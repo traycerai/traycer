@@ -6,7 +6,6 @@ import {
   DEFAULT_RAIL_DIVIDER_SEQ,
   RAIL_REGION_IDS,
   railDividerId,
-  MAX_RAIL_STACK_MEMBERS,
   areRailsEqual,
   normalizeRail,
   railRegionForLeftPanelId,
@@ -62,6 +61,22 @@ export type TaskTabLayout = "scroll" | "shrink";
  * `comfortable` is the shipped column, `wide` the one for a large monitor.
  */
 export type ReadingWidth = "comfortable" | "wide";
+
+/**
+ * `wide`'s own floor: today's fixed wide column (`max-w-5xl`), so the slider
+ * never reads narrower than what picking "Wide" has always meant.
+ */
+export const WIDE_READING_WIDTH_MIN_PX = 1024;
+
+/**
+ * The slider's own ceiling - generously past any real monitor, so in practice
+ * a user hits the VIEWPORT clamp (`useReadingWidthStyle`) before this. It only
+ * bounds the control itself, never what actually renders.
+ */
+export const WIDE_READING_WIDTH_MAX_PX = 3000;
+
+/** A "how much of the window" control: coarse steps, not fine precision. */
+export const WIDE_READING_WIDTH_STEP_PX = 16;
 
 /**
  * The two regions that name a bar AND an end of it, each for itself (L-156).
@@ -237,6 +252,14 @@ export interface LayoutArrangement {
    * much chrome someone wants, so a density switch must leave it alone.
    */
   readonly readingWidth: ReadingWidth;
+  /**
+   * How wide the `wide` column reads, in px - meaningful only while
+   * `readingWidth` is `"wide"`. Defaults to today's fixed wide column, so
+   * picking "Wide" with the slider untouched changes nothing visually.
+   * `useReadingWidthStyle` still viewport-clamps it, so this is a ceiling the
+   * user is choosing, not a guaranteed rendered width.
+   */
+  readonly wideReadingWidthPx: number;
 }
 
 /** Every provider that reports account rate limits, in the strip's own order. */
@@ -349,6 +372,7 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   sideStripView: "layered",
   taskTabLayout: "scroll",
   readingWidth: "comfortable",
+  wideReadingWidthPx: WIDE_READING_WIDTH_MIN_PX,
 };
 
 /** What a provider draws until told otherwise: its tightest limit, and only that. */
@@ -397,6 +421,33 @@ export function statusBarShownProfileIds(
 ): ReadonlyArray<string | null> {
   if (hostId === null) return NO_SHOWN_PROFILE_IDS;
   return shownProfiles[hostId]?.[providerId] ?? NO_SHOWN_PROFILE_IDS;
+}
+
+/**
+ * One provider's checked accounts on one host, replaced as a whole: the one
+ * write path, for the popover's per-profile toggle and the Profiles list.
+ *
+ * An emptied entry is REMOVED rather than stored as `[]`, matching what the
+ * resolver does on rehydration: one shape for "nothing checked", so the same
+ * selection can never read as two different arrangements.
+ */
+export function withShownProfileIds(
+  shownProfiles: StatusBarShownProfiles,
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileIds: ReadonlyArray<string | null>,
+): StatusBarShownProfiles {
+  const hostShown: Record<string, ReadonlyArray<string | null>> = {
+    ...shownProfiles[hostId],
+  };
+  if (profileIds.length === 0) delete hostShown[providerId];
+  else hostShown[providerId] = profileIds;
+  const next: Record<string, StatusBarShownProfiles[string]> = {
+    ...shownProfiles,
+  };
+  if (Object.keys(hostShown).length === 0) delete next[hostId];
+  else next[hostId] = hostShown;
+  return next;
 }
 
 // ── The two bar readings (L-156) ────────────────────────────────────────────
@@ -566,8 +617,10 @@ export function statusBarHostsAnyRegion(
  * (L-51), which is off by default - and it ignores them for the CONTENTS too
  * (L-162): a footer switched on draws both readings whichever bar each of
  * them names, because the phone has one bar and a footer that honoured a
- * header pick would silently drop a readout. The picks are kept, not
- * overridden, so the desktop window they were made in still honours them.
+ * header pick would silently drop a readout. Its ends are fixed as well -
+ * usage left, resources right - since an end picked for a desktop bar says
+ * nothing about the phone's. The picks are kept, not overridden, so the
+ * desktop window they were made in still honours them.
  */
 export function statusBarShown(
   arrangement: LayoutArrangement,
@@ -860,6 +913,43 @@ export function moveRailEntry(
   };
 }
 
+/**
+ * A panel reordered among panels alone, `toIndex` counted the same way: the
+ * phone's flat chip bar draws no divider or stack, so a move there must
+ * leave both exactly where they are - every divider and stack stays
+ * immediately after the SAME panel it already followed, wherever that panel
+ * now stands, rather than after whatever panel now occupies its old ARRAY
+ * slot. `normalizeRail` then keeps or splits a stack whose members the new
+ * order no longer holds adjacent.
+ */
+export function movePanelAmongPanels(
+  arrangement: LayoutArrangement,
+  panelId: string,
+  toIndex: number,
+): LayoutArrangement {
+  const panelIds = arrangement.rail.flatMap((entry) =>
+    entry.kind === "panel" ? [entry.id] : [],
+  );
+  const fromIndex = panelIds.findIndex((id) => id === panelId);
+  if (fromIndex < 0) return arrangement;
+  const reordered = movedWithin(panelIds, fromIndex, toIndex);
+  const markersAfter = new Map<RailRegionId | null, RailEntry[]>();
+  let anchor: RailRegionId | null = null;
+  for (const entry of arrangement.rail) {
+    if (entry.kind === "panel") {
+      anchor = entry.id;
+      continue;
+    }
+    markersAfter.set(anchor, [...(markersAfter.get(anchor) ?? []), entry]);
+  }
+  const rail: RailEntry[] = [...(markersAfter.get(null) ?? [])];
+  for (const id of reordered) {
+    rail.push({ kind: "panel", id });
+    rail.push(...(markersAfter.get(id) ?? []));
+  }
+  return { ...arrangement, rail: normalizeRail(rail) };
+}
+
 /** A new divider at `index`, on an id no divider has held before. */
 export function insertRailDivider(
   arrangement: LayoutArrangement,
@@ -933,13 +1023,13 @@ function carriedMembers(
 
 /**
  * What a drop onto the middle of a rail icon would do (L-181): `join` adds the
- * carried panels to the target's stack (or makes a stack with it), `full` is
- * refused because the result would pass {@link MAX_RAIL_STACK_MEMBERS}, and
- * `same` does nothing because the carried panels are already stacked with the
- * target. The rail draws the join cue, a refusal cue, or nothing, from this
- * answer, and the writer obeys the same one.
+ * carried panels to the target's stack (or makes a stack with it), and `same`
+ * does nothing because the carried panels are already stacked with the
+ * target. A stack has no cap, so no join is refused for its size. The rail
+ * draws the join cue or nothing from this answer, and the writer obeys the
+ * same one.
  */
-export type RailStackJoin = "join" | "full" | "same";
+export type RailStackJoin = "join" | "same";
 
 export function railStackJoin(
   rail: ReadonlyArray<RailEntry>,
@@ -954,10 +1044,7 @@ export function railStackJoin(
     carry,
   );
   const target = railStackOf(rail, targetId)?.members ?? [targetId];
-  if (carried.some((member) => target.includes(member))) return "same";
-  return target.length + carried.length > MAX_RAIL_STACK_MEMBERS
-    ? "full"
-    : "join";
+  return carried.some((member) => target.includes(member)) ? "same" : "join";
 }
 
 /**
@@ -1036,9 +1123,8 @@ export function stackRailPanels(
 /**
  * The panel directly below this one's stack (or below this panel, standing
  * alone), when the list's "Stack with the panel below" can join the two
- * (L-168, L-181): this panel is the last of its stack, the next entry is a
- * panel rather than a divider, and the two stacks together stay within
- * {@link MAX_RAIL_STACK_MEMBERS}. `null` otherwise.
+ * (L-168, L-181): this panel is the last of its stack and the next entry is a
+ * panel rather than a divider. `null` otherwise.
  */
 export function railPanelToStackBelow(
   rail: ReadonlyArray<RailEntry>,
@@ -1051,12 +1137,7 @@ export function railPanelToStackBelow(
   const [, blockEnd] = railBlockAt(rail, index);
   if (blockEnd !== index) return null;
   const below = rail.at(index + 1);
-  if (below === undefined || below.kind !== "panel") return null;
-  const count = (id: RailRegionId): number =>
-    railStackOf(rail, id)?.members.length ?? 1;
-  return count(regionId) + count(below.id) <= MAX_RAIL_STACK_MEMBERS
-    ? below.id
-    : null;
+  return below === undefined || below.kind !== "panel" ? null : below.id;
 }
 
 /**

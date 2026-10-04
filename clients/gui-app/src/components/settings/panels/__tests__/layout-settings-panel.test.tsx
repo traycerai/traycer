@@ -10,13 +10,14 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
-import { setMobileApp } from "@/lib/mobile-app";
+import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   LAYOUT_REGION_LIST,
   regionFacts,
 } from "@/components/layout-editor/regions/region-facts";
 import { SURFACE_GROUPS } from "@/components/layout-editor/regions/region-grammar";
 import { RAIL_REGION_IDS } from "@/lib/layout/rail";
+import { providerDisplayName } from "@/lib/provider-ordering";
 import {
   DEFAULT_ARRANGEMENT,
   USAGE_PROVIDER_IDS,
@@ -78,16 +79,21 @@ vi.mock(
 
 vi.mock(
   "@/components/layout-editor/inspector/use-layout-usage",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/layout-editor/inspector/use-layout-usage")
-    >()),
-    useLayoutUsage: () => ({
-      providerIds: USAGE_PROVIDER_IDS,
-      cluster: { kind: "no-providers" as const },
-      hostName: "the watched host",
-    }),
-  }),
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/components/layout-editor/inspector/use-layout-usage")
+      >();
+    return {
+      ...original,
+      useLayoutUsage: () => ({
+        ...original.EMPTY_USAGE,
+        providerIds: USAGE_PROVIDER_IDS,
+        cluster: { kind: "no-providers" as const },
+        hostName: "the watched host",
+      }),
+    };
+  },
 );
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -116,6 +122,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   setMobileApp(false);
+  setPhoneLayoutOnly(false);
   resetLayout();
   setSystemTabModalApi(null);
   useSettingsSearchStore.setState({
@@ -138,13 +145,20 @@ function shownValue(regionId: HideableRegionId): string {
 
 /** Every row of every list on the page, by the id it carries. */
 function rowIds(): ReadonlyArray<string> {
-  return [...document.querySelectorAll("[data-sortable-id]")].map(
-    (node) => node.getAttribute("data-sortable-id") ?? "",
+  return [
+    ...document.querySelectorAll("[data-sortable-id], [data-region-section]"),
+  ].map(
+    (node) =>
+      node.getAttribute("data-sortable-id") ??
+      node.getAttribute("data-region-section") ??
+      "",
   );
 }
 
 function row(id: string): HTMLElement {
-  const nodes = document.querySelectorAll(`[data-sortable-id="${id}"]`);
+  const nodes = document.querySelectorAll(
+    `[data-sortable-id="${id}"], [data-region-section="${id}"]`,
+  );
   const node = nodes[0];
   if (!(node instanceof HTMLElement)) throw new Error(`no such row: ${id}`);
   return node;
@@ -311,6 +325,10 @@ describe("Settings - Layout", () => {
           // Model has no Hide at all (G6): the picker always draws, so it has
           // no state control to be duplicated. Covered on its own below.
         ).filter((entry) => entry.id !== "model")) {
+          // The two readings are sections with a Show switch in the header;
+          // every other region keeps its one display control.
+          const section =
+            region.id === "usageLimits" || region.id === "resourceMonitor";
           // One wording for all three option sets (L-121): the page used to
           // carry two visibility vocabularies, a `Switch` and a tri-state, and
           // a dock row carried a size control AND a switch for one value.
@@ -319,11 +337,11 @@ describe("Settings - Layout", () => {
               name: `${region.name} display`,
             }),
             region.name,
-          ).toHaveLength(1);
+          ).toHaveLength(section ? 0 : 1);
           expect(
             screen.queryAllByRole("switch", { name: `Show ${region.name}` }),
             region.name,
-          ).toEqual([]);
+          ).toHaveLength(section ? 1 : 0);
         }
       }
     });
@@ -399,19 +417,57 @@ describe("Settings - Layout", () => {
         resourceMonitor: "Resource monitor",
       } as const;
       for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
-        await user.click(row(regionId));
         const name = names[regionId];
+        // One picker for the bar and the end of it, and no second row for either.
         expect(
           within(row(regionId)).getAllByRole("radiogroup", {
-            name: `${name} position`,
+            name: `${name} location`,
           }),
         ).toHaveLength(1);
         expect(
-          within(row(regionId)).getAllByRole("radiogroup", {
+          within(row(regionId)).queryByRole("radiogroup", {
             name: `${name} side`,
           }),
-        ).toHaveLength(1);
+        ).toBeNull();
       }
+    });
+
+    it("keeps only what the phone footer honours: no Location or Density (L-162)", async () => {
+      setPhoneLayoutOnly(true);
+      // Both in the Tab strip, where a desktop window would offer Density.
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          usageHost: "header",
+          resourceHost: "header",
+        },
+      });
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      const names = {
+        usageLimits: "Usage limits",
+        resourceMonitor: "Resource monitor",
+      } as const;
+      for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
+        const name = names[regionId];
+        const opened = within(row(regionId));
+        expect(
+          opened.queryByRole("radiogroup", { name: `${name} location` }),
+        ).toBeNull();
+        expect(
+          opened.queryByRole("radiogroup", { name: "Density" }),
+        ).toBeNull();
+      }
+      // The readouts themselves still apply to the footer.
+      expect(
+        within(row("usageLimits")).getByRole("radio", { name: "Remaining" }),
+      ).not.toBeNull();
+      expect(
+        within(row("resourceMonitor")).getByRole("checkbox", { name: "CPU" }),
+      ).not.toBeNull();
     });
   });
 
@@ -516,8 +572,8 @@ describe("Settings - Layout", () => {
     });
   });
 
-  describe("usage providers are a Status bar list (L-123)", () => {
-    it("draws a row per provider, opening its Limits pick in place", async () => {
+  describe("the Profiles list is part of Usage limits", () => {
+    it("draws a row per provider with its own eye, and no Limits pick (it lives in Providers)", async () => {
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "statusBar");
@@ -526,31 +582,16 @@ describe("Settings - Layout", () => {
       for (const providerId of DEFAULT_ARRANGEMENT.usageProviders) {
         expect(row(providerId), providerId).toBeTruthy();
       }
-
-      const first = DEFAULT_ARRANGEMENT.usageProviders[0];
+      expect(statusBar.getByText("Profiles")).toBeTruthy();
       expect(
         statusBar.queryByRole("radiogroup", { name: "Limits" }),
       ).toBeNull();
-      await user.click(row(first));
-
-      // Two levels, not five: the provider's own limits are one disclosure
-      // below its row, with no second stage and no second header.
+      const first = DEFAULT_ARRANGEMENT.usageProviders[0];
       expect(
-        within(row(first)).getByRole("radiogroup", { name: "Limits" }),
+        within(row(first)).getByRole("button", {
+          name: `Hide ${providerDisplayName(first)}`,
+        }),
       ).toBeTruthy();
-    });
-
-    it("is absent while Usage limits is hidden", async () => {
-      const user = userEvent.setup();
-      renderPanel();
-      await goToSurfaceTab(user, "statusBar");
-
-      await user.click(
-        within(row("usageLimits")).getByRole("radio", { name: "Hidden" }),
-      );
-
-      expect(rowIds()).not.toContain(DEFAULT_ARRANGEMENT.usageProviders[0]);
-      expect(screen.queryByText("Providers")).toBeNull();
     });
   });
 
@@ -919,7 +960,7 @@ describe("Settings - Layout", () => {
       expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     });
 
-    it("withholds Placement, Side tab view and Side in the installed mobile app, and never disables Tab overflow there", async () => {
+    it("withholds the desktop-only rows and the editor door in the installed mobile app", async () => {
       setMobileApp(true);
       useLayoutStore.setState({
         ...DEFAULT_LAYOUT_SNAPSHOT,
@@ -938,25 +979,60 @@ describe("Settings - Layout", () => {
       expect(
         screen.queryByRole("radiogroup", { name: "Side tab view" }),
       ).toBeNull();
-      const taskTabLayout = within(surface("topBar")).getByRole("radiogroup", {
-        name: "Tab overflow",
-      });
+      // No tab strip on the phone, so nothing for overflow to fit.
       expect(
-        within(taskTabLayout)
-          .getAllByRole<HTMLButtonElement>("radio")
-          .map((radio) => radio.disabled),
-      ).toEqual([false, false]);
-      expect(surface("topBar").textContent).not.toContain(
-        "Available when tabs are at the top.",
+        screen.queryByRole("radiogroup", { name: "Tab overflow" }),
+      ).toBeNull();
+      // No window there is ever wide enough, so neither the button nor the
+      // "needs a wider window" line that stands in for it.
+      expect(
+        screen.queryByRole("button", { name: "Customize layout" }),
+      ).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "The editor needs a wider window",
       );
 
-      // "Sidebar side" lives on a different tab, so it has to be checked on
+      // Each of the rest lives on a different tab, so it has to be checked on
       // ITS tab - on topBar's it would read as absent whether or not the
       // mobile-app guard withheld it.
       await goToSurfaceTab(user, "sidebar");
       expect(
         screen.queryByRole("radiogroup", { name: "Sidebar side" }),
       ).toBeNull();
+      expect(
+        screen.queryByRole("switch", { name: "Readings on agent rows" }),
+      ).toBeNull();
+      await goToSurfaceTab(user, "chat");
+      expect(
+        screen.queryByRole("radiogroup", { name: "Reading width" }),
+      ).toBeNull();
+      // The phone's minimap is a bottom drawer with no side, so the Minimap
+      // row keeps its Shown control and opens nothing.
+      const minimap = surface("chat").querySelector(
+        '[data-sortable-id="minimap"]',
+      );
+      if (!(minimap instanceof HTMLElement)) throw new Error("no Minimap row");
+      expect(
+        within(minimap)
+          .getByRole("button", { name: /^Minimap/ })
+          .hasAttribute("aria-expanded"),
+      ).toBe(false);
+      expect(minimap.querySelector("[data-region-detail]")).toBeNull();
+    });
+
+    it("says what the Home tab still decides on a phone, which has no tab strip", async () => {
+      setPhoneLayoutOnly(true);
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
+      const row = surface("topBar").querySelector(
+        '[data-sortable-id="homeTab"]',
+      );
+      if (!(row instanceof HTMLElement)) throw new Error("no Home tab row");
+
+      await user.click(within(row).getByRole("button", { name: /^Home tab/ }));
+
+      expect(row.textContent).toContain("Adds Home to the menu");
     });
 
     it.each(["vertical tabs", "side tabs"])(

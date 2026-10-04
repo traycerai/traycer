@@ -20,18 +20,26 @@ import {
 } from "vitest";
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { setMobileApp } from "@/lib/mobile-app";
 import {
-  isExperimentalGroupAvailable,
+  isAgentRolesRowAvailable,
   isPreventSleepRowAvailable,
   isVoiceInputRowAvailable,
   type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
 import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
+import type {
+  HostLifecycleSetResult,
+  HostLifecycleView,
+  IHostLifecycleHost,
+} from "@traycer-clients/shared/platform/runner-host";
 
 interface CapturedHostQueryArgs {
   readonly method: string;
@@ -282,7 +290,7 @@ describe("GeneralSettingsPanel", () => {
     delete (globalThis as { runnerHost?: unknown }).runnerHost;
   });
 
-  it("hydrates and updates Agent roles under Experimental", async () => {
+  it("hydrates and updates Agent roles with an Experimental badge beside the label", async () => {
     let agentRoles = false;
     const bridge: TestFeatureSettingsBridge = {
       get: vi.fn(() => Promise.resolve({ agentRoles })),
@@ -297,7 +305,13 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    expect(screen.getByText("Experimental")).toBeTruthy();
+    const agentRolesRow = document.querySelector(
+      `[data-settings-anchor="${GENERAL.definitions.agentRoles.anchor}"]`,
+    );
+    expect(agentRolesRow instanceof HTMLElement).toBe(true);
+    if (!(agentRolesRow instanceof HTMLElement)) return;
+    expect(within(agentRolesRow).getByText("Experimental")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Experimental" })).toBeNull();
     const toggle = screen.getByRole("switch", { name: "Agent roles" });
     await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -529,15 +543,15 @@ describe("GeneralSettingsPanel", () => {
     });
   });
 
-  it("renders the four named section headers in order", () => {
+  it("renders the three named section headers in order", () => {
     renderPanel();
 
     const chat = screen.getByText("Chat & composer");
-    const running = screen.getByText("Running agents");
+    const agents = screen.getByText("Agents");
     const danger = screen.getByText("Danger Zone");
 
-    expect(documentPosition(chat, running)).toBe("before");
-    expect(documentPosition(running, danger)).toBe("before");
+    expect(documentPosition(chat, agents)).toBe("before");
+    expect(documentPosition(agents, danger)).toBe("before");
   });
 
   // Both rows moved to the scoped host's Overview: each acts on ONE machine's
@@ -550,17 +564,21 @@ describe("GeneralSettingsPanel", () => {
     expect(screen.queryByText("Setup & migration")).toBeNull();
   });
 
-  it("omits the Running agents group entirely in the installed mobile app", () => {
+  it("omits Prevent sleep in the installed mobile app and still draws the Agents group", () => {
     setMobileApp(true);
 
     renderPanel();
 
-    // Its only remaining row - Prevent sleep - renders nothing there (no power
-    // bridge), and the two resource-visibility toggles that used to keep it
-    // populated now live on the Layout page. A heading over an empty card is
-    // worse than no heading.
+    // Prevent sleep hides with the power bridge; the branch prefix is drawn
+    // in every shell, so Agents is never a heading over an empty card.
     expect(screen.queryByText("Running agents")).toBeNull();
     expect(screen.queryByText("Prevent sleep while running")).toBeNull();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Agents" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("textbox", { name: "Branch prefix" }),
+    ).not.toBeNull();
     expect(screen.getByText("Chat & composer")).not.toBeNull();
     expect(screen.getByText("Danger Zone")).not.toBeNull();
   });
@@ -571,11 +589,7 @@ describe("GeneralSettingsPanel", () => {
     // SettingsGroup renders real <h2> labels, not row-shaped bands inside a
     // single shared card. Each group is its own <section>; the h2 and the
     // bordered rows-container are siblings.
-    const sectionTitles = [
-      "Chat & composer",
-      "Running agents",
-      "Danger Zone",
-    ] as const;
+    const sectionTitles = ["Chat & composer", "Agents", "Danger Zone"] as const;
 
     const headings = sectionTitles.map((title) =>
       screen.getByRole("heading", { level: 2, name: title }),
@@ -595,7 +609,7 @@ describe("GeneralSettingsPanel", () => {
     const snapshots = screen.getByText("Local app state");
 
     const chatHeading = headings[0];
-    const runningHeading = headings[1];
+    const agentsHeading = headings[1];
     const dangerHeading = headings[2];
 
     // Heading and its rows do NOT share the closest bordered card.
@@ -621,13 +635,13 @@ describe("GeneralSettingsPanel", () => {
 
     // Each heading's section owns its representative row.
     expect(chatHeading.closest("section")).toBe(voice.closest("section"));
-    expect(runningHeading.closest("section")).toBe(
+    expect(agentsHeading.closest("section")).toBe(
       preventSleep.closest("section"),
     );
     expect(dangerHeading.closest("section")).toBe(snapshots.closest("section"));
     // Distinct sections per group.
     expect(chatHeading.closest("section")).not.toBe(
-      runningHeading.closest("section"),
+      agentsHeading.closest("section"),
     );
   });
 
@@ -635,7 +649,7 @@ describe("GeneralSettingsPanel", () => {
     renderPanel();
 
     const chat = screen.getByText("Chat & composer");
-    const running = screen.getByText("Running agents");
+    const agents = screen.getByText("Agents");
     const danger = screen.getByText("Danger Zone");
 
     const voice = screen.getByText("Voice input");
@@ -643,17 +657,17 @@ describe("GeneralSettingsPanel", () => {
     const preventSleep = screen.getByText("Prevent sleep while running");
     const snapshots = screen.getByText("Local app state");
 
-    // Chat & composer rows sit between that header and Running agents.
+    // Chat & composer rows sit between that header and Agents.
     expect(documentPosition(chat, voice)).toBe("before");
     expect(documentPosition(voice, quote)).toBe("before");
-    expect(documentPosition(quote, running)).toBe("before");
+    expect(documentPosition(quote, agents)).toBe("before");
 
-    // Running agents rows sit between that header and Danger Zone.
-    expect(documentPosition(running, preventSleep)).toBe("before");
+    // Agents rows sit between that header and Danger Zone.
+    expect(documentPosition(agents, preventSleep)).toBe("before");
     expect(documentPosition(preventSleep, danger)).toBe("before");
     // Prevent sleep is not still in Chat & composer.
     expect(documentPosition(chat, preventSleep)).toBe("before");
-    expect(documentPosition(preventSleep, running)).not.toBe("before");
+    expect(documentPosition(preventSleep, agents)).not.toBe("before");
 
     // Danger Zone content after its header.
     expect(documentPosition(danger, snapshots)).toBe("before");
@@ -674,7 +688,81 @@ describe("GeneralSettingsPanel", () => {
     // text, so a regression that drops `WorktreeBranchPrefixSection` fails
     // loudly here.
     screen.getByRole("textbox", { name: "Branch prefix" });
-    screen.getByText("Default branch prefix");
+    screen.getByText("Worktree branch prefix");
+  });
+
+  it("puts the four Agents rows in order, badges Agent roles as Experimental, and draws no old group headings or radios", () => {
+    const featureSettings: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      setAgentRolesEnabled: vi.fn((enabled: boolean) =>
+        Promise.resolve({ agentRoles: enabled }),
+      ),
+    };
+    const view = lifecycleView();
+    const hostLifecycle: IHostLifecycleHost = {
+      get: () => Promise.resolve(view),
+      set: () =>
+        Promise.resolve({
+          kind: "applied",
+          view,
+        } satisfies HostLifecycleSetResult),
+      onChange: () => ({ dispose: () => undefined }),
+      quit: null,
+    };
+    const runnerHost = createFakeRunnerHost({ hostLifecycle });
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings },
+    };
+
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <GeneralSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    const agents = screen.getByTestId("settings-general-agents");
+    expect(
+      within(agents).getByRole("heading", { level: 2, name: "Agents" }),
+    ).not.toBeNull();
+
+    const preventSleep = within(agents).getByText(
+      "Prevent sleep while running",
+    );
+    const lifecycle = within(agents).getByText("When you quit Traycer");
+    const prefix = within(agents).getByText("Worktree branch prefix");
+    const agentRolesRow = agents.querySelector(
+      `[data-settings-anchor="${GENERAL.definitions.agentRoles.anchor}"]`,
+    );
+    expect(agentRolesRow instanceof HTMLElement).toBe(true);
+    if (!(agentRolesRow instanceof HTMLElement)) return;
+    expect(
+      within(agentRolesRow).getByRole("switch", { name: "Agent roles" }),
+    ).not.toBeNull();
+    expect(within(agentRolesRow).getByText("Experimental")).toBeTruthy();
+
+    expect(documentPosition(preventSleep, lifecycle)).toBe("before");
+    expect(documentPosition(lifecycle, prefix)).toBe("before");
+    expect(documentPosition(prefix, agentRolesRow)).toBe("before");
+
+    expect(
+      screen.queryByRole("heading", { name: "Running agents" }),
+    ).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Worktrees" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Experimental" })).toBeNull();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByTestId("host-lifecycle-card")).toBeNull();
+    expect(screen.queryByTestId("host-lifecycle-options")).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "When you quit Traycer" }),
+    ).not.toBeNull();
   });
 
   // Every anchored General entry the search index offers must land on exactly
@@ -692,7 +780,7 @@ describe("GeneralSettingsPanel", () => {
         featureSettings: null,
         mobileApp: false,
       };
-      expect(isExperimentalGroupAvailable(context)).toBe(false);
+      expect(isAgentRolesRowAvailable(context)).toBe(false);
       const { container } = render(panelTree());
 
       assertSettingsSearchTargets("general", context, container);
@@ -713,7 +801,7 @@ describe("GeneralSettingsPanel", () => {
         featureSettings,
         mobileApp: false,
       };
-      expect(isExperimentalGroupAvailable(context)).toBe(true);
+      expect(isAgentRolesRowAvailable(context)).toBe(true);
       const { container } = render(panelTree());
 
       assertSettingsSearchTargets("general", context, container);
@@ -764,6 +852,18 @@ function renderPanel(): QueryClient {
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+function lifecycleView(): HostLifecycleView {
+  return {
+    desired: { mode: "background", rev: 1, updatedBy: null, updatedAt: null },
+    applied: {
+      localHostCapability: "managed",
+      supervisor: "enforcing",
+      admittedAs: null,
+    },
+    pending: "none",
+  };
 }
 
 /** The panel alone, with no runner host above it. */

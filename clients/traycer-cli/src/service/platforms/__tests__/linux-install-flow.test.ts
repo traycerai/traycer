@@ -357,7 +357,10 @@ describe("linux service install flow", () => {
   it("uninstall clears a failed unit entry after removing the file", async () => {
     const { calls, runner } = recordingRunner(() => false);
 
-    await createLinuxController(runner).uninstall({ label });
+    await createLinuxController(runner).uninstall({
+      label,
+      leaveForegroundRun: null,
+    });
 
     expect(calls.map(verbOf)).toEqual([
       "disable",

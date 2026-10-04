@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { Info } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LazyMotion, domAnimation } from "motion/react";
@@ -11,7 +11,6 @@ import {
   SidebarWidthResizeHandle,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
-import { StripLiveAgentsPortal } from "@/components/epic-canvas/sidebar/strip-live-agents";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
 import { EpicSurfaceSheets } from "@/components/epic-tabs/epic-surface";
@@ -26,7 +25,6 @@ import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
 import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { SampleWorkspaceBody } from "@/components/sample-workspace/sample-workspace-body";
-import { SampleStripLiveAgents } from "@/components/sample-workspace/sample-strip-live-agents";
 import { NavigatorResourceHotspotChip } from "@/components/resources/resource-usage-chip";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -47,19 +45,11 @@ import {
 import type { OpenedStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useStatusBarShown } from "@/stores/layout/layout-store";
 import {
-  LayoutUsageProvider,
-  ProviderLimitWindowsReader,
-  type ProviderLimitWindows,
-} from "@/components/layout-editor/inspector/provider-limit-windows";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
-import {
   EPIC_SURFACE_ID,
   EPIC_SURFACE_CHAT,
   TRACKED_AGENT_ID,
   harnessMessengerFactory,
-  usageProbe,
   type SweepWindow,
-  SWEEP_CONFIGURED_PROVIDERS,
 } from "@/components/layout-editor/__tests__/layout-sweep-fixtures";
 
 function renderHostedBody(): ReactNode {
@@ -153,10 +143,6 @@ function EpicWindowSurface(props: {
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-clip">
       <EpicSessionContext value={props.session}>
-        <StripLiveAgentsPortal
-          epicId={EPIC_SURFACE_ID}
-          tabId={EPIC_SURFACE_ID}
-        />
         <EpicSurfaceSheets
           tabId={EPIC_SURFACE_ID}
           sidebarSide={sidebarSide}
@@ -205,8 +191,8 @@ function EpicWindowSurface(props: {
 
 /**
  * The sample workspace as the app mounts it: a route surface, which is one
- * sheet, holding the sample notice, the sample body (rail, transcript, minimap,
- * dock, composer) and the strip's live agents.
+ * sheet, holding the sample notice and the sample body (rail, transcript,
+ * minimap, dock, composer).
  */
 function SampleWindowSurface(): ReactNode {
   return (
@@ -226,7 +212,6 @@ function SampleWindowSurface(): ReactNode {
         </span>
       </div>
       <SampleWorkspaceBody />
-      <SampleStripLiveAgents tabId="sample-workspace" />
     </div>
   );
 }
@@ -326,28 +311,5 @@ export function SweepProviders(props: {
         </HostRuntimeProvider>
       </RunnerHostProvider>
     </QueryClientProvider>
-  );
-}
-
-function UsageCapture(props: {
-  readonly providerId: RateLimitProviderId;
-  readonly limits: ProviderLimitWindows;
-}): ReactNode {
-  const { providerId, limits } = props;
-  useEffect(() => {
-    usageProbe.set(providerId, limits);
-  }, [providerId, limits]);
-  return null;
-}
-
-export function UsageProbe(): ReactNode {
-  return (
-    <LayoutUsageProvider>
-      {SWEEP_CONFIGURED_PROVIDERS.map((providerId) => (
-        <ProviderLimitWindowsReader key={providerId} providerId={providerId}>
-          {(limits) => <UsageCapture providerId={providerId} limits={limits} />}
-        </ProviderLimitWindowsReader>
-      ))}
-    </LayoutUsageProvider>
   );
 }

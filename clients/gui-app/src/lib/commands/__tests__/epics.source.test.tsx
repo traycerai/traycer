@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   buildCmdkValue,
   paletteFilter,
 } from "@/components/command-palette/palette-cmdk-controller";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 import type {
   HistoryFetchResult,
   UseHistoryQueryParams,
@@ -142,18 +144,40 @@ function ctx(): CommandContext {
   };
 }
 
-function captureEpicsItems(query: string): ReadonlyArray<CommandItem> {
+function newQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+}
+
+// The source asks the mutation cache which tasks are being deleted, so its
+// probe mounts inside a client. Fresh per test (see `beforeEach` below): a held
+// delete left in a shared cache would hide an epic from the next case.
+let queryClient = newQueryClient();
+
+interface MountedEpicsItems {
+  /** What the source returned on its latest render. */
+  readonly current: () => ReadonlyArray<CommandItem>;
+}
+
+function mountEpicsItems(query: string): MountedEpicsItems {
   let captured: ReadonlyArray<CommandItem> = [];
   function Probe() {
     captured = epicsSource.useItems(ctx());
     return null;
   }
   render(
-    <PaletteQueryProvider value={query}>
-      <Probe />
-    </PaletteQueryProvider>,
+    <QueryClientProvider client={queryClient}>
+      <PaletteQueryProvider value={query}>
+        <Probe />
+      </PaletteQueryProvider>
+    </QueryClientProvider>,
   );
-  return captured;
+  return { current: () => captured };
+}
+
+function captureEpicsItems(query: string): ReadonlyArray<CommandItem> {
+  return mountEpicsItems(query).current();
 }
 
 describe("taskSearchQuery", () => {
@@ -186,10 +210,12 @@ describe("epicsSource", () => {
   beforeEach(() => {
     mockState.recordedParams.length = 0;
     mockState.result = historyResult([]);
+    queryClient = newQueryClient();
   });
 
   afterEach(() => {
     cleanup();
+    queryClient.clear();
     useEpicCanvasStore.setState({ tabsById: {}, openTabOrder: [] });
   });
 
@@ -340,5 +366,91 @@ describe("epicsSource", () => {
     if (item === undefined) throw new Error("item missing");
     expect(item.description).toBe("Open");
     expect(item.keywords).toEqual(["task", "epic", "open"]);
+  });
+
+  // The palette has no row to show a delete in, and opening a task the host is
+  // still deleting races the delete. The dispatch is staged the way a confirmed
+  // delete leaves it - a held `epic.batchDelete` in the mutation cache - and the
+  // REAL pending reader is what the source asks.
+  describe("a Task whose deletion is in flight", () => {
+    function openTab(tabId: string, epicId: string, name: string): void {
+      const tab: EpicViewTab = { tabId, epicId, name };
+      useEpicCanvasStore.setState((state) => ({
+        tabsById: { ...state.tabsById, [tabId]: tab },
+        openTabOrder: [...state.openTabOrder, tabId],
+      }));
+    }
+
+    function itemFor(
+      items: ReadonlyArray<CommandItem>,
+      epicId: string,
+    ): CommandItem | undefined {
+      return items.find((candidate) => candidate.id === `epic:${epicId}`);
+    }
+
+    it("is not offered when it is an open tab, and the other tab still is", () => {
+      openTab("tab-deleting", "e-deleting", "Deleting tab");
+      openTab("tab-live", "e-live", "Live tab");
+      holdEpicBatchDelete(queryClient, ["e-deleting"]);
+
+      const items = captureEpicsItems("");
+
+      expect(itemFor(items, "e-deleting")).toBeUndefined();
+      expect(itemFor(items, "e-live")?.description).toBe("Open");
+    });
+
+    it("is not offered when it is only a history row, and the other row still is", () => {
+      mockState.result = historyResult([
+        historyItem({ epicId: "e-deleting", title: "Deleting row" }),
+        historyItem({ epicId: "e-live", title: "Live row" }),
+      ]);
+      holdEpicBatchDelete(queryClient, ["e-deleting"]);
+
+      const items = captureEpicsItems("");
+
+      expect(itemFor(items, "e-deleting")).toBeUndefined();
+      expect(itemFor(items, "e-live")?.label).toBe("Live row");
+    });
+
+    it("is not offered through its history row either when it is also an open tab", () => {
+      // The tab loop skipping it is not enough: the same epic's row would then
+      // fall through to the recent items.
+      openTab("tab-deleting", "e-deleting", "Deleting tab");
+      mockState.result = historyResult([
+        historyItem({ epicId: "e-deleting", title: "Deleting row" }),
+        historyItem({ epicId: "e-live", title: "Live row" }),
+      ]);
+      holdEpicBatchDelete(queryClient, ["e-deleting"]);
+
+      const items = captureEpicsItems("");
+
+      expect(
+        items.filter((item) => item.id === "epic:e-deleting"),
+      ).toHaveLength(0);
+      expect(itemFor(items, "e-live")).toBeDefined();
+    });
+
+    it("is offered again once the delete settles", async () => {
+      openTab("tab-deleting", "e-deleting", "Deleting tab");
+      mockState.result = historyResult([
+        historyItem({ epicId: "e-row", title: "Deleting row" }),
+      ]);
+      const held = holdEpicBatchDelete(queryClient, ["e-deleting", "e-row"]);
+      const mounted = mountEpicsItems("");
+      // Control for the ids below: a batch hides every id it names.
+      expect(itemFor(mounted.current(), "e-deleting")).toBeUndefined();
+      expect(itemFor(mounted.current(), "e-row")).toBeUndefined();
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(itemFor(mounted.current(), "e-deleting")?.description).toBe(
+          "Open",
+        );
+      });
+      expect(itemFor(mounted.current(), "e-row")?.label).toBe("Deleting row");
+    });
   });
 });

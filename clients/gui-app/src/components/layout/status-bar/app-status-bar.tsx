@@ -41,6 +41,15 @@ import {
 const NO_MENU_PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [];
 
 /**
+ * The phone footer's fixed ends (L-162): usage at the start, resources at the
+ * end, whatever bar or end either reading names for a desktop window.
+ */
+const PHONE_FOOTER_PLACEMENTS: Readonly<Record<BarRegionId, BarPlacement>> = {
+  usageLimits: { host: "status-bar", side: "left" },
+  resourceMonitor: { host: "status-bar", side: "right" },
+};
+
+/**
  * The app's bottom strip: two clusters, one at each end, holding whichever of
  * the usage cluster and the resource readout named this bar and that side
  * (L-156). It ships with usage on the left and the readout on the right, and
@@ -88,10 +97,8 @@ function ScopedAppStatusBar(props: {
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
 }): ReactNode {
-  // Read for the chord ownership below, not for how the strip is drawn: a
-  // phone's footer draws the same readings as a desktop strip and scrolls
-  // them under a finger, so the viewport decides who holds a shortcut and
-  // nothing about what is on screen.
+  // Decides where the two readings draw (below): a phone's footer draws the
+  // same readings as a desktop strip and scrolls them under a finger.
   const narrowViewport = useIsMobileViewport();
   const rateLimitsEnabled = useRegionShown("usageLimits");
   const resourcesEnabled = useRegionShown("resourceMonitor");
@@ -101,20 +108,15 @@ function ScopedAppStatusBar(props: {
   // (L-156).
   const placements = useBarPlacements();
   // Except on a narrow viewport, where the footer draws BOTH whatever they
-  // name (L-51, L-162). There is one bar on a phone and the mobile header
-  // keeps its own copies, so a footer that honoured a header pick would drop
-  // a readout with nowhere to put it. The picks themselves are untouched, so
-  // the desktop window they were made in still honours them - and the ENDS
-  // still do, here, because a side is a fact about the bar the reading is
-  // drawn in.
+  // name, at fixed ends: usage left, resources right (L-51, L-162). There is
+  // one bar on a phone and the mobile header gives its copies up while the
+  // footer is on, so a footer that honoured a header pick would drop a
+  // readout with nowhere to put it, and an end picked for a desktop bar says
+  // nothing about this one. The picks
+  // themselves are untouched, so the desktop window they were made in still
+  // honours them.
   const drawn: Readonly<Record<BarRegionId, BarPlacement>> = narrowViewport
-    ? {
-        usageLimits: { host: "status-bar", side: placements.usageLimits.side },
-        resourceMonitor: {
-          host: "status-bar",
-          side: placements.resourceMonitor.side,
-        },
-      }
+    ? PHONE_FOOTER_PLACEMENTS
     : placements;
   const usageInStrip = drawn.usageLimits.host === "status-bar";
   const stripRegions: ReadonlyArray<BarRegionId> = [
@@ -139,39 +141,26 @@ function ScopedAppStatusBar(props: {
   // keyed by the WATCHED host, since the accounts it names are that host's.
   const profileSelection = useRateLimitProfileSelection(props.scope.hostId);
   // `app.rate-limits.open` has one handler slot and two possible owners, and
-  // on desktop they are mutually exclusive by placement: `RateLimitIconButton`
+  // they are mutually exclusive: on desktop by placement - `RateLimitIconButton`
   // owns it in the header and is not mounted while the usage controls live
-  // down here.
+  // down here - and on a phone by the footer switch, since the mobile header
+  // draws no gauge while this footer is on (and this footer only mounts
+  // there while it is on).
   //
-  // A mobile viewport is the one shell where BOTH are on screen - the mobile
-  // header keeps its gauge whatever the footer does - so the strip stands
-  // down and leaves the slot to the header. It is not a coin toss: the slot
-  // holds ONE handler and an unregister only clears its own, so the later
-  // registrant would silently displace the header's and then, on unmounting
-  // for the keyboard or the drawer, take the chord away entirely - the header
-  // button still on screen would have no handler and no way to get one back,
-  // since its effect does not re-run. Nothing is lost by standing down: the
-  // cluster's own `PopoverTrigger` is a tap away, and the two panels are the
-  // same panel.
-  //
-  // It also stands down while the usage cluster is drawing in the HEADER
-  // (L-156): the strip can now be on screen for the resource monitor alone,
-  // and the panel this slot would open has no anchor here at all.
+  // It stands down while the usage cluster is drawing in the HEADER (L-156):
+  // the strip can be on screen for the resource monitor alone, and the panel
+  // this slot would open has no anchor here at all.
   useEffect(() => {
-    if (narrowViewport || !usageInStrip) return;
+    if (!usageInStrip) return;
     return registerDynamicActionHandler("app.rate-limits.open", () => {
       setUsageOpen(true);
     });
-  }, [narrowViewport, usageInStrip]);
-  // `app.resources.open` has one handler slot, and on a desktop viewport the
-  // two possible owners are exclusive by placement: the monitor draws HERE or
-  // in the header (L-156), never both. A narrow viewport is the one shell
-  // where both are on screen - this footer draws the readout whatever it
-  // names (L-162) and the mobile header keeps its own - so the strip stands
-  // down there and leaves the slot to the header, which survives the
-  // keyboard. With the monitor hidden nothing below mounts, so nobody
-  // registers, which is correct: there is no panel to open.
-  const claimsResourcesAction = !narrowViewport;
+  }, [usageInStrip]);
+  // `app.resources.open` has one handler slot and the same two exclusive
+  // owners: the monitor draws HERE or in the header (L-156), never both - on
+  // a phone because the header gives its glyph up while the footer is on.
+  // With the monitor hidden nothing below mounts, so nobody registers, which
+  // is correct: there is no panel to open.
   // While the panel is open, let the header drop its title-bar drag regions so
   // a click on the (otherwise event-swallowing) drag area dismisses it. The id
   // is the header trigger's own: the two are mutually exclusive by placement
@@ -229,7 +218,7 @@ function ScopedAppStatusBar(props: {
       <ResourceMonitorPopover
         trigger="custom"
         contentSide="top"
-        claimsOpenAction={claimsResourcesAction}
+        claimsOpenAction
         triggerNode={
           <StatusBarResourceSegment
             {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
@@ -415,8 +404,8 @@ function menuProviders(
  * Same three states and same remedies as the popovers' notice, at one line:
  * `vanished` needs the pick dropped, `unreachable` needs the machine back, and
  * `connecting` needs a moment — which is why it alone offers no button. A
- * strip is not the place to explain a plan restriction or a host version, so
- * those keep landing in the popover, where there is room for the sentence.
+ * strip is not the place to explain a host version, so
+ * that keeps landing in the popover, where there is room for the sentence.
  *
  * It is passive chrome for the layout editor (4.2): it takes the slot the
  * usage segments would occupy and is not a region of its own.

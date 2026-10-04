@@ -49,8 +49,7 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
  * instead of wiping the merged directory and unbinding an active remote
  * selection.
  *
- * Remote-host entitlement is enforced by authn when an attach grant is minted;
- * the client projects only the registry's liveness information.
+ * The client projects only the registry's liveness information.
  */
 export function buildDefaultRemoteFetcher(
   auth: AuthService,
@@ -81,7 +80,7 @@ export function buildDefaultRemoteFetcher(
       return {
         kind: "hosts",
         entries: response.hosts.map((item) =>
-          hostListItemToDirectoryEntry(item, runnerHost.relayBaseUrl, true),
+          hostListItemToDirectoryEntry(item, runnerHost.relayBaseUrl),
         ),
       };
     } catch {

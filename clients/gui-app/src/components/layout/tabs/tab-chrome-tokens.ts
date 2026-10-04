@@ -22,15 +22,6 @@ export const TAB_CLASS_BASE =
 export const TAB_BOX_CLASS =
   "pointer-events-none absolute inset-0.5 rounded-xl";
 
-/**
- * A tab's colour on a tab with no box of its own to wear it: a short line
- * centred inside the box's bottom edge, the same for a lone tab, a split
- * member and the joined active tab. Never a rule across the tab - the header
- * has no baseline.
- */
-export const TAB_COLOR_MARK_CLASS =
-  "pointer-events-none absolute bottom-1.25 left-1/2 h-0.5 w-6 -translate-x-1/2 rounded-full bg-(--swatch)";
-
 export const SPLIT_MEMBER_CLASS =
   "gap-1 px-[var(--header-tab-padding,1.25rem)]";
 export const SPLIT_TAB_CONTROL_CLASS =
@@ -88,4 +79,15 @@ export function useHeaderTabDisplacementTransition(): Transition {
   return reduceMotion
     ? { duration: 0 }
     : { ...HEADER_TAB_REORDER_TRANSITION, opacity: { duration: 0 } };
+}
+
+/**
+ * Transition for the drag overlay fading out while a split preview shows and
+ * back in when the drop is a move again: the displacement's own tween, so the
+ * overlay leaves as the strip settles, and instant under reduced motion.
+ */
+export function useHeaderTabOverlayFadeTransition(): Transition {
+  return useReducedMotion() === true
+    ? { duration: 0 }
+    : HEADER_TAB_REORDER_TRANSITION;
 }

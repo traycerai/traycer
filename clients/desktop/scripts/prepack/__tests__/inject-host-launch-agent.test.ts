@@ -1,8 +1,19 @@
+// @vitest-environment node
 /**
  * Unit-level coverage for `inject-host-launch-agent.cjs`'s exported
  * `afterPack` electron-builder hook (see the module doc comment for the full
  * design rationale - relocatable `BundleProgram`, ad-hoc baseline signing
  * superseded by electron-builder's own recursive signing pass).
+ *
+ * Runs in the `node` environment, not this package's default `jsdom`, and
+ * that is load-bearing rather than tidiness. The `Arch` import below loads
+ * `builder-util`, which calls `source-map-support`'s `install()` as it loads.
+ * That library decides whether it is in a browser by looking for `window` and
+ * `XMLHttpRequest`, both of which jsdom supplies, and in a browser it fetches
+ * each source it maps with a synchronous XHR. jsdom answers a synchronous XHR
+ * from a worker thread and waits up to two minutes for the reply, and each of
+ * these requests ran that wait out. Under jsdom this file spent eleven
+ * minutes importing and a second testing. Nothing here touches the DOM.
  *
  * These tests drive the REAL committed `.cjs` file, not a
  * reimplementation of its logic. Since the module resolves `../../package.json`

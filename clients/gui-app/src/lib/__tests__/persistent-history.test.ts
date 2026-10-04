@@ -658,6 +658,37 @@ describe("PersistentHistoryController", () => {
     });
   });
 
+  // `/when-you-quit` is a transient signed-out surface reached only by
+  // the desktop's "Settings…" command while signed out. Persisting it would
+  // reopen the app on that card at the next launch, exactly the failure the
+  // bare-`/` rule above already prevents for the landing route.
+  it("does not persist /when-you-quit, mirroring the bare-`/` rule", () => {
+    const history = seedStack("window-a", ["/settings/general"]);
+
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/settings/general"],
+      index: 0,
+    });
+
+    history.push("/when-you-quit");
+
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/settings/general"],
+      index: 0,
+    });
+  });
+
+  it("persists an ordinary neighbouring route", () => {
+    const history = seedStack("window-a", ["/settings/general"]);
+
+    history.push("/settings/host");
+
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/settings/general", "/settings/host"],
+      index: 1,
+    });
+  });
+
   it("collapses an adjacent duplicate created by an in-place replace (no dead back step)", () => {
     // Mirrors the overlay bug: an overlay entry is PUSHED onto the same path it
     // sits over, then its search flag is cleared via `replace`, leaving an entry

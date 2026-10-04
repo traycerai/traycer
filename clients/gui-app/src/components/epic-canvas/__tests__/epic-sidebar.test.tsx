@@ -338,66 +338,6 @@ describe("<EpicLeftPanelRail />", () => {
     ).not.toBeUndefined();
   });
 
-  it("computes a combine cue from the MODEL's full stack, not from how many members are drawn (L-170, L-181)", () => {
-    // Build a 4-member stack, then hide every member but Chats: it draws as a
-    // LONE icon (no capsule at all), though the model still holds all four.
-    // Reading the drawn shape instead of the model would offer a join this
-    // stack cannot take.
-    act(() => {
-      let arrangement = currentLayoutArrangement();
-      arrangement = stackRailPanels(
-        arrangement,
-        "terminals",
-        "artifacts",
-        "stack",
-      );
-      arrangement = stackRailPanels(
-        arrangement,
-        "browsers",
-        "artifacts",
-        "stack",
-      );
-      applyRail(arrangement.rail);
-      setRailVisibilityOverride("artifacts", false);
-      setRailVisibilityOverride("terminals", false);
-      setRailVisibilityOverride("browsers", false);
-    });
-
-    render(
-      <EpicLeftPanelRail
-        epicId={EPIC_ID}
-        tabId={TAB_ID}
-        orientation="vertical"
-      />,
-    );
-    expect(screen.queryAllByTestId("epic-rail-stack")).toHaveLength(0);
-
-    act(() => {
-      useEpicDndStore.getState().canvasDragStarted(
-        {
-          kind: "left-panel-rail-item",
-          viewTabId: TAB_ID,
-          panelId: "sharing",
-          origin: "rail",
-        },
-        null,
-      );
-      useEpicDndStore.getState().dropPreviewChanged({
-        kind: "left-panel-rail",
-        viewTabId: TAB_ID,
-        panelId: "chats",
-        position: "combine",
-      });
-    });
-
-    expect(screen.getByTestId("epic-rail-chats").className).toContain(
-      "ring-destructive",
-    );
-    expect(screen.getByTestId("epic-rail-chats").className).not.toContain(
-      "ring-primary",
-    );
-  });
-
   it("draws the shipped rail as eight direct children - the chats/artifacts capsule plus seven icons - with no dividers", () => {
     // "Every panel available": comments needs its own reveal + a commentable
     // artifact, same as `revealCommentsPanel` below.
@@ -508,10 +448,8 @@ describe("<EpicLeftPanelRail />", () => {
     useLayoutEditorStore.getState().endSession();
   });
 
-  // Every stack member's own button answers a click exactly as a lone
-  // panel's icon would (L-181): there is no separate group-click branch any
-  // more, just `handleClick` reading `displayedPanelId` and that ONE panel's
-  // own collapsed state.
+  // A stack's one icon answers a click as a lone panel's would: open the
+  // stack when it is not showing, collapse the column when it is.
   it("opens its top panel's icon when neither member is showing", () => {
     useLeftPanelStore.getState().setActivePanelId(TAB_ID, "terminals");
     render(
@@ -527,7 +465,11 @@ describe("<EpicLeftPanelRail />", () => {
     expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe("chats");
   });
 
-  it("reopens a member whose own section is collapsed, instead of collapsing the column", () => {
+  it("collapses the column when only a member that is NOT displayed is collapsed", () => {
+    // Agents is displayed and open; Artifacts, collapsed, is a choice the
+    // column already shows. The click used to re-open Artifacts (and make it
+    // active) instead, one collapsed section per click, so the column
+    // collapsed only once none was left.
     useLeftPanelStore.getState().togglePanelSectionCollapsed("artifacts");
     render(
       <EpicLeftPanelRail
@@ -539,13 +481,11 @@ describe("<EpicLeftPanelRail />", () => {
 
     fireEvent.click(screen.getByTestId("epic-rail-chats"));
 
-    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
-      "artifacts",
-    );
+    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(true);
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe("chats");
     expect(
       useLeftPanelStore.getState().panelSectionCollapsedByPanelId.artifacts,
-    ).toBe(false);
-    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(false);
+    ).toBe(true);
   });
 
   it("namespaces duplicate Epic rail registrations by view tab", () => {
@@ -871,13 +811,10 @@ describe("<EpicLeftPanelRail />", () => {
     }
   });
 
-  it("puts a collapsed section back when its own rail icon is clicked (L-170)", () => {
-    // The lit icon usually toggles the whole sidebar (R5R-09), and it still
-    // does for every lone panel and every expanded stack member. The one
-    // exception is the state per-section collapse created: an active panel
-    // that is DISPLAYED and collapsed, where the click means "put this
-    // section back". Without it the icon the user reaches for collapses the
-    // whole column and the only way out is a chevron they have to find again.
+  it("collapses the column even when the ACTIVE member's own section is collapsed", () => {
+    // A stack draws every member at once, so which one is "active" is not on
+    // screen; the lit icon toggles the column whatever the sections say
+    // (VS Code's rule) and the next click brings the column back as it was.
     useLeftPanelStore.getState().togglePanelSectionCollapsed("chats");
     render(
       <EpicLeftPanelRail
@@ -889,16 +826,38 @@ describe("<EpicLeftPanelRail />", () => {
 
     fireEvent.click(screen.getByTestId("epic-rail-chats"));
 
+    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(true);
     expect(
       useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
-    ).toBe(false);
-    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(false);
+    ).toBe(true);
 
-    // A second click, now that the section is expanded, is the ordinary
-    // "collapse the sidebar" the lit icon has always meant.
     fireEvent.click(screen.getByTestId("epic-rail-chats"));
 
-    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(false);
+    expect(
+      useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
+    ).toBe(true);
+  });
+
+  it("opens a stack on a member that is already open, changing no section", () => {
+    useLeftPanelStore.getState().setActivePanelId(TAB_ID, "terminals");
+    useLeftPanelStore.getState().togglePanelSectionCollapsed("chats");
+    render(
+      <EpicLeftPanelRail
+        epicId={EPIC_ID}
+        tabId={TAB_ID}
+        orientation="vertical"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-rail-chats"));
+
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "artifacts",
+    );
+    expect(
+      useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
+    ).toBe(true);
   });
 
   /**
@@ -1749,7 +1708,7 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
     });
   });
 
-  it("registers the body droppable at the stack's TOP panel, not the active member, and draws the join/full/same drop cue (L-181, L-182)", () => {
+  it("registers the body droppable at the stack's TOP panel, not the active member, and draws the join/same drop cue (L-181, L-182)", () => {
     // Browsers is active, but Terminals is the top of the stack (L-181): the
     // body is one drop target for the whole stack, so it is Terminals the
     // droppable names, whichever member the user is looking at.
@@ -1833,8 +1792,8 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
       screen.getByTestId("epic-sidebar").querySelector("[data-body-drop-cue]"),
     ).toBeNull();
 
-    // Grown to the max (terminals+browsers+git-diff+pull-requests): a FIFTH
-    // panel's join now draws "full" instead.
+    // Grown to four (terminals+browsers+git-diff+pull-requests): a FIFTH
+    // panel still joins, since a stack has no cap.
     act(() => {
       applyRail(
         stackRailPanels(
@@ -1869,7 +1828,7 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
         .getByTestId("epic-sidebar")
         .querySelector("[data-body-drop-cue]")
         ?.getAttribute("data-body-drop-cue"),
-    ).toBe("full");
+    ).toBe("join");
   });
 });
 

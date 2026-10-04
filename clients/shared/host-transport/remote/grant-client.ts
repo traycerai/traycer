@@ -41,21 +41,15 @@ const GRANT_FETCH_TIMEOUT_MS = 10_000;
  *  - `ok`              — the grant to present to the relay.
  *  - `unauthorized`    — the bearer was rejected OR the host is revoked / not
  *                        owned (401/403); the caller decides whether to revalidate.
- *  - `plan-restricted` — 403 with `reason: "plan_restricted"`: the account's
- *                        plan does not include remote host connectivity. The
- *                        bearer is VALID — never treat this as an auth failure
- *                        or retry it; it clears only when the owner upgrades.
  *  - `network-error`   — transient transport/timeout/5xx or a malformed body.
  *
- * Every non-`ok`, non-`plan-restricted` result carries a human-readable
- * `detail`. Not decoration: this mint is the first step of a silently
+ * Every non-`ok` result carries a human-readable `detail`. Not decoration: this mint is the first step of a silently
  * forever-retrying connect loop, and the detail is the only place the actual
  * fault (DNS? 401? 500 body?) survives into the session's `DialFailureLog`.
  */
 export type AttachGrantResult =
   | { readonly kind: "ok"; readonly grant: AttachGrant }
   | ({ readonly kind: "unauthorized" } & AttachGrantFailure)
-  | { readonly kind: "plan-restricted" }
   | ({ readonly kind: "network-error" } & AttachGrantFailure);
 
 /**
@@ -81,34 +75,12 @@ export type AttachGrantResult =
  */
 
 /**
- * Reads a 401/403 body TEXT looking for the attach-grant entitlement denial
- * (`reason: "plan_restricted"` — CS's `HOST_CONNECTIVITY_DENIAL_REASON`).
- * Any parse failure means "not plan-restricted": the caller then treats the
- * status as an ordinary credential rejection, the safe default. Takes the
- * already-read text (not the `Response`) so the same single body read also
- * feeds the failure detail — a `Response` body can only be consumed once.
- */
-function isPlanRestrictedBody(bodyText: string): boolean {
-  let body: unknown;
-  try {
-    body = JSON.parse(bodyText);
-  } catch {
-    return false;
-  }
-  if (typeof body !== "object" || body === null) {
-    return false;
-  }
-  return (body as Record<string, unknown>).reason === "plan_restricted";
-}
-
-/**
  * Hard cap on how much of a FAILURE body is pulled off the wire at all. Only
  * {@link BODY_SNIPPET_CAP} characters of it ever survive into a log line, and a
  * 5xx here enters the session's forever-retrying mint loop — so buffering a
  * whole error page or a proxy's HTML on every attempt allocates its full size
  * over and over inside the renderer for text nobody reads. Sized far above any
- * real authn error body so {@link isPlanRestrictedBody} still parses a
- * complete JSON document.
+ * real authn error body.
  */
 const BODY_READ_CAP_BYTES = 64 * 1024;
 
@@ -278,9 +250,6 @@ export async function mintAttachGrantViaHttp(
 
   if (response.status === 401 || response.status === 403) {
     const bodyText = await readBodyText(response);
-    if (isPlanRestrictedBody(bodyText)) {
-      return { kind: "plan-restricted" };
-    }
     return {
       kind: "unauthorized",
       detail: `authn rejected the mint with HTTP ${response.status}`,
@@ -329,9 +298,7 @@ export async function mintAttachGrantViaHttp(
  * Builds an `AttachGrantProvider` bound to a host + bearer source. Every
  * non-`ok` mint collapses to `unavailable` (reconnect backoff — a transient CS
  * blip must not hard-fail the session; the re-auth bound still fail-closes a
- * genuinely revoked host at its next relay deadline) EXCEPT the
- * plan-restricted entitlement denial, which is surfaced so the session can go
- * terminal instead of dialing a relay it will never be granted.
+ * genuinely revoked host at its next relay deadline).
  */
 export function createAttachGrantProvider(deps: {
   readonly authnBaseUrl: string;
@@ -356,9 +323,6 @@ export function createAttachGrantProvider(deps: {
     );
     if (result.kind === "ok") {
       return { kind: "ok", grant: result.grant };
-    }
-    if (result.kind === "plan-restricted") {
-      return { kind: "plan-restricted" };
     }
     return {
       kind: "unavailable",

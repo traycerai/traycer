@@ -212,8 +212,11 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("blocks behind a foreign lock holder and proceeds only after it releases", async () => {
-      const { cliLockPath, ensureCliInstallHomeDir } =
+      const { cliLockPath, ensureCliInstallHomeDir, hostHomeDir } =
         await import("../../store/paths");
+      // HOME-safety guard: prove the redirect actually took before this
+      // test spawns a real worker against a real lock file on disk.
+      expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
       await ensureCliInstallHomeDir("production");
       const lockPath = cliLockPath("production");
 
@@ -235,6 +238,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: false,
           force: false,
           deferIfParked: false,
+          lifecycleOrigin: "terminal",
         });
         const pending = command(fakeCtx());
 
@@ -261,8 +265,11 @@ describe.skipIf(process.platform === "win32")(
     }, 20_000);
 
     it("--if-idle probes AFTER lock acquisition: an agent that starts busy while restart is still waiting behind a foreign holder is still caught", async () => {
-      const { cliLockPath, ensureCliInstallHomeDir } =
+      const { cliLockPath, ensureCliInstallHomeDir, hostHomeDir } =
         await import("../../store/paths");
+      // HOME-safety guard: prove the redirect actually took before this
+      // test spawns a real worker against a real lock file on disk.
+      expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
       await ensureCliInstallHomeDir("production");
       const lockPath = cliLockPath("production");
 
@@ -284,6 +291,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: true,
           force: false,
           deferIfParked: false,
+          lifecycleOrigin: "terminal",
         });
         const pending = command(fakeCtx());
 
@@ -308,8 +316,11 @@ describe.skipIf(process.platform === "win32")(
     }, 20_000);
 
     it("keeps the install-runtime attestation inside cli-lock until its read has completed", async () => {
-      const { cliLockPath, ensureCliInstallHomeDir } =
+      const { cliLockPath, ensureCliInstallHomeDir, hostHomeDir } =
         await import("../../store/paths");
+      // HOME-safety guard: prove the redirect actually took before this
+      // test spawns a real worker against a real lock file on disk.
+      expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
       await ensureCliInstallHomeDir("production");
       const lockPath = cliLockPath("production");
       const attestationStarted = deferred();
@@ -327,6 +338,7 @@ describe.skipIf(process.platform === "win32")(
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       })(fakeCtx());
       await attestationStarted.promise;
       const { exited } = spawnLockWorker(WORKER_SCRIPT, {

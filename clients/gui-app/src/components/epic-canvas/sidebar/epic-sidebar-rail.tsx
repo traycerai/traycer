@@ -23,7 +23,6 @@ import {
   type RailEntry,
 } from "@/lib/layout/rail";
 import {
-  isStackedRailPanel,
   railStackJoin,
   type EdgeSide,
   type RailStackJoin,
@@ -77,7 +76,6 @@ import {
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
   LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
-  LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS,
   LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
   LEFT_PANEL_RAIL_TILE_CLASS,
   railGroupLabel,
@@ -325,7 +323,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
       : getLeftPanelDefinition(panelSectionDragSource.panelId);
   const dropAtRailEnd = railPanelDropPreview?.kind === "left-panel-rail-list";
   // What this tab's rail drag carries, whatever it was grabbed off, so a
-  // middle-band preview can be read as a join, a refusal or nothing (L-181).
+  // middle-band preview can be read as a join or nothing (L-181).
   const dragSource = useLeftPanelRailDragSource(tabId);
   const dropCueFor = (
     targetPanelId: LeftPanelId,
@@ -345,15 +343,6 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   // `before` and `after` draw a boundary slot beside it, because it is going
   // next to it. The icon used to light on `isOver` alone, which said "into
   // this one" for all three.
-  // Whether this panel's SECTION is collapsed the way the body draws it: the
-  // flag only means anything while the panel is in a stack, which is the
-  // same reading `LeftPanelSectionContent` applies.
-  const sectionCollapsed = useCallback(
-    (panelId: LeftPanelId): boolean =>
-      collapsedById[panelId] === true &&
-      isStackedRailPanel(rail, railRegionForLeftPanelId(panelId)),
-    [collapsedById, rail],
-  );
   const previewPositionFor = (
     panelId: LeftPanelId,
   ): LeftPanelRailDropPosition | null =>
@@ -366,50 +355,37 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   // (R5R-09): when the active panel is hidden the rail lights the fallback,
   // and clicking the lit icon has to collapse the column the way clicking a
   // lit icon always does rather than silently re-selecting it.
-  //
-  // One exception, and it is the state per-section collapse created (L-170):
-  // the lit panel can be displayed AND collapsed, and there the click means
-  // "put this section back", not "collapse the sidebar". Without it the only
-  // way out of a collapsed active section is the chevron inside a header the
-  // user has to find again, and the icon they reach for instead collapses the
-  // whole column.
   const handleClick = useCallback(
     (panelId: LeftPanelId) => {
-      if (panelId === displayedPanelId && !sectionCollapsed(panelId)) {
+      if (panelId === displayedPanelId) {
         toggleMainCollapsed(tabId);
         return;
       }
       setActivePanelIdAndExpand(tabId, panelId);
     },
-    [
-      displayedPanelId,
-      sectionCollapsed,
-      setActivePanelIdAndExpand,
-      tabId,
-      toggleMainCollapsed,
-    ],
+    [displayedPanelId, setActivePanelIdAndExpand, tabId, toggleMainCollapsed],
   );
 
   // A stack's icon (G3) is lit while any member is the displayed panel, and
-  // clicking it is the same three answers a panel's icon gives: collapse the
-  // column when the stack is showing, put back a member section the user
-  // collapsed, and otherwise open the stack on its top panel.
+  // then it collapses the column like any lit icon (VS Code's rule), leaving
+  // each section as the user set it. It used to re-open a collapsed member
+  // first, one per click, keyed on which member was "active" - which a stack,
+  // drawing every member at once, never shows. Opening the stack lands on a
+  // member that is already open, so it changes no section either.
   const handleGroupClick = useCallback(
     (members: ReadonlyArray<LeftPanelId>) => {
-      const showing = members.some((member) => member === displayedPanelId);
-      const collapsedMember = members.find(sectionCollapsed);
-      if (showing && collapsedMember === undefined) {
+      if (members.some((member) => member === displayedPanelId)) {
         toggleMainCollapsed(tabId);
         return;
       }
       setActivePanelIdAndExpand(
         tabId,
-        collapsedMember ?? (showing ? displayedPanelId : null) ?? members[0],
+        members.find((member) => collapsedById[member] !== true) ?? members[0],
       );
     },
     [
+      collapsedById,
       displayedPanelId,
-      sectionCollapsed,
       setActivePanelIdAndExpand,
       tabId,
       toggleMainCollapsed,
@@ -632,7 +608,7 @@ interface RailPanelButtonProps {
   readonly active: boolean;
   /**
    * What a drop aimed at this icon's MIDDLE band would do (L-181): join its
-   * stack, or be refused because the stack is full.
+   * stack, or nothing.
    */
   readonly dropCue: Exclude<RailStackJoin, "same"> | null;
   readonly onClick: () => void;
@@ -797,7 +773,6 @@ export function RailButton(props: RailButtonProps) {
             active && activeClass,
             isDragSource && "cursor-grabbing opacity-50",
             dropCue === "join" && LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
-            dropCue === "full" && LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS,
           )}
         >
           <span

@@ -87,6 +87,9 @@ describe("StartPageSettingsSection", () => {
 
   it("hides wallpaper effects until a wallpaper is set", () => {
     renderSection();
+    expect(
+      screen.queryByRole("heading", { level: 2, name: "Start page" }),
+    ).toBeNull();
     expect(rowLabels()).toEqual([
       "Wallpaper",
       "Traycer team curated wallpapers",

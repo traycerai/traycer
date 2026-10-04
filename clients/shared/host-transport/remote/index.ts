@@ -24,8 +24,6 @@ export { RemoteHostMessenger } from "./remote-host-messenger";
 export { RemoteStreamClient } from "./remote-stream-client";
 export {
   acquireRemoteSession,
-  planRestrictedReprobeAt,
-  planRestrictedReprobeAtForHost,
   hasReadyRemoteSession,
   hasBorrowableRemoteSession,
   tryAcquireReadyRemoteSession,
@@ -55,7 +53,6 @@ export {
   type AttachGrantProvider,
   type AttachGrantProvision,
 } from "./grant-client";
-export { PLAN_RESTRICTED_FATAL_CODE } from "./remote-session";
 export {
   decodeHostPublicKey,
   InvalidHostPublicKeyError,

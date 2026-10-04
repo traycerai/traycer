@@ -23,7 +23,6 @@ import {
   switchControl,
   sweepCounts,
   sweepEntryName,
-  type SweepContext,
   type SweepEntry,
   type SweepStep,
 } from "@/components/layout-editor/__tests__/layout-sweep-plan";
@@ -111,18 +110,6 @@ const CONFIGURED_PREFIXES = SWEEP_CONFIGURED_PROVIDERS.map(
 
 const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   {
-    id: "limits-choose",
-    matches: (entry) =>
-      entry.source === "provider-limits" && entry.id.endsWith(":choose"),
-    why: "Choose seeds its picks with what Automatic draws, so the picture does not move until a pick changes",
-  },
-  {
-    id: "limits-automatic",
-    matches: (entry) =>
-      entry.source === "provider-limits" && entry.id.endsWith(":automatic"),
-    why: "back from Choose..., whose picks were seeded with the window Automatic draws, so the picture is the same",
-  },
-  {
     id: "unconfigured-provider-hidden",
     matches: (entry) =>
       entry.source === "provider-display" &&
@@ -134,12 +121,6 @@ const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
     matches: (entry) =>
       entry.id.startsWith("region-style:model:reasoningControl"),
     why: "the footer it styles is inside the model picker, which is closed here; the row pictures both options, and the editor opens its sample picker while Model is selected (L-173)",
-  },
-  {
-    id: "side-foot-single-move",
-    matches: (entry) =>
-      entry.id.includes(":side-foot:") && entry.given.length === 1,
-    why: "the tab strip's foot draws its readings as one row, the header's left end then its right end with usage before resources inside an end; with usage at the start and resources at the end either one moved alone leaves that order as it was (the entry that moves both, and flips it, must change the column)",
   },
   {
     id: "status-bar-parked",
@@ -183,12 +164,11 @@ function pause(ms: number): Promise<void> {
   });
 }
 
-function planFor(mount: SweepMount): ReadonlyArray<SweepEntry> {
+function sweepPlan(): ReadonlyArray<SweepEntry> {
   return buildSweepPlan({
     shipped: shippedLayoutSnapshot(),
     availability: AVAILABILITY,
     configuredProviders: SWEEP_CONFIGURED_PROVIDERS,
-    usage: mount.providerUsage(),
   });
 }
 
@@ -196,7 +176,6 @@ function planFor(mount: SweepMount): ReadonlyArray<SweepEntry> {
 async function warmUp(
   mount: SweepMount,
   plan: ReadonlyArray<SweepEntry>,
-  context: SweepContext,
 ): Promise<void> {
   for (const entry of plan) {
     await mount.poke(() => {
@@ -204,11 +183,11 @@ async function warmUp(
     });
     for (const step of entry.given) {
       await mount.poke(() => {
-        step.run(context);
+        step.run();
       });
     }
     await mount.poke(() => {
-      entry.write.run(context);
+      entry.write.run();
     });
   }
 }
@@ -216,11 +195,7 @@ async function warmUp(
 async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
   const started = performance.now();
   const mount = await mountSweepWindow(windowKind);
-  const context: SweepContext = {
-    providerUsage: (providerId) =>
-      mount.providerUsage().get(providerId) ?? null,
-  };
-  const plan = planFor(mount);
+  const plan = sweepPlan();
 
   // Warm-up: every entry once, unrecorded. A tree keeps things it only sets
   // the first time something re-renders (dnd-kit puts an inline
@@ -228,12 +203,12 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
   // list re-renders), and a baseline taken before that would see the first
   // write of a setting that changes nothing as a change. After a pass every
   // such thing has happened, and a second pass proves none is left.
-  await warmUp(mount, plan, context);
+  await warmUp(mount, plan);
   await mount.apply(() => {
     resetToShippedLayout();
   });
   const warmed = mount.signature();
-  await warmUp(mount, plan, context);
+  await warmUp(mount, plan);
   await mount.apply(() => {
     resetToShippedLayout();
   });
@@ -262,7 +237,7 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
     });
     for (const step of entry.given) {
       await mount.apply(() => {
-        step.run(context);
+        step.run();
       });
     }
     const before = mount.signature();
@@ -271,7 +246,7 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
     const baselineHeld = mount.signature() === before;
     const storedBefore = JSON.stringify(getLayoutSnapshot());
     await mount.apply(() => {
-      entry.write.run(context);
+      entry.write.run();
     });
     const stored = JSON.stringify(getLayoutSnapshot()) !== storedBefore;
     results.push({
@@ -534,9 +509,11 @@ const ARRANGEMENT_SWEEP: Record<keyof LayoutArrangement, Sweep | NotSwept> = {
   rail: SWEPT,
   usageProviders: SWEPT,
   hiddenProviders: SWEPT,
-  providerLimits: SWEPT,
+  providerLimits: notSwept(
+    "edited on a provider's own page in Settings > Providers, not on this one; its control is held by provider-limits-choose.test.tsx",
+  ),
   shownProfiles: notSwept(
-    "written only by the usage popover's account checklist, never by a Layout setting, and it changes what draws only for a provider with more than one account: this host lists no profiles, so no selection could change the column",
+    "written by the usage popover's account checklist and by the Profiles list's eyes for a provider's profiles, and it changes what draws only for a provider with more than one account: this host lists no second account, so neither control exists here and no selection could change the column",
   ),
   usageHost: SWEPT,
   usageSide: SWEPT,
@@ -554,6 +531,7 @@ const ARRANGEMENT_SWEEP: Record<keyof LayoutArrangement, Sweep | NotSwept> = {
   sideStripView: SWEPT,
   taskTabLayout: SWEPT,
   readingWidth: SWEPT,
+  wideReadingWidthPx: SWEPT,
 };
 
 /**
@@ -565,13 +543,13 @@ type GrammarRowKind = AnyGrammarRow["kind"];
 type ControlSpecKind = FineTuneRowFacts["control"]["kind"];
 
 const GRAMMAR_ROW_SWEEP: Record<GrammarRowKind, string> = {
-  "position-host": "region-position: one entry per unchecked bar",
-  "position-side": "region-position: one entry per unchecked side",
+  "position-host": "region-position: one entry per unchecked spot",
+  "position-side": "region-position: the minimap's unchecked side",
   "position-order":
     "order-list: the group's list, its first movable row down and its second up",
   style: "region-style: one entry per unchecked example",
   "fine-tune": "region-fine-tune: one entry per control option",
-  children: "provider-display and provider-limits: the Providers list",
+  children: "provider-display: the Profiles list's provider eyes",
 };
 
 const CONTROL_SPEC_SWEEP: Record<ControlSpecKind, string> = {
@@ -639,11 +617,7 @@ function registryIdentities(): ReadonlyArray<string> {
           identities.push(`style:${region.id}:${row.key}`);
           break;
         case "children":
-          identities.push(
-            "order:usageProviders",
-            "provider-display",
-            "provider-limits",
-          );
+          identities.push("order:usageProviders", "provider-display");
           break;
         case "fine-tune":
           for (const detail of row.rows) {
@@ -698,6 +672,9 @@ function operable(node: HTMLElement): boolean {
 function rowIdOf(node: Element): string {
   return (
     node.closest("[data-sortable-id]")?.getAttribute("data-sortable-id") ??
+    node
+      .closest("[data-region-section]")
+      ?.getAttribute("data-region-section") ??
     NO_ROW
   );
 }
@@ -712,6 +689,9 @@ function nameOf(node: Element): string {
 
 const RAIL_VERBS =
   /^(Stack .* with the panel below|Unstack .*|Remove stack|Remove divider)$/;
+
+/** The Profiles list's eyes: a provider's and a profile's, "Hide Codex" or "Show team". */
+const EYE_VERBS = /^(Hide|Show) (?!all providers|other providers)/;
 
 /**
  * Every control a person can operate on the mounted Settings > Layout page,
@@ -790,10 +770,16 @@ function addButtonControls(
   root: HTMLElement,
   controls: Map<string, PageControl>,
 ): void {
-  for (const node of root.querySelectorAll<HTMLElement>("button")) {
+  for (const node of root.querySelectorAll<HTMLElement>(
+    "button:not([role='switch'])",
+  )) {
     if (!operable(node)) continue;
     const name = nameOf(node);
-    if (RAIL_VERBS.test(name) || name === "Add divider") {
+    if (
+      RAIL_VERBS.test(name) ||
+      EYE_VERBS.test(name) ||
+      name === "Add divider"
+    ) {
       controls.set(buttonControl(rowIdOf(node), name), liveControl(node));
     }
   }
@@ -857,16 +843,12 @@ async function pageAfter(
   panel: SweepMount,
   given: ReadonlyArray<SweepStep>,
 ): Promise<ReadonlyMap<string, PageControl>> {
-  const context: SweepContext = {
-    providerUsage: (providerId) =>
-      panel.providerUsage().get(providerId) ?? null,
-  };
   await panel.apply(() => {
     resetToShippedLayout();
   });
   for (const step of given) {
     await panel.apply(() => {
-      step.run(context);
+      step.run();
     });
   }
   await openEveryDisclosure(panel);
@@ -995,7 +977,7 @@ describe("the plan is held to the registries and to the real page", () => {
     // And the plan names nothing the registry does not have.
     const phantom = [...covered].filter(
       (identity) =>
-        /^(display|position-host|position-side|style|fine-tune|order|provider-display|provider-limits)/.test(
+        /^(display|position-host|position-side|style|fine-tune|order|provider-display)/.test(
           identity,
         ) &&
         !declared.includes(identity) &&
@@ -1051,10 +1033,6 @@ describe("the plan is held to the registries and to the real page", () => {
     async () => {
       const opened = panel;
       if (opened === null) throw new Error("the settings panel did not mount");
-      const context: SweepContext = {
-        providerUsage: (providerId) =>
-          opened.providerUsage().get(providerId) ?? null,
-      };
       const mirrored = plan().filter((entry) => entry.mirrors !== null);
       expect(mirrored.length).toBeGreaterThan(0);
       const differ: string[] = [];
@@ -1072,11 +1050,11 @@ describe("the plan is held to the registries and to the real page", () => {
         });
         for (const step of entry.given) {
           await opened.apply(() => {
-            step.run(context);
+            step.run();
           });
         }
         await opened.apply(() => {
-          entry.write.run(context);
+          entry.write.run();
         });
         const viaPlan = JSON.stringify(getLayoutSnapshot());
         if (viaPage !== viaPlan) {

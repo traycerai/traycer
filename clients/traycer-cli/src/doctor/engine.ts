@@ -15,10 +15,14 @@ import {
   cliPostFinalizeMarkerPath,
   hostCredentialPath,
   hostDevIdentityPoolRoot,
+  hostHomeDir,
   hostIdentityNeedsReauthPath,
   hostNeedsReauthPath,
   hostUpdateProgressMarkerLockPath,
 } from "../store/paths";
+import { lockHolderLivenessGivenPublisher } from "@traycer-clients/shared/host-lock/cross-process-lock";
+import { verifyProcessIdentityAsync } from "@traycer-clients/shared/host-lock/process-identity";
+import { updateAttemptLockPath } from "@traycer-clients/shared/host-update";
 import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
@@ -61,13 +65,38 @@ import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
 import { probeUpdateMarkerLock } from "./update-marker-lock";
+import { probeUpdateAttemptLock } from "./update-attempt-lock";
+import {
+  readHostLifecycleSnapshot,
+  type HostLifecycleSnapshot,
+} from "../host/lifecycle-snapshot";
 import { CliError } from "../runner/errors";
 import {
   createServiceController,
   serviceLabelFor,
+  type ServiceLabel,
   type ServiceStatus,
 } from "../service";
 import { smAppServiceAgentLabelId } from "../service/label";
+import {
+  createServiceDefinitionRefresher,
+  type ServiceDefinitionRefresher,
+} from "../service/definition-refresh";
+import {
+  readServiceRegistrationDisabled,
+  SERVICE_REGISTRATION_DISABLED_MESSAGE,
+} from "../service/registration-disabled";
+import { readServiceRegistrationOwnership } from "../service/registration-owner";
+import {
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+  type WindowsTaskNotOwnedReason,
+} from "../service/platforms/windows-task-gate";
+import {
+  SERVICE_REFRESH_COMMAND,
+  SERVICE_REINSTALL_COMMAND,
+  type ServiceDefinitionState,
+} from "../service/service-definition";
+import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
 import {
   createRealLaunchdPrintRunner,
   probeMacosWedgedJob,
@@ -177,8 +206,20 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const label = serviceLabelFor(opts.environment);
   let serviceStatus: ServiceStatus | null = null;
   let stoppedServiceIssue: DoctorIssue | null = null;
+  // Whose registration this is comes first: a task another user owns is not
+  // this account's missing, stopped, stale or disabled service, and every fix
+  // those issues offer (Register service, Start host, Update service) is a
+  // write the ownership gate refuses. So it is the one service issue shown,
+  // with no fix, and the checks below that would offer one are skipped.
+  const taskNotOwnedReason = await serviceTaskNotOwnedBestEffort(label);
+  const taskNotOwned = taskNotOwnedReason !== null;
+  if (taskNotOwnedReason !== null) {
+    issues.push(serviceTaskNotOwnedIssue(taskNotOwnedReason));
+  }
   try {
-    serviceStatus = await createServiceController().status(label);
+    serviceStatus = taskNotOwned
+      ? null
+      : await createServiceController().status(label);
   } catch (err) {
     issues.push({
       code: DOCTOR_ISSUE_CODES.SERVICE_NOT_REGISTERED,
@@ -820,6 +861,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   });
   if (markerLockIssue !== null) issues.push(markerLockIssue);
 
+  // ---- 4f. Host update-attempt lock left by an interrupted install ----
+  // A maintenance lease whose supervisor died after handing liveness to the
+  // installer tree leaves a record that, on Windows, the lock's own rule can
+  // never judge stale - so every later scripted install and uninstall is
+  // refused as a live contender, and this file is the only trace. Read-only:
+  // removing it needs a person to confirm no installer is running.
+  const attemptLockIssue = await probeUpdateAttemptLock({
+    lockPath: updateAttemptLockPath(hostHomeDir(opts.environment)),
+    verifyPublisher: verifyProcessIdentityAsync,
+    livenessGivenPublisher: lockHolderLivenessGivenPublisher,
+  });
+  if (attemptLockIssue !== null) issues.push(attemptLockIssue);
+
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a
   // shared / VDI host, other users may have read access via default
@@ -878,7 +932,195 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     });
   }
 
-  return { issues };
+  // ---- 7. Host lifecycle policy ----
+  const lifecycle = await readHostLifecycleSnapshot(
+    opts.environment,
+    hostProcessAlive,
+  );
+  issues.push(...lifecycleIssues(lifecycle, hostProcessAlive));
+  if (!taskNotOwned) {
+    issues.push(
+      ...(await serviceDefinitionIssues(
+        opts.environment,
+        lifecycle.policy.mode,
+      )),
+    );
+    issues.push(...(await serviceRegistrationIssues(opts.environment)));
+  }
+
+  return { issues, lifecycle };
+}
+
+// Why the registration is not this account's, or `null` when it is (or there
+// is none). A read that cannot answer is not an issue: the other checks run as
+// before, and every write they could lead to still asks the gate itself.
+async function serviceTaskNotOwnedBestEffort(
+  label: ServiceLabel,
+): Promise<WindowsTaskNotOwnedReason | null> {
+  try {
+    const ownership = await readServiceRegistrationOwnership(
+      label,
+      process.platform,
+    );
+    return ownership.kind === "not-owned" ? ownership.reason : null;
+  } catch {
+    return null;
+  }
+}
+
+// Another user's task, or one whose owner could not be confirmed: the same
+// issue and the same "no fix", but only the first is said to be another
+// user's. Running the checks again is this card's own retry.
+const SERVICE_TASK_OWNER_UNCONFIRMED_DOCTOR_MESSAGE =
+  "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Run the checks again.";
+
+function serviceTaskNotOwnedIssue(
+  reason: WindowsTaskNotOwnedReason,
+): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_SERVICE_TASK_NOT_OWNED,
+    severity: "error",
+    title:
+      reason === "other-owner"
+        ? "Host task is owned by another user"
+        : "Couldn't confirm the host task is yours",
+    message:
+      reason === "other-owner"
+        ? SERVICE_TASK_NOT_OWNED_MESSAGE
+        : SERVICE_TASK_OWNER_UNCONFIRMED_DOCTOR_MESSAGE,
+    // Nothing this account runs repairs it: no button, and no command to
+    // copy that would only be refused.
+    fixAction: null,
+    terminalCommand: null,
+    details: null,
+  };
+}
+
+/**
+ * A registration its owner switched off: the state `host ensure` refuses to
+ * re-register over, named here with the same two repairs, in any lifecycle
+ * mode. A read that fails is not an issue; the ensure escalates as before.
+ */
+async function serviceRegistrationIssues(
+  environment: Environment,
+): Promise<DoctorIssue[]> {
+  const registration = await readServiceRegistrationDisabled(
+    serviceLabelFor(environment),
+    process.platform,
+  );
+  if (registration.kind !== "disabled") return [];
+  return [
+    {
+      code: DOCTOR_ISSUE_CODES.HOST_SERVICE_REGISTRATION_DISABLED,
+      severity: "error",
+      title: "Traycer Host task is disabled in Task Scheduler",
+      message: `${SERVICE_REGISTRATION_DISABLED_MESSAGE}. Nothing starts the host while it is disabled; installing the service registers the task enabled again and restarts the host.`,
+      fixAction: "service-install",
+      terminalCommand: SERVICE_REINSTALL_COMMAND,
+      details: null,
+    },
+  ];
+}
+
+/**
+ * The registered service definition, read back under a mode that parks.
+ * The same predicate `host service refresh` acts on, so this is the retry
+ * path when a mode change's own refresh failed - and the only signal when
+ * the mode was already set, since re-choosing it is not a transition.
+ */
+async function serviceDefinitionIssues(
+  environment: Environment,
+  mode: HostLifecycleMode,
+): Promise<DoctorIssue[]> {
+  if (mode === "background") return [];
+  let refresher: ServiceDefinitionRefresher;
+  try {
+    refresher = createServiceDefinitionRefresher(null);
+  } catch {
+    // Unsupported platform: there is no definition to judge.
+    return [];
+  }
+  // `inspect` reports an unreadable definition as `unrecognized` rather
+  // than throwing, so nothing else is swallowed here.
+  const state: ServiceDefinitionState = await refresher.inspect(
+    serviceLabelFor(environment),
+  );
+  if (state.kind === "stale") {
+    return [
+      {
+        code: DOCTOR_ISSUE_CODES.HOST_SERVICE_DEFINITION_STALE,
+        severity: "warning",
+        title: "Login starts may not follow the lifecycle mode",
+        message: `The lifecycle mode is '${mode}', but the registered host service is older than this CLI's launcher. The mode parks only labelled service starts, and an older launcher can start the host at login without its label, which then runs instead of being parked. Refreshing the definition starts and stops nothing${state.appliesAt === "next-login" ? "; on macOS it applies at the next login, not to a respawn before then" : "; the new launcher applies from the host's next start"}.`,
+        // Desktop's "Update service" runs the same `host service refresh`
+        // its own mode change runs; the terminal command is the same verb.
+        fixAction: "service-refresh",
+        terminalCommand: SERVICE_REFRESH_COMMAND,
+        details: { mode, form: state.form, appliesAt: state.appliesAt },
+      },
+    ];
+  }
+  if (state.kind === "unrecognized") {
+    return [
+      {
+        code: DOCTOR_ISSUE_CODES.HOST_SERVICE_DEFINITION_UNRECOGNIZED,
+        severity: "warning",
+        title: "Host service definition is not recognized",
+        message: `The lifecycle mode is '${mode}', but the registered host service could not be read as one Traycer wrote (${state.reason}), so it is left alone and cannot be relied on to park login starts. Re-registering the service replaces it; that restarts the host.`,
+        fixAction: "service-install",
+        terminalCommand: SERVICE_REINSTALL_COMMAND,
+        details: { mode, reason: state.reason },
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * The lifecycle facts are always in the report (`DoctorResult.lifecycle`);
+ * these are the two states that need a person to act.
+ */
+function lifecycleIssues(
+  lifecycle: HostLifecycleSnapshot,
+  hostProcessAlive: boolean,
+): DoctorIssue[] {
+  const issues: DoctorIssue[] = [];
+  const { policy, supervisor } = lifecycle;
+  if (policy.state === "invalid" || policy.state === "unreadable") {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.HOST_LIFECYCLE_POLICY_UNREADABLE,
+      severity: "warning",
+      title:
+        policy.state === "invalid"
+          ? "Host lifecycle policy file is corrupt"
+          : "Host lifecycle policy file cannot be read",
+      message: `${policy.path} is ${policy.state === "invalid" ? "not a valid lifecycle policy" : "unreadable"}, so the host runs in Background mode: it starts at login and keeps running after the app quits, whatever mode was chosen. Choose the mode again in Traycer's settings, or with 'traycer host lifecycle set <mode>'.`,
+      // No Desktop button: which mode to restore is the user's choice.
+      fixAction: null,
+      terminalCommand: "traycer host lifecycle set background",
+      details: { path: policy.path, state: policy.state },
+    });
+  }
+  if (
+    policy.mode !== "background" &&
+    hostProcessAlive &&
+    !supervisor.enforcesLifecyclePolicy
+  ) {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.HOST_LIFECYCLE_POLICY_NOT_ENFORCED,
+      severity: "warning",
+      title: "Host lifecycle mode is not enforced yet",
+      message: `The lifecycle mode is '${policy.mode}', but the running host supervisor does not enforce lifecycle modes (it predates them, or it exited without cleaning up). The mode takes effect after the host restarts.`,
+      fixAction: "host-restart",
+      terminalCommand: "traycer host restart",
+      details: {
+        mode: policy.mode,
+        supervisorRecord: supervisor.state,
+        supervisorLiveness: supervisor.liveness,
+      },
+    });
+  }
+  return issues;
 }
 
 /**
@@ -1196,7 +1438,14 @@ function probeWindowsScriptHostPolicy(): DoctorIssue | null {
           "/v",
           "Enabled",
         ],
-        { encoding: "utf8", windowsHide: true, timeout: 5000 },
+        // execFileSync copies a failing child's stderr into this process's
+        // stderr unless `stdio` is given; captured here, never forwarded.
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 5000,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
       );
     } catch {
       // Key or value absent - WSH enabled by default.
@@ -1235,6 +1484,7 @@ async function probeWindowsCredentialsAcl(
       encoding: "utf8",
       windowsHide: true,
       timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     return null;

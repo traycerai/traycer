@@ -52,14 +52,14 @@ export function PicturedOptions(props: {
         {options.map((option) => {
           const checked = option.id === value;
           return (
-            <RadioGroupPrimitive.Item
+            // The card is a plain container and the radio is a sibling laid
+            // over it: an option draws the REAL leaf, which can itself be a
+            // `<button>` (`HarnessModelTrigger`, the strip's agent rows), and
+            // a radio that held the picture would nest one in the other.
+            <div
               key={option.id}
-              value={option.id}
-              // The picture is `inert` below, so it is out of the a11y tree and
-              // this radio has no name left to take from its content.
-              aria-label={option.label}
               className={cn(
-                "grid items-center gap-x-2.5 rounded-lg border border-border bg-card px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:press-scrim disabled:opacity-50",
+                "relative grid items-center gap-x-2.5 rounded-lg border border-border bg-card px-2.5 py-2 text-left transition-colors has-disabled:opacity-50",
                 above
                   ? "grid-cols-[auto_minmax(0,1fr)] gap-y-2"
                   : "col-span-3 grid-cols-subgrid",
@@ -67,17 +67,15 @@ export function PicturedOptions(props: {
               )}
             >
               <span
+                aria-hidden
                 className={cn(
                   "relative size-3.5 shrink-0 rounded-full border border-input",
                   checked &&
                     "border-foreground after:absolute after:inset-0.75 after:rounded-full after:bg-foreground after:content-['']",
                 )}
               />
-              {/* `inert`: an option draws the REAL leaf, and for Model that
-                leaf is `HarnessModelTrigger` - a genuine `<button>` nested
-                inside a `role="radio"`, which is invalid markup (P-8, P-9).
-                `inert` takes the picture out of focus, hit testing and the
-                a11y tree in one, which leaves this radio as the row's one
+              {/* `inert` takes the picture out of focus, hit testing and the
+                a11y tree in one, which leaves the radio as the row's one
                 control. */}
               {above ? optionLabel(option.label) : null}
               <span
@@ -90,7 +88,13 @@ export function PicturedOptions(props: {
                 {option.picture}
               </span>
               {above ? null : optionLabel(option.label)}
-            </RadioGroupPrimitive.Item>
+              <RadioGroupPrimitive.Item
+                value={option.id}
+                // Nothing inside it, so it takes its name from here.
+                aria-label={option.label}
+                className="absolute -inset-px rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:press-scrim"
+              />
+            </div>
           );
         })}
       </RadioGroupPrimitive.Root>
@@ -99,5 +103,9 @@ export function PicturedOptions(props: {
 }
 
 function optionLabel(label: string): ReactNode {
-  return <span className="text-ui-xs text-muted-foreground">{label}</span>;
+  return (
+    <span aria-hidden className="text-ui-xs text-muted-foreground">
+      {label}
+    </span>
+  );
 }

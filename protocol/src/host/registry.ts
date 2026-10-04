@@ -1,3 +1,4 @@
+import { PROFILE_COPY_RPC_METHODS } from "./profile-copy-contracts";
 import {
   organizationReadV10,
   organizationReadV11,
@@ -327,14 +328,18 @@ import {
   hostStatusUpgradeV12ToV13,
   hostStatusUpgradeV13ToV14,
   hostStatusUpgradeV14ToV15,
+  hostStatusUpgradeV15ToV16,
   hostStatusV15,
+  hostStatusV16,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
   hostRestartUpgradeV11ToV12,
+  hostRestartUpgradeV12ToV13,
   hostRestartV10,
   hostRestartV11,
   hostRestartV12,
+  hostRestartV13,
 } from "@traycer/protocol/host/restart/contracts";
 import {
   providersFallbackPolicyGetUpgradeV10ToV11,
@@ -415,6 +420,8 @@ import {
   configShellResetV10,
   configShellRevertArgsV10,
   configShellSetV10,
+  configWorktreesGetV10,
+  configWorktreesSetV10,
 } from "@traycer/protocol/host/config/contracts";
 import {
   diagnosticsLogsListV10,
@@ -532,6 +539,7 @@ import {
   epicCreateChatV10,
   epicCreateChatV11,
   epicCreateChatV12,
+  epicContinueSubagentV10,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -738,6 +746,7 @@ import {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   browserSavedLoginSitesV10,
@@ -1041,6 +1050,7 @@ import {
   providersAwaitMcpAuthRequestSchema,
   providersAwaitMcpAuthResponseSchema,
   providersCancelLoginRequestSchemaV11,
+  providersCancelLoginRequestSchemaV12,
   providersCancelLoginResponseSchema,
   providersCancelMcpAuthRequestSchema,
   providersCancelMcpAuthResponseSchema,
@@ -1063,6 +1073,7 @@ import {
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchemaV10,
   providersStartLoginRequestSchemaV11,
+  providersStartLoginRequestSchemaV14,
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
   providersStartLoginResponseSchemaV12,
@@ -3698,6 +3709,25 @@ export const providersStartLoginUpgradeV12ToV13 = defineUpgradePath<
   }),
 });
 
+// Ownership is negotiated on both start@1.4 and cancel@1.2. Older callers
+// acquire an anonymous claim, preserving their scope-keyed cancellation.
+export const providersStartLoginV14 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: providersStartLoginRequestSchemaV14,
+  responseSchema: providersStartLoginResponseSchemaV13,
+});
+
+export const providersStartLoginUpgradeV13ToV14 = defineUpgradePath<
+  typeof providersStartLoginV13,
+  typeof providersStartLoginV14
+>({
+  from: { major: 1, minor: 3 },
+  to: { major: 1, minor: 4 },
+  upgradeRequest: (request) => ({ ...request, holderId: null }),
+  upgradeResponse: (response) => response,
+});
+
 export const providersAwaitLoginV10 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3885,6 +3915,23 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({
     ...response,
   }),
+});
+
+export const providersCancelLoginV12 = defineRpcContract({
+  method: "providers.cancelLogin",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: providersCancelLoginRequestSchemaV12,
+  responseSchema: providersCancelLoginResponseSchema,
+});
+
+export const providersCancelLoginUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersCancelLoginV11,
+  typeof providersCancelLoginV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => ({ ...request, holderId: null }),
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -5435,6 +5482,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "config.worktrees.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configWorktreesGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.worktrees.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configWorktreesSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "diagnostics.logs.list": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5463,7 +5536,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -5489,6 +5562,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: hostStatusV15,
           upgradeFromPreviousVersion: hostStatusUpgradeV14ToV15,
         },
+        6: {
+          contract: hostStatusV16,
+          upgradeFromPreviousVersion: hostStatusUpgradeV15ToV16,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -5499,7 +5576,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     // it with a racy activity read.
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostRestartV10,
@@ -5512,6 +5589,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostRestartV12,
           upgradeFromPreviousVersion: hostRestartUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostRestartV13,
+          upgradeFromPreviousVersion: hostRestartUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -7689,6 +7770,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "epic.continueSubagent": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicContinueSubagentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    // Optional: a host without it cannot continue a subagent at all, and
+    // there is no older verb that could stand in. The GUI reads the host's
+    // manifest and does not offer the control there.
+    degrade: { kind: "unsupported" },
+  },
   "epic.createChat": {
     1: {
       latestMinor: 2,
@@ -7772,6 +7869,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
+  ...PROFILE_COPY_RPC_METHODS,
   // Optional (non-floor) capability: narrow profile-only update of a chat's
   // persisted run settings - the host patches its own authoritative tuple, so
   // clients never rebuild (and stale-patch) the full tuple to move a chat's
@@ -10578,7 +10676,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: providersStartLoginV10,
@@ -10595,6 +10693,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         3: {
           contract: providersStartLoginV13,
           upgradeFromPreviousVersion: providersStartLoginUpgradeV12ToV13,
+        },
+        4: {
+          contract: providersStartLoginV14,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -10634,7 +10736,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.cancelLogin": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersCancelLoginV10,
@@ -10643,6 +10745,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         1: {
           contract: providersCancelLoginV11,
           upgradeFromPreviousVersion: providersCancelLoginUpgradeV10ToV11,
+        },
+        2: {
+          contract: providersCancelLoginV12,
+          upgradeFromPreviousVersion: providersCancelLoginUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -11520,7 +11626,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.1`,
  * `chat.subscribe@1.6`, `notifications.subscribe@1.1`,
- * `terminal.subscribe@1.6`, `git.subscribeStatus@1.3`,
+ * `terminal.subscribe@1.7`, `git.subscribeStatus@1.3`,
  * `browser.sessions@1.0`, `browser.screencast@1.0`,
  * `resources.subscribe@1.4`, `agent.inbox.subscribe@1.2`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
@@ -11785,7 +11891,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -11807,6 +11913,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         6: {
           contract: terminalSubscribeV16,
+        },
+        7: {
+          contract: terminalSubscribeV17,
         },
       },
     },

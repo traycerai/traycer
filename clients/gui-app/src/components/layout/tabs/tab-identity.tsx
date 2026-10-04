@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { HeaderTabAppearance } from "@/stores/tabs/types";
+import { cn } from "@/lib/utils";
+import type { HeaderTabAppearance, TabIcon } from "@/stores/tabs/types";
 import { firstGraphemes, tabMonogram } from "./tab-monogram";
 
 /**
@@ -60,6 +61,40 @@ export function sideTabTileOf(input: {
   const monogram = tabMonogram(input.title);
   if (monogram !== null) return { kind: "monogram", text: monogram };
   return { kind: "icon", icon: input.fallback };
+}
+
+/** A custom icon with any pictograph in it is an emoji; anything else is letters. */
+const EMOJI_PATTERN = /\p{Extended_Pictographic}/u;
+
+/**
+ * What an expanded row draws before its title, inline, with the space that
+ * follows it: the custom icon's characters at the title's own size, else the
+ * tab's component icon at 14px, else nothing (a task with no icon of its own).
+ */
+export function sideTabTitleIconOf(input: {
+  readonly appearance: HeaderTabAppearance | null;
+  readonly icon: TabIcon | null;
+}): ReactNode {
+  const characters = firstGraphemes(input.appearance?.icon ?? "", 2);
+  if (characters.length > 0) {
+    const text = characters.join("");
+    return (
+      <span
+        aria-hidden
+        data-slot="tab-custom-icon"
+        // Letters read as a label, apart from the title that follows.
+        className={cn(
+          "me-1",
+          !EMOJI_PATTERN.test(text) && "font-medium text-muted-foreground",
+        )}
+      >
+        {text}
+      </span>
+    );
+  }
+  if (input.icon === null) return null;
+  const Icon = input.icon;
+  return <Icon className="size-3.5 me-1.5" />;
 }
 
 /**

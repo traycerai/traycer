@@ -3,6 +3,13 @@
 // Keeping a single source means what the projection indexes can't drift from
 // what the card actually renders (the previous duplication did exactly that).
 
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  backgroundSectionCounts,
+  buildBackgroundTree,
+  buildRememberedBackgroundNodes,
+  dedupeByTaskId,
+} from "@/lib/chat/background-item-tree";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -84,6 +91,85 @@ function subagentCardPathIn(
     if (below !== null) return [segment, ...below];
   }
   return null;
+}
+
+/** The name a card is called by wherever it stands for a whole conversation. */
+export function subagentCardName(card: SubagentSegment): string {
+  return cleanSubagentNotificationText(card.name) ?? "Subagent";
+}
+
+/**
+ * How much running background work belongs to `card`: what the subagent
+ * started, at any depth. The card's own item is not part of it - that row is
+ * the subagent itself.
+ *
+ * Two signals decide ownership, because no harness fills in both. An item is
+ * the card's when its block is drawn inside the card's conversation (Codex
+ * reports every item as a root, so the transcript is the only place its owner
+ * is written), or when its `parentTaskId` chain reaches one that is, or
+ * reaches the card (a nested Claude agent's own work, which need not have a
+ * row here).
+ *
+ * Counted by the Background header's own function over the owned items alone,
+ * so the unit is the header's: one per group with something running in it. An
+ * agent and the commands under it are one, and a scheduled wake or cron job
+ * is waiting, not running.
+ */
+export function subagentOwnedBackgroundItemCount(
+  card: SubagentSegment,
+  items: ReadonlyArray<BackgroundItem>,
+): number {
+  const ownedBlockIds = new Set<string>();
+  collectChildBlockIds(card.children, ownedBlockIds);
+  const deduped = dedupeByTaskId(items);
+  const itemByTaskId = new Map(deduped.map((item) => [item.taskId, item]));
+  const owned = (item: BackgroundItem): boolean => {
+    if (ownedBlockIds.has(item.blockId)) return true;
+    const visited = new Set<string>([item.taskId]);
+    let parentTaskId = item.parentTaskId;
+    while (parentTaskId !== null && !visited.has(parentTaskId)) {
+      const parent = itemByTaskId.get(parentTaskId);
+      if (parent === undefined) return false;
+      if (parent.blockId === card.id || ownedBlockIds.has(parent.blockId)) {
+        return true;
+      }
+      visited.add(parentTaskId);
+      parentTaskId = parent.parentTaskId;
+    }
+    return false;
+  };
+  const ownedItems = deduped.filter(owned);
+  const ownedTaskIds = new Set(ownedItems.map((item) => item.taskId));
+  // A listed parent outside the owned set is the card itself or an ancestor of
+  // it: for this count the item is a root, not a member of that parent's
+  // group. A parent that has left the list keeps its children grouped, as the
+  // header groups them under the row it remembers.
+  const rooted = ownedItems.map((item) =>
+    item.parentTaskId === null ||
+    ownedTaskIds.has(item.parentTaskId) ||
+    !itemByTaskId.has(item.parentTaskId)
+      ? item
+      : { ...item, parentTaskId: null },
+  );
+  return backgroundSectionCounts({
+    tree: buildBackgroundTree(
+      rooted,
+      buildRememberedBackgroundNodes(rooted, new Map()),
+    ),
+    runningManagedCommandIds: [],
+    heldManagedCommandIds: [],
+    portForwardCount: 0,
+  }).runningCount;
+}
+
+function collectChildBlockIds(
+  children: ReadonlyArray<SubagentChildSegment>,
+  into: Set<string>,
+): void {
+  for (const child of children) {
+    into.add(child.id);
+    if (child.kind === "subagent") collectChildBlockIds(child.children, into);
+  }
 }
 
 /**

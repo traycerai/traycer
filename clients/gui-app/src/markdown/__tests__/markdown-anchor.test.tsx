@@ -14,7 +14,10 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TraycerMarkdown } from "@/markdown";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
-import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
+import {
+  MarkdownLinkContext,
+  type MarkdownLinkPolicy,
+} from "@/markdown/links/markdown-link-context";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import {
   BrowserSessionsContext,
@@ -53,6 +56,7 @@ const neutralToast = vi.hoisted(() =>
     () => "toast-id",
   ),
 );
+const toastSuccess = vi.hoisted(() => vi.fn<(message: ReactNode) => string>());
 const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
   Promise.resolve({
     sessionId: "session-markdown",
@@ -61,11 +65,14 @@ const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
   }),
 );
 
-vi.mock("sonner", () => ({ toast: neutralToast }));
+vi.mock("sonner", () => ({
+  toast: Object.assign(neutralToast, { success: toastSuccess }),
+}));
 
 afterEach(() => {
   cleanup();
   neutralToast.mockClear();
+  toastSuccess.mockClear();
   openTab.mockClear();
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
@@ -119,6 +126,14 @@ function renderMarkdownWithBrowserRouting(
   markdown: string,
   host: MockRunnerHost,
 ) {
+  return renderMarkdownWithBrowserRoutingAndLinkPolicy(markdown, host, null);
+}
+
+function renderMarkdownWithBrowserRoutingAndLinkPolicy(
+  markdown: string,
+  host: MockRunnerHost,
+  linkPolicy: MarkdownLinkPolicy | null,
+) {
   const canvas = createSingleTileCanvas(SOURCE_TILE);
   useEpicCanvasStore.setState({
     tabsById: {
@@ -158,17 +173,19 @@ function renderMarkdownWithBrowserRouting(
         {/* The click-time reader lives on the snapshot context (C8). */}
         <BrowserSessionsSnapshotProvider value={sessions}>
           <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
-            <TraycerMarkdown
-              className={null}
-              proseSize="normal"
-              components={null}
-              remarkPlugins={null}
-              rehypePlugins={null}
-              quotable={false}
-              isStreaming={false}
-            >
-              {markdown}
-            </TraycerMarkdown>
+            <MarkdownLinkContext.Provider value={linkPolicy}>
+              <TraycerMarkdown
+                className={null}
+                proseSize="normal"
+                components={null}
+                remarkPlugins={null}
+                rehypePlugins={null}
+                quotable={false}
+                isStreaming={false}
+              >
+                {markdown}
+              </TraycerMarkdown>
+            </MarkdownLinkContext.Provider>
           </LinkTargetProvider>
         </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
@@ -574,6 +591,249 @@ describe("MarkdownAnchor", () => {
     fireEvent.click(link);
     expect(openFileLink).not.toHaveBeenCalled();
     expect(host.openedExternalLinks).toEqual([]);
+  });
+});
+
+describe("MarkdownAnchor right-click menu", () => {
+  const DOCS_HREF = "https://example.com/docs";
+
+  function openLinkMenu(name: string): void {
+    fireEvent.contextMenu(screen.getByRole("link", { name }));
+  }
+
+  function stubClipboard() {
+    const writeText = vi.fn<(text: string) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    return writeText;
+  }
+
+  // The global test shim answers every media query with `matches: false`, so
+  // the other tests here already run on a fine pointer. This flips the coarse
+  // query alone; `unstubAllGlobals` below restores the shim.
+  function stubCoarsePointer(): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(pointer: coarse)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers the browser choices and Copy Link on a web link", () => {
+    renderMarkdownWithBrowserRouting(
+      `[Docs](${DOCS_HREF})`,
+      createRunnerHost(),
+    );
+
+    openLinkMenu("Docs");
+
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Open in Browser", "Open in External Browser", "Copy Link"]);
+  });
+
+  it("leaves out Open in Browser where no canvas is behind the link", () => {
+    renderMarkdown(`[Docs](${DOCS_HREF})`, createRunnerHost());
+
+    openLinkMenu("Docs");
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Open in Browser" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "Open in External Browser" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Copy Link" })).toBeTruthy();
+  });
+
+  it("opens the link in the OS browser from Open in External Browser", async () => {
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting(`[Docs](${DOCS_HREF})`, host);
+    openLinkMenu("Docs");
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Open in External Browser" }),
+    );
+
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual([DOCS_HREF]);
+    });
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("opens the link in-app from Open in Browser, even when the setting says external", async () => {
+    useSettingsStore.setState({
+      linkOpen: {
+        default: "external",
+        markdown: "external",
+        terminal: "external",
+        github: "external",
+        image: "external",
+      },
+    });
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting(`[Docs](${DOCS_HREF})`, host);
+    openLinkMenu("Docs");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open in Browser" }));
+
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, DOCS_HREF);
+    });
+    expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  // A slow file-link lookup must not land over the page the user just chose
+  // to open, so the menu's open items supersede it exactly as a plain click
+  // does. Copy Link opens nothing, so it must leave a pending lookup alone.
+  function renderLinkMenuWithSupersedeSpy() {
+    const supersedePendingFileLink = vi.fn<() => void>();
+    renderMarkdownWithBrowserRoutingAndLinkPolicy(
+      `[Docs](${DOCS_HREF})`,
+      createRunnerHost(),
+      { openFileLink: vi.fn(() => true), supersedePendingFileLink },
+    );
+    openLinkMenu("Docs");
+    return supersedePendingFileLink;
+  }
+
+  it.each(["Open in Browser", "Open in External Browser"])(
+    "%s supersedes a pending file link",
+    (itemName) => {
+      const supersedePendingFileLink = renderLinkMenuWithSupersedeSpy();
+
+      fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
+
+      expect(supersedePendingFileLink).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("Copy Link leaves a pending file link alone", async () => {
+    const writeText = stubClipboard();
+    const supersedePendingFileLink = renderLinkMenuWithSupersedeSpy();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Link" }));
+
+    // Wait for the copy to land so the spy is read after the item has run.
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(DOCS_HREF);
+    });
+    expect(supersedePendingFileLink).not.toHaveBeenCalled();
+  });
+
+  it("copies the link from Copy Link without a success toast", async () => {
+    const writeText = stubClipboard();
+    renderMarkdown(`[Docs](${DOCS_HREF})`, createRunnerHost());
+    openLinkMenu("Docs");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Link" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(DOCS_HREF);
+    });
+    // The menu closing is the feedback; a toast on top would be noise.
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  describe("with a text selection", () => {
+    afterEach(() => {
+      window.getSelection()?.removeAllRanges();
+    });
+
+    function requireTextNode(node: Node | null): Text {
+      if (!(node instanceof Text)) throw new Error("Expected a text node.");
+      return node;
+    }
+
+    function selectRange(range: Range): void {
+      const selection = window.getSelection();
+      if (selection === null) throw new Error("Expected a document selection.");
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    function renderLinkInParagraph(): HTMLAnchorElement {
+      renderMarkdown(
+        `Read the [Docs](${DOCS_HREF}) before you start.`,
+        createRunnerHost(),
+      );
+      const link = screen.getByRole("link", { name: "Docs" });
+      if (!(link instanceof HTMLAnchorElement)) {
+        throw new Error("Expected an anchor.");
+      }
+      return link;
+    }
+
+    it("leaves the OS menu when the selection runs past the link", () => {
+      const link = renderLinkInParagraph();
+      const range = document.createRange();
+      range.setStart(requireTextNode(link.firstChild), 0);
+      range.setEnd(requireTextNode(link.nextSibling), " before".length);
+      selectRange(range);
+
+      // The app menu would default-prevent the event and hide the OS menu,
+      // which is the one that offers Copy for the wider selection.
+      const osMenuAllowed = fireEvent.contextMenu(link);
+
+      expect(osMenuAllowed).toBe(true);
+      expect(screen.queryAllByRole("menuitem")).toEqual([]);
+    });
+
+    it("still opens the menu when the selection is inside the link", () => {
+      const link = renderLinkInParagraph();
+      const range = document.createRange();
+      range.setStart(requireTextNode(link.firstChild), 1);
+      range.setEnd(requireTextNode(link.firstChild), "Docs".length);
+      selectRange(range);
+
+      fireEvent.contextMenu(link);
+
+      expect(
+        screen.getAllByRole("menuitem").map((item) => item.textContent),
+      ).toContain("Copy Link");
+    });
+  });
+
+  it("leaves the OS menu on a touch device, where long-press already offers one", () => {
+    // The app menu's Radix trigger disables the native long-press callout, so a
+    // coarse pointer must get the plain anchor and keep the OS menu.
+    stubCoarsePointer();
+    renderMarkdownWithBrowserRouting(
+      `[Docs](${DOCS_HREF})`,
+      createRunnerHost(),
+    );
+
+    const osMenuAllowed = fireEvent.contextMenu(
+      screen.getByRole("link", { name: "Docs" }),
+    );
+
+    expect(osMenuAllowed).toBe(true);
+    expect(screen.queryAllByRole("menuitem")).toEqual([]);
+  });
+
+  it.each([
+    ["a local file link", "[App](src/app.ts)", "App"],
+    ["a mailto link", "[Mail](mailto:someone@example.com)", "Mail"],
+  ])("keeps the OS menu for %s", (_name, markdown, linkName) => {
+    renderMarkdownWithBrowserRouting(markdown, createRunnerHost());
+    const link = screen.getByRole("link", { name: linkName });
+
+    // Radix prevents the event once its menu opens, which is what would keep
+    // the OS menu from showing; a link with no app menu leaves it alone.
+    const osMenuAllowed = fireEvent.contextMenu(link);
+
+    expect(osMenuAllowed).toBe(true);
+    expect(screen.queryAllByRole("menuitem")).toEqual([]);
   });
 });
 

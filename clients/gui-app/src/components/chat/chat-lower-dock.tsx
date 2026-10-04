@@ -1,4 +1,4 @@
-import { useReadingWidthClass } from "@/lib/layout-overrides";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
 import type {
@@ -184,7 +184,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   // rather than inside its workspace row: a fully compact chat has no row at
   // all and must still draw them (A.4.4).
   const strip = useChatDockCompactStrip();
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   // The node an open pill's actions are portalled into. State rather than a
   // ref because the panels that fill it render in the same commit and must
   // re-render once it exists.
@@ -284,9 +284,10 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
               // (`empty:hidden`) pays nothing for it and keeps the composer's
               // own `pt-4` as its separation.
               "pointer-events-auto mx-auto flex w-full flex-col gap-3 bg-canvas",
-              readingWidth,
+              readingWidth.className,
               topPadding,
             )}
+            style={{ maxWidth: readingWidth.maxWidth }}
           >
             {/* One stack, two clusters (A.5, L-97): the pill row loose at the
               composer's left edge, then the joined frame tucked under the

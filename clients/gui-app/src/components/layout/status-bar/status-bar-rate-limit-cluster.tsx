@@ -3,6 +3,7 @@ import { useSampleScene } from "@/components/sample-workspace/sample-scene-conte
 import type { ReactNode } from "react";
 import { PopoverTrigger } from "@/components/ui/popover";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { UsageGlyph } from "@/components/layout/header/rate-limit-icon";
 import {
   STATUS_BAR_USAGE_CONTENT_CLASS,
   statusBarUsageTriggerName,
@@ -28,7 +29,10 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverRevealTarget,
 } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useRegionDensity } from "@/lib/layout-overrides";
+import { resolveReadingDensity } from "@/lib/layout/reading-density";
 import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
+import { cn } from "@/lib/utils";
 
 /**
  * The strip's left cluster: every visible provider's usage, the one control
@@ -58,6 +62,9 @@ export function StatusBarRateLimitCluster(props: {
   readonly editing: boolean;
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
+  const compact =
+    resolveReadingDensity(useRegionDensity("usageLimits"), "status-bar") ===
+    "compact";
   const sampleCold = useSampleScene();
   const requestRevealProfile = useRateLimitPopoverStore(
     (state) => state.requestRevealProfile,
@@ -93,6 +100,7 @@ export function StatusBarRateLimitCluster(props: {
           cluster={cluster}
           sampleLabel={sampleCold ? cluster.kind !== "hidden" : false}
           display={display}
+          compact={compact}
           onRevealProfile={requestRevealProfile}
         />
       </StatusBarUsageScroller>
@@ -138,6 +146,8 @@ export function StatusBarUsageTrigger(props: {
   readonly sampleLabel?: boolean;
   readonly cluster: StatusBarRateLimitClusterModel;
   readonly display: StatusBarUsageDisplay;
+  /** Density resolved to Compact: the glyph instead of the readings. */
+  readonly compact: boolean;
   readonly onRevealProfile: (target: RateLimitPopoverRevealTarget) => void;
 }): ReactNode {
   const { cluster, display } = props;
@@ -172,29 +182,57 @@ export function StatusBarUsageTrigger(props: {
         // shrank would hide readings the scroller exists to reach. No
         // padding either - the readings inside carry it, so the hover
         // fill and focus ring end where the last reading does.
-        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        // On a phone it may shrink as far as the readings' own floor (see
+        // the scroller), which is where the account names truncate.
+        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 max-md:shrink"
       >
         <span
           data-testid="status-bar-rate-limit-content"
-          className={STATUS_BAR_USAGE_CONTENT_CLASS}
+          className={cn(STATUS_BAR_USAGE_CONTENT_CLASS, "max-md:shrink")}
         >
           {props.sampleLabel ? (
             <span className="text-ui-xs">Sample</span>
           ) : null}
-          {props.sampleLabel && cluster.kind === "no-providers" ? (
-            <span>
-              Usage ·{" "}
-              {display.percentMode === "remaining"
-                ? `${100 - SAMPLE_USAGE_USED_PERCENT}% left`
-                : `${SAMPLE_USAGE_USED_PERCENT}% used`}
-            </span>
-          ) : (
-            <StatusBarUsageReadings cluster={cluster} display={display} />
-          )}
+          <UsageTriggerReadings
+            cluster={cluster}
+            display={display}
+            sample={props.sampleLabel}
+            compact={props.compact}
+          />
         </span>
       </button>
     </PopoverTrigger>
   );
+}
+
+/**
+ * What the trigger wears: the sample sentence while the sample scene has no
+ * provider to draw, the glyph in Compact, otherwise the Detailed readings.
+ */
+function UsageTriggerReadings(props: {
+  readonly cluster: StatusBarRateLimitClusterModel;
+  readonly display: StatusBarUsageDisplay;
+  readonly sample: boolean | undefined;
+  readonly compact: boolean;
+}): ReactNode {
+  const { cluster, display } = props;
+  if (props.sample && cluster.kind === "no-providers") {
+    return (
+      <span>
+        Usage ·{" "}
+        {display.percentMode === "remaining"
+          ? `${100 - SAMPLE_USAGE_USED_PERCENT}% left`
+          : `${SAMPLE_USAGE_USED_PERCENT}% used`}
+      </span>
+    );
+  }
+  // The same glyph the tab strip draws, unboxed at the bar's height. With no
+  // provider it draws empty tracks and the panel it opens carries the setup
+  // sentence; only the "hidden" state keeps its own words.
+  if (props.compact && cluster.kind !== "hidden") {
+    return <UsageGlyph cluster={cluster} />;
+  }
+  return <StatusBarUsageReadings cluster={cluster} display={display} />;
 }
 
 /**

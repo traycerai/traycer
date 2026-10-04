@@ -1,7 +1,44 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
+import type { AgentWorktreeCreatePolicy } from "@traycer/protocol/config/schema";
 import { buildProgramWithAgentRoles } from "../../index";
 import { extractRunnerFlags } from "../../runner/commander-flags";
+
+// The user's Agent worktrees setting (`worktrees.agentCreate`), as the program
+// builder reads it for an agent session. A mock rather than a real config file
+// so no test here depends on, or reads, the real `~/.traycer/cli/config.json`;
+// `read` is a `vi.fn` so a test can also prove it was never consulted for a
+// person.
+const worktreePolicy = vi.hoisted(() => {
+  const state: { current: AgentWorktreeCreatePolicy } = { current: "allow" };
+  return {
+    state,
+    read: vi.fn((): AgentWorktreeCreatePolicy => state.current),
+  };
+});
+
+vi.mock("../../agent-worktree-create", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agent-worktree-create")>();
+  return {
+    ...actual,
+    readAgentWorktreeCreatePolicy: worktreePolicy.read,
+  };
+});
+
+// This suite runs inside a live Traycer agent session, which already has
+// `TRAYCER_AGENT_ID` set: every test below pins it to "" (a person) unless it
+// stubs an agent id itself, so the public-surface inventory does not depend on
+// the session - or the user's real Agent worktrees setting - running it.
+beforeEach(() => {
+  vi.stubEnv("TRAYCER_AGENT_ID", "");
+  worktreePolicy.state.current = "allow";
+  worktreePolicy.read.mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 // Regression suite for the CLI command audit's "Help audit checklist"
 // (epics/.../artifacts/cli-command-audit/index.md): rendered root/parent/leaf
@@ -215,6 +252,7 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
   ["config", "env"],
   ["comments"],
   ["terminal"],
+  ["profile"],
   ["workspace"],
   ["worktree"],
   ["agent"],
@@ -339,6 +377,25 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  { path: "host lifecycle", options: [], args: [] },
+  {
+    path: "host lifecycle get",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "host lifecycle set",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "mode", required: true, variadic: false }],
+  },
   {
     path: "host restart",
     options: [
@@ -383,6 +440,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "host service status",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  // Public on purpose: the doctor, `host lifecycle set` and the service
+  // platforms all name it as the repair a person runs
+  // (SERVICE_REFRESH_COMMAND).
+  {
+    path: "host service refresh",
     options: [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -696,6 +765,88 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [{ name: "terminal-id", required: true, variadic: false }],
   },
+  { path: "profile", options: [], args: [] },
+  {
+    path: "profile list",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "provider", required: false, variadic: false }],
+  },
+  {
+    path: "profile add",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--label <name>", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "provider", required: true, variadic: false }],
+  },
+  {
+    path: "profile login",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile rename",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+      { name: "label", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile enable",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile disable",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile remove",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--yes", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
   { path: "workspace", options: [], args: [] },
   {
     path: "workspace list",
@@ -952,6 +1103,101 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
 ];
+
+// The Agent worktrees setting hides `worktree create` (and the pointers to it)
+// from an agent session's help only under `never`; a person, and an agent under
+// allow/ask, still see it. `ask` stays visible because the tool that asks is
+// offered, and the command's own refusal says so.
+describe("Agent worktrees setting: help for `worktree create` and its pointers", () => {
+  // Commander word-wraps long option descriptions, so a phrase can be split
+  // by a newline in the rendered text - collapse whitespace before matching.
+  function normalizedHelp(cmd: Command): string {
+    return renderHelp(cmd).replace(/\s+/g, " ");
+  }
+
+  function programFor(
+    agentId: string,
+    policy: AgentWorktreeCreatePolicy,
+  ): Command {
+    vi.stubEnv("TRAYCER_AGENT_ID", agentId);
+    worktreePolicy.state.current = policy;
+    return freshProgram();
+  }
+
+  const OFFERED_SCENARIOS: ReadonlyArray<
+    readonly [string, string, AgentWorktreeCreatePolicy]
+  > = [
+    ["a person under never", "", "never"],
+    ["an agent session under allow", "agent-fixture", "allow"],
+    ["an agent session under ask", "agent-fixture", "ask"],
+  ];
+
+  it.each(OFFERED_SCENARIOS)(
+    "lists `worktree create` and points `agent create`/`agent fork --cwd` at it for %s",
+    (_label, agentId, policy) => {
+      const program = programFor(agentId, policy);
+      const worktree = findByPath(program, ["worktree"]);
+
+      expect(visibleChildren(worktree).map((c) => c.name())).toContain(
+        "create",
+      );
+      expect(isHiddenCommand(program, ["worktree", "create"])).toBe(false);
+      expect(helpListsCommandName(renderHelp(worktree), "create")).toBe(true);
+
+      const create = normalizedHelp(findByPath(program, ["agent", "create"]));
+      expect(create).toContain(
+        "Primary working directory for the child agent. Use this with a path returned by 'traycer worktree create'.",
+      );
+      const fork = normalizedHelp(findByPath(program, ["agent", "fork"]));
+      expect(fork).toContain(
+        "Primary working directory for the forked agent. Use this with a path returned by 'traycer worktree create'. Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.",
+      );
+    },
+  );
+
+  it("never consults the policy for a person", () => {
+    programFor("", "never");
+    expect(worktreePolicy.read).not.toHaveBeenCalled();
+  });
+
+  it("hides `worktree create` and drops the pointers to it for an agent session under never", () => {
+    const program = programFor("agent-fixture", "never");
+    const worktree = findByPath(program, ["worktree"]);
+
+    // Hidden, not removed: an agent that types it anyway reaches the refusal in
+    // `withRunner` rather than an unknown-command error.
+    expect(isHiddenCommand(program, ["worktree", "create"])).toBe(true);
+    const visibleNames = visibleChildren(worktree).map((c) => c.name());
+    expect(visibleNames).not.toContain("create");
+    expect(visibleNames).toContain("list");
+    expect(helpListsCommandName(renderHelp(worktree), "create")).toBe(false);
+
+    const create = normalizedHelp(findByPath(program, ["agent", "create"]));
+    expect(create).not.toContain("traycer worktree create");
+    expect(create).toContain("Primary working directory for the child agent.");
+    expect(create).not.toContain("Use this with a path returned by");
+
+    const fork = normalizedHelp(findByPath(program, ["agent", "fork"]));
+    expect(fork).not.toContain("traycer worktree create");
+    expect(fork).toContain(
+      "Primary working directory for the forked agent. Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.",
+    );
+  });
+
+  it("keeps the `worktree create` flags registered under never, so a typed command still parses", () => {
+    const program = programFor("agent-fixture", "never");
+    const create = findByPath(program, ["worktree", "create"]);
+    expect(create.options.map((option) => option.long)).toEqual(
+      expect.arrayContaining([
+        "--workspace",
+        "--branch",
+        "--existing",
+        "--source-branch",
+        "--carry-uncommitted",
+      ]),
+    );
+  });
+});
 
 describe("rendered root/parent/leaf --help (CLI command audit regression suite)", () => {
   it("cross-checks the hidden-command helper against a known-hidden and a known-visible command", () => {
@@ -1262,6 +1508,10 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host update --expect-sequence",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
+        // Host lifecycle modes: the desktop's automatic quit-time stop in
+        // Linked and Stop-if-idle modes. A person stops a host with plain
+        // `host stop`.
+        "traycer host stop --if-idle",
         "traycer host apply --expected-stage-fingerprint",
         "traycer host apply --no-service",
         // Implicit-apply hold check (version-hold design): the desktop's
@@ -1270,6 +1520,23 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // An explicit "Update now" apply never sets it.
         "traycer host apply --respect-hold",
         "traycer host download --automatic",
+        // Host lifecycle modes: who is asking for a host start, written
+        // into the adoption proof the supervisor consumes. The desktop passes
+        // `desktop`, update/repair legs pass `maintenance`, and a person who
+        // omits it is `terminal`. Informational only - a grant runs whatever
+        // its origin - and on `restart`, `stop` and `free-port-and-restart`
+        // it is accepted and inert, so the desktop can pass it uniformly.
+        "traycer host apply --lifecycle-origin",
+        "traycer host ensure --lifecycle-origin",
+        "traycer host install --lifecycle-origin",
+        "traycer host service install --lifecycle-origin",
+        "traycer host service start --lifecycle-origin",
+        "traycer host restart --lifecycle-origin",
+        "traycer host stop --lifecycle-origin",
+        // `host uninstall` starts nothing but refuses a desktop request over
+        // a host a person started in a terminal, so it carries the flag too.
+        "traycer host uninstall --lifecycle-origin",
+        "traycer host free-port-and-restart --lifecycle-origin",
       ].sort(),
     );
   });

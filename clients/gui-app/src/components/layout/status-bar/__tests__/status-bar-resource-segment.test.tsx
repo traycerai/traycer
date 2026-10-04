@@ -10,6 +10,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import type { ResourceMetric } from "@/lib/layout/layout-values";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
 
 /**
  * What the segment does with the data it is handed — attribution above all,
@@ -107,6 +108,108 @@ describe("<StatusBarResourceSegment />", () => {
 
     expect(metricText("cpu")).toContain("12%");
     expect(metricText("processes")).toContain("14");
+  });
+
+  describe("density", () => {
+    function projectionWithCpu(cpuPercent: number): GlobalResourceProjection {
+      const live = liveProjection("host-b");
+      return {
+        ...live,
+        hostTree:
+          live.hostTree === null ? null : { ...live.hostTree, cpuPercent },
+      };
+    }
+
+    it("draws the CPU icon alone, no number, when Density is Compact, whatever Metrics says", () => {
+      registry.projection = liveProjection("host-b");
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        density: "compact",
+        cpu: false,
+        processes: true,
+      });
+
+      renderSegment({ hasExplicitPick: true });
+
+      const icon = screen.getByTestId("status-bar-resource-cpu-icon");
+      expect(icon.textContent).toBe("");
+      expect(icon.querySelector("svg")).not.toBeNull();
+      expect(screen.queryByTestId("resource-cpu-reading")).toBeNull();
+      expect(
+        screen.queryByTestId("status-bar-resource-metric-processes"),
+      ).toBeNull();
+      expect(screen.queryByTestId("status-bar-resource-metric-cpu")).toBeNull();
+    });
+
+    it("carries the compact CPU value in the icon's tooltip", async () => {
+      registry.projection = liveProjection("host-b");
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "CPU 12%",
+      );
+    });
+
+    it("carries the compact unavailable reason in the icon's tooltip", async () => {
+      registry.projection = liveProjection("host-a");
+      registry.unsupported = true;
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Office Linux is running an older Traycer host",
+      );
+    });
+
+    it.each([
+      { cpuPercent: 84, warns: false },
+      { cpuPercent: 85, warns: true },
+      { cpuPercent: 97, warns: true },
+    ])(
+      "colours CPU $cpuPercent% as a warning: $warns",
+      ({ cpuPercent, warns }) => {
+        registry.projection = projectionWithCpu(cpuPercent);
+
+        renderSegment({ hasExplicitPick: true });
+
+        // The value, not its label, which keeps its own muted tone.
+        const value = screen.getByTestId("status-bar-resource-metric-cpu")
+          .lastElementChild?.className;
+        expect(value?.includes(RUNNING_LOW_TEXT_CLASS_NAME)).toBe(warns);
+      },
+    );
+
+    it("warns on the compact icon too", () => {
+      registry.projection = projectionWithCpu(92);
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+
+      expect(
+        screen.getByTestId("status-bar-resource-cpu-icon").className,
+      ).toContain(RUNNING_LOW_TEXT_CLASS_NAME);
+    });
+
+    it("never warns on the other metrics", () => {
+      registry.projection = projectionWithCpu(99);
+
+      renderSegment({ hasExplicitPick: true });
+
+      expect(
+        screen.getByTestId("status-bar-resource-metric-processes")
+          .lastElementChild?.className,
+      ).not.toContain(RUNNING_LOW_TEXT_CLASS_NAME);
+    });
   });
 
   it("prints every metric with its label - the segment never shortens itself for a narrow window", () => {

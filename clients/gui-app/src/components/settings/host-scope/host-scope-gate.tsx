@@ -4,13 +4,7 @@ import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
-import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
-import {
-  PLAN_RESTRICTED_MOBILE_DETAIL,
-  planRestrictedMobileTitle,
-} from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 
 /**
@@ -172,36 +166,6 @@ function UnreachableNotice(props: {
   readonly host: HostScopeOption;
 }): ReactNode {
   const { scope, host } = props;
-  // A plan-gated route is not a broken one. The server would refuse the
-  // attach (`plan_restricted`) while the host keeps working on its own
-  // machine — so the remedy is an upgrade, and presenting it as "can't
-  // reach" sends people debugging connectivity over a billing limit. The
-  // deleted My Hosts list carried exactly this notice; the scope model now
-  // preserves the reason so this gate can keep making the distinction.
-  if (host.planRestricted) {
-    // The installed mobile app may not offer the purchase or the upgrade
-    // (App Store guideline 3.1.1), so it states the same fact without either -
-    // and `PlanRestrictedUpgradeAction` withholds the button itself, which is
-    // why the action slot below stays mounted on both shells.
-    const mobile = isMobileApp();
-    return (
-      <HostScopeNotice
-        tone="warn"
-        title={
-          mobile
-            ? planRestrictedMobileTitle(host.name)
-            : `Connecting to ${host.name} needs a paid plan`
-        }
-        detail={
-          mobile
-            ? PLAN_RESTRICTED_MOBILE_DETAIL
-            : "It keeps working on its own machine, and account-level settings here still apply. This app just can't attach to it remotely on the current plan."
-        }
-        action={<PlanRestrictedUpgradeAction />}
-        testId="host-scope-plan-restricted"
-      />
-    );
-  }
   return (
     <HostScopeNotice
       tone="warn"

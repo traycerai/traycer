@@ -39,7 +39,7 @@ export const ACTIVATE_HOST_HINT = "Switching changes where new work starts.";
  * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
  * the one word the row shows for it ("needs update").
  *
- * `connectable` / `planRestricted` are facts about the host that every picker
+ * `connectable` is a fact about the host that every picker
  * shares. This is the other kind: a reason THIS picker cannot use THIS host,
  * which no other picker would state — the fork dialog's target must speak
  * `epic.createChat` at the minor that carries the cross-host owner hint, and a
@@ -111,7 +111,7 @@ export function isHostOptionSelectable(
  * It used to answer a ROUTE question in STATUS words:
  *
  *     if (host.connectable) return null;
- *     return host.planRestricted ? "requires upgrade" : "unreachable";
+ *     return "unreachable";
  *
  * which made this the app's THIRD independent status vocabulary — after the
  * Settings health line and the tile banners — and the one that contradicted its
@@ -156,9 +156,6 @@ const STATUS_WORD: Record<HostHealthState, string | null> = {
   "viewer-offline": null,
   restarting: "restarting",
   offline: "offline",
-  // The remedy, not the symptom — one word covering both this and `offline`
-  // is what sent people debugging a network over a billing limit.
-  "local-only": "requires upgrade",
   "update-required": "update required",
   removed: "removed",
   stopped: "stopped",
@@ -171,8 +168,8 @@ export function hostOptionStatusWord(
 ): string | null {
   // The SURFACE state is consulted FIRST, not after status. When the surface
   // has put the row out of reach it owns the whole explanation, and a status
-  // word alongside it contradicts that reason - "offline" or "requires
-  // upgrade" on a row the class already ruled out reads as a problem with
+  // word alongside it contradicts that reason - "offline" on a row the
+  // class already ruled out reads as a problem with
   // THAT machine, and invites trying another one when no other one can help.
   if (surfaceState.kind === "inert") return null;
   if (host.settingUp) return "setting up";

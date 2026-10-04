@@ -58,16 +58,21 @@ vi.mock(
 
 vi.mock(
   "@/components/layout-editor/inspector/use-layout-usage",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/layout-editor/inspector/use-layout-usage")
-    >()),
-    useLayoutUsage: () => ({
-      providerIds: USAGE_PROVIDER_IDS,
-      cluster: { kind: "no-providers" as const },
-      hostName: "the watched host",
-    }),
-  }),
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/components/layout-editor/inspector/use-layout-usage")
+      >();
+    return {
+      ...original,
+      useLayoutUsage: () => ({
+        ...original.EMPTY_USAGE,
+        providerIds: USAGE_PROVIDER_IDS,
+        cluster: { kind: "no-providers" as const },
+        hostName: "the watched host",
+      }),
+    };
+  },
 );
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({

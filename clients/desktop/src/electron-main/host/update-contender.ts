@@ -1,5 +1,7 @@
 import {
+  readSupervisorRelaunchInstalledIdentityAt,
   verifyUpdateMutationCapability,
+  withSupervisorRelaunchContender,
   withUpdateContender,
   type UpdateContenderAdmission,
   type UpdateContenderOutcome,
@@ -89,35 +91,97 @@ export async function withDesktopUpdateContender<T>(
       pollIntervalMs: options.pollIntervalMs,
       admission: options.admission,
     },
-    async (capability) =>
-      withDesktopCliLock(
-        {
-          lockPath: options.lockPath,
-          reason: options.reason,
-          waitMs: options.waitMs,
-          pollIntervalMs: options.pollIntervalMs,
-        },
-        async (cliLock): Promise<DesktopInnerResult<T>> => {
-          const live = await verifyUpdateMutationCapability(
-            capability,
-            options.hostHomeDir,
-          );
-          if (live.kind !== "live") {
-            return { kind: "capability-not-live", verdict: live.kind };
-          }
-          try {
-            return { kind: "ran", result: await run(capability, cliLock) };
-          } catch (err) {
-            if (err instanceof DesktopAttemptCapabilityError) {
-              return { kind: "capability-not-live", verdict: err.verdict };
-            }
-            throw err;
-          }
-        },
-      ),
+    async (capability) => underDesktopCliLock(options, capability, run),
   );
 
   return mapDesktopContenderOutcome(contender);
+}
+
+export interface WithDesktopSupervisorRelaunchContenderOptions {
+  readonly hostHomeDir: string;
+  readonly lockPath: string;
+  /** The install record the park is judged against (`install.json`). */
+  readonly installRecordPath: string;
+  readonly reason: string;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+/**
+ * {@link withDesktopUpdateContender}, admitted the way the host supervisor's
+ * own relaunch is (`withSupervisorRelaunchContender`): a standing attempt
+ * admits it exactly when that record would admit the supervisor starting the
+ * installed host - parked for work, parked on an activation of the installed
+ * generation, or interrupted in a phase whose own next act is that start.
+ *
+ * Judged by the shared install reader
+ * (`readSupervisorRelaunchInstalledIdentityAt`), the one mapping the CLI's
+ * relaunch and `host ensure` use too, so the desktop and the CLI can never
+ * disagree about whether the same record admits the same start. For the
+ * packaged-macOS start of a host that is down over a park, and nothing else:
+ * everything that applies or activates bytes keeps its own admission.
+ */
+export async function withDesktopSupervisorRelaunchContender<T>(
+  options: WithDesktopSupervisorRelaunchContenderOptions,
+  run: (
+    capability: UpdateMutationCapability,
+    cliLock: DesktopCliLockHandle,
+  ) => Promise<T>,
+): Promise<DesktopUpdateContenderOutcome<T>> {
+  const contender = await withSupervisorRelaunchContender(
+    {
+      hostHomeDir: options.hostHomeDir,
+      reason: options.reason,
+      waitMs: options.waitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      readInstalledIdentity: () =>
+        readSupervisorRelaunchInstalledIdentityAt(options.installRecordPath),
+    },
+    async (capability) => underDesktopCliLock(options, capability, run),
+  );
+  return mapDesktopContenderOutcome(contender);
+}
+
+/** The whole-callback CLI lock both wrappers above take inside the attempt. */
+async function underDesktopCliLock<T>(
+  options: {
+    readonly hostHomeDir: string;
+    readonly lockPath: string;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+  },
+  capability: UpdateMutationCapability,
+  run: (
+    capability: UpdateMutationCapability,
+    cliLock: DesktopCliLockHandle,
+  ) => Promise<T>,
+): Promise<WithDesktopCliLockOutcome<DesktopInnerResult<T>>> {
+  return withDesktopCliLock(
+    {
+      lockPath: options.lockPath,
+      reason: options.reason,
+      waitMs: options.waitMs,
+      pollIntervalMs: options.pollIntervalMs,
+    },
+    async (cliLock): Promise<DesktopInnerResult<T>> => {
+      const live = await verifyUpdateMutationCapability(
+        capability,
+        options.hostHomeDir,
+      );
+      if (live.kind !== "live") {
+        return { kind: "capability-not-live", verdict: live.kind };
+      }
+      try {
+        return { kind: "ran", result: await run(capability, cliLock) };
+      } catch (err) {
+        if (err instanceof DesktopAttemptCapabilityError) {
+          return { kind: "capability-not-live", verdict: err.verdict };
+        }
+        throw err;
+      }
+    },
+  );
 }
 
 /**

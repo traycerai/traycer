@@ -67,7 +67,7 @@ import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
 import {
   useArrangementValue,
-  useReadingWidthClass,
+  useReadingWidthStyle,
   useRegionShown,
 } from "@/lib/layout-overrides";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
@@ -308,7 +308,7 @@ function CollabTileSkeleton(props: {
   readonly bodyBoundOnce: boolean;
   readonly budgetElapsed: boolean;
 }) {
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   const testIdSuffix =
     props.subscribeAnswered && props.bodyAvailability === "unavailable"
       ? "unavailable"
@@ -329,8 +329,9 @@ function CollabTileSkeleton(props: {
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
       className={cn(
         "mx-auto flex w-full flex-col gap-3 px-6 py-8",
-        readingWidth,
+        readingWidth.className,
       )}
+      style={{ maxWidth: readingWidth.maxWidth }}
     >
       {notice === null ? (
         <>
@@ -390,7 +391,7 @@ function draftRangeOwnedByTile(
 }
 
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   const {
     node,
     viewTabId,
@@ -761,7 +762,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
         onScroll={onScroll}
       >
-        <div className={cn("mx-auto flex w-full flex-col gap-4", readingWidth)}>
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col gap-4",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
           <div className="tc-editor-surface">
             <div
               className="tc-editor-body"

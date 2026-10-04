@@ -58,6 +58,7 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
+import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import {
   useSystemOverlayActive,
@@ -159,10 +160,14 @@ function HistoryMessageHitsSection(
   const historyOverlayActive = useSystemOverlayActive("history");
   const { close } = useSystemTabModalActions();
   const chord = useBindingForAction("app.chat-search.open");
+  const isEpicDeleteInFlight = useEpicDeleteInFlightReader();
 
   const openTarget = useCallback(
     (target: ChatSearchOpenTarget) => {
       if (hostId === null) return;
+      // A hit in a task being deleted from this very page: opening its chat
+      // opens the task, which every History row refuses meanwhile.
+      if (isEpicDeleteInFlight(target.epicId)) return;
       openChatSearchResult(
         navigate,
         { ...target, hostId },
@@ -170,7 +175,7 @@ function HistoryMessageHitsSection(
       );
       if (historyOverlayActive) close();
     },
-    [close, historyOverlayActive, hostId, navigate],
+    [close, historyOverlayActive, hostId, isEpicDeleteInFlight, navigate],
   );
   const expansionBase = status.kind === "ready" ? status.expansionBase : null;
   const renderExpansion = useCallback(

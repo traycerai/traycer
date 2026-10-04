@@ -89,11 +89,51 @@ export function isMobileFooterRowAvailable(
   return context.mobileApp;
 }
 
-/** General › Experimental — the desktop feature-settings bridge. */
-export function isExperimentalGroupAvailable(
+/**
+ * Layout › Customize layout - the canvas editor, and every door that offers it
+ * by name. It needs a window wider than the phone layout ever draws
+ * (`LAYOUT_EDITOR_MIN_WIDTH`), and the installed app is a phone-layout product
+ * on every device, so there it can never open. A narrow DESKTOP window keeps
+ * it: widening the window is the way in, and the page says so.
+ */
+export function isLayoutEditorAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp;
+}
+
+/**
+ * Layout › Chat › Minimap ▸ Side - the installed app never draws the edge
+ * rail (the chat minimap is withheld on the phone layout, the artifact one
+ * needs a fine pointer): its minimap is the tile bar's bottom drawer, which has
+ * no side. The region's Shown switch still decides the drawer.
+ */
+export function isMinimapSideRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp;
+}
+
+/** General › Agent roles — the desktop feature-settings bridge. */
+export function isAgentRolesRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return context.featureSettings !== null;
+}
+
+/**
+ * General › When you quit Traycer — the desktop's host lifecycle bridge.
+ * Present in every desktop launch, including one with no local host (where
+ * it is the only way back), and absent on the phone and in the browser.
+ */
+export function isHostLifecycleRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    !context.mobileApp &&
+    context.runnerHost !== null &&
+    context.runnerHost.hostLifecycle !== null
+  );
 }
 
 /** Appearance › Zoom — the desktop zoom bridge. */
@@ -106,8 +146,8 @@ export function isZoomRowAvailable(
   );
 }
 
-/** Notifications › System — the OS notification-settings pointer. */
-export function isSystemNotificationsGroupAvailable(
+/** Sounds › OS notifications — the OS notification-settings pointer. */
+export function isSystemNotificationsRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (
@@ -116,8 +156,8 @@ export function isSystemNotificationsGroupAvailable(
   );
 }
 
-/** Notifications › This phone — the OS push permission of a phone shell. */
-export function isPushPermissionGroupAvailable(
+/** Sounds › Push notifications — the OS push permission of a phone shell. */
+export function isPushPermissionRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (

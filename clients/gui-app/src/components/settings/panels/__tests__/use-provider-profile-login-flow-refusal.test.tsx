@@ -19,6 +19,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderLoginRefusal } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
 import { appLogger } from "@/lib/logger";
 import {
   useProviderProfileLoginFlow,
@@ -52,10 +53,6 @@ type CancelLoginRequest = RequestOfMethod<
 type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
->;
-type AwaitLoginRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
 >;
 type AwaitLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -145,7 +142,7 @@ function LoginFlowHarness(props: {
     request: StartLoginRequest,
   ) => Promise<StartLoginResponse>;
   readonly awaitLoginImpl: (
-    request: AwaitLoginRequest,
+    variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
   readonly onFailed: (message: string) => void;
 }): ReactNode {
@@ -161,7 +158,7 @@ function LoginFlowHarness(props: {
   const awaitLogin: AwaitLoginMutation = useMutation<
     AwaitLoginResponse,
     HostRpcError,
-    AwaitLoginRequest,
+    AwaitLoginVariables,
     { readonly hostId: string | null }
   >({
     mutationFn: props.awaitLoginImpl,
@@ -201,6 +198,7 @@ function LoginFlowHarness(props: {
   });
 
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership: false,
     mode: props.mode,
     providerId: PROVIDER_ID,
     existingProfileId: props.existingProfileId,
@@ -245,7 +243,7 @@ function renderFlow(options: {
     request: StartLoginRequest,
   ) => Promise<StartLoginResponse>;
   readonly awaitLoginImpl: (
-    request: AwaitLoginRequest,
+    variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
 }): { readonly onFailed: Mock<(message: string) => void> } {
   const onFailed = vi.fn<(message: string) => void>();

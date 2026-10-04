@@ -5,10 +5,12 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
+import { HostLifecycleSettingsRow } from "@/components/settings/host-lifecycle-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -47,8 +49,8 @@ export function GeneralSettingsPanel() {
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
   const availability = useSettingsAvailabilityContext();
-  const featureSettingsAvailable =
-    GENERAL.definitions.experimental.availableWhen(availability);
+  const agentRolesAvailable =
+    GENERAL.definitions.agentRoles.availableWhen(availability);
 
   return (
     <SettingsPanelShell
@@ -93,32 +95,28 @@ export function GeneralSettingsPanel() {
           />
         </SettingsGroup>
 
-        {/* Carries its own "Running agents" group: one row is left in it after
-          the two resource-visibility toggles moved to Layout, and that row
-          hides itself on builds with no power bridge - so the heading has to
-          go with it rather than be gated a second time here. */}
-        <PreventSleepSettingsSection />
-
+        {/* One group for everything about running agents. Each of the first
+          two rows is gated inside its own component (the phone has no power
+          bridge, and only the desktop has a host lifecycle bridge), and the
+          branch prefix is drawn in every shell, so the card is never empty. */}
         <SettingsGroup
-          group={GENERAL.definitions.worktrees}
+          group={GENERAL.definitions.agents}
           showTitle
           tone="default"
-          dataTestId={undefined}
+          dataTestId="settings-general-agents"
           fill={false}
         >
+          <PreventSleepSettingsSection />
+          <HostLifecycleSettingsRow />
           <WorktreeBranchPrefixSection />
-        </SettingsGroup>
-
-        {featureSettingsAvailable ? (
-          <SettingsGroup
-            group={GENERAL.definitions.experimental}
-            showTitle
-            tone="default"
-            dataTestId={undefined}
-            fill={false}
-          >
+          {agentRolesAvailable ? (
             <SettingsRow
               row={GENERAL.definitions.agentRoles}
+              labelStatus={
+                <Badge variant="muted" size="xs">
+                  Experimental
+                </Badge>
+              }
               status={
                 featureSettings.isError
                   ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
@@ -138,8 +136,8 @@ export function GeneralSettingsPanel() {
                 />
               }
             />
-          </SettingsGroup>
-        ) : null}
+          ) : null}
+        </SettingsGroup>
 
         <DangerZoneSection />
       </div>

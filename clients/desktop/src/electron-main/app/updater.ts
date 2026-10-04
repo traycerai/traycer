@@ -2200,7 +2200,13 @@ function unameReportsArm(): boolean {
 // probe as "not detected" rather than an error.
 function probeMacArch(command: string, args: readonly string[]): string {
   try {
-    return execFileSync(command, args, { encoding: "utf8", timeout: 2000 });
+    // execFileSync copies a failing child's stderr into this process's
+    // stderr unless `stdio` is given; captured here, never forwarded.
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch {
     return "";
   }

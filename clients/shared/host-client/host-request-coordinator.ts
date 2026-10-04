@@ -312,8 +312,18 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       return null;
     }
 
+    // An active job whose own controller was aborted is not joined. Nobody is
+    // waiting on it any more - its last waiter detached, or its read was
+    // cancelled - and it stays active only until its raw call settles, which
+    // a transport that cannot recall a sent request (the remote session) does
+    // when the host answers. Attached to it, this request would be handed an
+    // answer to a request its caller never made: for `providers.awaitLogin`,
+    // the end of the sign-in attempt the caller had just cancelled. It goes
+    // behind that job instead: onto the queued tail when there is one, else
+    // as a job of its own.
     if (
       queue.active !== null &&
+      !queue.active.controller.signal.aborted &&
       sameAuthorityDomain(queue.active.authorityDomain, domain)
     ) {
       return queue.active;

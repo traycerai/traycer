@@ -86,7 +86,7 @@ describe("<BrowserSettingsPanel /> browser placement", () => {
 });
 
 // Moved from opening-behavior-panel.test.tsx - Agent-opened tabs lives on this
-// panel now, in its own group alongside Browser placement rather than Links.
+// panel now, in the Agents group rather than Links.
 describe("<BrowserSettingsPanel /> agent-opened tabs", () => {
   it("writes the surfacing mode", () => {
     render(<BrowserSettingsPanel />);
@@ -98,15 +98,15 @@ describe("<BrowserSettingsPanel /> agent-opened tabs", () => {
     expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
   });
 
-  it("lives in a group of its own, not under Browser placement", () => {
+  it("lives in the Agents group, not under Browsing", () => {
     render(<BrowserSettingsPanel />);
 
     const control = screen.getByRole("combobox", { name: "Agent-opened tabs" });
     expect(
-      screen.getByTestId("settings-opening-agent-tabs").contains(control),
+      screen.getByTestId("settings-browser-agents").contains(control),
     ).toBe(true);
     expect(
-      screen.getByTestId("settings-browser-placement").contains(control),
+      screen.getByTestId("settings-browser-browsing").contains(control),
     ).toBe(false);
   });
 

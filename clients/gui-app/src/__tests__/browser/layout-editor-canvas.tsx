@@ -28,7 +28,6 @@ import {
   SidebarWidthResizeHandle,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
-import { StripLiveAgentsPortal } from "@/components/epic-canvas/sidebar/strip-live-agents";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
 import { EpicSurfaceSheets } from "@/components/epic-tabs/epic-surface";
@@ -54,7 +53,6 @@ import {
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { SampleWorkspaceBody } from "@/components/sample-workspace/sample-workspace-body";
-import { SampleStripLiveAgents } from "@/components/sample-workspace/sample-strip-live-agents";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import type { AgentActivityByEpic } from "@traycer/protocol/host/agent/activity";
@@ -228,7 +226,7 @@ function SessionTabSpecimen(): ReactNode {
     <span data-fixture-session-tab className="relative h-9 w-48 shrink-0">
       <TabChrome
         isActive
-        joined={false}
+        joined={null}
         concealed={false}
         color={SESSION_TAB_COLOR}
         session
@@ -333,13 +331,6 @@ interface LayoutCanvasProbe {
   readonly foldDockPills: () => void;
   readonly unfoldDockPills: () => void;
   readonly setMicShown: (shown: boolean) => void;
-  /**
-   * One of the two combinations the deleted Style row used to write as a
-   * named example (T2, L-10 partial): now written field by field, the way
-   * the "Show" checks and "Amount" segment write them - so the driver can
-   * show the strip's reading follows those fields (G6).
-   */
-  readonly applyUsageStyle: (exampleId: "barOnly" | "barPercent") => void;
   /** A Settings search result for `anchor` on the Layout page (H2). */
   readonly revealSetting: (anchor: string) => void;
   /** The editor door's deep link to a region's row, as the width gate sends it (H2). */
@@ -960,25 +951,6 @@ function buildProbe(): LayoutCanvasProbe {
       const target = document.querySelector<HTMLElement>(selector);
       return target !== null && focusGuideTarget(target);
     },
-    applyUsageStyle: (exampleId) => {
-      const patch =
-        exampleId === "barOnly"
-          ? {
-              bar: true,
-              percent: false,
-              word: false,
-              reset: false,
-              amount: "used" as const,
-            }
-          : {
-              bar: true,
-              percent: true,
-              word: false,
-              reset: false,
-              amount: "used" as const,
-            };
-      useLayoutStore.getState().setRegionValues("usageLimits", patch);
-    },
     hideChangedFilesAsChip: () => {
       useLayoutStore
         .getState()
@@ -1204,7 +1176,6 @@ function SampleRouteSheet(): ReactNode {
         </span>
       </div>
       <SampleWorkspaceBody />
-      <SampleStripLiveAgents tabId="sample-workspace" />
     </div>
   );
 }
@@ -1218,6 +1189,8 @@ const EPIC_SURFACE_AGENTS: ReadonlyArray<TreeNode> = [
   chatNode("fixture-agent-tests", "fixture-agent-plan", "Write the tests"),
   chatNode("fixture-agent-index", null, "Rebuild the index"),
 ];
+
+const EPIC_SURFACE_AGENT_UPDATED_AT = Date.now() - 6 * 60_000;
 
 function chatNode(
   id: string,
@@ -1245,9 +1218,10 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 /**
- * Epsilon's session: a real open-epic store with its agents in the tree, so
- * the REAL `StripLiveAgentsPortal` reads a session exactly as the epic surface
- * hands it one. Built only for the `surface=epic` windows.
+ * Epsilon's session: a real open-epic store with its agents in the tree, which
+ * the `warm` variant also registers, so the strip's task group reads a session
+ * exactly as it does for a task this window has mounted. Built only for the
+ * `surface=epic` windows.
  */
 function openEpicSurfaceSession() {
   const handle = openStoreForTest({
@@ -1276,7 +1250,8 @@ function openEpicSurfaceSession() {
         title: node.title,
         parentId: node.parentId,
         createdAt: 1,
-        updatedAt: 1,
+        // Six minutes ago, so a running agent's row reads "6m", not an epoch.
+        updatedAt: EPIC_SURFACE_AGENT_UPDATED_AT,
         userId: null,
         hostId: "test-local-host",
         isTitleEditedByUser: false,
@@ -1468,10 +1443,6 @@ function EpicSurfaceStandIn(): ReactNode {
     // `TopLevelTabHost`'s own box: the plane's coordinate origin.
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-clip">
       <EpicSessionContext value={EPIC_SURFACE_SESSION}>
-        <StripLiveAgentsPortal
-          epicId={EPIC_SURFACE_ID}
-          tabId={EPIC_SURFACE_ID}
-        />
         <EpicSurfaceSheets
           tabId={EPIC_SURFACE_ID}
           sidebarSide={sidebarSide}

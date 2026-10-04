@@ -1,6 +1,8 @@
 import {
+  assignLayoutTabGroup,
   repairTabGroups,
   inheritTabGroup,
+  stripItemGroupId,
   type TabCustomizations,
   type TabGroups,
 } from "./tab-groups";
@@ -98,6 +100,11 @@ export interface ReplaceRefArgs {
 export interface ReorderItemArgs {
   readonly itemId: string;
   readonly targetIndex: number;
+}
+
+/** A drop: where the item goes, and the group it lands in. */
+export interface MoveItemArgs extends ReorderItemArgs {
+  readonly groupId: string | null;
 }
 
 export type IsKnownTabKind = (kind: string) => kind is HeaderTabKind;
@@ -203,7 +210,16 @@ export function pairLayoutRefs(
     routeBackingSide: "right",
     leftRatio: validRatio(args.leftRatio) ? args.leftRatio : DEFAULT_LEFT_RATIO,
   };
-  const insertionIndex = Math.min(leftIndex, rightIndex);
+  // A pair made on a destination (a drop on a tab) takes that tab's place;
+  // otherwise it takes the earlier of the two.
+  let placeIndex = Math.min(leftIndex, rightIndex);
+  let otherIndex = Math.max(leftIndex, rightIndex);
+  if (args.targetRef !== undefined) {
+    const onLeft = refsEqual(args.targetRef, args.left);
+    placeIndex = onLeft ? leftIndex : rightIndex;
+    otherIndex = onLeft ? rightIndex : leftIndex;
+  }
+  const insertionIndex = placeIndex - (otherIndex < placeIndex ? 1 : 0);
   const retained = layout.items.filter(
     (item) =>
       item !== layout.items[leftIndex] && item !== layout.items[rightIndex],
@@ -542,6 +558,70 @@ export function reorderStripItem(
     ...layout,
     items: [...without.slice(0, insertion), item, ...without.slice(insertion)],
   };
+}
+
+/**
+ * One drop: the item takes its place in the strip and the group the drop
+ * landed in, `null` for none, so position alone decides membership. A
+ * collapsed group is joined at the head of its run, since its tabs are not
+ * drawn to be inserted among. A drop into any other group's run that does not
+ * join it lands at the head of the run, outside it: a sectioned strip draws
+ * only some of a group's tabs, so the place a drop was drawn at can fall
+ * between tabs of the group that the drop is not in, and the repair every
+ * commit runs would otherwise push it after the group. That repair also removes
+ * a group left with no tab.
+ */
+export function moveStripItem(
+  layout: PersistedTabStripLayout,
+  args: MoveItemArgs,
+): PersistedTabStripLayout {
+  const item =
+    layout.items.find((candidate) => candidate.id === args.itemId) ??
+    findSplitById(layout.items, args.itemId);
+  const ref = item === null ? undefined : flattenStripItemRefs(item).at(0);
+  if (item === null || ref === undefined) return layout;
+  const without = layout.items.filter((candidate) => candidate !== item);
+  const groupOf = (index: number): string | null =>
+    index < 0 || index >= without.length
+      ? null
+      : stripItemGroupId(without[index], layout.customizations);
+  const runStart = (groupId: string): number =>
+    without.findIndex(
+      (candidate) =>
+        stripItemGroupId(candidate, layout.customizations) === groupId,
+    );
+  const requested = Math.max(
+    0,
+    Math.min(args.targetIndex, layout.items.length),
+  );
+  let insertion =
+    layout.items.indexOf(item) < requested ? requested - 1 : requested;
+  const interior = groupOf(insertion - 1);
+  // The head of a collapsed group's run; none when the dragged item is the
+  // group's only tab, which keeps the place it was dropped at.
+  const collapsedStart =
+    args.groupId !== null && layout.groups?.[args.groupId]?.collapsed
+      ? runStart(args.groupId)
+      : -1;
+  if (collapsedStart >= 0) {
+    insertion = collapsedStart;
+  } else if (
+    interior !== null &&
+    interior === groupOf(insertion) &&
+    interior !== args.groupId
+  ) {
+    insertion = runStart(interior);
+  }
+  const items = [
+    ...without.slice(0, insertion),
+    item,
+    ...without.slice(insertion),
+  ];
+  const moved = items.some((entry, index) => entry !== layout.items[index]);
+  const regrouped =
+    stripItemGroupId(item, layout.customizations) !== args.groupId;
+  if (!moved && !regrouped) return layout;
+  return { ...assignLayoutTabGroup(layout, ref, args.groupId), items };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { describeHostBusy } from "@/components/host/host-restart-copy";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -47,6 +47,18 @@ export interface OsServiceSectionProps {
   /** Retires the whole section: no description to trust, nothing safe to press. */
   readonly degrade: OverviewDegradeReason | null;
   readonly canRegister: boolean;
+  /**
+   * Why Re-register is withheld, or `null`: this machine's host was started
+   * in a terminal (`serviceRegisterForegroundReason`). Disabled with the
+   * reason rather than hidden, so the row says what unblocks it.
+   */
+  readonly registerBlockedReason: string | null;
+  /**
+   * This machine's host was started in a terminal. Deregister stays offered -
+   * removing the registration leaves that run alone on every platform - but
+   * its confirm must not say the host stops.
+   */
+  readonly foregroundRun: boolean;
   readonly canDeregister: boolean;
   /**
    * Nothing is registered, so there is nothing to remove.
@@ -124,6 +136,12 @@ function OsServiceRow(props: OsServiceSectionProps): ReactNode {
     setConfirmRegister(false);
     setConfirmDeregister(false);
   }
+  // The same stale question from the other side: registering became
+  // withheld under an open confirm (a host started in a terminal began), and
+  // its Confirm would dispatch what the button no longer offers.
+  if (confirmRegister && props.registerBlockedReason !== null) {
+    setConfirmRegister(false);
+  }
 
   return (
     <div
@@ -154,56 +172,12 @@ function OsServiceRow(props: OsServiceSectionProps): ReactNode {
           </p>
         )}
       </div>
-      <div
-        className={cn(
-          "flex flex-wrap items-center gap-2",
-          SETTINGS_ROW_STACK.control,
-        )}
-      >
-        {!props.canRegister ? null : (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={anyPending}
-            data-testid="host-overview-service-register"
-            // Confirmed, always: on macOS this bootouts the running job before
-            // bootstrapping it again - a host restart wearing repair clothes -
-            // and it does so WITHOUT the busy-session refusal the restart flow
-            // gets, so the dialog is where the open-session fact is put in
-            // front of the person about to end them.
-            onClick={() => setConfirmRegister(true)}
-          >
-            {props.registerPending ? (
-              <AgentSpinningDots
-                className="mr-2 size-3"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-            Re-register
-          </Button>
-        )}
-        {!props.canDeregister ? null : (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={anyPending || props.nothingToDeregister}
-            data-testid="host-overview-service-deregister"
-            onClick={() => setConfirmDeregister(true)}
-          >
-            {props.deregisterPending ? (
-              <AgentSpinningDots
-                className="mr-2 size-3"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-            Deregister
-          </Button>
-        )}
-      </div>
+      <OsServiceActions
+        section={props}
+        anyPending={anyPending}
+        onRegister={() => setConfirmRegister(true)}
+        onDeregister={() => setConfirmDeregister(true)}
+      />
       <ConfirmDestructiveDialog
         blockedReason={null}
         open={confirmRegister}
@@ -232,7 +206,10 @@ function OsServiceRow(props: OsServiceSectionProps): ReactNode {
           if (!next) setConfirmDeregister(false);
         }}
         title="Deregister this host's OS service?"
-        description={`This stops ${props.hostName} and removes the registration that starts it again at login. Nothing is uninstalled and no data is deleted — but Traycer cannot start this host again from here, so bringing it back means running 'traycer host service install' on the machine itself.`}
+        description={describeDeregisterConfirm(
+          props.hostName,
+          props.foregroundRun,
+        )}
         cascadeSummary={null}
         actionLabel="Deregister"
         isPending={props.deregisterPending}
@@ -243,6 +220,105 @@ function OsServiceRow(props: OsServiceSectionProps): ReactNode {
       />
     </div>
   );
+}
+
+/**
+ * The row's two repair verbs and, when Re-register is withheld, the reason
+ * under them. The clicks only OPEN the row's confirms; nothing dispatches
+ * from here.
+ */
+function OsServiceActions(props: {
+  readonly section: OsServiceSectionProps;
+  readonly anyPending: boolean;
+  readonly onRegister: () => void;
+  readonly onDeregister: () => void;
+}): ReactNode {
+  const { section } = props;
+  const registerReasonId = useId();
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-2",
+        SETTINGS_ROW_STACK.control,
+      )}
+    >
+      {!section.canRegister ? null : (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          disabled={props.anyPending || section.registerBlockedReason !== null}
+          aria-describedby={
+            section.registerBlockedReason === null
+              ? undefined
+              : registerReasonId
+          }
+          data-testid="host-overview-service-register"
+          // Confirmed, always: on macOS this bootouts the running job before
+          // bootstrapping it again - a host restart wearing repair clothes -
+          // and it does so WITHOUT the busy-session refusal the restart flow
+          // gets, so the dialog is where the open-session fact is put in
+          // front of the person about to end them.
+          onClick={props.onRegister}
+        >
+          {section.registerPending ? (
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Re-register
+        </Button>
+      )}
+      {!section.canDeregister ? null : (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          disabled={props.anyPending || section.nothingToDeregister}
+          data-testid="host-overview-service-deregister"
+          onClick={props.onDeregister}
+        >
+          {section.deregisterPending ? (
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Deregister
+        </Button>
+      )}
+      {section.registerBlockedReason === null ? null : (
+        // Last in the row, on a line of its own, so it reads as the reason
+        // under the actions rather than splitting them.
+        <p
+          id={registerReasonId}
+          className="order-last basis-full text-ui-xs text-muted-foreground"
+          data-testid="host-overview-service-register-reason"
+        >
+          {section.registerBlockedReason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The deregister confirm's body. During a foreground run it must not say the
+ * host stops: removing the registration leaves a host started in a terminal
+ * running, on every platform, so the promise is only about the service.
+ */
+function describeDeregisterConfirm(
+  hostName: string,
+  foregroundRun: boolean,
+): string {
+  const tail =
+    "Nothing is uninstalled and no data is deleted — but Traycer cannot start this host again from here, so bringing it back means running 'traycer host service install' on the machine itself.";
+  return foregroundRun
+    ? `This removes the registration that starts ${hostName} at login. The host you started in a terminal keeps running until you stop it there. ${tail}`
+    : `This stops ${hostName} and removes the registration that starts it again at login. ${tail}`;
 }
 
 /**

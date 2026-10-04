@@ -424,10 +424,17 @@ export function buildBearerHeadersFromContext(
   },
 ): Headers {
   const Err = options.errorClass;
+  // Both request-ended arms keep the released lease as the error's cause: the
+  // caller's error class is what callers branch on, and the cause is what lets
+  // a log site tell a request that ended from a credential that was refused.
   if (ctx.isAborted) {
-    throw new Err(
+    const error = new Err(
       `${options.operationLabel}: request context has been aborted`,
     );
+    error.cause = new CredentialLeaseReleasedError(
+      "Request context has been aborted",
+    );
+    throw error;
   }
   // The verdict gate, and it belongs HERE rather than at the call sites for the
   // same reason the abort check does: this is the single choke point every
@@ -451,7 +458,9 @@ export function buildBearerHeadersFromContext(
     token = ctx.credentials.getBearerToken();
   } catch (cause) {
     if (cause instanceof CredentialLeaseReleasedError) {
-      throw new Err(cause.message);
+      const error = new Err(cause.message);
+      error.cause = cause;
+      throw error;
     }
     throw cause;
   }

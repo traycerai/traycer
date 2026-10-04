@@ -1,10 +1,11 @@
 import type { SegmentOption } from "@/components/layout-editor/regions/region-grammar";
 
 /**
- * One provider row's disclosure (L-26): which of that provider's limits its
- * segment draws. Everything here is about ONE provider (C-23).
+ * Which of one provider's limits its readings draw, now a section of the
+ * provider's page in Settings. Everything here is about ONE provider (C-23).
  */
 export const USAGE_PROVIDER_LEVEL = {
+  sectionLabel: "Limits in usage readings",
   limitsLabel: "Limits",
   limitsDescription: "Automatic follows the plan reported by the provider.",
   limitsOptions: [

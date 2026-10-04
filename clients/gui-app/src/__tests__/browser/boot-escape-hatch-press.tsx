@@ -119,6 +119,7 @@ export function Fixture() {
       key={`runtime-${String(generation)}`}
       onConfigureShell={() => undefined}
       onOpenSettings={onOpenSettings}
+      onMenuOpenSettings={() => undefined}
     />
   ) : (
     <GatePhase

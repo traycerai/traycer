@@ -6,30 +6,34 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
 import {
+  statusBarSegmentSeverity,
   statusBarSegmentTooltip,
-  type StatusBarUsageParts,
+  type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import {
+  providerDisplayName,
+  providerIdToGuiHarnessId,
+} from "@/lib/provider-ordering";
 import {
   rateLimitWindowSeverityTextClassName,
   RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
 import {
   windowLabelText,
+  windowPercentText,
   windowPercentValueText,
 } from "@/lib/rate-limits/status-bar-window-text";
 // The same glyph the strip's resource segment prints for a reading it does not
 // have, so one bar never shows two different dashes for one idea.
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
-import { useResetCountdown } from "@/lib/relative-time";
+import { formatResetCountdown, useSampledNow } from "@/lib/relative-time";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import { cn } from "@/lib/utils";
-import type { AmountMode } from "@/lib/layout/layout-values";
 
 /**
  * The reading's arrival, at the same 140ms the leader badge and the dock's
@@ -54,26 +58,25 @@ const SEVERITY_TRANSITION_CLASS_NAME =
 
 export interface StatusBarProviderSegmentProps {
   readonly segment: StatusBarProviderSegmentModel;
-  /** Which of the reading's optional parts the preferences switched on. */
-  readonly parts: StatusBarUsageParts;
-  readonly percentMode: AmountMode;
+  readonly display: StatusBarUsageDisplay;
 }
 
 /**
- * One account's usage, at the detail the preferences ask for.
+ * One account's usage, in the form its severity earns (see `SegmentBody`):
+ * calm is a logo, dot and bar; running low and limited expand in place.
  *
- * Always the whole reading: the cluster this sits in scrolls when its
- * segments outgrow the strip, so nothing here is shortened to make room, and
- * the width of the window never changes what a segment says. What CAN vary is
- * what the user switched on - the mode word, the mini bar, the countdown -
- * which arrives as `parts`.
+ * Nothing here is shortened to make room: the cluster this sits in scrolls
+ * when its segments outgrow the strip - except the account NAME on a phone,
+ * which truncates to a floor first. The form never changes with the width of
+ * the window. What the user chose arrives as `display`: Used or Remaining, and
+ * whether a profile prints its reset time.
  *
  * A provider with several accounts checked draws one of these per account,
  * and what tells them apart is the profile's accent dot after the provider
  * icon and the account's NAME before the reading, so the strip reads
- * `Codex · Work 57% used 4h` beside `Codex · Personal 12% used 4h`. Neither is
- * drawn for a provider with fewer than two profiles, where there is nothing
- * to tell the one account apart from.
+ * `Codex Work [bar] 86% 5d` beside a bare `Codex [bar]`. Neither is drawn
+ * for a provider with fewer than two profiles, where there is nothing to tell
+ * the one account apart from.
  *
  * Clicking a segment opens the usage panel on this provider with this
  * account's card in view. The segment itself is not a control - it sits inside
@@ -106,91 +109,146 @@ export interface StatusBarProviderSegmentProps {
 export function StatusBarProviderSegment(
   props: StatusBarProviderSegmentProps,
 ): ReactNode {
-  const segment = props.segment;
+  const { segment, display } = props;
+  const now = useSampledNow();
+  const hasNumbers = segment.state === "live" || segment.state === "degraded";
   const icon = (
     <HarnessIcon
       harnessId={providerIdToGuiHarnessId(segment.providerId)}
       className={cn("size-3", segment.state === "degraded" && "opacity-60")}
     />
   );
+  const identity = (
+    <span className="inline-flex items-center gap-1">
+      {icon}
+      {segment.account === null ? null : (
+        <span
+          data-testid="status-bar-provider-account-dot"
+          className="inline-flex shrink-0"
+        >
+          <AccentDot
+            profileId={segment.account.profileId}
+            accentColor={segment.account.accentColor}
+            label={segment.account.label}
+            variant="inline"
+            size="compact"
+            className={undefined}
+          />
+        </span>
+      )}
+      {segment.state === "degraded" ? (
+        <TriangleAlert
+          // The same amber a `running_low` percentage prints, since one can
+          // sit beside the other on this row.
+          className={cn("size-3 shrink-0", RUNNING_LOW_TEXT_CLASS_NAME)}
+          aria-hidden
+          data-testid="status-bar-provider-degraded"
+        />
+      ) : null}
+    </span>
+  );
   return (
     <span
-      className="inline-flex min-w-0 items-center gap-1"
+      // `min-w-min` on a phone, where the strip's row can shrink: the
+      // segment gives no further than its readings' floor, so a squeezed
+      // strip scrolls instead of drawing one segment over the next.
+      className="inline-flex min-w-0 items-center gap-1 max-md:min-w-min"
       data-testid={`status-bar-provider-segment-${segment.providerId}`}
       data-provider-id={segment.providerId}
       data-profile-id={segment.profileId ?? ""}
       data-state={segment.state}
     >
+      {/*
+        One tooltip over the whole segment, in one place for every state: a
+        calm profile has no text of its own, so this is where its numbers are,
+        and a tree that changed shape between states would remount the reading
+        (and with it the arrival animation a cold provider's first report
+        needs).
+
+        No `sr-only` provider name in here: the trigger this sits inside
+        carries an `aria-label`, which overrides its contents entirely, so a
+        hidden name would be unreachable weight. The trigger's own name lists
+        the providers instead.
+      */}
       <TooltipWrapper
-        label={statusBarSegmentTooltip(segment)}
+        label={
+          hasNumbers
+            ? segmentNumbersTooltip(segment, display, now)
+            : statusBarSegmentTooltip(segment)
+        }
         side="top"
         sideOffset={6}
         align={undefined}
       >
-        {/*
-          No `sr-only` provider name in here: the trigger this sits inside
-          carries an `aria-label`, which overrides its contents entirely, so a
-          hidden name would be unreachable weight. The trigger's own name lists
-          the providers instead.
-        */}
-        <span className="inline-flex items-center gap-1">
-          {icon}
-          {segment.account === null ? null : (
-            <span
-              data-testid="status-bar-provider-account-dot"
-              className="inline-flex shrink-0"
-            >
-              <AccentDot
-                profileId={segment.account.profileId}
-                accentColor={segment.account.accentColor}
-                label={segment.account.label}
-                variant="inline"
-                size="compact"
-                className={undefined}
-              />
-            </span>
-          )}
-          {segment.state === "degraded" ? (
-            <TriangleAlert
-              // The same amber a `running_low` percentage prints, since one can
-              // sit beside the other on this row.
-              className={cn("size-3 shrink-0", RUNNING_LOW_TEXT_CLASS_NAME)}
-              aria-hidden
-              data-testid="status-bar-provider-degraded"
-            />
-          ) : null}
+        <span
+          data-testid="status-bar-provider-tooltip-target"
+          className="inline-flex items-center gap-1"
+        >
+          {identity}
+          <SegmentBody segment={segment} display={display} now={now} />
         </span>
       </TooltipWrapper>
-      <SegmentBody {...props} />
     </span>
   );
 }
 
 /**
- * The reading itself: the account's name where there is one, then one entry
- * per window the user selected (`segment.shown` - the tightest limit by
- * default, which is the one that decides whether the panel is worth opening),
- * each at the detail `parts` asks for.
+ * The reading itself, in the form the profile's severity earns.
+ *
+ * **Calm** (`healthy`): what the Reading style draws - the 16px bar by default,
+ * or the percentage, or both - then the short reset time when Reset time is
+ * on. The rest is one hover away (the tooltip wraps the
+ * whole segment) and one click away (the panel).
+ * **Expanded** (`running_low`, `limited`, or every profile under Everything):
+ * the profile's name, then per window a 32px bar, the percentage - or "Limit" -
+ * and the reset time. The segment grows where it stands: the form depends on
+ * severity and the chosen style alone, never on position.
+ *
+ * The form is decided per segment, from the worst of its shown windows
+ * (`statusBarSegmentSeverity`). Inside an expanded segment each window still
+ * prints its own tier, so a healthy window beside a limited one reads as a
+ * percentage and not as "Limit".
  */
-function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
-  const { segment, parts } = props;
+function SegmentBody(props: {
+  readonly segment: StatusBarProviderSegmentModel;
+  readonly display: StatusBarUsageDisplay;
+  readonly now: number;
+}): ReactNode {
+  const { segment, display, now } = props;
   const motionEnabled = useMotionEnabled();
+  const isCold = segment.state === "cold";
+  const expanded =
+    display.readingStyle === "full" ||
+    statusBarSegmentSeverity(segment) !== "healthy";
   // The account's name before the reading rather than after, so `Work 57%`
   // and `Personal 12%` read as two labelled figures rather than one figure
-  // with two trailing words.
-  const accountName =
-    segment.account === null ? null : (
-      <span
-        data-testid="status-bar-provider-account"
-        className="whitespace-nowrap"
-      >
-        {segment.account.label}
+  // with two trailing words. A profile with no account tells nothing apart, so
+  // its name is the provider's.
+  //
+  // On a phone the name is the one part of the strip that gives when the
+  // readings outgrow it: it truncates down to a `5ch` floor before the strip
+  // falls back to scrolling. A one-track grid is what sets that floor as the
+  // name's MIN-CONTENT width - a plain truncating span still contributes its
+  // whole text to every ancestor's minimum, so nothing above it could shrink.
+  const name = expanded ? (
+    <span
+      data-testid={
+        segment.account === null
+          ? "status-bar-provider-name"
+          : "status-bar-provider-account"
+      }
+      className="whitespace-nowrap text-foreground max-md:inline-grid max-md:grid-cols-[minmax(5ch,max-content)]"
+    >
+      <span className="min-w-0 truncate">
+        {segment.account === null
+          ? providerDisplayName(segment.providerId)
+          : segment.account.label}
       </span>
-    );
-  const isCold = segment.state === "cold";
+    </span>
+  ) : null;
   return (
     <>
-      {accountName}
+      {name}
       {/*
         The track and the reading are siblings rather than two keyed members of
         the presence below, and that is the point: the track leaves in the same
@@ -204,7 +262,7 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
         <span
           data-testid="status-bar-provider-cold-track"
           aria-hidden="true"
-          className="h-1 w-8 shrink-0 rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
+          className="h-1 w-4 shrink-0 rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
         />
       ) : null}
       <AnimatePresence initial={false}>
@@ -237,32 +295,25 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
                       ·
                     </span>
                   )}
-                  {/* One bar per reading, immediately before the number it
-                    measures. A provider showing several limits is showing
-                    several independent gauges, and a single bar in front of
-                    them would be a fourth severity colour with nothing on the
-                    row saying which limit it is about. Gated as ONE decision
-                    for the whole segment, so the switch takes every bar away at
-                    once rather than thinning them. */}
-                  {parts.bar ? (
-                    <StatusBarMiniBar
-                      windowKey={window.windowKey}
-                      usedPercent={window.usedPercent}
-                      severity={window.severity}
+                  {expanded ? (
+                    <StatusBarExpandedWindow
+                      window={window}
+                      display={display}
+                      now={now}
+                      // The provider's live windows, not the ones the selection
+                      // draws: a provider drawing its tightest alone still has
+                      // to say which of several that one is.
+                      liveWindowCount={segment.windows.length}
+                      motionEnabled={motionEnabled}
                     />
-                  ) : null}
-                  <StatusBarWindowText
-                    window={window}
-                    percentMode={props.percentMode}
-                    showModeWord={parts.modeWord}
-                    showPercent={parts.percent}
-                    showTimer={parts.timer}
-                    // The provider's live windows, not the ones the selection
-                    // draws: a provider drawing its tightest alone still has to
-                    // say which of several that one is.
-                    visibleWindowCount={segment.windows.length}
-                    motionEnabled={motionEnabled}
-                  />
+                  ) : (
+                    <StatusBarCalmWindow
+                      window={window}
+                      display={display}
+                      now={now}
+                      motionEnabled={motionEnabled}
+                    />
+                  )}
                 </Fragment>
               ))
             )}
@@ -274,75 +325,174 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
 }
 
 /**
- * One window, as `33% used 4h 15m` — or `33% 5h` with the mode word and the
- * countdown switched off.
- *
- * A leaf of its own because the countdown subscribes to the shared 60s clock,
- * the idiom every other countdown in the app follows. It is not what keeps the
- * tick cheap here — the segments hook samples the same clock to expire windows,
- * so the cluster re-renders each minute either way — but it keeps this label
- * the only thing that has to, in every future where that stops being true.
- *
- * The percentage is its own span, and the only tinted one. Severity is a fact
- * about the reading rather than a preference about it, so it survives every
- * switch that keeps the percentage - including the one that takes the mini bar
- * away, which is the only other place this colour appears.
- *
- * Switching the percentage itself off leaves the window's own label (and the
- * mode word and countdown, where those are on), which is what makes the bar a
- * reading in its own right rather than a decoration beside a number.
+ * The short time until a window resets (`5h`), or null when Reset time is off
+ * or the window has no reset instant. One owner for the calm and expanded
+ * forms, so the switch governs both the same way.
  */
-function StatusBarWindowText(props: {
+function windowResetCountdown(
+  window: StatusBarRateLimitWindow,
+  display: StatusBarUsageDisplay,
+  now: number,
+): string | null {
+  return display.showTimer && window.resetsAt !== null
+    ? formatResetCountdown(window.resetsAt, now)
+    : null;
+}
+
+/**
+ * One window of a calm profile, drawn as the Reading style says: the 16px bar,
+ * the percentage, or the bar then the percentage, then the short reset time
+ * when Reset time is on. A calm window is `healthy`, so its percentage is
+ * never "Limit".
+ */
+function StatusBarCalmWindow(props: {
   readonly window: StatusBarRateLimitWindow;
-  readonly percentMode: AmountMode;
-  readonly showModeWord: boolean;
-  readonly showPercent: boolean;
-  readonly showTimer: boolean;
-  readonly visibleWindowCount: number;
-  /** Resolved once per segment, not once per window. */
+  readonly display: StatusBarUsageDisplay;
+  readonly now: number;
+  readonly motionEnabled: boolean;
+}): ReactNode {
+  const { window, display } = props;
+  const countdown = windowResetCountdown(window, display, props.now);
+  return (
+    <>
+      {display.readingStyle === "percent" ? null : (
+        <StatusBarMiniBar
+          windowKey={window.windowKey}
+          size="calm"
+          usedPercent={window.usedPercent}
+          severity={window.severity}
+        />
+      )}
+      {display.readingStyle === "bar" ? null : (
+        <StatusBarWindowPercent
+          window={window}
+          display={display}
+          motionEnabled={props.motionEnabled}
+        />
+      )}
+      {countdown === null ? null : (
+        <span
+          data-testid={`status-bar-window-reset-${window.windowKey}`}
+          className="whitespace-nowrap"
+        >
+          {countdown}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * A window's percentage, or "Limit" once the host says it is `limited`.
+ *
+ * It is the only tinted span - severity is a fact about the reading rather
+ * than a preference about it, so the tone crossing a threshold is bridged and
+ * the digits do not roll.
+ */
+function StatusBarWindowPercent(props: {
+  readonly window: StatusBarRateLimitWindow;
+  readonly display: StatusBarUsageDisplay;
   readonly motionEnabled: boolean;
 }): ReactNode {
   const { window } = props;
-  // `null` when the timer is off, and also when the provider reported no reset
-  // instant to count down to - both fall back to the catalog's static name.
-  const countdown = useResetCountdown(props.showTimer ? window.resetsAt : null);
-  // The digits do not roll - they are dense peripheral data nobody watches
-  // change, and the same string is the trigger's own accessible name - but the
-  // tone crossing a threshold is a state change, and it is the one part of this
-  // reading worth bridging.
   const severityClassName = props.motionEnabled
     ? cn(
         rateLimitWindowSeverityTextClassName(window.severity),
         SEVERITY_TRANSITION_CLASS_NAME,
       )
     : rateLimitWindowSeverityTextClassName(window.severity);
-  const suffix = [
-    ...(props.showModeWord ? [props.percentMode] : []),
-    windowLabelText({
-      label: window.label,
-      labelIsDuration: window.labelIsDuration,
-      countdown,
-      visibleWindowCount: props.visibleWindowCount,
-    }),
-  ].join(" ");
   return (
     <span
-      className="whitespace-nowrap"
-      data-testid={`status-bar-window-${window.windowKey}`}
+      data-testid={`status-bar-window-percent-${window.windowKey}`}
+      className={cn("font-medium", severityClassName)}
     >
-      {props.showPercent ? (
-        <>
-          <span
-            data-testid={`status-bar-window-percent-${window.windowKey}`}
-            className={severityClassName}
-          >
-            {windowPercentValueText(window.usedPercent, props.percentMode)}
-          </span>
-          {` ${suffix}`}
-        </>
-      ) : (
-        suffix
-      )}
+      {window.severity === "limited"
+        ? "Limit"
+        : windowPercentValueText(window.usedPercent, props.display.percentMode)}
     </span>
   );
+}
+
+/**
+ * One window of an expanded profile: `[32px bar] 86% 5d`, or `[bar] Limit
+ * resets 3d` once the host says it is `limited`. Under Everything the percent
+ * carries its "used" or "remaining" word: `[bar] 86% used 5d`. Under Percent
+ * there is no bar at all: expanding only adds the name, value and reset time.
+ *
+ * What follows the percentage is `windowLabelText`'s: the countdown, the
+ * window's name, or both, so with Reset time off the countdown gives way to the
+ * name.
+ */
+function StatusBarExpandedWindow(props: {
+  readonly window: StatusBarRateLimitWindow;
+  readonly display: StatusBarUsageDisplay;
+  readonly now: number;
+  readonly liveWindowCount: number;
+  /** Resolved once per segment, not once per window. */
+  readonly motionEnabled: boolean;
+}): ReactNode {
+  const { window, display } = props;
+  const limited = window.severity === "limited";
+  const countdown = windowResetCountdown(window, display, props.now);
+  const label = windowLabelText({
+    label: window.label,
+    labelIsDuration: window.labelIsDuration,
+    countdown:
+      countdown !== null && limited ? `resets ${countdown}` : countdown,
+    visibleWindowCount: props.liveWindowCount,
+  });
+  return (
+    <span
+      className="inline-flex items-center gap-1 whitespace-nowrap"
+      data-testid={`status-bar-window-${window.windowKey}`}
+    >
+      {display.readingStyle === "percent" ? null : (
+        <StatusBarMiniBar
+          windowKey={window.windowKey}
+          size="expanded"
+          usedPercent={window.usedPercent}
+          severity={window.severity}
+        />
+      )}
+      <StatusBarWindowPercent
+        window={window}
+        display={display}
+        motionEnabled={props.motionEnabled}
+      />
+      {display.readingStyle === "full" && !limited ? (
+        <span>{display.percentMode}</span>
+      ) : null}
+      <span>{label}</span>
+    </span>
+  );
+}
+
+/**
+ * What a profile with a reading says on hover: `personal · 41% used · resets
+ * in 5d`. Several shown windows read as one clause each, split by `;`.
+ */
+function segmentNumbersTooltip(
+  segment: StatusBarProviderSegmentModel,
+  display: StatusBarUsageDisplay,
+  now: number,
+): string {
+  const name =
+    segment.account === null
+      ? providerDisplayName(segment.providerId)
+      : segment.account.label;
+  const clauses = segment.shown.map((window) =>
+    [
+      segment.windows.length > 1 ? window.label : null,
+      windowPercentText(window.usedPercent, display.percentMode),
+      window.resetsAt === null
+        ? null
+        : `resets in ${formatResetCountdown(window.resetsAt, now)}`,
+    ]
+      .filter((part) => part !== null)
+      .join(" · "),
+  );
+  // A degraded reading still has to say why it is stale, ahead of the numbers.
+  const lead =
+    segment.state === "degraded" ? statusBarSegmentTooltip(segment) : name;
+  return `${lead} · ${clauses.join("; ")}`;
 }

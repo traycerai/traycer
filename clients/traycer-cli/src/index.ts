@@ -49,6 +49,16 @@ import { buildAgentTranscriptCommand } from "./commands/agent-transcript";
 import { buildAgentInboxCommand } from "./commands/agent-inbox";
 import { buildTerminalListCommand } from "./commands/terminal-list";
 import { buildTerminalOutputCommand } from "./commands/terminal-output";
+import { buildProfileListCommand } from "./commands/profile-list";
+import {
+  buildProfileLoginCommand,
+  PROCESS_PROFILE_LOGIN_IO,
+} from "./commands/profile-login";
+import {
+  buildProfileRemoveCommand,
+  buildProfileRenameCommand,
+  buildProfileSetEnabledCommand,
+} from "./commands/profile-mutations";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
 import { buildWorktreeCreateCommand } from "./commands/worktree-create";
 import { buildWorktreeListCommand } from "./commands/worktree-list";
@@ -82,6 +92,10 @@ import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-an
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import {
+  buildHostLifecycleSetCommand,
+  hostLifecycleGetCommand,
+} from "./commands/host-lifecycle";
+import {
   parseHostMaintenanceLeaseTarget,
   runHostMaintenanceLease,
   type HostMaintenanceLeaseAdmission,
@@ -89,6 +103,12 @@ import {
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
+import { LIFECYCLE_ORIGIN_COMMANDS } from "@traycer/protocol/config/lifecycle-origin-commands";
+import {
+  HOST_START_ORIGINS,
+  hostStartOriginFromOption,
+  type HostStartOrigin,
+} from "./host/lifecycle-origin";
 import {
   acknowledgeRelocationEntry,
   relocateOutOfHostCgroupIfNeeded,
@@ -109,9 +129,13 @@ import { buildLinkPhoneCommand } from "./commands/link-phone";
 import { buildLoginCommand } from "./commands/login";
 import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
-import { serviceStartCommand } from "./commands/service-start";
+import { buildServiceStartCommand } from "./commands/service-start";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
+import {
+  refreshServiceDefinitionUnderContender,
+  serviceRefreshCommand,
+} from "./commands/service-refresh";
 import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import {
@@ -135,6 +159,11 @@ import {
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
+import {
+  agentWorktreeCreateOffered,
+  assertAgentWorktreeCreateAllowed,
+  readAgentWorktreeCreatePolicy,
+} from "./agent-worktree-create";
 import { writeStderr, writeStdout } from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
@@ -199,6 +228,78 @@ function attemptAdoptionOption(): Option {
     "--attempt-adoption <nonce>",
     "Internal: adopt a parent update segment's live attempt lock instead of acquiring",
   ).hideHelp();
+}
+
+/**
+ * `--lifecycle-origin <origin>` - who is asking for this host start, recorded
+ * in the adoption proof the start publishes and printed by `host status` /
+ * `host doctor` (`host/lifecycle-origin.ts`).
+ *
+ * Hidden: Traycer Desktop is the caller that passes `desktop` (from its
+ * `HostController`), and every other caller is a terminal, which is the default - so an
+ * invocation that predates the flag keeps its argv valid and is described
+ * truthfully. `.choices` makes a misspelling a parse error through the
+ * runner's envelope instead of a silently mislabelled start.
+ *
+ * Registered on every command Desktop invokes that can start the host, and on
+ * `host stop` and `host uninstall`, which start nothing but are on Desktop's
+ * same invocation path (`host uninstall` refuses a desktop request over a host
+ * a person started in a terminal) - exactly `LIFECYCLE_ORIGIN_COMMANDS`, which
+ * `assertLifecycleOriginCommands` checks. On `host restart` and
+ * `host free-port-and-restart` the relaunch is always recorded as
+ * `maintenance` whatever this says: a restart brings back a run that already
+ * existed.
+ *
+ * `maintenance` is not a choice. Only those relaunch legs may record it, and
+ * a `granted` + `maintenance` start is one that continues its predecessor's
+ * run (`continuesPredecessorRun`) - a caller able to name it could make an
+ * ordinary start inherit a Linked stop it never asked for.
+ */
+function lifecycleOriginOption(): Option {
+  return new Option(
+    "--lifecycle-origin <origin>",
+    "Internal: who is asking for this host start (desktop, terminal)",
+  )
+    .choices(COMMAND_LINE_HOST_START_ORIGINS)
+    .hideHelp();
+}
+
+const COMMAND_LINE_HOST_START_ORIGINS: readonly HostStartOrigin[] =
+  HOST_START_ORIGINS.filter((origin) => origin !== "maintenance");
+
+/**
+ * The commands carrying `--lifecycle-origin` must be exactly
+ * `LIFECYCLE_ORIGIN_COMMANDS`, the list Traycer Desktop reads to decide where
+ * to append `--lifecycle-origin desktop`. Commander rejects an unknown option,
+ * so a listed command without the flag would fail every Desktop call to it,
+ * and a flagged command off the list would record Desktop's starts as
+ * `terminal`. Checked on every program build - every CLI test builds one - so
+ * a drift on either side fails the first test that runs, never a user's start.
+ */
+function assertLifecycleOriginCommands(program: Command): void {
+  const expected = new Set(
+    LIFECYCLE_ORIGIN_COMMANDS.map((path) => path.join(" ")),
+  );
+  const registered = new Set<string>();
+  const visit = (command: Command, path: readonly string[]): void => {
+    for (const child of command.commands) {
+      const childPath = [...path, child.name()];
+      if (
+        child.options.some((option) => option.long === "--lifecycle-origin")
+      ) {
+        registered.add(childPath.join(" "));
+      }
+      visit(child, childPath);
+    }
+  };
+  visit(program, []);
+  const missing = [...expected].filter((path) => !registered.has(path));
+  const extra = [...registered].filter((path) => !expected.has(path));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `--lifecycle-origin registrations differ from LIFECYCLE_ORIGIN_COMMANDS (missing: ${missing.join(", ") || "none"}; unlisted: ${extra.join(", ") || "none"})`,
+    );
+  }
 }
 
 /**
@@ -287,6 +388,14 @@ function withRunner(
       assertCommandAllowedOnSurface(
         commandPath,
         resolveAgentCliSurface(readonlyEnv()),
+      );
+      // The user's Agent worktrees setting, for `worktree create` typed inside
+      // an agent session. Here for the reason the check above is: hiding the
+      // command does not stop an agent that types it.
+      assertAgentWorktreeCreateAllowed(
+        commandPath,
+        readonlyEnv(),
+        readAgentWorktreeCreatePolicy,
       );
       return build(optsBag, positionals)(ctx);
     };
@@ -567,6 +676,7 @@ export function buildProgramWithAgentRoles(
   // raw prose onto an NDJSON stream.
   applyRunnerErrorRouting(program);
   installHostUpdateVersionParser(program);
+  assertLifecycleOriginCommands(program);
   return program;
 }
 
@@ -734,6 +844,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerConfigCommands(program);
   registerCommentsCommands(program);
   registerTerminalCommands(program);
+  registerProfileCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
@@ -922,7 +1033,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--cwd <path>",
-        "Working directory for the host (defaults to the install directory)",
+        "Working directory for the host (defaults to the host home directory)",
       )
       // Identity binding for journal-authorised reclaim probes. Existing
       // registrations remain valid without these options; a probe requires
@@ -1213,6 +1324,8 @@ function registerHostCommands(program: Command): void {
     () => hostDoctorCommand,
   );
 
+  registerHostLifecycleCommands(host);
+
   withRunner(
     host
       .command("restart")
@@ -1251,12 +1364,14 @@ function registerHostCommands(program: Command): void {
           "--defer-if-parked",
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
         deferIfParked: opts.deferIfParked === true,
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       }),
   );
 
@@ -1264,13 +1379,24 @@ function registerHostCommands(program: Command): void {
     host
       .command("stop")
       .description("Stop the host service")
+      // Hidden: the desktop's automatic idle-only quit stop, not a
+      // user-facing switch - see commands/host-stop.ts.
+      .addOption(
+        new Option(
+          "--if-idle",
+          "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before stop",
+        ).hideHelp(),
+      )
       .option(
         "--force",
         "Stop even if the host has work in progress: skip the cooperative shutdown claim and kill the host process (SIGTERM, then SIGKILL after the exit grace). Running terminal sessions and in-flight agent work are killed.",
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildHostStopCommand({
         force: opts.force === true,
+        ifIdle: opts.ifIdle === true,
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       }),
   );
 
@@ -1321,6 +1447,7 @@ function registerHostCommands(program: Command): void {
       )
       .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption())
       .addHelpText(
         "after",
         [
@@ -1366,6 +1493,7 @@ function registerHostCommands(program: Command): void {
         }
         return buildHostInstallCommand({
           attemptAdoption: attemptAdoptionNonce(opts),
+          lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           // Registry path defaults to "latest" when neither flag is set.
           // For --from installs the value is unused (the archive supplies
           // the version), but the underlying command contract still wants
@@ -1425,7 +1553,8 @@ function registerHostCommands(program: Command): void {
         "--keep-installed",
         "Liveness only: keep whatever non-yanked host is installed, whatever its version, instead of converging to this build's default. Ignored when --release names a version. The default when nothing is installed still installs the packaged/pinned host.",
       )
-      .addOption(attemptAdoptionOption()),
+      .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption()),
     (opts) => {
       const explicitVersion =
         typeof opts.release === "string" && opts.release.length > 0
@@ -1446,6 +1575,7 @@ function registerHostCommands(program: Command): void {
         }
         return buildHostEnsureCommand({
           attemptAdoption: attemptAdoptionNonce(opts),
+          lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           versionRequest: explicitVersion,
           fromPath,
           enableLinger: opts.linger !== false,
@@ -1494,6 +1624,7 @@ function registerHostCommands(program: Command): void {
         ).hideHelp(),
       )
       .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption())
       .addHelpText(
         "after",
         [
@@ -1527,6 +1658,7 @@ function registerHostCommands(program: Command): void {
             : null,
         respectHold: opts.respectHold === true,
         attemptAdoption: attemptAdoptionNonce(opts),
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       }),
   );
 
@@ -1866,10 +1998,12 @@ function registerHostCommands(program: Command): void {
           "Neither mode touches your data or credentials under ~/.traycer.",
           "",
         ].join("\n"),
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildHostUninstallCommand({
         all: opts.all === true,
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       }),
   );
 
@@ -1962,7 +2096,8 @@ function registerHostCommands(program: Command): void {
           "--defer-if-parked",
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) => {
       const pid =
         typeof opts.pid === "string" ? parsePositiveIntegerArg(opts.pid) : null;
@@ -2002,6 +2137,7 @@ function registerHostCommands(program: Command): void {
         pid,
         port,
         deferIfParked: opts.deferIfParked === true,
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       });
     },
   );
@@ -2149,10 +2285,12 @@ function registerServiceCommands(host: Command): void {
         "--takeover",
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
-      .addOption(attemptAdoptionOption()),
+      .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildServiceInstallCommand({
         attemptAdoption: attemptAdoptionNonce(opts),
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
@@ -2169,8 +2307,12 @@ function registerServiceCommands(host: Command): void {
       .command("start")
       .description(
         "Start the registered OS service in the background and return (the host keeps running after this command exits). Needs an existing registration; if the start fails and none is found, it points you at 'traycer host service install'.",
-      ),
-    () => serviceStartCommand,
+      )
+      .addOption(lifecycleOriginOption()),
+    (opts) =>
+      buildServiceStartCommand({
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
+      }),
   );
 
   withRunner(
@@ -2182,6 +2324,18 @@ function registerServiceCommands(host: Command): void {
     () => serviceStatusCommand,
   );
 
+  // Definition-only, beside the verbs that also start or stop: see
+  // commands/service-refresh.ts. Traycer Desktop runs it after a lifecycle
+  // mode change it writes, and the doctor names it as the repair.
+  withRunner(
+    service
+      .command("refresh")
+      .description(
+        "Rewrite the registered OS service definition to this CLI's current launcher, without starting, stopping or restarting anything. The running host keeps running; the new launcher applies from its next start (on macOS, for a definition older than the launcher file, from the next login). Needed for a lifecycle mode other than background to park login starts. Does nothing when the definition is already current or nothing is registered.",
+      ),
+    () => serviceRefreshCommand,
+  );
+
   withRunner(
     service
       .command("uninstall")
@@ -2189,6 +2343,51 @@ function registerServiceCommands(host: Command): void {
         "Deregister the OS service for the current environment. Deregistration also asks the supervised host to stop, but that is best-effort: on Linux and Windows the teardown commands tolerate their own failures, so a host can survive it - check with 'traycer host status'. The installed host bytes are kept; use 'traycer host uninstall' to remove those.",
       ),
     () => serviceUninstallCommand,
+  );
+}
+
+// `host lifecycle get | set <mode>` - the CLI half of the host lifecycle
+// setting Traycer Desktop shows in Settings (see commands/host-lifecycle.ts).
+function registerHostLifecycleCommands(host: Command): void {
+  const modeHelp = `
+Modes:
+  background    Start the host when you log in. Keep work running after you quit Traycer Desktop.
+  linked        Start the host when you open Traycer Desktop. Quitting stops the host and its work.
+  ask           Start the host with Traycer Desktop. When you quit, ask whether to keep work running or stop it.
+  stop-if-idle  Start the host with Traycer Desktop. When you quit, stop if nothing is running; otherwise, ask.
+  none          Don't start a host on this machine. Use Traycer Desktop to connect to remote hosts instead.
+
+A host you started manually in a terminal keeps running when you quit Traycer Desktop.
+`;
+  const lifecycle = host
+    .command("lifecycle")
+    .description(
+      "Show or change when the host starts and what happens to running work when you quit Traycer Desktop",
+    )
+    .addHelpText("after", modeHelp);
+
+  withRunner(
+    lifecycle
+      .command("get")
+      .description(
+        "Show the current mode, whether Traycer Desktop is open, how the host was started, and whether it supports the selected mode.",
+      ),
+    () => hostLifecycleGetCommand,
+  );
+
+  withRunner(
+    lifecycle
+      .command("set")
+      .description(
+        "Choose when the host starts and what happens when you quit Traycer Desktop. This command does not start or stop the host. Startup changes apply the next time the host starts automatically. Quit behavior can update while Traycer Desktop is open, but a quit already in progress keeps your earlier choice. Some running hosts need a restart to apply the mode. Choosing 'none' leaves the running host alone; Traycer Desktop switches to remote hosts on its next launch. Login startup settings are updated when needed to match the mode.",
+      )
+      .argument("<mode>", "background | linked | ask | stop-if-idle | none")
+      .addHelpText("after", modeHelp),
+    (_opts, args) =>
+      buildHostLifecycleSetCommand({
+        mode: args[0],
+        refreshServiceDefinition: refreshServiceDefinitionUnderContender,
+      }),
   );
 }
 
@@ -2553,6 +2752,128 @@ function registerTerminalCommands(program: Command): void {
   );
 }
 
+// The terminal counterpart of the GUI's provider settings: both drive the same
+// `providers.*` host methods, so a change made in one shows in the other. The
+// mutating commands are refused on the readonly agent surface
+// (`READONLY_REFUSED_COMMANDS`); `list` is a read and is not.
+function registerProfileCommands(program: Command): void {
+  const profile = program
+    .command("profile")
+    .description(
+      "Manage provider profiles: the accounts each provider can run under",
+    );
+  const providerArgument = "Provider name: claude, codex, grok or antigravity";
+  const profileArgument =
+    "'ambient' for the provider's own CLI login, or a managed profile id from 'traycer profile list'";
+
+  withRunner(
+    profile
+      .command("list")
+      .description(
+        "List provider profiles with their account, state and cached limit status",
+      )
+      .argument("[provider]", `${providerArgument}. Omit to list every one.`),
+    (_opts, args) => buildProfileListCommand({ provider: args[0] ?? null }),
+  );
+
+  withRunner(
+    profile
+      .command("add")
+      .description(
+        "Create a managed profile and sign it in. Prints a sign-in link and waits for it to finish.",
+      )
+      .argument("<provider>", providerArgument)
+      .option(
+        "--label <name>",
+        "Name for the profile (defaults to the account's email prefix)",
+      ),
+    (opts, args) =>
+      buildProfileLoginCommand(
+        {
+          provider: expectRequiredPositional(args[0], "provider"),
+          target: {
+            kind: "create",
+            label: typeof opts.label === "string" ? opts.label : null,
+          },
+        },
+        PROCESS_PROFILE_LOGIN_IO,
+      ),
+  );
+
+  withRunner(
+    profile
+      .command("login")
+      .description(
+        "Sign an existing profile in again. Prints a sign-in link and waits for it to finish.",
+      )
+      .argument("<provider>", providerArgument)
+      .argument("<profile>", profileArgument),
+    (_opts, args) =>
+      buildProfileLoginCommand(
+        {
+          provider: expectRequiredPositional(args[0], "provider"),
+          target: {
+            kind: "existing",
+            profile: expectRequiredPositional(args[1], "profile"),
+          },
+        },
+        PROCESS_PROFILE_LOGIN_IO,
+      ),
+  );
+
+  withRunner(
+    profile
+      .command("rename")
+      .description("Rename a profile")
+      .argument("<provider>", providerArgument)
+      .argument("<profile>", profileArgument)
+      .argument("<label>", "New name, 1 to 64 characters"),
+    (_opts, args) =>
+      buildProfileRenameCommand({
+        provider: expectRequiredPositional(args[0], "provider"),
+        profile: expectRequiredPositional(args[1], "profile"),
+        label: expectRequiredPositional(args[2], "label"),
+      }),
+  );
+
+  for (const enabled of [true, false]) {
+    withRunner(
+      profile
+        .command(enabled ? "enable" : "disable")
+        .description(
+          enabled
+            ? "Let Traycer use a profile again"
+            : "Stop Traycer using a profile without removing it",
+        )
+        .argument("<provider>", providerArgument)
+        .argument("<profile>", profileArgument),
+      (_opts, args) =>
+        buildProfileSetEnabledCommand({
+          provider: expectRequiredPositional(args[0], "provider"),
+          profile: expectRequiredPositional(args[1], "profile"),
+          enabled,
+        }),
+    );
+  }
+
+  withRunner(
+    profile
+      .command("remove")
+      .description(
+        "Remove a managed profile and its stored sign-in. The ambient profile cannot be removed.",
+      )
+      .argument("<provider>", providerArgument)
+      .argument("<profile>", "Managed profile id from 'traycer profile list'")
+      .option("--yes", "Remove without asking for confirmation"),
+    (opts, args) =>
+      buildProfileRemoveCommand({
+        provider: expectRequiredPositional(args[0], "provider"),
+        profile: expectRequiredPositional(args[1], "profile"),
+        yes: opts.yes === true,
+      }),
+  );
+}
+
 function registerCommentsCommands(program: Command): void {
   const comments = program
     .command("comments")
@@ -2617,6 +2938,13 @@ function registerWorktreeCommands(program: Command): void {
   const deleteHidden = {
     hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
   };
+  // Hidden for an agent session whose user turned agent-created worktrees off
+  // (Settings > Worktrees). Presentation only, like `deleteHidden`: the refusal
+  // is `assertAgentWorktreeCreateAllowed` in `withRunner`.
+  const worktreeCreateOffered = agentWorktreeCreateOffered(
+    readonlyEnv(),
+    readAgentWorktreeCreatePolicy,
+  );
   const worktree = program
     .command("worktree")
     .description(
@@ -2664,7 +2992,7 @@ function registerWorktreeCommands(program: Command): void {
 
   withRunner(
     worktree
-      .command("create")
+      .command("create", { hidden: !worktreeCreateOffered })
       .description("Create a Git worktree path without creating an agent")
       .requiredOption("--workspace <path>", "Source workspace path")
       .option(
@@ -2709,6 +3037,15 @@ function registerAgentCommands(
   const readonlyHidden = {
     hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
   };
+  // `--cwd` help points at `traycer worktree create` only for a caller that
+  // command will run for; see `registerWorktreeCommands`, which hides it on
+  // the same predicate.
+  const worktreeCreateCwdHint = agentWorktreeCreateOffered(
+    readonlyEnv(),
+    readAgentWorktreeCreatePolicy,
+  )
+    ? " Use this with a path returned by 'traycer worktree create'."
+    : "";
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
   // Deliberately spells out what OMITTING the option does: omission is its own
   // selection (the remembered last-used profile), not a synonym for 'ambient'.
@@ -2766,7 +3103,7 @@ function registerAgentCommands(
       .option("--profile <ambient|id>", profileHelp)
       .option(
         "--cwd <path>",
-        "Primary working directory for the child agent. Use this with a path returned by 'traycer worktree create'.",
+        `Primary working directory for the child agent.${worktreeCreateCwdHint}`,
       )
       .option(
         "--workspace-path <path>",
@@ -2832,7 +3169,7 @@ function registerAgentCommands(
       .option("--profile <ambient|id>", forkProfileHelp)
       .option(
         "--cwd <path>",
-        "Primary working directory for the forked agent. Use this with a path returned by 'traycer worktree create'. Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.",
+        `Primary working directory for the forked agent.${worktreeCreateCwdHint} Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.`,
       )
       .option(
         "--workspace-path <path>",

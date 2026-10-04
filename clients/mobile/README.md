@@ -88,8 +88,7 @@ bun run --cwd clients/mobile open:ios   # set your team, run on a device
 ```
 
 Staging is the only connectable target today (the production relay has no
-release yet). The signed-in account must be allowed to use remote hosts
-(server-side plan gate), and a host must be enrolled against the staging
+release yet). A host must be enrolled against the staging
 cloud — from the internal repo, `make remote-host-staging` or a staging-target
 host on your own machine.
 

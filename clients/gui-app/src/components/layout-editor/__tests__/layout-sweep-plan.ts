@@ -7,6 +7,18 @@ import {
 import type { FineTuneRowFacts } from "@/components/layout-editor/inspector/rows/fine-tune-row";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
 import {
+  compactIgnoredRows,
+  READING_SPOT_LABELS,
+  READING_SPOTS,
+  readingSpot,
+  withReadingSpot,
+} from "@/components/layout-editor/regions/reading-placement";
+import {
+  readingPlacement,
+  readingStyleApplies,
+  resolvedReadingDensity,
+} from "@/lib/layout/reading-density";
+import {
   LAYOUT_REGION_LIST,
   regionFacts,
   regionRowAvailable,
@@ -15,11 +27,9 @@ import {
 import {
   ACCESS_DISPLAY_OPTIONS,
   AUTO_SHOWN_HIDDEN_OPTIONS,
-  BAR_HOST_OPTIONS,
   DISCLOSURE_HIDDEN_OPTIONS,
   DISCLOSURE_OPTIONS,
   DOCK_DISPLAY_OPTIONS,
-  edgeSideOptions,
   EDGE_SIDE_OPTIONS,
   READING_WIDTH_OPTIONS,
   SHOWN_HIDDEN_OPTIONS,
@@ -32,7 +42,6 @@ import {
   orderGroupListLabel,
   SURFACE_ORDER_GROUPS,
 } from "@/components/layout-editor/regions/surface-groups";
-import { USAGE_PROVIDER_LEVEL } from "@/components/layout-editor/regions/usage-provider-level";
 import {
   regionShownOnValue,
   setRegionShown,
@@ -46,10 +55,8 @@ import {
 } from "@/lib/layout/arrangement-gestures";
 import {
   asBarRegionId,
-  AUTOMATIC_LIMIT_SELECTION,
   barPlacement,
   insertRailDivider,
-  isAutomaticLimitSelection,
   movedWithin,
   moveRailEntry,
   railPanelToStackBelow,
@@ -58,15 +65,10 @@ import {
   toggleStatusBarSurface,
   unstackRail,
   unstackRailPanel,
-  withBarHost,
-  withBarSide,
-  type BarHost,
+  WIDE_READING_WIDTH_MAX_PX,
   type EdgeSide,
-  type BarRegionId,
   type LayoutArrangement,
   type OrderGroupId,
-  type StatusBarProviderLimitSelection,
-  type TabStripPlacement,
 } from "@/lib/layout/layout-arrangement";
 import { resetLayout } from "@/lib/layout/layout-diff";
 import {
@@ -91,7 +93,6 @@ import {
 import type { RegionId } from "@/lib/layout/region-id";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
-import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import {
   isVoiceInputRowAvailable,
   type SettingsAvailabilityContext,
@@ -101,7 +102,6 @@ import {
   getLayoutSnapshot,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import type { SweepProviderUsage } from "@/components/layout-editor/__tests__/layout-sweep-fixtures";
 
 /**
  * The plan: every layout setting VALUE the product can write, as data, in the
@@ -125,7 +125,6 @@ export type SweepSource =
   | "order-list"
   | "rail-structure"
   | "provider-display"
-  | "provider-limits"
   | "surface-row"
   | "arrangement-field"
   | "preset"
@@ -139,24 +138,16 @@ export const SWEEP_SOURCES: ReadonlyArray<SweepSource> = [
   "order-list",
   "rail-structure",
   "provider-display",
-  "provider-limits",
   "surface-row",
   "arrangement-field",
   "preset",
   "reset",
 ];
 
-/** What a step may read of the live column: what the providers report and draw. */
-export interface SweepContext {
-  readonly providerUsage: (
-    providerId: RateLimitProviderId,
-  ) => SweepProviderUsage | null;
-}
-
 /** One write, named, through the product's own writer. */
 export interface SweepStep {
   readonly label: string;
-  readonly run: (context: SweepContext) => void;
+  readonly run: () => void;
 }
 
 export interface SweepEntry {
@@ -183,7 +174,7 @@ export interface SweepEntry {
    * The registry rows this entry exercises, for the completeness guard:
    * `display:<region>`, `position-host:<region>`, `position-side:<region>`,
    * `style:<region>:<key>`, `fine-tune:<region>:<row id>`, `order:<group>`,
-   * `rail:<what>`, `provider-display`, `provider-limits`,
+   * `rail:<what>`, `provider-display`,
    * `arrangement:<field>`, `definition:<key>`.
    */
   readonly covers: ReadonlyArray<string>;
@@ -202,8 +193,6 @@ export interface SweepPlanInput {
   readonly availability: SettingsAvailabilityContext;
   /** The providers the watched host has signed in, in the strip's order. */
   readonly configuredProviders: ReadonlyArray<RateLimitProviderId>;
-  /** What each configured provider reports and draws, read from the mounted column. */
-  readonly usage: ReadonlyMap<RateLimitProviderId, SweepProviderUsage>;
 }
 
 // ── Census key spellings ────────────────────────────────────────────────────
@@ -267,38 +256,6 @@ function writeAutoRailVisibility(region: RegionId, next: string): void {
   const patch: Partial<LayoutValues[RegionId]> = {};
   Reflect.set(patch, "shown", next);
   recordedPatch(region, patch);
-}
-
-function writeLimitSelection(
-  providerId: RateLimitProviderId,
-  selection: StatusBarProviderLimitSelection,
-): void {
-  useLayoutEditorStore.getState().recordGesture(() => {
-    const arrangement = useLayoutStore.getState().arrangement;
-    const providerLimits = { ...arrangement.providerLimits };
-    if (isAutomaticLimitSelection(selection)) delete providerLimits[providerId];
-    else providerLimits[providerId] = selection;
-    useLayoutStore
-      .getState()
-      .setArrangement({ ...arrangement, providerLimits });
-  });
-}
-
-function pickedWindow(
-  selection: StatusBarProviderLimitSelection,
-  order: ReadonlyArray<string>,
-  windowKey: string,
-  checked: boolean,
-): StatusBarProviderLimitSelection {
-  const next = new Set(selection.limitKeys);
-  if (checked) next.add(windowKey);
-  else next.delete(windowKey);
-  if (next.size === 0) return selection;
-  const live = order.filter((key) => next.has(key));
-  const stale = selection.limitKeys.filter(
-    (key) => next.has(key) && !order.includes(key),
-  );
-  return { limitKeys: [...live, ...stale] };
 }
 
 function applyPresetWrite(presetId: LayoutPresetId): void {
@@ -496,6 +453,31 @@ const TAB_PLACEMENT_LEFT: SweepStep = arrangementFieldStep(
 
 type StyleGrammarRow = Extract<AnyGrammarRow, { readonly kind: "style" }>;
 
+/** A reading's Show switch, in its section's header. */
+function showSwitchEntries(
+  region: RegionId,
+  values: LayoutValues,
+): ReadonlyArray<SweepEntry> {
+  const name = regionFacts(region).name;
+  const shown = !regionValuesHidden(values[region]);
+  return [
+    {
+      id: `region-display:${region}:${shown ? "hidden" : "shown"}`,
+      source: "region-display",
+      mirrors: null,
+      given: NO_GIVEN,
+      write: {
+        label: `Show ${name}: ${shown ? "off" : "on"}`,
+        run: () => {
+          setRegionShown(region, !shown);
+        },
+      },
+      covers: [`display:${region}`],
+      controls: [switchControl(region, `Show ${name}`)],
+    },
+  ];
+}
+
 function displayEntries(
   region: RegionId,
   values: LayoutValues,
@@ -528,114 +510,109 @@ function positionHostEntries(
   const bar = asBarRegionId(region);
   if (bar === null) return [];
   const name = regionFacts(region).name;
-  const current = barPlacement(arrangement, bar).host;
-  const field = bar === "usageLimits" ? "usageHost" : "resourceHost";
-  return BAR_HOST_OPTIONS.filter((option) => option.value !== current).map(
-    (option) => {
-      const host: BarHost = option.value === "header" ? "header" : "status-bar";
-      return {
-        id: `region-position:${region}:host:${option.value}`,
-        source: "region-position",
-        mirrors: null,
-        given: NO_GIVEN,
-        write: arrangementStep(`${name} position: ${option.label}`, (now) =>
-          withBarHost(now, bar, host),
-        ),
-        covers: [`position-host:${region}`, `arrangement:${field}`],
-        controls: [radioControl(region, `${name} position`, option.label)],
-      };
-    },
-  );
-}
-
-/** The stored side field a region's side row writes. */
-function sideField(
-  bar: BarRegionId | null,
-): "minimapSide" | "usageSide" | "resourceSide" {
-  if (bar === null) return "minimapSide";
-  return bar === "usageLimits" ? "usageSide" : "resourceSide";
-}
-
-interface SideCase {
-  readonly idPart: string;
-  readonly placement: TabStripPlacement;
-  readonly given: ReadonlyArray<SweepStep>;
-}
-
-/**
- * The placements a side row is swept at. A reading hosted in the tab strip
- * reads its ends as Start and End once the strip stands at an edge (its foot),
- * a different drawing of the same stored side: swept there as well.
- */
-function sideCases(
-  bar: BarRegionId | null,
-  arrangement: LayoutArrangement,
-): ReadonlyArray<SideCase> {
-  const shipped: SideCase = {
-    idPart: "side",
-    placement: arrangement.tabStripPlacement,
+  const current = readingSpot(barPlacement(arrangement, bar));
+  const hostField = bar === "usageLimits" ? "usageHost" : "resourceHost";
+  const sideField = bar === "usageLimits" ? "usageSide" : "resourceSide";
+  return READING_SPOTS.filter((spot) => spot !== current).map((spot) => ({
+    id: `region-position:${region}:spot:${spot}`,
+    source: "region-position",
+    mirrors: null,
     given: NO_GIVEN,
-  };
-  if (bar === null || barPlacement(arrangement, bar).host !== "header") {
-    return [shipped];
-  }
-  return [
-    shipped,
-    { idPart: "side-foot", placement: "left", given: [TAB_PLACEMENT_LEFT] },
-  ];
+    write: arrangementStep(
+      `${name} location: ${READING_SPOT_LABELS[spot]}`,
+      (now) => withReadingSpot(now, bar, spot),
+    ),
+    // The tab strip writes the host alone and a status bar spot the end too,
+    // so the pair is covered by the three spots between them.
+    covers: [
+      `position-host:${region}`,
+      `arrangement:${hostField}`,
+      `arrangement:${sideField}`,
+    ],
+    controls: [
+      radioControl(region, `${name} location`, READING_SPOT_LABELS[spot]),
+    ],
+  }));
 }
 
+/** The minimap's edge, the one Side row left. */
 function positionSideEntries(
   region: RegionId,
   arrangement: LayoutArrangement,
 ): ReadonlyArray<SweepEntry> {
-  const bar = asBarRegionId(region);
-  if (bar === null && region !== "minimap") {
+  if (region !== "minimap") {
     throw new Error(
       `${region} has a position-side row this plan does not know how to write`,
     );
   }
   const name = regionFacts(region).name;
-  const current =
-    bar === null
-      ? arrangement.minimapSide
-      : barPlacement(arrangement, bar).side;
-  const field = sideField(bar);
-  const entries: SweepEntry[] = [];
-  for (const sideCase of sideCases(bar, arrangement)) {
-    const options =
-      bar === null
-        ? EDGE_SIDE_OPTIONS
-        : edgeSideOptions(
-            barPlacement(arrangement, bar).host,
-            sideCase.placement,
-          );
-    for (const option of options.filter((entry) => entry.value !== current)) {
-      const side: EdgeSide = option.value === "left" ? "left" : "right";
-      entries.push({
-        id: `region-position:${region}:${sideCase.idPart}:${option.value}`,
-        source: "region-position",
-        mirrors: null,
-        given: sideCase.given,
-        write: arrangementStep(`${name} side: ${option.label}`, (now) =>
-          bar === null
-            ? { ...now, minimapSide: side }
-            : withBarSide(now, bar, side),
-        ),
-        covers: [`position-side:${region}`, `arrangement:${field}`],
-        controls: [radioControl(region, `${name} side`, option.label)],
-      });
-    }
+  return EDGE_SIDE_OPTIONS.filter(
+    (option) => option.value !== arrangement.minimapSide,
+  ).map((option) => {
+    const side: EdgeSide = option.value === "left" ? "left" : "right";
+    return {
+      id: `region-position:${region}:side:${option.value}`,
+      source: "region-position",
+      mirrors: null,
+      given: NO_GIVEN,
+      write: arrangementStep(`${name} side: ${option.label}`, (now) => ({
+        ...now,
+        minimapSide: side,
+      })),
+      covers: [`position-side:${region}`, "arrangement:minimapSide"],
+      controls: [radioControl(region, `${name} side`, option.label)],
+    };
+  });
+}
+
+/**
+ * Reading style is drawn by the status bar's Detailed form alone, so the page
+ * hides its row anywhere else: a person moves the reading to the status bar
+ * first, and picks Detailed if it was Compact.
+ */
+function styleGiven(
+  region: RegionId,
+  row: StyleGrammarRow,
+  values: LayoutValues,
+  arrangement: LayoutArrangement,
+): ReadonlyArray<SweepStep> {
+  if (
+    region !== "usageLimits" ||
+    row.key !== "readingStyle" ||
+    readingStyleApplies(values.usageLimits.density, arrangement)
+  ) {
+    return NO_GIVEN;
   }
-  return entries;
+  const name = regionFacts(region).name;
+  return [
+    ...(readingPlacement(arrangement, region) === "status-bar"
+      ? NO_GIVEN
+      : [
+          arrangementStep(`${name} location: Status bar left`, (now) =>
+            withReadingSpot(now, region, "status-bar-left"),
+          ),
+        ]),
+    ...(values.usageLimits.density === "compact"
+      ? [
+          controlStep(
+            region,
+            "density",
+            "detailed",
+            `${name} density: Detailed`,
+          ),
+        ]
+      : NO_GIVEN),
+  ];
 }
 
 function styleEntries(
   region: RegionId,
   row: StyleGrammarRow,
   values: LayoutValues,
+  arrangement: LayoutArrangement,
 ): ReadonlyArray<SweepEntry> {
   const regionValues = values[region];
+  const given = styleGiven(region, row, values, arrangement);
   return row.examples
     .filter(
       (example) =>
@@ -647,7 +624,7 @@ function styleEntries(
       id: `region-style:${region}:${row.key}:${example.id}`,
       source: "region-style",
       mirrors: "StyleExamples onChange",
-      given: NO_GIVEN,
+      given,
       write: {
         label: `${row.label}: ${example.label}`,
         run: () => {
@@ -674,9 +651,9 @@ function grammarRowEntries(
     case "children":
       return [];
     case "style":
-      return styleEntries(region, row, values);
+      return styleEntries(region, row, values, arrangement);
     case "fine-tune":
-      return fineTuneEntries(region, row.rows, values);
+      return fineTuneEntries(region, row.rows, values, arrangement);
     default:
       throw new Error(`${region} has a grammar row this plan does not know`);
   }
@@ -688,7 +665,11 @@ function regionPlan(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
   const entries: SweepEntry[] = [];
   for (const facts of LAYOUT_REGION_LIST) {
     const region = facts.id;
-    entries.push(...displayEntries(region, values, availability));
+    entries.push(
+      ...(asBarRegionId(region) === null
+        ? displayEntries(region, values, availability)
+        : showSwitchEntries(region, values)),
+    );
     const declared: ReadonlyArray<AnyGrammarRow> = LAYOUT_REGIONS[region].rows;
     for (const row of declared) {
       if (!regionRowAvailable(region, row, false)) continue;
@@ -705,9 +686,27 @@ function fineTuneGiven(
   region: RegionId,
   row: FineTuneRowFacts,
   values: LayoutValues,
+  arrangement: LayoutArrangement,
 ): ReadonlyArray<SweepStep> {
   const regionValues = values[region];
   const given: SweepStep[] = [];
+  // A Compact reading ignores these rows, so the page hides them: a person
+  // picks Detailed first.
+  const bar = asBarRegionId(region);
+  if (
+    bar !== null &&
+    compactIgnoredRows(bar).includes(row.id) &&
+    resolvedReadingDensity(values[bar].density, arrangement, bar) === "compact"
+  ) {
+    given.push(
+      controlStep(
+        region,
+        "density",
+        "detailed",
+        `${regionFacts(region).name} density: Detailed`,
+      ),
+    );
+  }
   if (
     regionValuesHidden(regionValues) &&
     !fineTuneRowLiveWhileHidden(row, regionValues)
@@ -727,6 +726,7 @@ function fineTuneGiven(
 
 /** What one fine-tune row's entries are written from. */
 interface FineTuneContext {
+  readonly arrangement: LayoutArrangement;
   readonly region: RegionId;
   readonly row: FineTuneRowFacts;
   readonly regionValues: LayoutValues[RegionId];
@@ -771,6 +771,30 @@ function switchRowEntries(
   ];
 }
 
+/**
+ * Compact only differs from Auto where Auto is Detailed, so a Compact pick is
+ * made from the status bar; Detailed differs from Auto wherever it starts, in
+ * a tab strip.
+ */
+function densityGiven(
+  context: FineTuneContext,
+  picked: string,
+): ReadonlyArray<SweepStep> {
+  const { region, row, arrangement } = context;
+  const bar = asBarRegionId(region);
+  if (bar === null || row.id !== "density" || picked !== "compact") {
+    return context.given;
+  }
+  if (readingPlacement(arrangement, bar) === "status-bar") return context.given;
+  return [
+    ...context.given,
+    arrangementStep(
+      `${regionFacts(region).name} location: Status bar left`,
+      (now) => withReadingSpot(now, bar, "status-bar-left"),
+    ),
+  ];
+}
+
 function segmentRowEntries(
   context: FineTuneContext,
   key: RegionValueKey,
@@ -782,7 +806,7 @@ function segmentRowEntries(
     .filter((option) => option.value !== current)
     .map((option) =>
       fineTuneEntry(
-        context,
+        { ...context, given: densityGiven(context, option.value) },
         `:${option.value}`,
         controlStep(region, key, option.value, `${row.label}: ${option.label}`),
         radioControl(region, row.label, option.label),
@@ -793,23 +817,6 @@ function segmentRowEntries(
 interface ChecksOption {
   readonly key: RegionValueKey;
   readonly label: string;
-  readonly requires: RegionValueKey | null;
-}
-
-/** What a person does first to make a check operable: switch its parent on. */
-function checkGiven(
-  context: FineTuneContext,
-  requires: RegionValueKey | null,
-): ReadonlyArray<SweepStep> {
-  if (
-    requires === null ||
-    readControlValue(context.regionValues, requires) === true
-  ) {
-    return context.given;
-  }
-  const label = `${context.region} ${requires}: on`;
-  if (context.given.some((step) => step.label === label)) return context.given;
-  return [...context.given, controlStep(context.region, requires, true, label)];
 }
 
 function checksRowEntries(
@@ -820,7 +827,7 @@ function checksRowEntries(
   return options.map((option) => {
     const current = readControlValue(regionValues, option.key) === true;
     return fineTuneEntry(
-      { ...context, given: checkGiven(context, option.requires) },
+      context,
       `:${option.key}`,
       controlStep(
         region,
@@ -893,55 +900,17 @@ function fineTuneEntries(
   region: RegionId,
   rows: ReadonlyArray<FineTuneRowFacts>,
   values: LayoutValues,
+  arrangement: LayoutArrangement,
 ): ReadonlyArray<SweepEntry> {
   return rows.flatMap((row) =>
     fineTuneRowEntries({
+      arrangement,
       region,
       row,
       regionValues: values[region],
-      given: fineTuneGiven(region, row, values),
+      given: fineTuneGiven(region, row, values, arrangement),
     }),
   );
-}
-
-/**
- * The tab strip's foot draws its readings as one row in a fixed order: the
- * header's left end, then its right end, usage before resources inside an end.
- * With usage at the start and resources at the end, either reading moved to the
- * other end leaves that order as it was; the two moves together reverse it.
- * The single moves are swept above and are silent by construction; this is the
- * entry that proves the foot reads the sides at all.
- */
-function footOrderEntries(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
-  const arrangement = input.shipped.arrangement;
-  if (
-    arrangement.usageHost !== "header" ||
-    arrangement.resourceHost !== "header" ||
-    arrangement.usageSide !== "left" ||
-    arrangement.resourceSide !== "right"
-  ) {
-    return [];
-  }
-  return [
-    {
-      id: "region-position:resourceMonitor:side-foot:order-flip",
-      source: "region-position",
-      mirrors: null,
-      given: [
-        TAB_PLACEMENT_LEFT,
-        arrangementStep("Usage limits side: End", (now) =>
-          withBarSide(now, "usageLimits", "right"),
-        ),
-      ],
-      write: arrangementStep("Resource monitor side: Start", (now) =>
-        withBarSide(now, "resourceMonitor", "left"),
-      ),
-      covers: ["position-side:resourceMonitor", "arrangement:resourceSide"],
-      controls: [
-        radioControl("resourceMonitor", "Resource monitor side", "Start"),
-      ],
-    },
-  ];
 }
 
 // ── Ordered lists ───────────────────────────────────────────────────────────
@@ -1085,7 +1054,18 @@ function orderEntries(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
         id: `order-list:${list.group}:${row.id}:${direction}`,
         source: "order-list",
         mirrors: "OrderGroupRows onMove",
-        given: NO_GIVEN,
+        // Provider order is visible where the reading lists its profiles: the
+        // status bar, not the tab strip's glyph.
+        given:
+          list.group === "usageProviders"
+            ? [
+                arrangementStep(
+                  "Usage limits location: Status bar left",
+                  (now) =>
+                    withReadingSpot(now, "usageLimits", "status-bar-left"),
+                ),
+              ]
+            : NO_GIVEN,
         write: {
           label: `${list.label}: ${row.id} ${direction}`,
           run: () => {
@@ -1194,12 +1174,11 @@ function railEntries(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
 // ── Providers ───────────────────────────────────────────────────────────────
 
 function providerEntries(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
-  const { shipped, configuredProviders, usage } = input;
+  const { shipped } = input;
   const arrangement = shipped.arrangement;
   const entries: SweepEntry[] = [];
   for (const providerId of arrangement.usageProviders) {
     const name = providerDisplayName(providerId);
-    const configured = configuredProviders.includes(providerId);
     const hidden = arrangement.hiddenProviders.includes(providerId);
     entries.push({
       id: `provider-display:${providerId}:${hidden ? "shown" : "hidden"}`,
@@ -1218,95 +1197,9 @@ function providerEntries(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
       },
       covers: ["provider-display", "arrangement:hiddenProviders"],
       controls: [
-        radioControl(
-          providerId,
-          `${name} display`,
-          hidden ? "Shown" : "Hidden",
-        ),
+        buttonControl(providerId, `${hidden ? "Show" : "Hide"} ${name}`),
       ],
     });
-    if (!configured || !isWindowedRateLimitProvider(providerId)) continue;
-    const facts = usage.get(providerId);
-    if (facts === undefined || facts.windows.length === 0) continue;
-    const choose: SweepStep = {
-      label: `${name} ${USAGE_PROVIDER_LEVEL.limitsLabel}: Choose...`,
-      run: (context) => {
-        const live = context.providerUsage(providerId);
-        if (live === null || live.windows.length === 0) {
-          throw new Error(`${providerId} reports no window to choose from`);
-        }
-        const seed =
-          live.drawnKeys.length > 0
-            ? live.drawnKeys
-            : live.windows.slice(0, 1).map((window) => window.windowKey);
-        writeLimitSelection(providerId, { limitKeys: seed });
-      },
-    };
-    entries.push({
-      id: `provider-limits:${providerId}:choose`,
-      source: "provider-limits",
-      mirrors: "ProviderLimitsPick writeSelection",
-      given: NO_GIVEN,
-      write: choose,
-      covers: ["provider-limits", "arrangement:providerLimits"],
-      controls: [
-        radioControl(providerId, USAGE_PROVIDER_LEVEL.limitsLabel, "Choose..."),
-      ],
-    });
-    entries.push({
-      id: `provider-limits:${providerId}:automatic`,
-      source: "provider-limits",
-      mirrors: "ProviderLimitsPick writeSelection",
-      given: [choose],
-      write: {
-        label: `${name} ${USAGE_PROVIDER_LEVEL.limitsLabel}: Automatic (recommended)`,
-        run: () => {
-          writeLimitSelection(providerId, AUTOMATIC_LIMIT_SELECTION);
-        },
-      },
-      covers: ["provider-limits", "arrangement:providerLimits"],
-      controls: [
-        radioControl(
-          providerId,
-          USAGE_PROVIDER_LEVEL.limitsLabel,
-          "Automatic (recommended)",
-        ),
-      ],
-    });
-    // What Choose... seeds is checked, and the last checked window cannot be
-    // unticked, so the page offers a tick on the others only.
-    const seeded =
-      facts.drawnKeys.length > 0
-        ? facts.drawnKeys
-        : facts.windows.slice(0, 1).map((window) => window.windowKey);
-    for (const window of facts.windows) {
-      if (seeded.includes(window.windowKey)) continue;
-      entries.push({
-        id: `provider-limits:${providerId}:window:${window.windowKey}`,
-        source: "provider-limits",
-        mirrors: "ProviderLimitsPick writeSelection",
-        given: [choose],
-        write: {
-          label: `${name} window ${window.label}: on`,
-          run: (context) => {
-            const live = context.providerUsage(providerId);
-            const order = (live ?? facts).windows.map(
-              (entry) => entry.windowKey,
-            );
-            const selection =
-              useLayoutStore.getState().arrangement.providerLimits[
-                providerId
-              ] ?? AUTOMATIC_LIMIT_SELECTION;
-            writeLimitSelection(
-              providerId,
-              pickedWindow(selection, order, window.windowKey, true),
-            );
-          },
-        },
-        covers: ["provider-limits", "arrangement:providerLimits"],
-        controls: [checkControl(providerId, window.label)],
-      });
-    }
   }
   return entries;
 }
@@ -1558,6 +1451,23 @@ function arrangementFieldEntries(): ReadonlyArray<SweepEntry> {
       ],
       controls: [],
     },
+    {
+      id: "arrangement-field:wideReadingWidthPx",
+      source: "arrangement-field",
+      mirrors: null,
+      // The wide-column-width row only draws once Reading width is Wide
+      // (`WideReadingWidthRow`).
+      given: [
+        arrangementFieldStep("Reading width: Wide", "readingWidth", "wide"),
+      ],
+      write: arrangementFieldStep(
+        "Wide column width: max",
+        "wideReadingWidthPx",
+        WIDE_READING_WIDTH_MAX_PX,
+      ),
+      covers: ["arrangement:wideReadingWidthPx"],
+      controls: [],
+    },
   ];
 }
 
@@ -1566,7 +1476,6 @@ export function buildSweepPlan(
 ): ReadonlyArray<SweepEntry> {
   const plan = [
     ...regionPlan(input),
-    ...footOrderEntries(input),
     ...orderEntries(input),
     ...railEntries(input),
     ...providerEntries(input),

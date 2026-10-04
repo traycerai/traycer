@@ -397,6 +397,7 @@ function createBaseRunnerHost(): IRunnerHost {
     migration: null,
     hostManagement: null,
     hostTray: null,
+    hostLifecycle: null,
     zoom: null,
     pushPermission: null,
     systemBack: null,
@@ -535,7 +536,6 @@ function createDirtyEpicHandle(
       set({ isDirty: false, unsyncedQueueSize: 0 });
     },
     requestFreshSnapshot: () => undefined,
-    retryTransport: () => undefined,
     wakeTransport: () => undefined,
     retryMigration: () => undefined,
     // These became ASYNC when the replica moved: the queue mints ids and the
@@ -607,7 +607,6 @@ function createDirtyEpicHandle(
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
-    retryTransport: () => undefined,
     wakeTransport: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],

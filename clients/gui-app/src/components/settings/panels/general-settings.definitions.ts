@@ -1,7 +1,8 @@
 import { modLabel } from "@/lib/keybindings/platform";
 import {
   alwaysAvailable,
-  isExperimentalGroupAvailable,
+  isAgentRolesRowAvailable,
+  isHostLifecycleRowAvailable,
   isPreventSleepRowAvailable,
   isVoiceInputRowAvailable,
 } from "@/lib/settings/settings-availability";
@@ -69,22 +70,23 @@ export const GENERAL = defineSettingsSection("general", {
       "shortcut",
     ],
   },
-  // Drawn by `PreventSleepSettingsSection` around its one row - the two
-  // resource-visibility toggles that used to sit beside it moved to Layout -
-  // so the group is gated exactly as that row is, and one gate hides the
-  // heading with the row it headed.
-  runningAgents: {
+  // One group for everything about running agents. Each of its rows used to
+  // have a heading and a card of its own (Running agents, When you quit
+  // Traycer, Worktrees, Experimental), which drew four borders around four
+  // settings. Every row is gated on its own, and the branch prefix is drawn in
+  // every shell, so the group never renders empty.
+  agents: {
     kind: "group",
-    search: { anchor: "general-running-agents" },
-    label: "Running agents",
+    search: { anchor: "general-agents" },
+    label: "Agents",
     description: null,
     breadcrumb: null,
-    availableWhen: isPreventSleepRowAvailable,
-    keywords: ["activity", "background", "power"],
+    availableWhen: alwaysAvailable,
+    keywords: ["activity", "background", "running agents", "worktrees"],
   },
   preventSleep: {
     kind: "row",
-    group: "runningAgents",
+    group: "agents",
     search: { anchor: "general-prevent-sleep" },
     label: "Prevent sleep while running",
     description:
@@ -100,45 +102,76 @@ export const GENERAL = defineSettingsSection("general", {
       "suspend",
     ],
   },
-  worktrees: {
+  // Machine-local, so it lives here rather than under a host scope: it has to
+  // work before any host is installed and with no local host. Signed out this
+  // page is not reachable; the full card renders on its own at
+  // `/when-you-quit`. The row shows the chosen mode's own sentence as its
+  // `status`, so this description is what search reads.
+  hostLifecycle: {
+    kind: "row",
+    group: "agents",
+    search: { anchor: "general-host-lifecycle" },
+    label: "When you quit Traycer",
+    description:
+      "Choose what happens to the host on this machine when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
+    availableWhen: isHostLifecycleRowAvailable,
+    keywords: [
+      "quit",
+      "host",
+      "background",
+      "keep running",
+      "stop host",
+      "linked",
+      "lifecycle",
+      "login",
+      "ask",
+      "idle",
+      "remote",
+      "wsl",
+      "no local host",
+    ],
+  },
+  // The same setting drawn as a card of its own at `/when-you-quit`, the one
+  // page a signed-out desktop can reach. It has no entry: settings search does
+  // not exist there, and signed in the row above is where a result lands.
+  hostLifecycleCard: {
     kind: "group",
-    search: { anchor: "general-worktrees" },
-    label: "Worktrees",
+    search: { contributesTo: "hostLifecycle" },
+    label: "When you quit Traycer",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["git", "branch", "checkout"],
+    availableWhen: isHostLifecycleRowAvailable,
+    keywords: [],
   },
-  // Hand-built, not a `SettingsRow`: its sentence embeds a live preview of the
-  // next branch name, so there is no fixed text to copy and the keywords carry
-  // the vocabulary.
+  // Its sentence embeds a live preview of the next branch name, so the row
+  // passes it as a `status` and the keywords carry the vocabulary.
   branchPrefix: {
     kind: "row",
-    group: "worktrees",
+    group: "agents",
     search: { anchor: "general-branch-prefix" },
-    label: "Default branch prefix",
+    label: "Worktree branch prefix",
     description: null,
     availableWhen: alwaysAvailable,
-    keywords: ["branch", "naming", "prefix", "git", "worktree"],
-  },
-  experimental: {
-    kind: "group",
-    search: { anchor: "general-experimental" },
-    label: "Experimental",
-    description: null,
-    breadcrumb: null,
-    availableWhen: isExperimentalGroupAvailable,
-    keywords: ["beta", "preview", "feature flag", "labs"],
+    keywords: ["branch", "naming", "prefix", "git", "worktree", "checkout"],
   },
   agentRoles: {
     kind: "row",
-    group: "experimental",
+    group: "agents",
     search: { anchor: "general-agent-roles" },
     label: "Agent roles",
     description:
       "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts.",
-    availableWhen: alwaysAvailable,
-    keywords: ["roles", "coordination", "delegation", "feature flag"],
+    availableWhen: isAgentRolesRowAvailable,
+    keywords: [
+      "roles",
+      "coordination",
+      "delegation",
+      "feature flag",
+      "experimental",
+      "beta",
+      "preview",
+      "labs",
+    ],
   },
   dangerZone: {
     kind: "group",

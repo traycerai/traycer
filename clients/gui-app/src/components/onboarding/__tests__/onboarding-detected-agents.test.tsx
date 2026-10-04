@@ -39,9 +39,15 @@ type StartLoginMutate = (
   options: StartLoginOptions,
 ) => void;
 
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the caller's `AbortSignal`, `undefined` for a wait that
+// only ever runs to the end (onboarding's).
 type AwaitLoginVariables = {
-  readonly providerId: string;
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 type AwaitLoginCompletion = {
   // Absent from a host before `providers.awaitLogin@2.2`.
@@ -85,6 +91,7 @@ type SetEnabledVariables = Parameters<SetEnabledMutate>[0];
 type CancelLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
+  readonly holderId: string | null;
 };
 
 // `codex` is disabled with a DETECTED candidate, so it's the one row that
@@ -265,8 +272,17 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
   useProvidersCancelLogin: () => ({
     mutate: fixtures.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      fixtures.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: false,
   }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -711,7 +727,10 @@ describe("SignInToEnableButton declined sign-in", () => {
     if (awaitCall === undefined) {
       throw new Error("Expected an awaitLogin call.");
     }
-    expect(awaitCall[0]).toEqual({ providerId: "codex", profileId: null });
+    expect(awaitCall[0]).toStrictEqual({
+      request: { providerId: "codex", profileId: null },
+      signal: undefined,
+    });
     // The options object carries the enable-on-authenticated chain; its
     // behaviour is pinned by the next test.
     expect(typeof awaitCall[1].onSuccess).toBe("function");
@@ -874,7 +893,10 @@ describe("SignInToEnableButton declined sign-in", () => {
     if (awaitCall === undefined) {
       throw new Error("Expected an awaitLogin call.");
     }
-    expect(awaitCall[0]).toEqual({ providerId: "codex", profileId: null });
+    expect(awaitCall[0]).toStrictEqual({
+      request: { providerId: "codex", profileId: null },
+      signal: undefined,
+    });
   });
 
   // The pack failure travels on the answer itself, not on `failure` - see
@@ -1638,6 +1660,7 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: null,
+      holderId: null,
     });
     expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toBe(
@@ -1665,6 +1688,7 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -1693,6 +1717,7 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: null,
+      holderId: null,
     });
   });
 

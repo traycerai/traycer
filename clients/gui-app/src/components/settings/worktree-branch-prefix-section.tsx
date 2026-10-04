@@ -9,10 +9,9 @@ import {
   useSettingsStore,
 } from "@/stores/settings/settings-store";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
-import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
+import { SettingsRow } from "@/components/settings/settings-row";
 import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 import { pickFriendlyBranchSuffix } from "@/lib/worktree/random-friendly-name";
-import { cn } from "@/lib/utils";
 
 const RESET_TOOLTIP = `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`;
 // Mirrors the agent-selection-guide editor's debounce-autosave convention
@@ -187,52 +186,39 @@ export function WorktreeBranchPrefixSection(): ReactNode {
       : previewSuffix;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
-      {/* Hand-built rather than a `SettingsRow`: the input and its live
-          preview sentence share a line the primitive does not offer. It still
-          reads its label and anchor from its definition, so it writes the
-          attribute settings search looks for itself. */}
-      <div
-        data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}
-        className={cn(
-          "flex flex-wrap items-center gap-3.5 px-3.5 py-2.5",
-          SETTINGS_ROW_STACK.container,
-        )}
-      >
-        <div className={cn("min-w-0 flex-1", SETTINGS_ROW_STACK.label)}>
-          <div className="flex items-center gap-2">
-            <span className="text-ui-sm font-medium text-foreground">
-              {GENERAL.definitions.branchPrefix.label}
-            </span>
-          </div>
-          {/* One line beside the input from `md` up; below it the row is a
-              stack and the sentence is free to use as many lines as it needs.
-              Scoped as `md:truncate` rather than an override of `truncate`,
-              so which rule wins never depends on utility source order. */}
-          <p className="mt-0.5 text-ui-xs text-muted-foreground md:truncate">
+    <SettingsRow
+      row={GENERAL.definitions.branchPrefix}
+      // The sentence carries a live preview of the next branch name, so it is
+      // the row's `status` rather than a fixed description. A validation error
+      // sits under it, in the same described region.
+      status={
+        <div className="flex flex-col gap-1">
+          <p>
             New branches start like{" "}
             <span className="font-medium text-foreground">{previewBranch}</span>{" "}
             unless a repository sets its own prefix in Environment
           </p>
+          {error !== null ? (
+            <p id={errorId} role="alert" className="text-destructive">
+              {error}
+            </p>
+          ) : null}
         </div>
-        {/* Below `md` this cluster has wrapped onto a line of its own, so it
-            spans that line and the input flexes into it rather than keeping
-            its desktop width with dead space beside it.
-
-            Source order is the only order, at every width. The reset slot
-            leads, so the field is inset by the width the slot reserves - that
-            reservation is what stops the input jumping when the button appears
-            mid-edit, and it is a fixed, quiet inset rather than a gap that
-            opens and closes under the caret. Reordering the two below `md`
-            would close the inset and break focus order instead: the slot holds
-            a labelled button, so the eye would reach the field first while the
-            keyboard and a screen reader still reached Reset first. */}
-        <div
-          className={cn(
-            "flex max-w-full shrink-0 flex-wrap items-center gap-1.5",
-            SETTINGS_ROW_STACK.controlLine,
-          )}
-        >
+      }
+      // Below `md` the control has wrapped onto a line of its own, so it
+      // spans that line and the input flexes into it rather than keeping its
+      // desktop width with dead space beside it.
+      controlSpansLine
+      control={
+        // Source order is the only order, at every width. The reset slot
+        // leads, so the field is inset by the width the slot reserves - that
+        // reservation is what stops the input jumping when the button appears
+        // mid-edit, and it is a fixed, quiet inset rather than a gap that
+        // opens and closes under the caret. Reordering the two below `md`
+        // would close the inset and break focus order instead: the slot holds
+        // a labelled button, so the eye would reach the field first while the
+        // keyboard and a screen reader still reached Reset first.
+        <div className="flex w-full max-w-full flex-wrap items-center gap-1.5">
           <div className="flex size-7 shrink-0 items-center justify-center">
             {showReset ? (
               <TooltipWrapper
@@ -304,22 +290,16 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             saving={error === null && hasLocalEdit}
             justSaved={error === null && !hasLocalEdit && justSaved}
           />
+          {/* Inside the row, not after it: a sibling of the row would be the
+              group card's last child in its place, and the row would keep a
+              bottom border it is meant to drop when it is last. */}
+          <WorktreeBranchPrefixLiveStatus
+            saving={error === null && hasLocalEdit}
+            justSaved={error === null && !hasLocalEdit && justSaved}
+          />
         </div>
-      </div>
-      {error !== null ? (
-        <p
-          id={errorId}
-          role="alert"
-          className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-destructive"
-        >
-          {error}
-        </p>
-      ) : null}
-      <WorktreeBranchPrefixLiveStatus
-        saving={error === null && hasLocalEdit}
-        justSaved={error === null && !hasLocalEdit && justSaved}
-      />
-    </div>
+      }
+    />
   );
 }
 

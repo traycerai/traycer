@@ -30,7 +30,6 @@ import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schema
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   useHostReachability,
   resolvedHostLabel,
@@ -59,8 +58,6 @@ import {
   peekXtermHostGridForSession,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 const TERMINAL_DEFAULT_COLS = 80;
@@ -70,9 +67,23 @@ export interface LandingTerminalTileProps {
   readonly landingPageId: string;
   readonly tab: LandingTerminalTabRef;
   readonly active: boolean;
+  /** The panel this tile lives in is open, not parked past its row's edge. */
+  readonly panelOpen: boolean;
   /** True only after active-host probe/reconciliation has settled. */
   readonly createEnabled: boolean;
   readonly authorityEntry: LandingTerminalAuthorityEntry | null;
+}
+
+/** The tile's props plus the one fact only its wrapper can read. */
+export interface LandingTerminalTileBodyProps extends LandingTerminalTileProps {
+  /**
+   * This is the active tab of an open panel on the Start Page being shown. A
+   * collapsed panel keeps its tiles mounted at full size, a retained page
+   * keeps them mounted hidden and an inactive tab sits behind the active one,
+   * so "mounted" is not "on screen" - and only an on-screen terminal may size
+   * the grid every attached client shares.
+   */
+  readonly onScreen: boolean;
 }
 
 /** One permanent, host-bound terminal tile in the landing panel stack. */
@@ -89,16 +100,24 @@ export function LandingTerminalTile(
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
   const tileVisible = props.active && surfaceVisible;
+  // The active tab of an open panel on the shown page, and nothing else. An
+  // inactive tab shares the active one's box but its engine is not presented,
+  // so it cannot report a size: it would keep counting with whatever it last
+  // had, the 80x24 fallback if it never measured. It stays attached either
+  // way, so a tab switch is still instant.
+  const onScreen = props.panelOpen && tileVisible;
   return (
     <TabHostProvider hostId={props.tab.hostId}>
       <PaneVisibilityContext.Provider value={tileVisible}>
-        <LandingTerminalTileBody {...props} />
+        <LandingTerminalTileBody {...props} onScreen={onScreen} />
       </PaneVisibilityContext.Provider>
     </TabHostProvider>
   );
 }
 
-function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
+function LandingTerminalTileBody(
+  props: LandingTerminalTileBodyProps,
+): ReactNode {
   // Before the capability switch, whatever the host's authority says: the
   // session is the host's (manager-owned, provider spawn env), so neither
   // bootstrap below may run - the durable one would `terminal.plain.create`
@@ -125,7 +144,7 @@ function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
 }
 
 export function LandingTerminalLegacyBootstrap(
-  props: LandingTerminalTileProps,
+  props: LandingTerminalTileBodyProps,
 ): ReactNode {
   const handleExitedTab = useRemoveExitedLandingTab(props.landingPageId);
   const rekeyTab = useLandingPanelStore((state) => state.rekeyTab);
@@ -163,6 +182,7 @@ export function LandingTerminalLegacyBootstrap(
     instanceId: props.tab.instanceId,
     sessionKind: "terminal",
     preparePayload,
+    viewer: props.onScreen ? "presentation" : "cache",
     enabled: props.createEnabled,
   });
 
@@ -177,12 +197,7 @@ export function LandingTerminalLegacyBootstrap(
   }, [bootstrap.createError?.code, props.tab.instanceId, rekeyTab]);
 
   if (reachability.status === "unreachable") {
-    return (
-      <TerminalDeadState
-        hostLabel={reachability.hostLabel}
-        unavailability={reachability.unavailability}
-      />
-    );
+    return <TerminalDeadState hostLabel={reachability.hostLabel} />;
   }
   if (hostLoad.kind !== "ready") {
     // The directory has not answered yet, or is empty because this machine's
@@ -245,7 +260,7 @@ export function LandingTerminalLegacyBootstrap(
 }
 
 function LandingTerminalDurableBootstrap(
-  props: Omit<LandingTerminalTileProps, "authorityEntry"> & {
+  props: Omit<LandingTerminalTileBodyProps, "authorityEntry"> & {
     readonly authorityEntry: LandingTerminalAuthorityEntry;
   },
 ): ReactNode {
@@ -358,6 +373,11 @@ function LandingTerminalDurableBootstrap(
     reattachMode: runtimeRunning ? "live" : "fresh",
     kind: "terminal",
     enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
+    // Off screen the tile keeps its stream (so a reveal is instant and the
+    // tab strip's title stays live) but as a `cache` attachment. As a viewer
+    // it capped every other client's view of this terminal at whatever it
+    // subscribed with: the 80x24 fallback when it could not measure itself.
+    viewer: props.onScreen ? "presentation" : "cache",
   });
 
   return (
@@ -391,12 +411,7 @@ function LandingTerminalDurableState(props: {
   readonly authoritativeTerminal: PlainTerminalViewModel | null;
 }): ReactNode {
   if (props.reachability.status === "unreachable") {
-    return (
-      <TerminalDeadState
-        hostLabel={props.reachability.hostLabel}
-        unavailability={props.reachability.unavailability}
-      />
-    );
+    return <TerminalDeadState hostLabel={props.reachability.hostLabel} />;
   }
   if (
     props.reachability.status === "checking" ||
@@ -647,42 +662,16 @@ function LandingTerminalWaiting(): ReactNode {
 /**
  * The tile replaced by an explanation of why its host cannot be reached.
  *
- * `plan-restricted` gets its own sentence rather than the offline one, because
- * "is offline" is false for it in a way that costs the reader real time: the
- * machine is running and healthy, it simply has no remote route on this
- * account's plan. Telling them it is off sends them to restart it, and hides
- * the only thing that would actually help.
- *
  * `indeterminate` never reaches here — `useHostReachability` reports it as
  * reachable, so the live path runs and the dial either succeeds or fails on its
  * own evidence.
  */
 export function TerminalDeadState(props: {
   readonly hostLabel: string;
-  readonly unavailability: HostUnavailability | null;
 }): ReactNode {
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas p-4 text-center text-ui-sm text-muted-foreground">
-      {terminalDeadStateMessage(props.hostLabel, props.unavailability)}
+      {`${props.hostLabel} is offline. This terminal stays bound to that host.`}
     </div>
   );
-}
-
-/**
- * The fact is the same on every shell; only the remedy differs. The installed
- * mobile app may not tell the reader to upgrade (App Store review guideline
- * 3.1.1), so it points at the shell that may carry that offer, and keeps the
- * note that the terminal stays bound either way.
- */
-function terminalDeadStateMessage(
-  hostLabel: string,
-  unavailability: HostUnavailability | null,
-): string {
-  if (unavailability !== "plan-restricted") {
-    return `${hostLabel} is offline. This terminal stays bound to that host.`;
-  }
-  const reached = `${hostLabel} is local only on your current plan, so it can't be reached from here.`;
-  return isMobileApp()
-    ? `${reached} ${PLAN_RESTRICTED_MOBILE_REMEDY} This terminal stays bound to it.`
-    : `${reached} Upgrade to use it remotely; this terminal stays bound to it.`;
 }

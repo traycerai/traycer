@@ -128,7 +128,7 @@ describe("revealMemberAlongAxis", () => {
     describe(`on the ${axis.id} axis`, () => {
       it("scrolls a member clipped at the end forward by the overflow", () => {
         const scroller = boxed(view);
-        revealMemberAlongAxis(scroller, boxed(place(250, 80)), axis);
+        revealMemberAlongAxis(scroller, boxed(place(250, 80)), axis, 0);
         expect(offset(scroller)).toBe(30);
       });
 
@@ -136,20 +136,48 @@ describe("revealMemberAlongAxis", () => {
         const scroller = boxed(view);
         if (axis.id === "x") scroller.scrollLeft = 50;
         else scroller.scrollTop = 50;
-        revealMemberAlongAxis(scroller, boxed(place(80, 60)), axis);
+        revealMemberAlongAxis(scroller, boxed(place(80, 60)), axis, 0);
         expect(offset(scroller)).toBe(30);
       });
 
       it("reveals the end edge first when the member overflows both edges", () => {
         const scroller = boxed(view);
-        revealMemberAlongAxis(scroller, boxed(place(90, 240)), axis);
+        revealMemberAlongAxis(scroller, boxed(place(90, 240)), axis, 0);
         expect(offset(scroller)).toBe(30);
       });
 
       it("leaves a fully visible member alone", () => {
         const scroller = boxed(view);
-        revealMemberAlongAxis(scroller, boxed(place(120, 60)), axis);
+        revealMemberAlongAxis(scroller, boxed(place(120, 60)), axis, 0);
         expect(offset(scroller)).toBe(0);
+      });
+
+      // Something covers 30 at the start and 20 at the end of the scrollport.
+      const padded = (): HTMLElement => {
+        const scroller = boxed(view);
+        for (const [side, px] of [
+          ["left", 30],
+          ["top", 30],
+          ["right", 20],
+          ["bottom", 20],
+        ] as const) {
+          scroller.style.setProperty(`scroll-padding-${side}`, `${px}px`);
+        }
+        return scroller;
+      };
+
+      it("keeps a member clipped at the end clear of the scroll-padding", () => {
+        const scroller = padded();
+        revealMemberAlongAxis(scroller, boxed(place(250, 80)), axis, 0);
+        expect(offset(scroller)).toBe(50);
+      });
+
+      it("keeps a member clipped at the start clear of the scroll-padding", () => {
+        const scroller = padded();
+        if (axis.id === "x") scroller.scrollLeft = 50;
+        else scroller.scrollTop = 50;
+        revealMemberAlongAxis(scroller, boxed(place(110, 60)), axis, 0);
+        expect(offset(scroller)).toBe(30);
       });
     });
   }

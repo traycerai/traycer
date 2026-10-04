@@ -167,15 +167,16 @@ describe("every chevron opens something with content (G6, all five areas)", () =
   // detail draws nothing (a row kind that returns null, a hint-only region
   // with an empty hint) is a failure here rather than a chevron that opens
   // onto blank space.
-  // Task tabs is the one area with nothing to disclose (Home tab is its only
-  // row and has no detail), so it is asserted to draw none; the others draw at
-  // least one, which is what keeps a broken selector from passing vacuously.
+  // Task tabs (Home tab is its only row and has no detail) and Usage and
+  // resources (its readings are always-open sections) have nothing to
+  // disclose, so they are asserted to draw none; the others draw at least one, which is what keeps a broken selector from passing vacuously.
   const DISCLOSING_ROWS_AT_LEAST: Readonly<Record<SurfaceGroupId, number>> = {
     topBar: 0,
     sidebar: 1,
     chat: 1,
     composer: 1,
-    statusBar: 1,
+    // The two readings are always-open sections, not disclosures.
+    statusBar: 0,
   };
 
   it.each(SURFACE_GROUPS.map((group) => group.id))(
@@ -194,7 +195,9 @@ describe("every chevron opens something with content (G6, all five areas)", () =
       expect(disclosing.length).toBeGreaterThanOrEqual(
         DISCLOSING_ROWS_AT_LEAST[surface],
       );
-      if (surface === "topBar") expect(disclosing).toHaveLength(0);
+      if (DISCLOSING_ROWS_AT_LEAST[surface] === 0) {
+        expect(disclosing).toHaveLength(0);
+      }
 
       for (const node of disclosing) {
         const id = node.getAttribute("data-sortable-id") ?? "";

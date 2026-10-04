@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -16,152 +16,99 @@ function fakeStreamSession(): IStreamSession {
   };
 }
 
-function controllableTransport(): {
+function fakeTransport(): {
   readonly transport: DurableStreamTransport;
-  readonly emitClosed: (reason: string) => void;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly closeTransport: Mock<() => void>;
 } {
-  const closedListeners = new Set<() => void>();
-  let closed = false;
-  let closedReason: string | null = null;
   const wsStreamClient: IHostStreamClient<HostStreamRpcRegistry> = {
     subscribe: () => fakeStreamSession(),
     subscribeWithParamsProvider: () => fakeStreamSession(),
     close: () => undefined,
-    isClosed: () => closed,
-    getClosedReason: () => closedReason,
-    onClosed: (listener) => {
-      closedListeners.add(listener);
-      return () => closedListeners.delete(listener);
-    },
-    instanceId: "controlled-durable-client",
+    isClosed: () => false,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "owned-durable-client",
     notifyBearerRotated: () => undefined,
     notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
-    isReady: () => !closed,
+    isReady: () => true,
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => undefined,
     getMethodSchemaVersion: () => null,
     subscribeAvailabilityRecovered: () => () => undefined,
   };
-  const closeTransport = vi.fn();
+  const closeTransport = vi.fn<() => void>();
   return {
     transport: { wsStreamClient, close: closeTransport },
-    emitClosed: (reason) => {
-      closed = true;
-      closedReason = reason;
-      for (const listener of [...closedListeners]) listener();
-    },
+    wsStreamClient,
     closeTransport,
   };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-describe("openOwnedDurableStreamClient plan-restricted reprobe", () => {
-  it("asks the owner to rebuild at the session cache deadline", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    const controlled = controllableTransport();
-    const rebuild = vi.fn();
-    const owned = openOwnedDurableStreamClient(
-      () => controlled.transport,
-      "host-a",
-      () => ({ close: vi.fn() }),
-      rebuild,
+describe("openOwnedDurableStreamClient", () => {
+  it("opens the transport for the host and builds the typed client over its stream client", () => {
+    const fake = fakeTransport();
+    const openTransport = vi.fn<(hostId: string) => DurableStreamTransport>(
+      () => fake.transport,
     );
+    const client = { close: vi.fn() };
+    const build = vi.fn<
+      (wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>) => {
+        readonly close: () => void;
+      }
+    >(() => client);
 
-    controlled.emitClosed("plan-restricted:11000");
-    vi.advanceTimersByTime(999);
-    expect(rebuild).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(rebuild).toHaveBeenCalledTimes(1);
+    const owned = openOwnedDurableStreamClient(openTransport, "host-a", build);
 
-    owned.close();
+    expect(openTransport).toHaveBeenCalledTimes(1);
+    expect(openTransport).toHaveBeenCalledWith("host-a");
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build).toHaveBeenCalledWith(fake.wsStreamClient);
+    expect(owned.client).toBe(client);
+    // Opening owns the transport but must not tear anything down.
+    expect(client.close).not.toHaveBeenCalled();
+    expect(fake.closeTransport).not.toHaveBeenCalled();
   });
 
-  it("cancels an armed rebuild when the durable owner is disposed", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(20_000);
-    const controlled = controllableTransport();
-    const rebuild = vi.fn();
-    const owned = openOwnedDurableStreamClient(
-      () => controlled.transport,
-      "host-a",
-      () => ({ close: vi.fn() }),
-      rebuild,
-    );
-
-    controlled.emitClosed("plan-restricted:21000");
-    owned.close();
-    vi.advanceTimersByTime(1_000);
-    expect(rebuild).not.toHaveBeenCalled();
-    expect(controlled.closeTransport).toHaveBeenCalledTimes(1);
-  });
-
-  it("arms the deadline when the negative cache returns an already-closed client", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
-    const controlled = controllableTransport();
-    controlled.emitClosed("plan-restricted:31000");
-    const rebuild = vi.fn();
-    const owned = openOwnedDurableStreamClient(
-      () => controlled.transport,
-      "host-a",
-      () => ({ close: vi.fn() }),
-      rebuild,
-    );
-
-    vi.advanceTimersByTime(1_000);
-    expect(rebuild).toHaveBeenCalledTimes(1);
-    owned.close();
-  });
-
-  it("retries an owner rebuild that throws synchronously", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(40_000);
-    const controlled = controllableTransport();
-    const rebuild = vi.fn<() => void>().mockImplementationOnce(() => {
-      throw new Error("wiring failed");
+  it("closes the typed client before its transport, each exactly once", () => {
+    const fake = fakeTransport();
+    const order: string[] = [];
+    const client = {
+      close: vi.fn(() => {
+        order.push("client");
+      }),
+    };
+    fake.closeTransport.mockImplementation(() => {
+      order.push("transport");
     });
+
     const owned = openOwnedDurableStreamClient(
-      () => controlled.transport,
+      () => fake.transport,
       "host-a",
-      () => ({ close: vi.fn() }),
-      rebuild,
+      () => client,
     );
-
-    controlled.emitClosed("plan-restricted:41000");
-    vi.advanceTimersByTime(1_000);
-    expect(rebuild).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(999);
-    expect(rebuild).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1);
-    expect(rebuild).toHaveBeenCalledTimes(2);
-
     owned.close();
+
+    expect(order).toEqual(["client", "transport"]);
+    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(fake.closeTransport).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds repeated synchronous rebuild failures", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(50_000);
-    const controlled = controllableTransport();
-    const rebuild = vi.fn(() => {
-      throw new Error("still unavailable");
-    });
-    const owned = openOwnedDurableStreamClient(
-      () => controlled.transport,
-      "host-a",
-      () => ({ close: vi.fn() }),
-      rebuild,
-    );
+  it("closes the half-built transport and rethrows when the build throws synchronously", () => {
+    const fake = fakeTransport();
+    const failure = new Error("wiring failed");
 
-    controlled.emitClosed("plan-restricted:51000");
-    vi.advanceTimersByTime(10_000);
-    expect(rebuild).toHaveBeenCalledTimes(3);
+    expect(() =>
+      openOwnedDurableStreamClient(
+        () => fake.transport,
+        "host-a",
+        () => {
+          throw failure;
+        },
+      ),
+    ).toThrow(failure);
 
-    owned.close();
+    expect(fake.closeTransport).toHaveBeenCalledTimes(1);
   });
 });

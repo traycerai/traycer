@@ -95,6 +95,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const nonce = await readAdoptionNonce(hostHomeDir);
         const admission = await defaultRunHostStartDeps.admitHostStartSpawn(
@@ -111,6 +112,7 @@ describe("host-start parent adoption", () => {
             return child;
           },
           () => undefined,
+          { consumed: null, onGranted: () => undefined },
         );
         expect(admission.kind).toBe("ran");
         return admission;
@@ -143,6 +145,7 @@ describe("host-start parent adoption", () => {
       () => {
         beside += 1;
       },
+      { consumed: null, onGranted: () => undefined },
     );
     expect(admission.kind).toBe("ran");
     expect(callbackCalls).toBe(1);
@@ -209,6 +212,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const proof = JSON.parse(await readFile(adoptionPath, "utf8")) as {
           adoption: { hostHomeDir: string; holder: { token: string | null } };
@@ -359,6 +363,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
 
         // Capture each target before the first await. The second invocation
@@ -413,6 +418,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const path = join(hostHomeDir, ".host-start-adoption.json");
         const proof = JSON.parse(await readFile(path, "utf8")) as {
@@ -457,6 +463,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const path = join(hostHomeDir, ".host-start-adoption.json");
         const proof = JSON.parse(await readFile(path, "utf8")) as {
@@ -516,6 +523,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const nonce = await readAdoptionNonce(hostHomeDir);
         const first = consumeHostStartAdoption(
@@ -566,6 +574,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const nonce = await readAdoptionNonce(hostHomeDir);
         await expect(
@@ -616,6 +625,7 @@ describe("host-start parent adoption", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const consumed = await consumeHostStartAdoption(
           "production",
@@ -664,6 +674,7 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const path = join(hostHomeDir, ".host-start-adoption.json");
         // Age the REAL proof rather than hand-rolling one, so every other
@@ -718,6 +729,7 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           capability,
           options(hostHomeDir),
           "ai.traycer.host.agent",
+          "terminal",
         );
 
         expect(
@@ -753,6 +765,7 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           capability,
           options(hostHomeDir),
           "ai.traycer.host.agent",
+          "terminal",
         );
       },
     );
@@ -784,6 +797,7 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
         return child;
       },
       () => undefined,
+      { consumed: null, onGranted: () => undefined },
     );
     expect(admission.kind).toBe("ran");
     expect(callbackCalls).toBe(1);
@@ -828,6 +842,7 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const path = join(hostHomeDir, ".host-start-adoption.json");
         // Age the REAL proof INTO THE FUTURE rather than hand-rolling one, so
@@ -880,6 +895,7 @@ describe("readHostStartAdoptionNonce — production change B: the symmetric age 
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
 
         // Control, run INSIDE the contender's callback: the final step of
@@ -941,7 +957,12 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
         admission: "recovery-maintenance",
       },
       async (capability) => {
-        await publishHostStartAdoption(capability, options(hostHomeDir), label);
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          label,
+          "terminal",
+        );
       },
     );
     if (ageMs > 0) {
@@ -988,6 +1009,7 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
           capability,
           options(hostHomeDir),
           publishLabel,
+          "terminal",
         );
         const path = join(hostHomeDir, ".host-start-adoption.json");
         const proof = JSON.parse(await readFile(path, "utf8")) as {
@@ -1064,6 +1086,7 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
           capability,
           options(hostHomeDir),
           publishLabel,
+          "terminal",
         );
         result = await consumeHostStartAdoption(
           "production",
@@ -1117,6 +1140,7 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
         return child;
       },
       () => undefined,
+      { consumed: null, onGranted: () => undefined },
     );
     expect(admission.kind).toBe("ran");
     expect(callbackCalls).toBe(1);
@@ -1181,5 +1205,133 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
     );
 
     expect(result).toEqual({ kind: "absent" });
+  });
+});
+
+describe("host-start adoption — origin plumbing (`host/lifecycle-origin.ts`)", () => {
+  it("publishHostStartAdoption writes the origin field, and the resulting grant carries it through", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-origin-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+          "desktop",
+        );
+        const raw = JSON.parse(
+          await readFile(
+            join(hostHomeDir, ".host-start-adoption.json"),
+            "utf8",
+          ),
+        ) as { readonly origin: string };
+        expect(raw.origin).toBe("desktop");
+
+        const nonce = await readAdoptionNonce(hostHomeDir);
+        const consumed = await consumeHostStartAdoption(
+          "production",
+          serviceLabel,
+          nonce,
+        );
+        expect(consumed.kind).toBe("grant");
+        if (consumed.kind === "grant") {
+          expect(consumed.grant.origin).toBe("desktop");
+          await consumed.grant.abandon();
+        }
+      },
+    );
+  });
+
+  it("a v2 proof hand-written WITHOUT an `origin` key still grants, with `grant.origin === null` (N-1 publisher)", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-missing-origin-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        // Publish normally, then hand-rewrite the persisted proof with the
+        // `origin` key stripped out entirely, simulating a publisher that
+        // predates the field.
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+          "terminal",
+        );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        const proof = JSON.parse(await readFile(path, "utf8")) as Record<
+          string,
+          unknown
+        >;
+        delete proof.origin;
+        await writeFile(path, JSON.stringify(proof), "utf8");
+
+        const nonce = await readAdoptionNonce(hostHomeDir);
+        const consumed = await consumeHostStartAdoption(
+          "production",
+          serviceLabel,
+          nonce,
+        );
+        expect(consumed.kind).toBe("grant");
+        if (consumed.kind === "grant") {
+          expect(consumed.grant.origin).toBeNull();
+          await consumed.grant.abandon();
+        }
+      },
+    );
+  });
+
+  it("a v2 proof with an unknown `origin` string still grants, with `grant.origin === null`", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-garbage-origin-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+          "terminal",
+        );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        const proof = JSON.parse(await readFile(path, "utf8")) as Record<
+          string,
+          unknown
+        >;
+        proof.origin = "bogus";
+        await writeFile(path, JSON.stringify(proof), "utf8");
+
+        const nonce = await readAdoptionNonce(hostHomeDir);
+        const consumed = await consumeHostStartAdoption(
+          "production",
+          serviceLabel,
+          nonce,
+        );
+        expect(consumed.kind).toBe("grant");
+        if (consumed.kind === "grant") {
+          expect(consumed.grant.origin).toBeNull();
+          await consumed.grant.abandon();
+        }
+      },
+    );
   });
 });

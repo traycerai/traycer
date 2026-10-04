@@ -193,25 +193,13 @@ function PresetCard(props: {
   const modifiedId = useId();
   const name = PRESET_LABELS[presetId];
   return (
-    // A `<div role="button">`, not a native `<button>`: the miniature draws
-    // real depictions, a few of which render their own `<button>`, and a
-    // button inside a button is invalid HTML. The miniature is `inert`, so
-    // this card is the one control.
+    // A plain card with the button laid over it as a sibling: the miniature
+    // draws real depictions, a few of which render their own `<button>`, and
+    // a button around them would nest one in the other. The miniature is
+    // `inert`, so the overlay is the one control.
     <div
-      role="button"
-      tabIndex={0}
-      data-preset={presetId}
-      aria-label={`Apply ${name}`}
-      aria-describedby={modified ? `${modifiedId} ${captionId}` : captionId}
-      aria-current={last ? "true" : undefined}
-      onClick={onApply}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        onApply();
-      }}
       className={cn(
-        "relative flex min-w-0 cursor-default flex-col gap-1.5 rounded-lg border border-border p-1 pb-2 text-left transition-colors duration-100 hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "relative flex min-w-0 flex-col gap-1.5 rounded-lg border border-border p-1 pb-2 text-left transition-colors duration-100 hover:bg-foreground/5",
         last && "border-foreground/60 bg-foreground/5",
       )}
     >
@@ -255,6 +243,15 @@ function PresetCard(props: {
           {PRESET_CAPTIONS[presetId]}
         </span>
       </span>
+      <button
+        type="button"
+        data-preset={presetId}
+        aria-label={`Apply ${name}`}
+        aria-describedby={modified ? `${modifiedId} ${captionId}` : captionId}
+        aria-current={last ? "true" : undefined}
+        onClick={onApply}
+        className="absolute -inset-px cursor-default rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
     </div>
   );
 }

@@ -101,7 +101,8 @@ import {
   SidebarGroupContent,
 } from "@/components/ui/sidebar";
 import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
-import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
+import { TreeChevronSpacer } from "@/components/ui/tree-chevron";
+import { NodeChevron } from "@/components/epic-canvas/sidebar/tree-node-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
   CHAT_ORIGIN,
@@ -178,6 +179,8 @@ import {
   localChatLastActiveAtById,
   mergeChatListEntries,
   selectUnfoldedCloudChats,
+  cloudChatBranchKeys,
+  nestCloudChats,
 } from "@/lib/chats/unified-chat-list";
 import {
   decideChatSharingMenuEntry,
@@ -1035,10 +1038,24 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       ),
     [ancestorIdsOfActive, ancestorIdsOfReveal, revealVisibleIds],
   );
+  // A shared orchestrator's subagents nest under it (`nestCloudChats`), and
+  // the branch opens by default exactly as a local root does: its row key
+  // joins the implicit-root set, and a collapse is remembered in the same
+  // per-panel store. Only rows that HAVE children are entered, so a leaf
+  // arriving or leaving does not re-mint the expanded set.
+  const cloudBranchKeys = useMemo(
+    () => cloudChatBranchKeys(nestCloudChats(visibleCloudChats)),
+    [visibleCloudChats],
+  );
+  const implicitExpandedIds = useMemo(
+    () =>
+      cloudBranchKeys.length === 0 ? rootIds : [...rootIds, ...cloudBranchKeys],
+    [rootIds, cloudBranchKeys],
+  );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
     panelId,
-    rootIds,
+    implicitExpandedIds,
     forcedExpandedIds,
   );
   const expandAction = useEpicSidebarExpansionStore((s) => s.expand);
@@ -1182,9 +1199,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [recordHeads, sortClock, visibleCloudChats],
   );
-  // One list: local roots and unreachable-host rows, interleaved. Nested local
-  // children still render under their parents through `ChatNode`; only ROOTS
-  // take part in the interleave, and a cloud row is always a leaf.
+  // One list: local roots and cloud-only rows, interleaved. Only ROOTS take
+  // part in the interleave: a nested local child still renders under its
+  // parent through `ChatNode`, and a collaborator's subagent renders under its
+  // orchestrator through the cloud row's own `childEntries`.
   const listEntries = useMemo(
     () =>
       mergeChatListEntries({
@@ -1366,6 +1384,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     <EpicSidebarCloudChatRow
                       key={entry.key}
                       chat={entry.chat}
+                      childEntries={entry.children}
+                      expansion={expansion}
                       tabId={tabId}
                       depth={0}
                       selectionMode={selectionMode}
@@ -2355,48 +2375,6 @@ function ChatNodeShellBody(
         onConfirm={onConfirmDelete}
       />
     </m.li>
-  );
-}
-
-interface NodeChevronProps {
-  hasChildren: boolean;
-  expanded: boolean;
-  onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
-}
-
-function NodeChevron(props: NodeChevronProps) {
-  const { hasChildren, expanded, onToggle } = props;
-  const surface = useChatTreeSurface();
-  if (!hasChildren) return <TreeChevronSpacer />;
-  if (surface === null) {
-    return <TreeChevron expanded={expanded} onToggle={onToggle} />;
-  }
-  // Desktop's chevron is an 11.25px glyph INSIDE the row button, which is fine
-  // for a cursor and not for a thumb: a near-miss lands on the row instead, and
-  // on a surface that closes itself on activation that miss dismisses the sheet
-  // rather than merely doing nothing. So the hit box grows and the glyph does
-  // not - an absolutely-positioned pseudo takes no space in flow, so the column
-  // stays desktop's exact width and the density ruling is untouched. `onToggle`
-  // moves to this wrapper so one handler owns the whole enlarged box; it
-  // already stops propagation, which is what keeps the row from opening.
-  return (
-    <span
-      // Same `aria-hidden` the glyph inside already carries: this wrapper adds
-      // hit area and nothing else, so exposing a second nameless control would
-      // be noise rather than access.
-      //
-      // It does NOT claim keyboard reachability. Expansion in this tree is
-      // pointer-only on BOTH form factors - desktop binds no ArrowRight/Left
-      // and neither does the row button - so a keyboard-only user cannot open
-      // a collapsed branch here. That gap is desktop's and predates this
-      // mount; what the mount changed is that a phone now inherits it, where
-      // the flat list it replaced had listed every descendant outright.
-      aria-hidden="true"
-      onClick={onToggle}
-      className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
-    >
-      <TreeChevron expanded={expanded} onToggle={undefined} />
-    </span>
   );
 }
 

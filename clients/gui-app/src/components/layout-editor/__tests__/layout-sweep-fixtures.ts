@@ -16,14 +16,15 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
-import type { TreeNode } from "@/stores/epics/open-epic/types";
+import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   getLayoutSnapshot,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import type { ProviderLimitWindows } from "@/components/layout-editor/inspector/provider-limit-windows";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -350,7 +351,11 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-/** Epsilon's session: a real open-epic store with its agents in the tree. */
+/**
+ * Epsilon's session: a real open-epic store with its agents in the tree and as
+ * chats, registered so the strip names them, with the activity plane saying
+ * they are working, so the Activity view nests them under Epsilon's row.
+ */
 export function openEpicSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC_SURFACE_ID,
@@ -370,6 +375,30 @@ export function openEpicSession(): OpenedStoreForTest {
     else (childrenByParent[node.parentId] ??= []).push(node.id);
   }
   handle.store.setState({ tree: { rootIds, childrenByParent, nodeById } });
+  const chats: Record<string, ChatProjection> = {};
+  for (const node of EPIC_SURFACE_AGENTS) {
+    chats[node.id] = {
+      id: node.id,
+      title: node.title,
+      parentId: node.parentId,
+      createdAt: 1,
+      updatedAt: 1,
+      userId: null,
+      hostId: HARNESS_LOCAL_HOST.hostId,
+      isTitleEditedByUser: false,
+      docResident: false,
+      archivedAt: null,
+      settings: null,
+    };
+  }
+  handle.store.setState({ chats: { allIds: Object.keys(chats), byId: chats } });
+  __getOpenEpicRegistryForTests().acquire(EPIC_SURFACE_ID, () => handle);
+  const working = EPIC_SURFACE_AGENTS.map((node) => node.id);
+  __setAgentActivityStateForTests(
+    { [EPIC_SURFACE_ID]: { working, turn: working.slice(0, 2) } },
+    "local",
+    "connected",
+  );
   return handle;
 }
 
@@ -405,35 +434,11 @@ export function seedEpicCanvas(): void {
   }));
 }
 
-/**
- * What the providers' own limits pickers read: the windows each provider
- * reports and the ones its strip is drawing now. Read through the SAME
- * `ProviderLimitWindowsReader` the settings row's `Choose...` reads, from the
- * same query cache the app column's own segments fill, so a sweep entry seeds
- * a pick exactly as pressing the row would. It renders nothing, so it is not
- * in the column's HTML.
- */
-export const usageProbe = new Map<RateLimitProviderId, ProviderLimitWindows>();
-
-/** One provider's reported windows and the ones its strip draws, as read now. */
-export interface SweepProviderUsage {
-  readonly windows: ReadonlyArray<{
-    readonly windowKey: string;
-    readonly label: string;
-  }>;
-  readonly drawnKeys: ReadonlyArray<string>;
-}
-
 // ── Mounting ────────────────────────────────────────────────────────────────
 
 export interface SweepMount {
   /** The mounted tree's root element (the app column, or the settings panel). */
   readonly root: () => HTMLElement;
-  /** What each configured provider reports and draws right now. */
-  readonly providerUsage: () => ReadonlyMap<
-    RateLimitProviderId,
-    SweepProviderUsage
-  >;
   /** The app column's HTML now, normalised for React's minted ids. */
   readonly signature: () => string;
   /** The app column's HTML with nothing normalised. */

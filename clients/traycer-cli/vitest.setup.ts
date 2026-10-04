@@ -1,4 +1,51 @@
-import { afterEach, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeEach } from "vitest";
+
+// Pin the home directory to a private temp dir for every test file, BEFORE
+// the file - or anything it imports - is evaluated.
+//
+// `store/paths` binds `~/.traycer` from `os.homedir()` at module load, and the
+// protocol and shared path helpers resolve it themselves. A suite that runs a
+// real provisioning segment, the update-attempt lock or a CLI-slot staging
+// without isolating the home therefore reads and writes the developer's REAL
+// `~/.traycer` - the live host's home, its update lock, its credentials.
+// Several did (`ensure`, `host-install`, `provision*`). Per-suite `node:os`
+// mocks cannot be trusted to cover it: replacing one `store/paths` export
+// leaves every helper that calls the module's own `hostHomeDir` on the real
+// home. `os.homedir()` answers from HOME (USERPROFILE on Windows) on every
+// call, so setting both here redirects every module, mocked or not; a
+// suite's own per-test isolation nests inside this one.
+//
+// Per test file, not per worker: setup files run before each file, and a
+// worker's environment carries over between them, so the ORIGINAL home is
+// kept in the environment on the first pass and never re-read from HOME.
+const ORIGINAL_HOME_ENV = "TRAYCER_VITEST_ORIGINAL_HOME";
+const originalHome = process.env[ORIGINAL_HOME_ENV] ?? homedir();
+process.env[ORIGINAL_HOME_ENV] = originalHome;
+const testHome = mkdtempSync(join(tmpdir(), "traycer-cli-test-home-"));
+process.env.HOME = testHome;
+process.env.USERPROFILE = testHome;
+if (homedir() !== testHome || homedir() === originalHome) {
+  throw new Error(
+    "vitest.setup: os.homedir() does not resolve to this file's temp home - refusing to run a suite against the developer's home",
+  );
+}
+
+afterEach(() => {
+  // A test that restores a HOME it captured before this file ran would put
+  // the rest of the file back on the developer's home.
+  if (homedir() === originalHome) {
+    throw new Error(
+      "vitest.setup: a test put os.homedir() back on the developer's home",
+    );
+  }
+});
+
+afterAll(() => {
+  rmSync(testHome, { recursive: true, force: true });
+});
 
 // Refuse any `fetch` that would leave this machine, and FAIL the test that
 // made it.

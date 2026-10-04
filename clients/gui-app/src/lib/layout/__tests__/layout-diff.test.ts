@@ -4,7 +4,6 @@ import {
   providerChanged,
   resetLayout,
   resetWouldChange,
-  revertProvider,
   usageProvidersChanged,
 } from "@/lib/layout/layout-diff";
 import {
@@ -80,27 +79,10 @@ describe("one provider's own state", () => {
     expect(usageProvidersChanged(stored)).toBe(false);
     expect(resetWouldChange(snapshotWith(stored))).toBe(false);
   });
-
-  it("reverts to shown and Automatic, leaving every other provider alone", () => {
-    const before: LayoutArrangement = {
-      ...DEFAULT_ARRANGEMENT,
-      hiddenProviders: [PROVIDER, OTHER_PROVIDER],
-      providerLimits: {
-        [PROVIDER]: { limitKeys: ["5h"] },
-        [OTHER_PROVIDER]: { limitKeys: ["week"] },
-      },
-    };
-
-    const after = revertProvider(before, PROVIDER);
-
-    expect(providerChanged(after, PROVIDER)).toBe(false);
-    expect(providerChanged(after, OTHER_PROVIDER)).toBe(true);
-    expect(after.hiddenProviders).toEqual([OTHER_PROVIDER]);
-  });
 });
 
 describe("what the page can see as changed", () => {
-  it("counts hidden providers, picked limits and a reorder as the providers changing", () => {
+  it("counts hidden providers and a reorder as the Profiles list changing, never picked limits", () => {
     expect(usageProvidersChanged(DEFAULT_ARRANGEMENT)).toBe(false);
     expect(
       usageProvidersChanged({
@@ -108,12 +90,13 @@ describe("what the page can see as changed", () => {
         hiddenProviders: [PROVIDER],
       }),
     ).toBe(true);
+    // Limits are edited in Settings ▸ Providers, not in the Profiles list.
     expect(
       usageProvidersChanged({
         ...DEFAULT_ARRANGEMENT,
         providerLimits: { [PROVIDER]: { limitKeys: ["5h"] } },
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       usageProvidersChanged({
         ...DEFAULT_ARRANGEMENT,
@@ -136,6 +119,7 @@ describe("what the page can see as changed", () => {
       { sideStripView: "activity" },
       { taskTabLayout: "shrink" },
       { readingWidth: "wide" },
+      { wideReadingWidthPx: 1600 },
     ];
     for (const patch of eachOne) {
       expect(
@@ -167,6 +151,7 @@ describe("Reset layout (L-20)", () => {
         sidebarSide: "right",
         // D8: and the vertical strip's view.
         sideStripView: "activity",
+        wideReadingWidthPx: 1600,
       },
     };
 
@@ -179,6 +164,9 @@ describe("Reset layout (L-20)", () => {
     expect(after.arrangement.tabStripPlacement).toBe("top");
     expect(after.arrangement.sidebarSide).toBe("left");
     expect(after.arrangement.sideStripView).toBe("layered");
+    expect(after.arrangement.wideReadingWidthPx).toBe(
+      DEFAULT_ARRANGEMENT.wideReadingWidthPx,
+    );
   });
 
   it("never hands a divider id back out, which is the one field it keeps", () => {

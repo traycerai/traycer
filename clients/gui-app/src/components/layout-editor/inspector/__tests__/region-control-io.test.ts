@@ -52,17 +52,17 @@ describe("writing and reverting", () => {
   });
 
   it("reverts several keys at once and leaves the rest of the region alone", () => {
-    writeControlValue("usageLimits", "bar", false);
-    writeControlValue("usageLimits", "word", false);
+    writeControlValue("usageLimits", "reset", false);
+    writeControlValue("usageLimits", "amount", "remaining");
 
-    expect(changedControlKeys("usageLimits", ["bar", "word", "shown"])).toEqual(
-      ["bar", "word"],
-    );
+    expect(
+      changedControlKeys("usageLimits", ["reset", "amount", "shown"]),
+    ).toEqual(["reset", "amount"]);
 
-    revertControlValues("usageLimits", ["bar"]);
+    revertControlValues("usageLimits", ["reset"]);
 
     expect(getLayoutSnapshot().overrides).toEqual({
-      usageLimits: { word: false },
+      usageLimits: { amount: "remaining" },
     });
   });
 
@@ -73,11 +73,11 @@ describe("writing and reverting", () => {
       startedAt: 0,
       origin: { kind: "tab" },
     });
-    writeControlValue("usageLimits", "bar", false);
-    writeControlValue("usageLimits", "word", false);
+    writeControlValue("usageLimits", "reset", false);
+    writeControlValue("usageLimits", "amount", "remaining");
     const depth = useLayoutEditorStore.getState().history.past.length;
 
-    revertControlValues("usageLimits", ["bar", "word"]);
+    revertControlValues("usageLimits", ["reset", "amount"]);
 
     expect(getLayoutSnapshot().overrides).toEqual({});
     expect(useLayoutEditorStore.getState().history.past).toHaveLength(
@@ -87,7 +87,7 @@ describe("writing and reverting", () => {
     useLayoutEditorStore.getState().undo();
 
     expect(getLayoutSnapshot().overrides).toEqual({
-      usageLimits: { bar: false, word: false },
+      usageLimits: { reset: false, amount: "remaining" },
     });
   });
 

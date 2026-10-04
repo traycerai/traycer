@@ -276,8 +276,10 @@ describe("SideStripReadings", () => {
 
     const row = screen.getByTestId("side-strip-readings");
     expect(row.classList.contains("hidden")).toBe(false);
-    expect(row.className).toContain("grid");
-    expect(row.className).toContain("grid-flow-col");
+    // Compact (Auto in a tab strip): one row of equal-width tiles.
+    const tiles = screen.getByTestId("side-strip-readings-tiles");
+    expect(tiles.className).toContain("grid");
+    expect(tiles.className).toContain("grid-flow-col");
 
     const usage = screen.getByTestId("rate-limit-header-button");
     const resource = screen.getByTestId("resource-monitor-header-button");
@@ -317,7 +319,9 @@ describe("SideStripReadings", () => {
     expect(row.className).toContain("flex");
     expect(row.className).toContain("w-10");
     expect(row.className).toContain("flex-col");
-    expect(row.className).not.toContain("grid");
+    expect(
+      screen.getByTestId("side-strip-readings-tiles").className,
+    ).not.toContain("grid");
     // A 40px tile has no room for a reading: both keep the glyph.
     expect(
       screen.getByTestId("rate-limit-header-button").getAttribute("data-form"),
@@ -327,5 +331,65 @@ describe("SideStripReadings", () => {
         .getByTestId("resource-monitor-header-button")
         .getAttribute("data-form"),
     ).toBe("tile");
+  });
+
+  it("collapsed: ignores a Detailed choice, since a rail has no room for rows", async () => {
+    place({ usageHost: "header", resourceHost: "header" });
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { density: "detailed" });
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    expect(
+      screen.getByTestId("rate-limit-header-button").getAttribute("data-form"),
+    ).toBe("tile");
+    expect(screen.queryByTestId("side-strip-readings-usageLimits")).toBeNull();
+  });
+
+  it("Detailed by choice: a full-width block per reading, a hairline between them", async () => {
+    place({ usageHost: "header", resourceHost: "header" });
+    for (const region of ["usageLimits", "resourceMonitor"] as const) {
+      useLayoutStore
+        .getState()
+        .setRegionValues(region, { density: "detailed" });
+    }
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    expect(screen.queryByTestId("side-strip-readings-tiles")).toBeNull();
+    expect(
+      screen.getByTestId("rate-limit-header-button").getAttribute("data-form"),
+    ).toBe("rows");
+    expect(
+      screen
+        .getByTestId("resource-monitor-header-button")
+        .getAttribute("data-form"),
+    ).toBe("rows");
+    // The usage block leads; the resource row sits below a hairline.
+    const usage = screen.getByTestId("side-strip-readings-usageLimits");
+    const resource = screen.getByTestId("side-strip-readings-resourceMonitor");
+    expect(usage.className).not.toContain("border-t");
+    expect(resource.className).toContain("border-t");
+  });
+
+  it("a Detailed item stacks under the Compact tiles of the other", async () => {
+    place({ usageHost: "header", resourceHost: "header" });
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { density: "detailed" });
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    const tiles = screen.getByTestId("side-strip-readings-tiles");
+    expect(tiles.contains(screen.getByTestId("rate-limit-header-button"))).toBe(
+      true,
+    );
+    expect(
+      screen
+        .getByTestId("side-strip-readings-resourceMonitor")
+        .contains(screen.getByTestId("resource-monitor-header-button")),
+    ).toBe(true);
   });
 });

@@ -24,14 +24,6 @@ export const LEFT_PANEL_RAIL_TILE_CLASS =
 export const LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS =
   "bg-primary/10 text-foreground ring-2 ring-primary";
 
-/**
- * The same place, for a drop that would be refused: one that would take a
- * stack past `MAX_RAIL_STACK_MEMBERS` (L-181). Drawn rather than left silent, so the user
- * sees why releasing there will do nothing.
- */
-export const LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS =
-  "bg-destructive/10 ring-2 ring-destructive";
-
 /** The underline a horizontal rail draws under the panel it is showing. */
 export const LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS =
   "absolute inset-x-2 bottom-0 rounded-b-none rounded-t";

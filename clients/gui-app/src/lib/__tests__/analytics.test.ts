@@ -112,6 +112,39 @@ describe("analytics", () => {
     ).toEqual({ provider: "antigravity", mode: "create" });
   });
 
+  it("keeps a profile copy's source kind, which is what splits Terminal-account copies from managed ones", async () => {
+    // A property on the event type but missing from the runtime key list is
+    // dropped silently by the sanitizer, with the event still sent - which is
+    // exactly how `source_kind` first shipped.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 2,
+        source_kind: "ambient",
+      }),
+    ).toEqual({
+      provider: "codex",
+      destination_count: 2,
+      source_kind: "ambient",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 1,
+        source_kind: "terminal",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 1,
+      }),
+    ).toBeNull();
+  });
+
   it("accepts every settings section the type union declares", async () => {
     // The runtime allowlist is what `section` is validated against, and a
     // union member missing from it drops the event with no error anywhere -
@@ -1683,5 +1716,271 @@ describe("Layout page settings analytics", () => {
         }),
       ).toEqual({ source: "direct_ui", section: "general", setting });
     }
+  });
+});
+
+describe("profile copy analytics allowlists", () => {
+  it("keeps profile_copy_attempt_settled with a wire-enum reason and none", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "signed-in",
+        reason: "none",
+      }),
+    ).toEqual({
+      provider: "claude-code",
+      state: "signed-in",
+      reason: "none",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "antigravity",
+        state: "quarantined",
+        reason: "writer-unconfirmed",
+      }),
+    ).toEqual({
+      provider: "antigravity",
+      state: "quarantined",
+      reason: "writer-unconfirmed",
+    });
+  });
+
+  it("drops a settled event for free-text reason or unknown state", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "signed-in",
+        reason: "the host timed out",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "mystery",
+        reason: "none",
+      }),
+    ).toBeNull();
+  });
+
+  it("strips undeclared keys such as a host id or label", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "signed-in",
+        reason: "none",
+        hostId: "source-host",
+        label: "Work",
+      }),
+    ).toEqual({
+      provider: "claude-code",
+      state: "signed-in",
+      reason: "none",
+    });
+  });
+
+  it("bounds destination_count on profile_copy_started", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "claude-code",
+        destination_count: 2,
+        source_kind: "managed",
+      }),
+    ).toEqual({
+      provider: "claude-code",
+      destination_count: 2,
+      source_kind: "managed",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "claude-code",
+        destination_count: 10_001,
+        source_kind: "managed",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "claude-code",
+        destination_count: -1,
+        source_kind: "managed",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("host lifecycle analytics schema", () => {
+  it("accepts host_lifecycle_mode_set with every mode/source combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = [
+      "background",
+      "ask",
+      "stop-if-idle",
+      "linked",
+      "none",
+    ] as const;
+    const sources = ["settings", "quit-modal", "no-host-card", "cli"] as const;
+
+    for (const mode of modes) {
+      for (const source of sources) {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+            mode,
+            source,
+          }),
+        ).toEqual({ mode, source });
+      }
+    }
+  });
+
+  it("rejects host_lifecycle_mode_set with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "settings",
+        hostId: "host-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_lifecycle_mode_set with an out-of-taxonomy mode or source", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "always-on",
+        source: "settings",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "tray",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts host_quit_decision with every verdict/choice combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = ["ask", "stop-if-idle"] as const;
+    const verdicts = ["idle", "busy", "unknown"] as const;
+    const choices = ["keep", "stop", "cancel"] as const;
+
+    for (const mode of modes) {
+      for (const verdict of verdicts) {
+        for (const choice of choices) {
+          expect(
+            sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+              mode,
+              verdict,
+              choice,
+              forced: choice === "stop",
+              remembered: false,
+            }),
+          ).toEqual({
+            mode,
+            verdict,
+            choice,
+            forced: choice === "stop",
+            remembered: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("rejects host_quit_decision with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+        requestId: "req-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid mode or verdict", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "always-ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "checking",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid choice", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "force-stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with forced/remembered sent as non-booleans", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: "true",
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the runtime event contract complete after adding both events", async () => {
+    const { analyticsEventContractIsComplete } =
+      await import("@/lib/analytics");
+
+    expect(analyticsEventContractIsComplete()).toBe(true);
   });
 });

@@ -161,6 +161,7 @@ export function Fixture(): ReactElement {
         taskId="motion-regression"
         snapshot={quoteSnapshot}
         onDismiss={() => undefined}
+        onQuoted={() => undefined}
         boundaryRef={noBoundary}
         bottomOverlayInsetPx={0}
       />

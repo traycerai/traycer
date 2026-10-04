@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { errorCode } from "./credentials-fs";
+import { probeProcessLivenessAsync } from "./process-liveness";
 
 /**
  * Cross-process advisory lock for credentials-file mutations (`credentials.lock`
@@ -98,7 +99,7 @@ export async function acquireCredentialsLock(
   await mkdir(dirname(opts.lockPath), { recursive: true, mode: 0o700 });
   const content: LockContent = {
     pid: process.pid,
-    pidStartTime: ownPidStartFingerprint(),
+    pidStartTime: await ownPidStartFingerprintAsync(),
     acquisitionNonce: randomUUID(),
     acquiredAt: Date.now(),
     reason: opts.reason,
@@ -122,7 +123,12 @@ export async function acquireCredentialsLock(
     // denied unlink) times out to lock-busy instead of hot-looping past the
     // deadline (which, with `signal: null`, would hang startup).
     if (holder.kind === "parsed") {
-      if (holderProvablyDead(holder.content.pid, holder.content.pidStartTime)) {
+      if (
+        await holderProvablyDead(
+          holder.content.pid,
+          holder.content.pidStartTime,
+        )
+      ) {
         if ((await breakStaleLock(opts.lockPath, holder.raw)) === "removed") {
           continue;
         }
@@ -175,19 +181,29 @@ export function isHolderProvablyDead(args: {
   return args.currentFingerprint !== args.recordedFingerprint;
 }
 
-/** OS-probing wrapper over {@link isHolderProvablyDead} for a recorded holder. */
-function holderProvablyDead(
+/**
+ * OS-probing wrapper over {@link isHolderProvablyDead} for a recorded holder.
+ * Also the mutation store's spent-base marker owner check, which applies the
+ * lock's exact holder-liveness semantics to its own owner records.
+ *
+ * ASYNCHRONOUS throughout: it runs on every poll of a contended acquisition,
+ * inside long-lived processes (Electron main, the CLI supervisor), so neither
+ * probe may block the event loop - the Windows `tasklist` and the macOS `ps`
+ * are both spawned without waiting on them synchronously.
+ */
+export async function holderProvablyDead(
   pid: number,
   recordedFingerprint: string | null,
-): boolean {
+): Promise<boolean> {
   // Probe liveness first and short-circuit: a gone pid (the common crash
   // takeover) needs no fingerprint query, which on non-Linux POSIX would spawn
-  // `ps` for a result the decision ignores.
-  if (!isProcessAlive(pid)) return true;
+  // `ps` for a result the decision ignores. A probe that could not tell is
+  // treated as alive: a lock we cannot probe is never broken.
+  if ((await probeProcessLivenessAsync(pid)) === "dead") return true;
   return isHolderProvablyDead({
     alive: true,
     recordedFingerprint,
-    currentFingerprint: queryPidStartFingerprint(pid),
+    currentFingerprint: await queryPidStartFingerprintAsync(pid),
   });
 }
 
@@ -367,47 +383,42 @@ async function lockFileAgeMs(lockPath: string): Promise<number | null> {
   }
 }
 
-// Cross-platform process-liveness probe: POSIX `process.kill(pid, 0)` (EPERM =>
-// alive, ESRCH => gone); Windows `tasklist`. Mirrors the CLI's shared
-// `isProcessAlive` (protocol cannot import upward into the CLI, and this variant
-// also feeds the start-time fingerprint below). Exported for the mutation
-// store's spent-base marker, which reuses the lock's exact holder-liveness
-// semantics for its own owner records.
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  if (process.platform === "win32") {
-    try {
-      const stdout = execFileSync(
-        "tasklist",
-        ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
-        { encoding: "utf8", windowsHide: true, timeout: 3000 },
-      );
-      const trimmed = stdout.trim();
-      if (trimmed.length === 0) return false;
-      return trimmed.includes(`"${pid}"`);
-    } catch {
-      // tasklist missing/refused - treat as held so we never break a lock we
-      // cannot probe.
-      return true;
-    }
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errorCode(err) === "EPERM";
-  }
+// ONE cache for both twins below: whichever reads first fills it, and the
+// other answers from it without a probe.
+let cachedOwnFingerprint: string | null | undefined;
+let ownFingerprintAsyncRead: Promise<string | null> | null = null;
+
+function settleOwnFingerprint(fingerprint: string | null): string | null {
+  if (cachedOwnFingerprint === undefined) cachedOwnFingerprint = fingerprint;
+  return cachedOwnFingerprint;
 }
 
-let cachedOwnFingerprint: string | null | undefined;
-
-/** This process's own start-time fingerprint, cached (it cannot change). Also
- *  consumed by the mutation store's spent-base marker for self-recognition. */
+/**
+ * This process's own start-time fingerprint, cached (it cannot change).
+ * SYNCHRONOUS on a cold cache (a `ps` spawn on macOS): for a one-shot caller.
+ * The lock and the spent-base marker take {@link ownPidStartFingerprintAsync}.
+ */
 export function ownPidStartFingerprint(): string | null {
-  if (cachedOwnFingerprint === undefined) {
-    cachedOwnFingerprint = queryPidStartFingerprint(process.pid);
+  if (cachedOwnFingerprint !== undefined) return cachedOwnFingerprint;
+  return settleOwnFingerprint(queryPidStartFingerprint(process.pid));
+}
+
+/**
+ * {@link ownPidStartFingerprint} without blocking the event loop, sharing its
+ * cache. Concurrent callers share one probe. Consumed by the lock's own
+ * record and by the mutation store's spent-base marker for self-recognition.
+ */
+export function ownPidStartFingerprintAsync(): Promise<string | null> {
+  if (cachedOwnFingerprint !== undefined) {
+    return Promise.resolve(cachedOwnFingerprint);
   }
-  return cachedOwnFingerprint;
+  if (ownFingerprintAsyncRead !== null) return ownFingerprintAsyncRead;
+  const read = queryPidStartFingerprintAsync(process.pid).then(
+    (fingerprint) => settleOwnFingerprint(fingerprint),
+    () => settleOwnFingerprint(null),
+  );
+  ownFingerprintAsyncRead = read;
+  return read;
 }
 
 /**
@@ -416,6 +427,10 @@ export function ownPidStartFingerprint(): string | null {
  * `/proc/<pid>/stat`; other POSIX shells out to `ps -o lstart=`. A `null`
  * result means "cannot prove dead" upstream, never "dead". Exported so the
  * timezone-invariance of the fingerprint can be tested directly.
+ *
+ * SYNCHRONOUS (a blocking `ps` spawn on macOS): for a one-shot caller. The
+ * lock and the spent-base marker take {@link queryPidStartFingerprintAsync},
+ * which answers the same bytes.
  */
 export function queryPidStartFingerprint(pid: number): string | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
@@ -424,44 +439,89 @@ export function queryPidStartFingerprint(pid: number): string | null {
   return psLstart(pid);
 }
 
+/** {@link queryPidStartFingerprint} without blocking the event loop. */
+export async function queryPidStartFingerprintAsync(
+  pid: number,
+): Promise<string | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "linux") return linuxStartTimeAsync(pid);
+  if (process.platform === "win32") return null;
+  return psLstartAsync(pid);
+}
+
 function linuxStartTime(pid: number): string | null {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    // Fields: `pid (comm) state ppid ... starttime(22) ...`. `comm` may contain
-    // spaces and parens, so split from after the LAST ')': the remainder starts
-    // at field 3 (state), making starttime (field 22) index 19.
-    const close = stat.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = stat
-      .slice(close + 1)
-      .trim()
-      .split(/\s+/);
-    const starttime = fields[19];
-    return typeof starttime === "string" && starttime.length > 0
-      ? starttime
-      : null;
+    return linuxStartTimeOf(readFileSync(`/proc/${pid}/stat`, "utf8"));
   } catch {
     return null;
   }
 }
 
-function psLstart(pid: number): string | null {
+async function linuxStartTimeAsync(pid: number): Promise<string | null> {
   try {
-    const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: 3000,
-      // `lstart` is rendered in the caller's timezone/locale; force a fixed one
-      // so the same live PID fingerprints identically across processes. A
-      // desktop holder in local time and a `TZ=UTC` CLI contender must not
-      // disagree and mistake a live holder for a recycled PID - that would break
-      // a live lock and let both spend the same refresh token.
-      env: { ...process.env, TZ: "UTC", LC_ALL: "C", LC_TIME: "C" },
-    });
-    const trimmed = out.trim();
-    return trimmed.length > 0 ? trimmed : null;
+    return linuxStartTimeOf(await readFile(`/proc/${pid}/stat`, "utf8"));
   } catch {
     return null;
   }
+}
+
+function linuxStartTimeOf(stat: string): string | null {
+  // Fields: `pid (comm) state ppid ... starttime(22) ...`. `comm` may contain
+  // spaces and parens, so split from after the LAST ')': the remainder starts
+  // at field 3 (state), making starttime (field 22) index 19.
+  const close = stat.lastIndexOf(")");
+  if (close < 0) return null;
+  const fields = stat
+    .slice(close + 1)
+    .trim()
+    .split(/\s+/);
+  const starttime = fields[19];
+  return typeof starttime === "string" && starttime.length > 0
+    ? starttime
+    : null;
+}
+
+// `lstart` is rendered in the caller's timezone/locale; force a fixed one so
+// the same live PID fingerprints identically across processes. A desktop
+// holder in local time and a `TZ=UTC` CLI contender must not disagree and
+// mistake a live holder for a recycled PID - that would break a live lock and
+// let both spend the same refresh token.
+function psLstartEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, TZ: "UTC", LC_ALL: "C", LC_TIME: "C" };
+}
+
+function psLstartArgs(pid: number): string[] {
+  return ["-o", "lstart=", "-p", String(pid)];
+}
+
+function psLstartFingerprintOf(out: string): string | null {
+  const trimmed = out.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function psLstart(pid: number): string | null {
+  try {
+    const out = execFileSync("ps", psLstartArgs(pid), {
+      encoding: "utf8",
+      timeout: 3000,
+      env: psLstartEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return psLstartFingerprintOf(out);
+  } catch {
+    return null;
+  }
+}
+
+function psLstartAsync(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "ps",
+      psLstartArgs(pid),
+      { encoding: "utf8", timeout: 3000, env: psLstartEnv() },
+      (err, out) => resolve(err === null ? psLstartFingerprintOf(out) : null),
+    );
+  });
 }
 
 function aborted(signal: AbortSignal | null): boolean {

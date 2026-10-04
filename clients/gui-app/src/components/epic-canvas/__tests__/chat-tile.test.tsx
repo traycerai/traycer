@@ -370,6 +370,7 @@ vi.mock(
 );
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -1004,6 +1005,58 @@ function foldedTurnRecord(messageId: string, timestamp: number): Message {
     ],
     timestamp,
     turnId: "turn-folded",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
+const SUBAGENT_BLOCK_ID = "subagent-block-1";
+
+/** An assistant turn holding one subagent card with a conversation of its own. */
+function subagentAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "subagent-msg",
+    startedAt: 1,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude",
+      displayName: "Claude",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "subagent",
+        blockId: SUBAGENT_BLOCK_ID,
+        agentType: null,
+        name: "Mendel",
+        task: "Investigate the lifecycle.",
+        progressUpdates: [],
+        result: null,
+        status: "completed",
+        timestamp: 2,
+        startedAt: 2,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+      {
+        type: "text",
+        blockId: "subagent-child-text",
+        parentBlockId: SUBAGENT_BLOCK_ID,
+        text: "Words only the subagent said.",
+        status: "completed",
+        timestamp: 3,
+        providerNotice: null,
+      },
+    ],
+    timestamp: 3,
+    turnId: "turn-subagent",
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
@@ -2551,6 +2604,68 @@ describe("<ChatTile />", () => {
       expect(screen.queryByText("Which path should we take?")).toBeNull();
       expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
     });
+  });
+
+  it("lands a jump on the pending interview card of a hidden tile and lets its highlight go 600ms after the tile is shown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      // Kept mounted under `display:none`, as `TopLevelTabHost` keeps a task
+      // that is not in front.
+      const tree = (paneVisible: boolean) => (
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          {chatTileTestTree(queryClient, true, CHAT_ARTIFACT)}
+        </PaneVisibilityContext.Provider>
+      );
+      const { rerender } = render(tree(false));
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+          activeTurn: null,
+          pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+        });
+      });
+      const highlighted = (): string | null =>
+        screen
+          .getByTestId("interview-card")
+          .getAttribute("data-navigation-highlighted");
+
+      act(() => {
+        useChatTranscriptJumpStore
+          .getState()
+          .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+            kind: "block",
+            blockId: "question-1",
+          });
+      });
+      await waitFor(() => {
+        expect(highlighted()).toBe("true");
+      });
+      // Hidden, the card cannot paint, so its ring's time has not started.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(highlighted()).toBe("true");
+
+      rerender(tree(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(highlighted()).toBe("true");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(highlighted()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows resolved Q&A fork actions while the assistant turn continues", async () => {
@@ -5186,6 +5301,45 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     expect(retryFromUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a subagent's conversation over the transcript with a notice naming it, and Back to chat returns", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), subagentAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+    await settleLegendList();
+
+    expect(screen.queryByTestId("subagent-view-notice")).toBeNull();
+    expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
+
+    const openControl = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-subagent-open-as-chat]"),
+    ).find(
+      (element) => element.dataset.subagentOpenAsChat === SUBAGENT_BLOCK_ID,
+    );
+    if (openControl === undefined) {
+      throw new Error("expected the subagent card's open-as-chat control");
+    }
+    fireEvent.click(openControl);
+
+    expect(screen.getByTestId("subagent-chat-view")).not.toBeNull();
+    expect(screen.getByTestId("subagent-view-notice").textContent).toContain(
+      "You're viewing Mendel's conversation.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+
+    expect(screen.queryByTestId("subagent-view-notice")).toBeNull();
+    expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
   });
 
   describe("turn-completed announcement title", () => {

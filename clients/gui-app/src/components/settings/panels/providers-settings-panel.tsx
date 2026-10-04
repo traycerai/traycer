@@ -75,7 +75,10 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
+import { ProfileCopyIncomingSection } from "./profile-copy/profile-copy-incoming-section";
+import { ProfileCopyRecentSection } from "./profile-copy/profile-copy-recent-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
+import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -589,7 +592,7 @@ function ProvidersPanelBody({
     // recovery invalidation does land.
     //
     // A remote host that dialed and then went TERMINAL - an incompatible
-    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // handshake, a rejected credential, the reconnect cap -
     // owes no boundary either, and would strand this spinner just as badly.
     // That case never PERSISTS here, enforced at two layers. New requests:
     // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
@@ -684,7 +687,7 @@ function ProvidersRailLayout({
   const [initialFocus, setInitialFocus] = useState(() => {
     const focus = useProvidersFocusStore.getState();
     // The intent is consumed only by the rail of the host it NAMES. A profile
-    // deep link whose target is unreachable or plan-gated never mounts a rail
+    // deep link whose target is unreachable never mounts a rail
     // there, so the harness / profile / sign-in halves stay armed; without
     // this check the next reachable host the user picked consumed them and
     // could start an automatic sign-in on that machine whenever the same
@@ -1455,6 +1458,18 @@ function ProviderTabBody({
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}
           />
+          {/* Copies arriving on this host, then copies this window sent from
+              it. Both name hosts by the ids their copies captured; neither
+              follows the scope once a copy is opened. */}
+          <ProfileCopyIncomingSection
+            hostId={profileTab.hostId}
+            providerId={state.providerId}
+          />
+          <ProfileCopyRecentSection
+            hostId={profileTab.hostId}
+            providerId={state.providerId}
+            profiles={state.profiles}
+          />
           <div
             className={cn(
               "flex flex-col gap-3 transition-opacity duration-150",
@@ -1479,8 +1494,9 @@ function ProviderTabBody({
               />
             ) : null}
           </div>
-          {/* Outside the inert block: it is not profile-scoped, so dimming it
-              while a profile switch settles would suggest it is. */}
+          {/* Outside the inert block: neither is profile-scoped, so dimming
+              them while a profile switch settles would suggest it is. */}
+          <ProviderUsageLimitsSection providerId={state.providerId} />
           <FallbackCrossLinkRow />
         </div>
       );

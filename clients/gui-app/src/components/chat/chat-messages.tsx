@@ -128,7 +128,7 @@ import {
 } from "@/stores/chats/subagent-open-store";
 import {
   OpenSubagentAsChatContext,
-  useSubagentDrillIn,
+  type SubagentDrillIn,
 } from "@/components/chat/segments/subagent-open-as-chat";
 import { SubagentChatView } from "@/components/chat/subagent-chat-view";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
@@ -270,6 +270,13 @@ interface ChatMessagesProps {
   /** Measured height of the overlaid composer/queue/pinned/agents dock
    *  (chat-tile.tsx), reserved as the transcript's bottom content inset. */
   composerOverlayHeight: number;
+  /**
+   * Which subagent card's conversation covers the transcript, if any. Owned by
+   * the chat tile, not by this component: the lower dock beside the transcript
+   * has to know a subagent is on screen too, so it stops presenting the
+   * parent chat's composer as that subagent's.
+   */
+  subagentDrillIn: SubagentDrillIn;
 }
 
 export type ChatScrollRequestOutcome = "landed" | "exhausted" | "cancelled";
@@ -1979,6 +1986,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     onVisibleOrdinalRangeChange,
     onScrollRequestSettled,
     scrollRequest,
+    subagentDrillIn,
     systemOverlayActive,
     taskId,
     taskTitle,
@@ -3866,9 +3874,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // Open-as-chat: a card's conversation drawn over the transcript, inside
-  // this tile. Declared before find, which searches only that conversation
-  // while it is open.
-  const subagentDrillIn = useSubagentDrillIn();
+  // this tile. Find searches only that conversation while it is open.
   const { close: closeSubagentDrillIn } = subagentDrillIn;
   const getSubagentViewRoot = useCallback(
     (): HTMLElement | null => subagentViewScrollRef.current,
@@ -4190,6 +4196,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   taskId={taskId}
                   snapshot={quoteSelection.snapshot}
                   onDismiss={quoteSelection.dismiss}
+                  // A quote goes into THIS chat's draft, and under an
+                  // open-as-chat view the composer holding it is hidden. So a
+                  // quote taken there returns to the chat, as a terminal quote
+                  // reveals the chat it was added to.
+                  onQuoted={closeSubagentDrillIn}
                   boundaryRef={transcriptContainerRef}
                   bottomOverlayInsetPx={endInset}
                 />

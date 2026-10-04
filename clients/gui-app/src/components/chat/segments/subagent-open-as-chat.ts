@@ -1,4 +1,11 @@
 import { createContext, use, useCallback, useMemo, useState } from "react";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  subagentCardName,
+  subagentCardPath,
+  subagentOwnedBackgroundItemCount,
+} from "@/components/chat/segments/subagent-display";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 /**
  * Opens one subagent card's conversation as a full-height, read-only view
@@ -45,12 +52,19 @@ export interface SubagentDrillIn {
 }
 
 /**
- * The transcript's open-as-chat state: which card's conversation covers the
+ * The chat tile's open-as-chat state: which card's conversation covers the
  * transcript, if any. Component state on purpose - a drill-in is transient
- * and belongs to this mount, never to the persisted tile tree.
+ * and belongs to this mount, never to the persisted tile tree. Held by the
+ * tile rather than the transcript because the lower dock reads it too.
+ *
+ * It still ends with the transcript: `transcriptLoaded` going false closes it,
+ * as unmounting the transcript did while the state lived there. A view left
+ * open across a reload would mount already open when the snapshot returns,
+ * and take focus on a reconnect nobody asked for.
  */
-export function useSubagentDrillIn(): SubagentDrillIn {
+export function useSubagentDrillIn(transcriptLoaded: boolean): SubagentDrillIn {
   const [openId, setOpenId] = useState<string | null>(null);
+  if (!transcriptLoaded && openId !== null) setOpenId(null);
   const open = useCallback<OpenSubagentAsChat>((subagentId) => {
     setOpenId(subagentId);
   }, []);
@@ -58,4 +72,49 @@ export function useSubagentDrillIn(): SubagentDrillIn {
     setOpenId(null);
   }, []);
   return useMemo(() => ({ openId, open, close }), [close, open, openId]);
+}
+
+/**
+ * What the lower dock says while a subagent's conversation is open, in place
+ * of the parent chat's composer and dock.
+ */
+export interface SubagentDockView {
+  /** The open card's name; `null` once it left the loaded transcript. */
+  readonly name: string | null;
+  /** Background work the open subagent started that is still running. */
+  readonly runningCount: number;
+  readonly close: () => void;
+}
+
+/**
+ * The dock's view of the drill-in, or `null` while the transcript is showing.
+ *
+ * Built from values rather than from the card: the card is a new object on
+ * every streamed token, and the dock must not re-render on each one.
+ */
+export function useSubagentDockView(
+  drillIn: SubagentDrillIn,
+  messages: ReadonlyArray<ChatMessageModel>,
+  backgroundItems: ReadonlyArray<BackgroundItem> | undefined,
+): SubagentDockView | null {
+  const { close, openId } = drillIn;
+  const card = useMemo(
+    () =>
+      openId === null
+        ? null
+        : (subagentCardPath(messages, openId)?.at(-1) ?? null),
+    [messages, openId],
+  );
+  const name = card === null ? null : subagentCardName(card);
+  const runningCount = useMemo(
+    () =>
+      card === null || backgroundItems === undefined
+        ? 0
+        : subagentOwnedBackgroundItemCount(card, backgroundItems),
+    [backgroundItems, card],
+  );
+  return useMemo(
+    () => (openId === null ? null : { name, runningCount, close }),
+    [close, name, openId, runningCount],
+  );
 }

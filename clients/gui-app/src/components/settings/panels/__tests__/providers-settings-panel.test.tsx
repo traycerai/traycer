@@ -80,9 +80,14 @@ type StartLoginMutate = (
   options: StartLoginOptions,
 ) => void;
 
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the attempt's own `AbortSignal`.
 type AwaitLoginVariables = {
-  readonly providerId: ProviderCliState["providerId"];
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: ProviderCliState["providerId"];
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (data: unknown) => void;
@@ -148,6 +153,11 @@ type SetEnabledVariables = RequestOfMethod<
 >;
 type SetEnabledMutate = (variables: SetEnabledVariables) => void;
 
+type CancelLoginVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.cancelLogin"
+>;
+
 const providerMocks = vi.hoisted(() => ({
   listResult: {
     data: { providers: [] as ProviderCliState[] },
@@ -211,8 +221,30 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
 }));
 
+// The provider's Limits pick reads the watched host's usage through the layout
+// editor's own scope, which this suite does not stand up, so it is a marker
+// here: what is held is WHERE the page mounts it. Which providers it offers a
+// pick for is held by `provider-usage-limits-section.test.tsx`, and the pick
+// itself by `provider-limits-choose.test.tsx`.
+vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
+  ProviderUsageLimitsSection: (props: { readonly providerId: string }) => (
+    <div
+      data-testid="provider-usage-limits"
+      data-provider-id={props.providerId}
+    />
+  ),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+// The profile-copy entry button and Recent copies list label devices from the
+// account's host list, which is a real TanStack query. This suite is about the
+// panel, not copying, so the list is empty and the button renders disabled.
+// `use-host-options` is stubbed with only the member this subtree calls.
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({ hosts: [] }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -447,6 +479,10 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
     mutate: providerMocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      providerMocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: providerMocks.cancelLoginPending,
   });
   return {
@@ -2699,6 +2735,34 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
   });
 
+  it("offers the provider's Limits pick on its usage tab, which the Layout page no longer carries", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(
+      screen
+        .getByTestId("provider-usage-limits")
+        .getAttribute("data-provider-id"),
+    ).toBe("codex");
+  });
+
   it("keeps the current tab across providers when both support it", () => {
     providerMocks.listResult.data = {
       providers: [
@@ -3353,6 +3417,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
   });
 
@@ -3977,6 +4042,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -3990,10 +4056,11 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
@@ -4564,6 +4631,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
@@ -4582,10 +4650,11 @@ describe("<ProvidersSettingsPanel />", () => {
     // reads non-definitive with the probe still in flight (`authPending`).
     // That must resolve as "not settled yet" - never as a failed sign-in.
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "ambient",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
       awaitOptions.onSuccess(pendingAmbientAwaitResponse());
     });
@@ -4602,10 +4671,11 @@ describe("<ProvidersSettingsPanel />", () => {
     if (repollCall === undefined) {
       throw new Error("Expected re-poll await login call.");
     }
-    expect(repollCall[0]).toEqual({
+    expect(repollCall[0].request).toEqual({
       providerId: "codex",
       profileId: "ambient",
     });
+    expect(repollCall[0].signal).toBeInstanceOf(AbortSignal);
     act(() => {
       repollCall[1].onSuccess({
         codeRejected: false,
@@ -4690,6 +4760,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "ambient",
+      holderId: null,
     });
 
     act(() => {
@@ -5307,6 +5378,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-pending",
+      holderId: null,
     });
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -5385,6 +5457,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
     expect(screen.queryByText("Switching account")).toBeNull();
 
@@ -5507,6 +5580,7 @@ describe("<ProvidersSettingsPanel />", () => {
           providerId: "claude-code",
           profileId: "work-profile",
           createProfile: null,
+          holderId: null,
         },
         expect.anything(),
       );
@@ -5661,6 +5735,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     await act(() => {
@@ -5673,10 +5748,11 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
       awaitOptions.onSuccess({
         state: {
@@ -5729,6 +5805,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -5736,6 +5813,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
 
     await act(() => {
@@ -6353,6 +6431,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -6416,6 +6495,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      holderId: null,
     });
   });
 
@@ -6528,6 +6608,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -7129,6 +7210,7 @@ describe("<ProvidersSettingsPanel />", () => {
         label: "Work",
         shareSkillsAndPlugins: false,
       },
+      holderId: null,
     });
 
     const [, startOptions] = firstStartLoginCall();

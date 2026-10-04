@@ -27,6 +27,8 @@ import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider"
 import { EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE } from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "@/components/layout/tabs/header-strip-geometry";
 import { SideStripRowList } from "@/components/layout/tabs/side-strip/side-strip-row-list";
+import { StripNeedsYouScope } from "@/components/layout/tabs/side-strip/strip-needs-you-scope";
+import { StripSectionsScope } from "@/components/layout/tabs/side-strip/strip-sections-scope";
 import {
   publishTabDetachHandler,
   resetTabDetachHandler,
@@ -41,6 +43,15 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
+import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
@@ -148,17 +159,22 @@ function installStripGeometry(): void {
   );
 }
 
+/** The row list under the scopes `SideTabStrip` mounts it in. */
 function SideStripHost(): ReactNode {
   const controller = useTabStripController();
   return (
     <>
-      <TabStripIndicatorScope indicators={controller.indicators}>
-        <SideStripRowList
-          controller={controller}
-          edge="left"
-          variant="expanded"
-        />
-      </TabStripIndicatorScope>
+      <StripNeedsYouScope controller={controller}>
+        <TabStripIndicatorScope indicators={controller.indicators}>
+          <StripSectionsScope controller={controller}>
+            <SideStripRowList
+              controller={controller}
+              edge="left"
+              variant="expanded"
+            />
+          </StripSectionsScope>
+        </TabStripIndicatorScope>
+      </StripNeedsYouScope>
       {controller.dialogs}
     </>
   );
@@ -205,10 +221,13 @@ interface RowDrag {
   readonly pointerId: number;
 }
 
-/** Presses Alpha's row at its centre and crosses the activation distance on y. */
-function pressAlpha(pointerId: number): RowDrag {
-  const source = screen.getByTestId("tab-epic-e-alpha");
-  const centre = ROW_HEIGHT / 2;
+/**
+ * Presses the row drawn `index`th from the top at its centre and crosses the
+ * activation distance on y.
+ */
+function pressRow(testId: string, index: number, pointerId: number): RowDrag {
+  const source = screen.getByTestId(testId);
+  const centre = ROW_PITCH * index + ROW_HEIGHT / 2;
   act(() => {
     fireEvent.pointerDown(source, {
       pointerId,
@@ -269,7 +288,7 @@ describe("SideStripRowList under RootDndProvider", () => {
   it("reorders a row along y with the side row as the drag overlay", async () => {
     await mountSideStrip();
 
-    const drag = pressAlpha(1);
+    const drag = pressRow("tab-epic-e-alpha", 0, 1);
     // The dragged centre (grab offset 16) passes Gamma's centre at 84.
     moveTo(drag, IN_BAND, 120);
 
@@ -289,11 +308,90 @@ describe("SideStripRowList under RootDndProvider", () => {
     publishTabDetachHandler({ isAvailable: true, requestOpen });
     await mountSideStrip();
 
-    const drag = pressAlpha(2);
+    const drag = pressRow("tab-epic-e-alpha", 0, 2);
     moveTo(drag, INTO_CONTENT, ROW_HEIGHT / 2);
     releaseAt(drag, INTO_CONTENT, ROW_HEIGHT / 2);
 
     expect(requestOpen).toHaveBeenCalledTimes(1);
     expect(requestOpen.mock.calls[0]?.[0]).toMatchObject({ id: "e-alpha" });
+  });
+});
+
+/**
+ * The Activity view lists Alpha (running) under Working and Beta and Gamma
+ * under Idle, so a drag moves a row among its own section's rows and the order
+ * it writes is the strip's own.
+ */
+describe("SideStripRowList sections under RootDndProvider", () => {
+  beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
+    resetTabDetachHandler();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    seedTabs();
+    installStripGeometry();
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: "left",
+        sideStripView: "activity",
+      },
+    });
+    __setAgentActivityStateForTests(
+      { "e-alpha": { working: ["chat-1"], turn: ["chat-1"] } },
+      "local",
+      "connected",
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetTabDetachHandler();
+    vi.restoreAllMocks();
+    __resetAgentActivityStoreForTests();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  const stripOrder = (): ReadonlyArray<string> =>
+    useTabsStore.getState().stripOrder.map((ref) => ref.id);
+
+  it("reorders a row among its own section's rows, writing the strip's order", async () => {
+    await mountSideStrip();
+
+    // Gamma is drawn third, under Idle; its centre passes Beta's going up.
+    const drag = pressRow("tab-epic-e-gamma", 2, 1);
+    moveTo(drag, IN_BAND, 40);
+
+    const beta = screen
+      .getByTestId("tab-epic-e-beta")
+      .closest("[data-strip-item-id]");
+    expect(
+      beta?.querySelector('[data-testid="tab-drop-indicator"]'),
+    ).not.toBeNull();
+    const alpha = screen
+      .getByTestId("tab-epic-e-alpha")
+      .closest("[data-strip-item-id]");
+    expect(
+      alpha?.querySelector('[data-testid="tab-drop-indicator"]'),
+    ).toBeNull();
+
+    releaseAt(drag, IN_BAND, 40);
+    expect(stripOrder()).toEqual(["e-alpha", "e-gamma", "e-beta"]);
+  });
+
+  it("offers no drop outside the dragged row's section, however far it is pulled", async () => {
+    await mountSideStrip();
+
+    // Beta pulled up over Alpha, which is in Working: Beta stays in Idle.
+    const drag = pressRow("tab-epic-e-beta", 1, 1);
+    moveTo(drag, IN_BAND, 5);
+
+    expect(screen.queryByTestId("tab-drop-indicator")).toBeNull();
+
+    releaseAt(drag, IN_BAND, 5);
+    expect(stripOrder()).toEqual(["e-alpha", "e-beta", "e-gamma"]);
   });
 });

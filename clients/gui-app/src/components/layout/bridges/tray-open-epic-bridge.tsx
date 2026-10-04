@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
 import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
 
@@ -13,6 +14,8 @@ import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
  * the projected list (threaded through tab creation so the cold-open canvas
  * renders the real title immediately) and routes through the shared
  * `openEpicFromList` helper - the same entry point the in-app epic list uses.
+ * Like that list, it refuses a task whose delete is in flight: the tray's
+ * projected list still names it until the host answers.
  */
 export function TrayOpenEpicBridge(): null {
   const openRequest = useTrayProjectionStore((state) => state.openRequest);
@@ -21,9 +24,10 @@ export function TrayOpenEpicBridge(): null {
   // the live pathname is read off `router.state` at open time rather than
   // subscribed to, so a route change does not re-open the last epic.
   const router = useRouter();
+  const isEpicDeleteInFlight = useEpicDeleteInFlightReader();
 
   useEffect(() => {
-    if (openRequest === null) {
+    if (openRequest === null || isEpicDeleteInFlight(openRequest.epicId)) {
       return;
     }
     const epic = useTrayProjectionStore
@@ -35,7 +39,7 @@ export function TrayOpenEpicBridge(): null {
       router.state.location.pathname,
       { title: epic?.title, source: "system_tray" },
     );
-  }, [openRequest, navigate, router]);
+  }, [openRequest, navigate, router, isEpicDeleteInFlight]);
 
   return null;
 }

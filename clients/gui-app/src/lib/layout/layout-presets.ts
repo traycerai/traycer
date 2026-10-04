@@ -39,11 +39,10 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   homeTab: { shown: "hidden" },
   usageLimits: {
     shown: "shown",
-    bar: true,
-    percent: true,
-    word: true,
     reset: true,
     amount: "used",
+    density: "auto",
+    readingStyle: "bar",
   },
   // CPU and process count, not memory: on a fresh install the host's memory
   // figure is the one a reader cannot act on, and it cost the scarcest row in
@@ -55,6 +54,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
     processes: true,
     ramShare: false,
     agentRows: true,
+    density: "auto",
   },
   minimap: { shown: "shown" },
   contextUsage: {
@@ -73,7 +73,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   todo: { shown: "shown", size: "full" },
   attachImage: { shown: "shown" },
   access: { size: "full" },
-  model: { style: "text", reasoningControl: "slider" },
+  model: { style: "text", reasoningControl: "slider", toolbarStyle: "flat" },
   mic: { shown: "shown" },
   railAgents: { shown: "shown" },
   railTerminals: { shown: "shown" },
@@ -105,11 +105,10 @@ const COMPACT_VALUES: LayoutValues = {
   ...SHIPPED_DEFAULT_VALUES,
   usageLimits: {
     shown: "shown",
-    bar: false,
-    percent: true,
-    word: false,
     reset: false,
     amount: "used",
+    density: "auto",
+    readingStyle: "percent",
   },
   resourceMonitor: {
     shown: "shown",
@@ -120,6 +119,7 @@ const COMPACT_VALUES: LayoutValues = {
     // The sidebar's per-agent CPU/RSS/process readout crowds the agent titles
     // out of a narrow row; the status bar's total still reads.
     agentRows: false,
+    density: "auto",
   },
   contextUsage: {
     shown: "shown",
@@ -141,7 +141,7 @@ const COMPACT_VALUES: LayoutValues = {
   background: { shown: "shown", size: "chip" },
   todo: { shown: "shown", size: "chip" },
   access: { size: "chip" },
-  model: { style: "bars", reasoningControl: "slider" },
+  model: { style: "bars", reasoningControl: "slider", toolbarStyle: "flat" },
   mic: { shown: "hidden" },
 };
 
@@ -153,11 +153,10 @@ const DETAILED_VALUES: LayoutValues = {
   ...SHIPPED_DEFAULT_VALUES,
   usageLimits: {
     shown: "shown",
-    bar: true,
-    percent: true,
-    word: true,
     reset: true,
     amount: "used",
+    density: "auto",
+    readingStyle: "bar",
   },
   resourceMonitor: {
     shown: "shown",
@@ -166,6 +165,7 @@ const DETAILED_VALUES: LayoutValues = {
     processes: true,
     ramShare: true,
     agentRows: true,
+    density: "auto",
   },
   contextUsage: {
     shown: "shown",
@@ -175,7 +175,7 @@ const DETAILED_VALUES: LayoutValues = {
     compactButton: "shown",
   },
   // Every thinking level spelled out by name, which is what the list does.
-  model: { style: "bars-text", reasoningControl: "list" },
+  model: { style: "bars-text", reasoningControl: "list", toolbarStyle: "flat" },
   toolActivity: { size: "full" },
   thinking: { shown: "shown", size: "full" },
 };

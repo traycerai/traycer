@@ -19,6 +19,8 @@ import {
   type SideStripView,
   type ReadingWidth,
   type TaskTabLayout,
+  WIDE_READING_WIDTH_MAX_PX,
+  WIDE_READING_WIDTH_MIN_PX,
   type StatusBarShownProfiles,
   type TabStripPlacement,
 } from "@/lib/layout/layout-arrangement";
@@ -149,6 +151,7 @@ const ARRANGEMENT_FIELDS: ReadonlyArray<keyof LayoutArrangement> = [
   "sideStripView",
   "taskTabLayout",
   "readingWidth",
+  "wideReadingWidthPx",
 ];
 
 /**
@@ -249,6 +252,10 @@ export function resolvePersistedArrangement(value: unknown): LayoutArrangement {
     readingWidth: persistedReadingWidth(
       stored.readingWidth,
       DEFAULT_ARRANGEMENT.readingWidth,
+    ),
+    wideReadingWidthPx: persistedWideReadingWidthPx(
+      stored.wideReadingWidthPx,
+      DEFAULT_ARRANGEMENT.wideReadingWidthPx,
     ),
   });
 }
@@ -477,6 +484,20 @@ function persistedReadingWidth(
   fallback: ReadingWidth,
 ): ReadingWidth {
   return value === "comfortable" || value === "wide" ? value : fallback;
+}
+
+/**
+ * The stored wide-column width, clamped to the slider's own floor and
+ * ceiling ({@link WIDE_READING_WIDTH_MIN_PX}, {@link WIDE_READING_WIDTH_MAX_PX})
+ * so a hand-edited or out-of-range record can't render a column narrower than
+ * "Wide" has ever meant, or wider than the control itself allows.
+ */
+function persistedWideReadingWidthPx(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(
+    WIDE_READING_WIDTH_MAX_PX,
+    Math.max(WIDE_READING_WIDTH_MIN_PX, Math.round(value)),
+  );
 }
 
 /** The remembered set, holding only ids this build has a reading for (L-160). */

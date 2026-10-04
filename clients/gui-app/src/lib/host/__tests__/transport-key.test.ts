@@ -33,13 +33,6 @@ import {
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
 
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
-const PLAN_ALLOWS_REMOTE = true;
-
 afterEach(() => {
   readySessionHosts.value = new Set();
 });
@@ -68,8 +61,6 @@ function remoteEntry(
     transportDialability: "dialable",
     publicKey: "pubkey-a",
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -95,31 +86,6 @@ function remoteWithConnectivity(
   return remoteEntry({
     transportDialability:
       connectivity === "connectable" ? "dialable" : "not-dialable",
-    remoteStatus: {
-      connectivity,
-      viewerReachability: "unknown",
-      clientCloud: "ok",
-      updateState: "current",
-      appVersion: null,
-      lastSeenAt: null,
-    },
-  });
-}
-
-/**
- * The same fixture for an account whose plan has no remote hosts.
- *
- * The wire says nothing about the plan any more — it carries pure liveness —
- * so the account fact is stamped on the entry at projection time and the mapper
- * derives dialability from BOTH. Nothing is dialable on this plan, whatever the
- * host is doing.
- */
-function planGatedRemote(
-  connectivity: "connectable" | "unknown" | "offline",
-): RemoteHostDirectoryEntry {
-  return remoteEntry({
-    transportDialability: "not-dialable",
-    planAllowsRemote: false,
     remoteStatus: {
       connectivity,
       viewerReachability: "unknown",
@@ -182,26 +148,6 @@ describe("the transport's refusal gate", () => {
     expect(dialableHostEndpoint(dead)).toBeNull();
   });
 
-  it("refuses a plan-restricted host — the attach grant would 403 the dial", () => {
-    // Correct to refuse, and NOT the same as offline: the machine is running
-    // (`connectable` on the wire). Saying so is `useHostReachability`'s reason
-    // field, not this layer's job.
-    const planGated = planGatedRemote("connectable");
-    expect(hostTransportKey(planGated)).toBeNull();
-    expect(dialableHostEndpoint(planGated)).toBeNull();
-  });
-
-  it("refuses a plan-restricted host whose liveness read came back blind, unlike the paid one", () => {
-    // The one asymmetry the split introduces at this layer: `unknown` is dialed
-    // for an entitled account (a blind read is not a refusal) and refused for a
-    // gated one (the refusal is deterministic — the grant 403s whatever the
-    // read would have said).
-    const gatedBlind = planGatedRemote("unknown");
-    expect(hostTransportKey(gatedBlind)).toBeNull();
-    expect(dialableHostEndpoint(gatedBlind)).toBeNull();
-    expect(hostTransportKey(remoteWithConnectivity("unknown"))).not.toBeNull();
-  });
-
   it("keeps the key UNCHANGED across a dialable → indeterminate flip", () => {
     // The anti-churn property, and the one without which the P0 survives the
     // rest of this suite: every caller memoizes its client on this key, so a
@@ -227,20 +173,10 @@ describe("the transport's refusal gate", () => {
     expect(dialableHostEndpoint(dead)).not.toBeNull();
   });
 
-  it("a ready live session outranks plan-restricted too — same rule, deliberately no exception for the downgrade", () => {
-    const planGated = planGatedRemote("connectable");
-    readySessionHosts.value = new Set([planGated.hostId]);
-    expect(hostTransportKey(planGated)).not.toBeNull();
-    expect(dialableHostEndpoint(planGated)).not.toBeNull();
-  });
-
-  it("without a ready session, both confirmed verdicts still refuse — key and endpoint stay null", () => {
+  it("without a ready session, a confirmed-offline verdict still refuses — key and endpoint stay null", () => {
     const dead = remoteWithConnectivity("offline");
-    const planGated = planGatedRemote("connectable");
     expect(hostTransportKey(dead)).toBeNull();
     expect(dialableHostEndpoint(dead)).toBeNull();
-    expect(hostTransportKey(planGated)).toBeNull();
-    expect(dialableHostEndpoint(planGated)).toBeNull();
   });
 });
 
@@ -329,7 +265,6 @@ describe("F7 relay fuse grace - recovery dial on a lease-lapse offline entry", (
     const fuseGraceEntry = hostListItemToDirectoryEntry(
       offlineHostListItem(recentLastSeen),
       "wss://relay.example.test/attach",
-      PLAN_ALLOWS_REMOTE,
     );
     expect(hostTransportKey(fuseGraceEntry)).not.toBeNull();
     expect(dialableHostEndpoint(fuseGraceEntry)).not.toBeNull();
@@ -340,7 +275,6 @@ describe("F7 relay fuse grace - recovery dial on a lease-lapse offline entry", (
     const genuineOfflineEntry = hostListItemToDirectoryEntry(
       offlineHostListItem(oldLastSeen),
       "wss://relay.example.test/attach",
-      PLAN_ALLOWS_REMOTE,
     );
     expect(hostTransportKey(genuineOfflineEntry)).toBeNull();
     expect(dialableHostEndpoint(genuineOfflineEntry)).toBeNull();

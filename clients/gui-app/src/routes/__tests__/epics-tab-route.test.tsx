@@ -76,6 +76,13 @@ vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
 
+// Always mounted by RootComponent, and it reads the QueryClient to report a
+// lifecycle mode change. This harness supplies only a router queryClient (no
+// QueryClientProvider), so stub it like the other shell bridges above.
+vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
+  HostLifecycleAnalyticsBridge: () => null,
+}));
+
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
 }));

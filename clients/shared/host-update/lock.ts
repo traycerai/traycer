@@ -2,15 +2,12 @@ import {
   acquireLock,
   readLockHolder,
   rewriteLockLivenessIfToken,
-  verifyLockHolderLiveness,
+  verifyLockHolderLivenessAsync,
   type AcquireLockOptions,
   type LockHandle,
   type LockMetadata,
 } from "@traycer-clients/shared/host-lock/cross-process-lock";
-import {
-  verifyProcessIdentityAsync,
-  type ProcessIdentityVerdict,
-} from "@traycer-clients/shared/host-lock/process-identity";
+import type { ProcessIdentityVerdict } from "@traycer-clients/shared/host-lock/process-identity";
 import { resolve } from "node:path";
 import {
   attemptHolderFingerprint,
@@ -516,16 +513,12 @@ export async function probeAttemptHolder(
     }
   }
 
+  // The async holder verdict for every holder shape: the supervised-group and
+  // retain-on-death rules add only a spawn-free group probe, and this runs in
+  // long-lived callers (an adopted child re-probes its parent per mutation).
   const evidence = evidenceForVerdict(
     probe.holder,
-    probe.holder.supervisedProcessGroupId === undefined &&
-      probe.holder.retainOnPublisherDeath !== true
-      ? await verifyProcessIdentityAsync({
-          pid: probe.holder.pid,
-          startedAtMs: probe.holder.processStartedAtMs,
-          startIdentity: probe.holder.processStartIdentity,
-        })
-      : verifyLockHolderLiveness(probe.holder),
+    await verifyLockHolderLivenessAsync(probe.holder),
   );
   holderCache.set(lockPath, {
     fingerprint,

@@ -35,6 +35,7 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -183,11 +184,11 @@ function approvalEntry(
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
-    epicId: "epic-1",
+    epicId: `epic-${id}`,
     chatId: "chat-1",
     payload: {
       kind: "approval",
-      epicId: "epic-1",
+      epicId: `epic-${id}`,
       chatId: "chat-1",
       chatTitle: "Deploy checkout fix",
       taskTitle: "Deploy checkout fix",
@@ -196,18 +197,36 @@ function approvalEntry(
   };
 }
 
-/** Seeds the host feed with `count` unresolved approvals, driving both the
- * unread and the needs-you counts at once (a fresh prompt is unread by
- * construction). */
+/** Seeds the host feed with `count` unresolved approvals, each in a task of
+ * its own, driving both the unread and the needs-you counts at once (a fresh
+ * prompt is unread by construction). */
 function seedApprovals(count: number): void {
-  const entries = Array.from({ length: count }, (_unused, index) =>
+  seedFeed(count, count);
+}
+
+/** Seeds `needsYou` unresolved approvals, a task each, under a summary of `unread` unread. */
+function seedFeed(needsYou: number, unread: number): void {
+  const entries = Array.from({ length: needsYou }, (_unused, index) =>
     approvalEntry(`approval-${index}`, 10 + index),
   );
   act(() => {
     useHostNotificationsStore.getState().applySnapshot({
       attention: { entries, nextCursor: null },
       recent: { entries, nextCursor: null },
-      summary: { unreadCount: count, attentionCount: count },
+      summary: { unreadCount: unread, attentionCount: needsYou },
+    });
+  });
+}
+
+/** Vertical, expanded, Activity: the one arrangement `useLiveAgentsInStrip` admits. */
+function activateActivityView(): void {
+  act(() => {
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: "left",
+        sideStripView: "activity",
+      },
     });
   });
 }
@@ -272,20 +291,62 @@ describe("SideStripNavRows", () => {
     ).not.toBe(0);
   });
 
-  it("shows one unread count, tinted while an ask needs you, hidden at 0", async () => {
+  it("Layered view: the amber pill is the Needs you task count, the muted one the unread total while no task needs you, hidden at 0", async () => {
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
 
-    seedApprovals(2);
+    seedFeed(0, 3);
+    const unread = screen.getByTestId("side-strip-inbox-count");
+    expect(unread.textContent).toBe("3");
+    expect(unread.dataset.needsYou).toBe("false");
 
+    // Amber says Needs you, so it never carries the unread total.
+    seedFeed(2, 5);
+    const needsYou = screen.getByTestId("side-strip-inbox-count");
+    expect(needsYou.textContent).toBe("2");
+    expect(needsYou.dataset.needsYou).toBe("true");
+  });
+
+  it("Layered view: with no task waiting, failures keep a red count over the unread total", async () => {
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    // Two failures to attend to, five unread, nothing waiting on the person.
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
+
+    const pill = screen.getByTestId("side-strip-inbox-count");
+    expect(pill.textContent).toBe("2");
+    expect(pill.dataset.tone).toBe("attention");
+    expect(pill.dataset.needsYou).toBe("false");
+    expect(
+      screen.getByTestId("side-strip-inbox").getAttribute("aria-label"),
+    ).toBe("Notifications, 2 need attention, 5 unread");
+  });
+
+  it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
+    activateActivityView();
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    // Unread with nothing waiting: the Layered view would show a muted "3".
+    seedFeed(0, 3);
+    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+
+    seedFeed(2, 5);
     const badge = screen.getByTestId("side-strip-inbox-count");
     expect(badge.textContent).toBe("2");
     expect(badge.dataset.needsYou).toBe("true");
   });
 
-  it("collapsed: shows one amber corner badge sized by the needs-you count", async () => {
+  it("collapsed: shows one amber corner badge sized by the Needs you task count", async () => {
     useSideTabStripStore.setState({ collapsed: true });
     seedApprovals(3);
     renderStrip("left");
@@ -323,6 +384,24 @@ describe("SideStripNavRows", () => {
       ).toBe("Notifications, status unavailable");
     },
   );
+
+  it("expanded: draws no unavailable indicator beside a count, and still names the state", async () => {
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+    seedApprovals(2);
+    // The summary goes stale; the waiting prompts it filed stay.
+    act(() => {
+      useHostNotificationsStore.getState().markSummaryUnknown();
+    });
+
+    expect(screen.getByTestId("side-strip-inbox-count").textContent).toBe("2");
+    expect(
+      screen.queryByTestId("side-strip-inbox-unknown-indicator"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("side-strip-inbox").getAttribute("aria-label"),
+    ).toBe("Notifications, 2 need you, status unavailable");
+  });
 
   it("hides the unavailable indicator once the host summary is known and clear", async () => {
     seedApprovals(0);
@@ -432,6 +511,35 @@ describe("SideStripNewTask (F7)", () => {
   );
 });
 
+describe("SideStripNewTask in the Activity view (always primary)", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+    activateActivityView();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it("expanded: New Task stays the solid primary button with its label and shortcut", async () => {
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    const newTask = screen.getByTestId("side-strip-new-task");
+    expect(restingFillClasses(newTask)).toEqual(["bg-primary"]);
+    expect(newTask.classList.contains("text-primary-foreground")).toBe(true);
+    expect(screen.getByTestId("side-strip-new-task-label").textContent).toBe(
+      "New Task",
+    );
+    const chord = useKeybindingStore.getState().bindings["epic.new"];
+    if (chord === null) throw new Error("expected a default binding");
+    expect(newTask.textContent).toContain(formatChordForDisplay(chord));
+  });
+});
+
 /**
  * `AgentSpinningDots`' default ("dots") frames: the ten braille cells a
  * running agent shows everywhere. Written out, not imported, because the claim
@@ -472,13 +580,16 @@ describe("SideTabStrip rows: running work (F3, D5)", () => {
     __resetAgentActivityStoreForTests();
   });
 
-  /** Alpha has two agents mid-turn; nothing is seeded for any other task. */
+  /**
+   * Alpha has one agent mid-turn (a row shows the spinner for one, and the
+   * meter from two); nothing is seeded for any other task.
+   */
   function seedRunningAlpha(): void {
     __setAgentActivityStateForTests(
       {
         "e-alpha": {
-          working: ["agent-1", "agent-2"],
-          turn: ["agent-1", "agent-2"],
+          working: ["agent-1"],
+          turn: ["agent-1"],
         },
       },
       "local",
@@ -494,7 +605,7 @@ describe("SideTabStrip rows: running work (F3, D5)", () => {
 
     const alpha = within(screen.getByTestId("tab-epic-e-alpha"));
     const glyph = alpha
-      .getByTestId("side-tab-leading")
+      .getByTestId("side-tab-trailing")
       .querySelector('[data-status-glyph="running"]');
     if (!(glyph instanceof HTMLElement))
       throw new Error("expected the running task's row to draw a glyph");
@@ -526,7 +637,7 @@ describe("SideTabStrip rows: running work (F3, D5)", () => {
     // counting it, in the meter's own mark.
     expect(
       tile.querySelectorAll('[data-testid="side-tab-meter"] [data-pip="turn"]'),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       tile.querySelector('[data-status-glyph="running"], .font-mono'),
     ).toBe(null);

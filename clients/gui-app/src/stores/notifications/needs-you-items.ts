@@ -4,6 +4,10 @@ import {
   type HostNotificationEntryV22,
   type HostNotificationsCloudFeedRowV11,
 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  useRegisteredEpicLiveAgents,
+  useRegisteredEpicTitles,
+} from "@/lib/epic-selectors";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 import {
@@ -51,6 +55,46 @@ export function needsYouReasonOf(
   return null;
 }
 
+/**
+ * The task a prompt belongs to: the epic its notification payload names, or
+ * `null` when the payload names none (an approval may carry no epic).
+ */
+export function needsYouItemEpicId(item: NeedsYouItem): string | null {
+  const payload = item.row.payload;
+  if (payload?.kind === "approval" || payload?.kind === "interview") {
+    return payload.epicId ?? null;
+  }
+  return null;
+}
+
+/** The chat a prompt belongs to, or `null` when its payload names none. */
+export function needsYouItemChatId(item: NeedsYouItem): string | null {
+  const payload = item.row.payload;
+  if (payload?.kind === "approval" || payload?.kind === "interview") {
+    return payload.chatId ?? null;
+  }
+  return null;
+}
+
+/**
+ * The prompts grouped by the task they belong to, in the order given. An item
+ * that names no task is in no group. The strip's task rows read their
+ * prompts through this.
+ */
+export function groupNeedsYouByEpic(
+  items: ReadonlyArray<NeedsYouItem>,
+): ReadonlyMap<string, ReadonlyArray<NeedsYouItem>> {
+  const byEpic = new Map<string, NeedsYouItem[]>();
+  for (const item of items) {
+    const epicId = needsYouItemEpicId(item);
+    if (epicId === null) continue;
+    const group = byEpic.get(epicId);
+    if (group === undefined) byEpic.set(epicId, [item]);
+    else group.push(item);
+  }
+  return byEpic;
+}
+
 /** The chat title a prompt entry carries, for the item's "task · agent" line. */
 function agentTitleOfEntry(entry: HostNotificationEntryV22): string | null {
   const known = parseKnownHostNotificationPayloadForKind(
@@ -93,6 +137,29 @@ export function selectNeedsYouItems(
 }
 
 /**
+ * The item named as the app names its task and its chat, where this window
+ * holds them (`liveTask`, `liveAgent`; the chat's `title` is `null` while it is
+ * untitled), else by the names its prompt was filed under. A prompt is filed
+ * with the titles of that moment, so a chat titled after it asked (the usual
+ * case: titles are generated from the first prompt) would otherwise stay
+ * "Untitled agent". An agent's name that only repeats its task's is dropped:
+ * the task already says it.
+ */
+export function withLiveTitles(
+  item: NeedsYouItem,
+  liveTask: string | null,
+  liveAgent: { readonly title: string | null } | null,
+): NeedsYouItem {
+  const taskTitle = liveTask ?? item.taskTitle;
+  const name = liveAgent === null ? item.agentTitle : liveAgent.title;
+  // The line sits right under its task's title: it never repeats the task.
+  const agentTitle = name === taskTitle ? null : name;
+  return taskTitle === item.taskTitle && agentTitle === item.agentTitle
+    ? item
+    : { ...item, taskTitle, agentTitle };
+}
+
+/**
  * Every prompt waiting on the person, newest first (the merged feed's order).
  * One item per chat and kind: the host keys a prompt row per chat.
  */
@@ -100,7 +167,7 @@ export function useNeedsYouItems(): ReadonlyArray<NeedsYouItem> {
   const rows = useMergedNotificationRows();
   const hostById = useHostNotificationsStore((state) => state.byId);
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
-  return useMemo(
+  const filed = useMemo(
     () =>
       selectNeedsYouItems(rows, (row) => {
         // The cloud store keys its rows by feed id, not the bare entry id.
@@ -112,5 +179,28 @@ export function useNeedsYouItems(): ReadonlyArray<NeedsYouItem> {
           : null;
       }),
     [rows, hostById, cloudRows],
+  );
+  const refs = useMemo(
+    () =>
+      filed.map((item) => ({
+        // No task: no session to look in, so nothing resolves.
+        epicId: needsYouItemEpicId(item) ?? "",
+        agentId: needsYouItemChatId(item),
+      })),
+    [filed],
+  );
+  const epicIds = useMemo(() => refs.map((ref) => ref.epicId), [refs]);
+  const liveTasks = useRegisteredEpicTitles(epicIds);
+  const liveAgents = useRegisteredEpicLiveAgents(refs);
+  return useMemo(
+    () =>
+      filed.map((item, index) =>
+        withLiveTitles(
+          item,
+          liveTasks[index] ?? null,
+          liveAgents[index] ?? null,
+        ),
+      ),
+    [filed, liveTasks, liveAgents],
   );
 }

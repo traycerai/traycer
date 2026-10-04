@@ -35,7 +35,9 @@ function renderModelStyleRow(key: string) {
   return render(
     <StyleRow
       label={row.label}
+      description={row.description}
       styleKey={row.key}
+      labelPlacement={row.labelPlacement}
       examples={row.examples}
       regionId="model"
       values={values}

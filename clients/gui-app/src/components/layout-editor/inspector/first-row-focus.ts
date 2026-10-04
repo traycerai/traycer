@@ -24,6 +24,9 @@ const ROW_GRAB_SELECTOR = "[data-row-grab]";
  */
 export function focusSortableRowGrab(row: Element | null): void {
   if (row === null) return;
-  const grab = row.querySelector<HTMLElement>(ROW_GRAB_SELECTOR);
+  // A reading's section has no grab of its own: its Show switch is the stop.
+  const grab = row.matches("[data-region-section]")
+    ? row.querySelector<HTMLElement>("[data-region-show]")
+    : row.querySelector<HTMLElement>(ROW_GRAB_SELECTOR);
   grab?.focus();
 }

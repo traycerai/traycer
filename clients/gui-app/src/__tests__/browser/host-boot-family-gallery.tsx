@@ -81,7 +81,6 @@ const FACES = [
   "narrator-slow",
   "narrator-failed",
   "narrator-no-host",
-  "narrator-plan",
   "narrator-update",
   "gate-provisioning-error",
   "gate-removed",
@@ -166,6 +165,7 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   progress: null,
   lastProgress: null,
   provisioningError: null,
+  ensureFailure: null,
   provisioning: false,
   removed: false,
   hostBusy: false,
@@ -286,16 +286,6 @@ function narratorProps(which: GalleryFace): WindowHostModalProps {
         settingsEmphasis: "button",
         settingsOnly: false,
       };
-    case "narrator-plan":
-      return {
-        ...HEALTHY,
-        cause: "no-usable-host",
-        variant: { kind: "plan-restricted" },
-        bootBody: null,
-        showReportIssue: true,
-        settingsEmphasis: "button",
-        settingsOnly: false,
-      };
     case "narrator-update":
       return {
         ...HEALTHY,
@@ -350,6 +340,7 @@ function Face(): ReactElement {
         <HostRuntimeBootFallback
           onConfigureShell={noop}
           onOpenSettings={noop}
+          onMenuOpenSettings={noop}
         />
       );
     case "attach":

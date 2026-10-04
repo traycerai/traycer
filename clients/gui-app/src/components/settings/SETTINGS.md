@@ -63,6 +63,47 @@ The gate now exists and is a test rather than the compiler:
 `stores/tabs/__tests__/settings-kind.test.ts` asserts every section id is in
 the set.
 
+## Page shapes
+
+A settings page takes one of two shapes, and which one is decided by its
+content, not by taste.
+
+- **Stacked groups** (`settings-group.tsx`) is the default: named groups of
+  rows down one scroll, everything on the page visible at once. General,
+  Browser, Sounds, Opening behavior and most others.
+- **The rail** (`settings-master-detail.tsx`) is for a page that is a
+  collection of like things (Providers) or too long to scan in one scroll
+  (Layout, Appearance). It shows one area at a time, so it costs a click per
+  area and a third column beside the settings sidebar. On a short page that is
+  all cost: General on a rail would be a rail entry per row.
+
+Two rules for a stacked page:
+
+- **A group holds at least two rows.** A heading and a border around one row
+  is a container, not a group, and a page of them reads as nested boxes with
+  small titles. Danger Zone is the exception, because its tone is the point.
+- **Detail appears when a setting is being changed.** A long choice is a
+  dropdown with a sentence per option (General ▸ When you quit Traycer), not a
+  permanent block of radios.
+
+One rule for a rail page, and it has three callers. **Whatever points at a
+control has to pick that control's area first**, because only the picked area
+is on screen (`settings-master-detail-area.ts`):
+
+- **A search result** picks the area of its anchor (`useSettingsAnchorArea`).
+  A row with no anchor of its own contributes its name to its GROUP, never to
+  the page: a page result opens the page on its first area, so the page's own
+  keywords name only what that first area holds.
+- **A setup guide step** picks the area that holds its target
+  (`useSettingsGuideArea`), found through the `data-settings-area` each area's
+  panel carries. Without it the coachmark has no visible target and the guide
+  has no card to continue from. An armed reveal for a row of the page outranks
+  it: a guide stays active while Settings is closed, so the page can mount
+  with both, and the reveal is what the person asked for a moment ago.
+- **A link from outside Settings** to something that is not in the first area
+  arms the same reveal a search result does, with the group's anchor (the
+  start page's "Customize start page" button).
+
 ## Getting started
 
 `/settings/getting-started` is the persistent setup checklist for agent selection,
@@ -201,8 +242,10 @@ predicates; it never imports the assembled index or the search consumer.
 - A group's `breadcrumb` is the group segment of its result's breadcrumb —
   `null` for a rendered card, `"Providers"` for that page's region groups.
 - **Availability composes for containment only.** A row's effective
-  `availableWhen` is its own AND its group's (Agent roles is gated by
-  Experimental, not by its own predicate). A contribution target is not a
+  `availableWhen` is its own AND its group's. The merged groups (General ▸
+  Agents, Browser ▸ Agents, Sounds ▸ Notifications) are drawn in every shell,
+  so each gated row in them carries its own predicate (Agent roles, OS
+  notifications, Push notifications). A contribution target is not a
   container: contributing never changes the target's availability.
 - **`status` replaces the static description.** `SettingsRow` takes
   an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
@@ -332,8 +375,8 @@ rather than the page — and it is small enough that a page still wins on its ow
 name.
 
 **Anchors.** `SettingsRow`, `SettingsGroup` and `SettingsSubgroup` take an
-`anchor` prop and emit `data-settings-anchor`; a hand-built row writes the attribute directly (see
-`worktree-branch-prefix-section.tsx`). `LogDetailGroup` takes its anchor as a
+`anchor` prop and emit `data-settings-anchor`; a hand-built target writes the attribute directly (see
+`OpenEditorAction` in `panels/layout-settings-panel.tsx`). `LogDetailGroup` takes its anchor as a
 required `string | null` prop because the same card is the "Log detail" group
 on two different pages, and only the app's is indexed — the host page passes
 `null`.
@@ -375,8 +418,8 @@ different answers:
   `contributesTo: "page"`, or the row that stands in for the set. No shell can
   promise the row, so no shell offers it. "Detected dev origins" shipped as a
   result that navigated to General and lit nothing.
-- **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
-  desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
+- **Gated on the SHELL** (Zoom, Agent roles and OS notifications need a
+  desktop bridge; Push notifications needs `pushPermission`; Voice input and Prevent
   sleep hide in the mobile app, and Layout's "Show the status bar on small
   screens" row exists only there) - indexed, with
   the definition's
@@ -553,12 +596,10 @@ to join.
   setting's only consumer, `PreventSleepController`, holds an OS power-save
   blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
   returns null there. Extracted from `general-settings-panel.tsx` for exactly
-  this reason. It is now the group's ONLY row - the two resource-visibility
-  toggles that used to keep it populated moved to Layout - so the component
-  returns the whole **Running agents** `SettingsGroup`, heading included, and
-  one gate hides both. The panel gates nothing (the `BrowserSettingsSection`
-  shape); a second gate there would stay on the build identity the day this one
-  narrows to the capability it is really about, and the empty card would return.
+  this reason. It is one row of General ▸ **Agents**: the component returns
+  the row alone and gates it, and the panel draws the group. The panel gates
+  nothing; the group holds the branch prefix in every shell, so it is never a
+  heading over an empty card.
 - **Layout's "Show the status bar on small screens" ROW** - a
   surface-level row of the layout form (L-51), and the only Layout row the
   installed mobile app ADDS.
@@ -1028,10 +1069,9 @@ available for a host this client has never dialled).
 `connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
 plus a separate relay-attach bit, and with them the states that existed only to
 narrate those two disagreeing ("Reconnecting", "Not reporting"). Its remaining
-invariants are tested and load-bearing: no green dot without live evidence;
-`unknown` (liveness unreadable) never renders as a false "Offline"; and
-`local-only` - a host the account's plan will never expose remotely - is an
-upgrade prompt, not an outage.
+invariants are tested and load-bearing: no green dot without live evidence, and
+`unknown` (liveness unreadable) never renders as a false "Offline". The retired
+`local-only` wire value, which no server emits, reads as `unknown`.
 
 Two things a reader of this file will look for and not find in the DTO:
 `busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
@@ -1043,7 +1083,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
 ## Sections
 
 - `General` App behavior, agent activity, and local data controls, divided
-  into four named groups via `settings-group.tsx`: a small, quiet `<h2>`
+  into named groups via `settings-group.tsx`: a small, quiet `<h2>`
   label sits OUTSIDE its own bordered card, so orientation (the label) and
   action (the card's rows) read as different things - a group label never
   looks like another setting row. This replaced an earlier row-shaped
@@ -1063,18 +1103,70 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       Permissions ▸ Modes; its search vocabulary moved with it. General keeps
       no alias for it (nothing stores an anchor token, so there is nothing an
       alias would redirect).
-  - **Running agents**: Prevent sleep while running
-    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions") is the only row left. The two
-    resource-visibility toggles that used to sit beside it are gone. Both
-    answers now come from ONE switch, Layout ▸ Status bar ▸ Resource monitor ▸
-    Shown (L-48, L-60): off means no status-bar segment, no header button, no
-    sidebar or task-navigator chips, and no `resources.subscribe` stream at
-    all. The sidebar chips have no control of their own and never moved to a
-    Sidebar row. Because that leaves one self-hiding row, the group
-    itself is returned by `prevent-sleep-settings-section.tsx` rather than
-    wrapped here, so the heading disappears with the row instead of drawing
-    over an empty card.
+  - **Agents** (anchor `general-agents`, `data-testid="settings-general-agents"`):
+    Prevent sleep while running, When you quit Traycer, Worktree branch prefix
+    and Agent roles. These were four groups of one setting each (Running
+    agents, When you quit Traycer, Worktrees, Experimental), which drew four
+    headings and four borders around four settings. The rule now is the one
+    under "Page shapes": a group holds at least two rows. Each row gates
+    itself, and the branch prefix is drawn in every shell, so the card is never
+    empty.
+    - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`,
+      hidden in the mobile app - see "Two different mobile questions"). The
+      two resource-visibility toggles that used to sit beside it are gone. Both
+      answers now come from ONE switch, Layout ▸ Status bar ▸ Resource monitor
+      ▸ Shown (L-48, L-60): off means no status-bar segment, no header button,
+      no sidebar or task-navigator chips, and no `resources.subscribe` stream
+      at all. The sidebar chips have no control of their own and never moved
+      to a Sidebar row.
+    - **When you quit Traycer** (`HostLifecycleSettingsRow` in
+      `host-lifecycle-settings-section.tsx`, anchor `general-host-lifecycle`,
+      gated by `isHostLifecycleRowAvailable`: the desktop's
+      `runnerHost.hostLifecycle` bridge and not the mobile app): the host
+      lifecycle mode for THIS machine - Background (default), Ask, Stop if
+      idle, Linked, No local host - as ONE row with a dropdown. It was a card
+      of five radios with a sentence each, the tallest block on the page for
+      one choice. The closed trigger shows the mode's short name (the one the
+      "Set to X" line uses), each option in the list carries its full label
+      and sentence, and the row's description is the chosen mode's own
+      sentence, so what quitting will do is readable without opening anything.
+      The copy is the host lifecycle UX artifact's, with the machine noun
+      platform-substituted (Mac / PC / machine; never "device"). It is here,
+      on the app-wide page, and not under a host scope, because it is a
+      machine-local desktop preference read and written through desktop main
+      (`hostLifecycle.get/set/onChange`), never a host RPC: it has to work
+      before any host is installed, and in a launch with no local host, where
+      it is the only way back. A CLI `traycer host lifecycle set` arrives
+      through `onChange` and is reflected, never replayed. Under the
+      description, while desired and applied differ: "Set to X · restart the
+      host to apply" (an older supervisor is running; carries a Restart host
+      button that opens `LocalHostRestartFlow`) or "Set to X · takes effect at
+      next launch" (entering or leaving No local host). No local host is
+      disabled in the list, with the reason after its sentence, while signed
+      out (remote hosts are reached through the account), and choosing it
+      while this launch runs a host confirms through the quit modal's
+      stop-only form (`host-lifecycle-none-confirm-dialog.tsx`). The local
+      host's Overview header carries the same mode promise the tray shows
+      ("keeps running after quit") as a link back here
+      (`host-scope/host-lifecycle-mode-line.tsx`).
+      - **The radio card still exists, at `/when-you-quit`**
+        (`HostLifecycleSettingsSection`, definition `hostLifecycleCard`, a
+        contributor with no entry of its own). Signed out there is no settings
+        shell, so that route renders the card alone, CLI footnote included.
+        Both presentations read one model (`useHostLifecycleModel`): the
+        query, the write, the signed-out and task-ownership holds and the None
+        confirmation are written once.
+    - **Worktree branch prefix** (`worktree-branch-prefix-section.tsx`): a
+      plain `SettingsRow` now. Its sentence, with the live preview of the next
+      branch name, is the row's `status`, and a validation error sits under it
+      in the same described region. It used to draw a bordered card of its own
+      inside the group's card. The label was "Default branch prefix" under a
+      Worktrees heading; with the heading gone the label names worktrees
+      itself.
+    - **Agent roles**: gated by `isAgentRolesRowAvailable` (the desktop
+      feature-settings bridge) and marked with the muted xs **Experimental**
+      badge the permission modes use, in place of an Experimental heading over
+      one row.
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
     your work and Data migration used to share this group under the name
     "Setup & migration"; both moved to the scoped host's **Overview**, because
@@ -1102,16 +1194,29 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   placement, agent-opened tab surfacing, and saved website sessions. Search
   entries belong to this section, including conditional host/desktop controls.
   Host and desktop scope remain explicit in each control's copy.
-  - **Search** selects Google (default), DuckDuckGo, Bing, or Kagi. The shared
-    address-bar normalizer navigates recognizable addresses and encodes other
-    input as a query in native and streamed tabs. The preference is persisted
-    and invalid or missing values fall back to Google.
-  - **Browser placement** shows the effective browser destination. Selecting
-    one enables per-category placement while preserving other categories'
-    current effective values. No preference keys or defaults are migrated.
-  - **Agent-opened tabs** keeps `agentTabSurfacing` and the existing canvas/PiP
-    rules. It controls explicit REPL opens; page-created tabs keep their
-    existing popup/link behavior.
+  - **Three groups**: Browsing, Agents, Website sessions. Search, Browser
+    placement, Browser and Agent-opened tabs used to be four groups holding
+    five rows between them.
+  - **Browsing** (anchor `browser-browsing`): the two choices about the
+    person's own browsing.
+    - **Default search engine** selects Google (default), DuckDuckGo, Bing, or
+      Kagi. The shared address-bar normalizer navigates recognizable addresses
+      and encodes other input as a query in native and streamed tabs. The
+      preference is persisted and invalid or missing values fall back to
+      Google.
+    - **Open browser tabs** shows the effective browser destination. Selecting
+      one enables per-category placement while preserving other categories'
+      current effective values. No preference keys or defaults are migrated.
+      The click-modifier legend sits directly under this group, because it is
+      about where a tile opens.
+  - **Agents** (anchor `browser-agents`, drawn by `BrowserSettingsSection`):
+    what agents may do with the browser. **Agent-opened tabs** is drawn in
+    every shell, so the group is never empty; the panel owns that row and
+    hands it in. It keeps `agentTabSurfacing` and the existing canvas/PiP
+    rules, and controls explicit REPL opens; page-created tabs keep their
+    existing popup/link behavior. **Let agents use the in-app browser** sits
+    above it when the active host advertises both `config.browser.*` methods,
+    and **Detected dev origins** below it once a terminal has printed one.
   - **Website sessions** (`browser-settings-section.tsx`'s second group,
     `data-testid="settings-saved-logins"`): where session data from the in-app
     browser is kept, and the only place it can be turned off, removed, or
@@ -1240,6 +1345,19 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       again instead of hiding it for the session. **Remove all** calls the
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
+- `Sounds` (`panels/app-notifications-settings-panel.tsx`,
+  `/settings/app-notifications`): two groups.
+  - **Chimes** (`panels/notification-chime-settings-section.tsx`): one
+    dropdown per kind of alert. Untitled, because the page is already named
+    for it.
+  - **Notifications** (anchor `app-notifications-notifications`): where the
+    alerts themselves are configured. **OS notifications** on a desktop with
+    the system-settings bridge (`system-notification-settings-section.tsx`),
+    **Push notifications on this phone** in the phone app
+    (`push-permission-section.tsx`; "this phone", never "this device", which
+    is the UI word for a host), and **Notification events**, a pointer to the
+    selected host's Notifications page, in every shell. System, This phone
+    and Events were three groups of one row each.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
   `/settings/opening-behavior`): link routing (Open links and per-link-type
   choices), general tile placement and per-type overrides
@@ -1247,14 +1365,32 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   to all categories, including browsers; browser-specific controls live in
   Browser. `settings-enum-select.tsx` supplies the shared accessible select.
   Existing store keys and their legacy migrations remain unchanged.
-- `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
-  followed by **Start page**, **Interface**, **Layout**, **Fonts and text**,
-  **Motion and readability**, **Terminal**, **Agent office**, and **Icon
-  colors** via `settings-group.tsx`.
-  Each group has an `<h2>` label outside its bordered card. Settings apply
-  immediately; the theme editor previews a draft until Save theme or Cancel.
-  `themes/appearance-details.tsx` supplies the prompt font and ligature rows
-  inside Fonts and text, plus the separate Motion and readability group.
+- `Appearance` (`panels/appearance-settings-panel.tsx`): seven areas in the
+  master-detail card Providers and Layout use (`settings-master-detail.tsx`):
+  **Themes**, **Start page**, **Interface**, **Fonts and text**,
+  **Terminal**, **Diff viewer** and **Tasks**. It was one scroll of nine
+  titled groups; at thirty rows it is the long page of the Application group,
+  which is what the rail is for (see "Page shapes").
+  - **The rail.** A vertical Radix tab list beside the picked area from `md`
+    up, a select above it below `md`. Each area has a pinned header (its
+    group's label and one line) over a body that owns the scroll. Every area
+    stays mounted, hidden while another is picked, so a search result that
+    picks an area finds its row in the same commit. The pick and the
+    scroll-to-top on a new area are the hooks Layout uses
+    (`settings-master-detail-area.ts`).
+  - **An area is a group of the definitions**, so its label and anchor come
+    from there and a search result finds its area by the group its row sits
+    in (`appearanceAreaForAnchor`). The area header names the group, so no
+    group card draws its own `<h2>` (`showTitle={false}`).
+  - **Interface** holds zoom, the pointer cursor, panel animations, animation
+    duration and contrast. Motion and readability was a group of its own;
+    both were app-wide chrome and neither was long.
+  - **Tasks** holds the agent office default view and Color icons by type.
+    Agent office and Icon colors were each a heading over one row.
+    Settings apply immediately; the theme editor previews a draft until Save
+    theme or Cancel. `themes/appearance-details.tsx` supplies the prompt font
+    and ligature rows of Fonts and text, and the motion and contrast rows of
+    Interface.
   - **Theme**: light/dark/system mode (`theme`/`setTheme`) plus the theme
     library - selection, editing, import/export - lives in `ThemeGallery`,
     backed by `stores/settings/theme-library-store.ts` and applied by
@@ -1402,7 +1538,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       visually distinct. `TerminalPreview` reflects the chosen shape/blink with a
       CSS-only cursor (reads the store directly, no xterm instance) so the effect
       is visible without spawning a real terminal.
-  - **Agent office** (group). One row, `Default view` (a `Select` over
+  - **Agent office default view** (a row of the Tasks area; a `Select` over
     `agentOfficeDefaultView`, `"auto"` plus every id in `OFFICE_VIEW_IDS`,
     default `"auto"`) - which office view an epic's comm-graph tile opens on
     when nobody has picked one for that tile. The options are read from the
@@ -1471,10 +1607,28 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     region is Hidden. Every row reserves its grip, revert, extra and chevron
     slots (L-122), so controls share one right edge and never shift. At the
     inspector's 320px the control wraps under the label.
-  - **Usage providers are a headed list in the Usage and resources area**
-    (L-123): configured providers first, with their logos, then the rest behind
-    a Show all providers disclosure. A provider's disclosure holds
-    `ProviderLimitsControl`.
+  - **Usage and resources is two sections, not two rows**
+    (`ReadingSection`, `inspector/surface-section.tsx`). Usage limits and the
+    Resource monitor each get a header with a **Show switch**, then their rows,
+    always open. **Location** is ONE picker (`inspector/reading-location-picker.tsx`):
+    a small window with three spots - Tab strip, Status bar left, Status bar
+    right - drawn the way the app is for the stored tab strip placement. The
+    tab strip has no end, so that spot writes the host alone and the old end is
+    kept for the way back; a status bar spot writes the host and the end
+    (`regions/reading-placement.ts`). **Density** is Auto / Compact / Detailed
+    in every placement, and its description says what Auto resolves to at the
+    current spot (`densityDescription`). The rows the RESOLVED density ignores
+    are hidden (`compactIgnoredRows`): with Compact, Percent shows, Reset time
+    and Metrics go. "Percent shows" is `amount` and "Reset time" is the `reset`
+    switch. **Reading style** (`readingStyle`: Bar, Percent, Bar and percent,
+    Everything) is a pictured style row between Density and Percent shows. It
+    is drawn only while the status bar's Detailed form is (`readingStyleApplies`),
+    so it is hidden under Compact and whenever usage is in a tab strip. A phone's footer draws no Location or Density row and hides none.
+    The **Profiles** list sits under Usage limits (`inspector/usage-profiles.tsx`):
+    one row per provider, dragged to order (`usageProviders`), an eye on the
+    provider (`hiddenProviders`) and, for a provider with several profiles, an
+    eye on each profile (`shownProfiles` for the watched host, never emptied:
+    the last drawn profile stays).
   - **Presets and resets.** The Presets block (`inspector/presets-block.tsx`)
     applies a preset in one click, replacing visibility and style values and
     keeping placement, order and providers, with an Undo toast. Its status
@@ -1535,7 +1689,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   The rules below describe the CHROME these controls configure. They live here
   because the chrome has no other doc, not because this page owns them.
 
-  - **Which of a provider's limits the strip draws is a TWO-MODE pick**
+  - **Which of a provider's limits the strip draws is a TWO-MODE pick**,
+    edited on the provider's own page (Settings > Providers > Profiles &
+    Limits, `panels/provider-usage-limits-section.tsx`), not in the Layout form
     (L-96, L-110): a `SegmentedControl` reading `Automatic (recommended)` /
     `Choose...`, and under `Choose...` one checkbox per limit the provider
     currently reports, labelled from the window catalog (`5h`, `wk`, `Fable`).
@@ -1615,7 +1771,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     reading stays pinned to the end it named (L-156). The percentage is severity-coloured always,
     bar or no bar.
   - **Which ACCOUNTS a provider's segments describe is chosen in the usage
-    panel, not in the layout form** (`layout/header/rate-limit-popover.tsx`).
+    panel and in the layout form's Profiles list** (`layout/header/rate-limit-popover.tsx`).
     Every profile card carries an eye toggle immediately left of its accent dot
     (`aria-pressed`), and the strip draws **one segment per checked account**
     for the host it is watching, with its own limits, mini bars and countdowns.
@@ -1624,9 +1780,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     credential on ONE machine. The background poll refreshes every eligible
     account regardless of this selection. A checked id whose profile has since gone is
     skipped at read time, never pruned. It lives in the arrangement but is not
-    a display preference: no density preset carries it, and the layout form
-    draws no control for it because the form is app-level and the accounts are
-    not.
+    a display preference: no density preset carries it. The Layout form's
+    Profiles list edits it too, for the watched host.
     - **The eye exists only while the strip is on screen**, which is ONE
       predicate, `statusBarShown` / `useStatusBarShown`
       (`stores/layout/layout-store.ts`): on a desktop viewport, EITHER reading
@@ -1770,7 +1925,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       The user reads it as a "Divider", adds it, drags it and removes it, and
       the sidebar draws it as a gap at rest (L-140).
       The shipped rail carries none.
-    - A STACK joins two to four ADJACENT panels (L-166, L-181): they share
+    - A STACK joins two or more ADJACENT panels (L-166, L-181): they share
       the sidebar body, top to bottom, with a resize handle between each two
       and a per-section collapse. The entry sits right after its first member
       and its id names every member in order (`stack:A+B+C`), so a stored pair
@@ -1787,13 +1942,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       stand side by side, in any order and re-minted for that order: members
       trading places keeps the stack, a member taken away leaves it (a pair
       dissolves), a divider or another panel moved between members splits it
-      there, a run over four keeps its first four, and a panel belongs to one
-      stack. Membership is explicit in the writers, so a member carried out of
+      there, and a panel belongs to one stack. Membership is explicit in the writers, so a member carried out of
       its stack leaves it even when it lands right beside it.
       A rail drag says what it CARRIES (`RailDragCarry`): the rail's icon
       carries its whole stack, a SECTION header carries one panel.
-      Four is the cap because of the BODY, not the rail: at the window's 600px
-      minimum height, four sections still show a header and three rows each.
+      A stack has no cap. It had one of four (each section keeping three rows
+      at the 600px minimum height), but the sidebar's groups never had one, so
+      a stack refusing a fifth panel was a regression. A deep stack shrinks
+      each section toward its header, and a section's body scrolls.
       A HIDDEN panel drops out of its stack for display only - the rest stand
       as a smaller stack, or alone, on the rail and in the body, and showing the
       panel again puts it back.
@@ -1820,10 +1976,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       On the rail a drop has three bands (L-168): the outer 30% at each end
       reorders, and the middle 40% appends what is carried to the target's
       stack (after its last member), or stacks them with a lone target.
-      `railStackJoin` answers what the middle band would do - `join`, `full`
-      (the result would pass four) or `same` (already stacked together) - and
-      the rail draws the join ring or a red refusal ring on the target icon
-      from that answer; a refused drop commits nothing.
+      `railStackJoin` answers what the middle band would do - `join` or `same`
+      (already stacked together) - and the rail draws the join ring on the
+      target icon from that answer; a `same` drop commits nothing.
       A member leaves its stack by dragging its section header out of the
       body onto the rail, from the stack icon's menu ("Unstack 'Name'" per
       member), or from the Sidebar area's stack row, which lists every member
@@ -1833,10 +1988,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       A drop on the open sidebar BODY means INTO the stack it draws (L-182):
       the body is one droppable naming the stack's top panel, it resolves to
       the same middle-band join as that panel's rail icon, and it draws the
-      same answer on its frame - the join ring, the red refusal for a stack
-      that would pass four, and nothing for a member dropped on its own
-      stack. The editor canvas has no join gesture (L-169), so the body there
-      takes no drop.
+      same answer on its frame, the join ring.
+      A member's own section HEADER is the one exception: joining its own
+      stack means nothing, so inside its body it reorders the stack, landing
+      at the section boundary nearest the pointer (a `left-panel-section`
+      preview, drawn as a line on that boundary), as the sidebar's groups
+      always did. The editor canvas has no join gesture
+      (L-169), so the body there takes no drop.
       The split and the per-section collapse live in the PANEL store
       (`panelSectionWeightsByPanelId`, `panelSectionCollapsedByPanelId`), not in
       the arrangement: they are how a stack is drawn rather than whether it
@@ -5079,6 +5237,26 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
+  - **Agent worktrees** (`worktree-agent-create-chip.tsx`) — the second chip in
+    the toolbar's leading slot (now `policies`, not `cleanup`), right of
+    Automatic cleanup: what an agent's `traycer_create_worktree` call does on
+    this host. `Allow` (default) / `Ask first` / `Never`, stored in the
+    `worktrees.agentCreate` block of `~/.traycer/cli/config.json` on that
+    machine and read over `config.worktrees.get` / `set`. The host enforces it
+    on every call (`traycer-host/src/domain/agent/agent-worktree-policy.ts`),
+    so a change governs the next request of an agent already running.
+    - **Same gate as the cleanup chip**, reusing `resolveAutoCleanupGate` with
+      `supported` = both methods advertised (they negotiate independently, and
+      a readable-but-unwritable policy would render a menu whose every choice
+      fails). Non-`ready` states render the same `aria-disabled` inert chip
+      with its sentence in a Tooltip.
+    - **A radio menu, not a popover**: `DropdownMenuRadioGroup` with one line
+      of meaning under each value and a footer naming the host the policy
+      governs ("agents running on {host}"). Items stay disabled until the read
+      lands, so no choice is made against an unknown current value. A failed
+      read (malformed config file) replaces the items with the repair
+      sentence the Browser row uses. Chip label: `Agent worktrees · <value>`,
+      bare `Agent worktrees` until the read lands.
   - **Automatic cleanup** (`worktree-auto-cleanup-chip.tsx`) — ONE chip in the
     inventory toolbar's leading slot, opening a popover that holds the opt-in
     letting this host delete proven-safe, long-idle worktrees unattended.
@@ -5340,7 +5518,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
   There is no Status tab any more: it repeated the header's facts and stated
   one update three times (the update card, the version card's tag, and its
   answer), so its update card, wait and offline notice moved into the strip,
-  where they are on every tab, and its version card leads Updates.
+  where they are on every tab, and its update answer leads Updates (now the
+  answer card, drawn only when there is news or an action).
   - **Frame.** The header, the notices strip, the tab bar and the active body
     share one card. On desktop the page takes `SettingsPanelShell`'s
     `fillHeight` (the Providers model) with a transparent body card: the
@@ -5360,8 +5539,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
     the bar sit outside anything that withholds a body, and each body decides
     what it can show (the per-region `usable` gates it carried before the
     split). While the host connects, Updates shows the version list's loading
-    shape (`HostScopeConnecting`) with no version card above it - unless an
-    update is retained, when the version card shows. The header's own states
+    shape (`HostScopeConnecting`) with no answer card above it: the answer
+    needs the host, and a retained update is the strip's to describe. The
+    header's own states
     are unchanged: this computer's host down gets Run doctor (and Reinstall
     Traycer after a removal), an unreachable host gets no Activate or `⋯`.
     The two page states with NO header and no tabs are unchanged too - a host
@@ -5424,7 +5604,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
        (`useHostUpdateCompletion`) runs at PANEL level, so the card's own
        mount and unmount never restart its timer. It is the page's
        ONLY report of an update in flight: the header carries no update pill,
-       and the version card goes quiet while it shows.
+       and the answer card and Check now go quiet while it shows.
     3. **The account's wait** (`HostUpdateDrainGateRow`: "Waiting for 2
        agents", Apply now — ends 2 agents), a warning callout. **One wait on
        screen**: it is withheld once the host's update view is
@@ -5439,59 +5619,106 @@ set-state-in-effect` forbids the effect form, and an effect would also
     caller but the bound activation offer, whose button is "Restart host").
     Restart and Update now stay ordinary buttons. Every confirmation still
     names the count.
-  - **Updates ▸ Version card** (`HostOverviewVersionCard` in
-    `host-overview-updates.tsx`), first on Updates, always - except while the
-    scope connects with no update retained. The running version at the
-    name's size (`text-title-sm`), one tag (Latest · Update available ·
-    Checking… · Restart to finish · Needs newer CLI tools · Last reported;
-    `deriveHostOverviewVersionTag`), the answer in today's words, and Update
-    now (only when installable) / Check now.
+  - **Updates ▸ Answer card** (`HostOverviewAnswerCard` in
+    `host-overview-updates.tsx`), first on Updates, and ONLY when the update
+    answer has news or an action. There is no version heading and no tag: the
+    running version is the header health line's, and "latest" is the version
+    list's installed row (`latest` beside `installed`). So a current host,
+    the FIRST check (no answer in hand yet; the version list says it is
+    asking), a host that can't be reached or is still connecting (the offline
+    notice and the list's loading shape speak then), and an update in flight
+    all draw no card. A RE-CHECK is not one of them: `describeCheckState`
+    answers "checking" only with no catalog and no settled failure, so Check
+    now, the release-candidate checkbox and the error lane's own retry all
+    leave the card already on screen in place (Check now spins and Update now
+    is disabled for that span) instead of removing it and jumping the rows
+    under it. For the same reason `unreachable` is "the last settled word,
+    for this host, was a transport failure and nothing has answered since"
+    (`useCheckSettledUnreachable`), not bare `isError`. That drops in three
+    ways before anything answers: a no-data retry returns `status` to
+    `pending` (held by `errorUpdateCount`); the release-candidate checkbox
+    switches to a fresh query key whose count is zero; and the same switch
+    over a retained catalog shows the OLD key's catalog as placeholder with
+    no error (both held by the errored host id, which only data of the key's
+    own clears, and which a scoped-host swap stops matching). Otherwise the card is an icon tile, a title, the
+    answer's own sentence, and the answer's one control on the right (stacked
+    under the text at full width below the `@lg` container width). Tone and title come from `ANSWER_CARD_LOOK`,
+    keyed by `answerKind`:
+
+    | Answer              | Tone    | Title                                 | Line                                            | Control                                                                              |
+    | ------------------- | ------- | ------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+    | `available`         | info    | Update available                      | `v1.4.0 → v1.5.1` (sentence sr-only)            | Update now                                                                           |
+    | `needs-cli`         | warning | Needs newer CLI tools                 | the remedy sentence                             | the command-line-tools fix                                                           |
+    | `restart-to-finish` | warning | Restart to finish                     | "v1.5.1 is installed — restart host to finish." | none, or Update now when the catalog offers something newer than the installed bytes |
+    | `stranded`          | info    | Newer version on another release line | the stranded sentence                           | none                                                                                 |
+    | `not-installable`   | neutral | Update unavailable for this host      | the not-installable sentence                    | none                                                                                 |
+    | `unreachable`       | neutral | Update check failed                   | "Couldn't ask … which versions …"               | none                                                                                 |
+    | `check-failed`      | neutral | Update check failed                   | "Couldn't check for updates on …"               | none                                                                                 |
+    | degrade             | neutral | Updates aren't managed here           | `describeOverviewDegrade`                       | none                                                                                 |
+
+    The neutral tone is `bg-foreground/5`, never `bg-muted` (raised surface).
+    - **One standing live region.** The check runs on its own, so the answer
+      changes with no user action to anchor it. `HostOverviewAnswerCard`'s
+      wrapper is an `aria-live="polite"` region mounted for as long as the
+      host can be asked: empty and `sr-only` while the answer is quiet (out
+      of the tab's column, still in the accessibility tree), and holding the
+      card otherwise. A polite region is announced when its content changes,
+      not when it is inserted already filled, and the card is inserted at
+      exactly the moments worth announcing (an update arrived, a check
+      failed), so the region has to exist first. Nothing inside the card
+      carries a live role of its own - not the sentence, the failure footer
+      or the failed-attempt card - because a region nested in a region is
+      announced twice.
     - **In flight, quiet.** While an update runs, waits or restarts
-      (`inFlightUpdateKind`, retained phase included) the card is its version
-      alone: no tag, no answer, and Update now and Check now HIDDEN, not
-      disabled; all come back when the update finishes or fails. The update
-      card in the strip is on screen for exactly that span (an in-flight kind
-      is never a quiet view, and an offline host wears "Last reported"
-      instead), so it is the one place that describes the update: the
-      catalog's "v1.5.1 is available." mid-download would contradict it, and
-      activation debt's "Restart to finish" tag and "v1.5.1 is installed —
-      restart host to finish." answer would repeat it. Outside flight the
-      answer still decides the tag, so a pre-@1.3 host's activation debt,
-      which has no update card, keeps both.
+      (`inFlightUpdateKind`, retained phase included) the card is withheld
+      and Check now is HIDDEN, not disabled; both come back when the update
+      finishes or fails. The update card in the strip is on screen for
+      exactly that span (an in-flight kind is never a quiet view), so it is
+      the one place that describes the update: the catalog's "v1.5.1 is
+      available." mid-download would contradict it, and activation debt's
+      "v1.5.1 is installed — restart host to finish." would repeat it.
+      Outside flight the answer still draws, so a pre-@1.3 host's activation
+      debt, which has no update card, keeps its Restart to finish card.
     - **The command-line-tools fix** (Copy command, Show installation help,
       or the Desktop steps) replaces Update now here and nowhere else, and is
-      NOT held to the in-flight rule - it keeps its sentence too: it is a fix
-      for the tools rather than a control over the update, a work park can be
-      waiting on exactly it (the update card's floor sentence points at its
-      Show installation help), and the page's 30 s floor recheck runs for as
-      long as a floor applies, which is only honest while the fix it is for
-      is on screen.
-    - **A refused or failed attempt** is ONE line under the answer
-      (`failureDescription`), clearing on the next try. It is no longer the
+      NOT held to the in-flight rule - it keeps its card and sentence too: it
+      is a fix for the tools rather than a control over the update, a work
+      park can be waiting on exactly it (the update card's floor sentence
+      points at its Show installation help), and the page's 30 s floor
+      recheck runs for as long as a floor applies, which is only honest while
+      the fix it is for is on screen.
+    - **A refused or failed attempt** (`failureDescription`, clearing on the
+      next try) is a red footer under whichever answer shows, or - under a
+      quiet answer or in flight - a destructive card of its own
+      (`data-answer="failed-attempt"`). It is not the
       answer too: `describeCheckState` lost its failure-first arm, so the
       answer beside it is what the catalog still says. It is not held to the
       in-flight rule: a refused Force update… is answered during the very
       park that counts as in flight, and its dialog closes on the refusal
-      expecting this line to say why.
+      expecting this card to say why.
     - **A check that settled with no catalog** (the host's CLI failed, or
-      answered in a format this app can't read) answers "Couldn't check for
-      updates on build-box." with no tag and Check now, and the line under
-      it carries the reason. It never falls through to "Checking for
-      updates…", which is the first load's alone: that sentence and its
-      Checking… tag would stay with nothing running.
+      answered in a format this app can't read) is "Update check failed" over
+      "Couldn't check for updates on build-box.", with the reason in the
+      footer like any other failure. The footer is never promoted to the
+      card's line: `failureDescription` is the last ATTEMPT's failure
+      (`installFailure ?? check.transient`, or a store-format refusal), so an
+      earlier install's error would read as what the check reported. It never
+      falls through to "Checking for updates…", which is the first load's
+      alone and draws no card.
     - **The stranded answer** ends "…Pick it from the versions below to
       move.", plain text: the version list it points at is on the same tab,
       under the card.
     - **Not manageable here** (too old, no Traycer CLI, managed outside
-      Traycer): one sentence in place of the buttons, no tag. The version
-      list under it is withheld and does not repeat the sentence.
+      Traycer): the degrade card, with no control. The version list under it
+      is withheld (so is Check now) and does not repeat the sentence.
     - **No auto-update caption.** The switch is the next row on the same tab
       and states the policy itself.
+
   - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
     stays at panel level, so it opens over whichever tab is showing.
   - **One component per tab**, each drawing what the panel hands it; the
     queries, the mutations and every dialog stay in `host-overview-panel.tsx`,
-    so the update card in the strip, the version card and the version list
+    so the update card in the strip, the answer card and the version list
     on Updates are still one `useHostOverviewUpdates` instance. The dialogs
     open over whichever tab is showing: the restart confirm, the three "Host
     is busy" force-or-defer dialogs (restart, staged-update force, bound
@@ -5503,7 +5730,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
     | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                |
     | ------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
     | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last |
-    | Updates      | `host-overview-updates-tab.tsx`      | The version card (`host-overview-updates.tsx`: version and tag, the update answer, Update now / Check now or the command-line-tools fix, the failed-attempt line), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with its release-candidate choice, version list and inline refusal                                                                                                  |
+    | Updates      | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                           |
     | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                              |
     | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                               |
 
@@ -5577,7 +5804,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
     could show v1.4.2 (the registry row) above v1.5.0 (the RPC) at the same
     time, which reads as broken rather than stale.
     - **Layout.** Name, rename pencil and tags on one line; presence dot, health
-      label, platform/arch/version and the sessions chip on the next; then a
+      label, the lifecycle mode line (this machine's own host only - the
+      `lifecycleLine` slot, "keeps running after quit", linking to General ▸
+      When you quit Traycer), platform/arch/version and the sessions chip on
+      the next; then a
       footer verb bar; then Host ID. Rename is a pencil ON the name rather than
       a third word beside Restart and Run doctor - it was the only one of the
       three whose object is the name, and as a peer button it read as an equally
@@ -5632,8 +5862,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
     error: the host closed session admission, found work in flight and reopened
     it, so it renders as an amber notice with a Try again, never a red toast.
   - **Updates**: one hook, two places. The drain-gate force sits in the
-    notices strip above the tab bar; the host's own answer and "Check now"
-    (`host.update.*`) in the version card, the VERSION LIST and the account
+    notices strip above the tab bar; the host's own answer (`host.update.*`)
+    in the answer card, the VERSION LIST with Check now on its heading, and
+    the account
     registry's auto-update policy sit on Updates
     (`HostAutoUpdateRow`, keyed by `hostId`, controls capture their target when
     armed). The auto-update switch is a single-row group with no group label:
@@ -5648,8 +5879,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
       the host chose inclusion from its installed release-candidate line.
       Above older rows that cannot open newer chat stores, it warns about the
       access lost until this host updates again. The list can say it is asking,
-      say no versions are available, or say the host returned no list; the
-      last state offers Check now through the same action as the version card.
+      say no versions are available, or say the host returned no list; Check
+      now on the group's heading (a ghost button with a refresh glyph that
+      becomes the spinner while it runs, hidden while an update is in flight)
+      is the page's only one, so the no-list state carries no second copy.
     - **The version list replaced a free-text pin.** `host.update.check` returns
       the whole manifest, not just `latest`, so the Overview renders the same
       per-row-Install list the local recovery console has always had - for a
@@ -5686,9 +5919,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
       pinned; the auto-update policy beside it still works without a route.
       `isValidHostVersion` (the client mirror of authn-v3's server-side regex)
       went with the input it validated.
-    - Check is one shared query for the version card's answer and the version
-      list. It populates on its own; Check now in either place forces a
-      refetch.
+    - Check is one shared query for the answer card and the version list. It
+      populates on its own; Check now forces a refetch of both.
     - The RPC half degrades away WHOLE - Check-now and the list with it,
       leaving the auto-update policy as the only update control, plus one line
       saying why - without the methods, without a
@@ -5701,11 +5933,11 @@ set-state-in-effect` forbids the effect form, and an effect would also
       `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
       going wrong with the mechanism intact - so the controls stay and an inline
       `host-overview-update-attempt-failed` notice clears on the next try. A
-      transient refused Install appears under the list and under the version
-      card's answer, both on Updates, from that one failure state; the version rows
+      transient refused Install appears under the list and on the answer
+      card, both on Updates, from that one failure state; the version rows
       unfreeze and the page stays on Updates. A structural refusal (for
       example, a CLI that disappeared after the list was read) withdraws the
-      list and the inline refusal with it; the version card above states the
+      list and the inline refusal with it; the answer card above states the
       not-manageable reason once.
       Connecting or restarting shows a loading shape in the list's place.
       An unreachable host keeps the auto-update row and says "Connect to
@@ -6080,9 +6312,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
       this remedy pins the host's required floor, the answer to "this host
       refuses the CLI it has". Version rows on Updates retain their reasons.
       Sentence precedence preserves the record-derived parks: **activation
-      debt → CLI remedy → checking → unreachable → check failed → no
-      manifest → stranded on its release line / up to date → unavailable /
-      available**. A failed or refused attempt is not in this chain: it is the
+      debt → CLI remedy → unreachable → check failed → no manifest (the first
+      load, "checking") → stranded on its release line / up to date →
+      unavailable / available**. A check in flight is not a step: a re-check
+      leaves the standing answer in place. A failed or refused attempt is not in this chain: it is the
       one line under the answer (`failureDescription`), so the answer beside
       it stays what the catalog says instead of repeating the failure. "Check
       failed" is the chain's one step about a failure, and only as a fact
@@ -6242,7 +6475,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
     promises self-recovery is worse than one that says nothing, since it is the
     reason someone would leave a host removed and expect it back. The
     deregistered-host re-enrollment gap itself is a recorded product follow-up,
-    not a client-side fix.
+    not a client-side fix. A successful removal returns Settings to the active
+    host (`scope.returnToActive`): left pinned to the removed id, the page fell
+    to the `vanished` notice ("<uuid> is no longer registered") as soon as the
+    lists refreshed. `vanished` stays the answer for a host that disappears
+    out from under the page (removed from another window or device); following
+    the active host after a removal the user just confirmed is not the silent
+    retarget that row forbids.
 
   **The recovery console is GONE.** `host-recovery-console.tsx` was what
   remained of the old CLI-bridge page and the last `IHostManagement` consumer

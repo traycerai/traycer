@@ -493,6 +493,25 @@ describe("useEpicWaitingReason", () => {
     expect(result.current).toBe("approval");
   });
 
+  it("picks up a warm chat that joins the epic's live projection after mount", () => {
+    registerSessionHoldingAgents([]);
+    registerChatSession(AGENT_ID, []);
+    setChatGates(AGENT_ID, {
+      pendingApprovals: [COMMAND_APPROVAL],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+    });
+    const { result } = renderHook(() => useEpicWaitingReason(EPIC_ID));
+    expect(result.current).toBeNull();
+
+    act(() => {
+      __getOpenEpicRegistryForTests()
+        .peek(EPIC_ID)
+        ?.store.setState({ chats: { allIds: [AGENT_ID], byId: {} } });
+    });
+    expect(result.current).toBe("approval");
+  });
+
   it("reads null for a null epic id", () => {
     const { result } = renderHook(() => useEpicWaitingReason(null));
     expect(result.current).toBeNull();

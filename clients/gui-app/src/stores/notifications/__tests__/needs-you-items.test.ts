@@ -6,9 +6,11 @@ import { NotificationFeedModeContext } from "@/lib/notifications/notification-fe
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
+  groupNeedsYouByEpic,
   needsYouReasonOf,
   selectNeedsYouItems,
   useNeedsYouItems,
+  withLiveTitles,
   type NeedsYouReason,
 } from "@/stores/notifications/needs-you-items";
 
@@ -136,6 +138,57 @@ describe("selectNeedsYouItems", () => {
   });
 });
 
+describe("groupNeedsYouByEpic", () => {
+  it("groups approvals and interviews by the epic they name, dropping an epic-less approval", () => {
+    const items = selectNeedsYouItems(
+      [
+        buildRow({ feedId: "host:a", sourceId: "a" }),
+        buildRow({
+          feedId: "host:b",
+          sourceId: "b",
+          hostKind: "interview.requested",
+          payload: INTERVIEW_PAYLOAD,
+        }),
+        buildRow({
+          feedId: "host:c",
+          sourceId: "c",
+          hostKind: "interview.requested",
+          payload: {
+            kind: "interview",
+            epicId: "epic-2",
+            chatId: "chat-2",
+            interviewBlockId: undefined,
+          },
+        }),
+        buildRow({
+          feedId: "host:d",
+          sourceId: "d",
+          payload: {
+            kind: "approval",
+            epicId: undefined,
+            chatId: "chat-1",
+            approvalId: "approval-1",
+            sessionId: undefined,
+            artifactId: undefined,
+          },
+        }),
+      ],
+      () => null,
+    );
+
+    const groups = groupNeedsYouByEpic(items);
+
+    expect([...groups.keys()]).toEqual(["epic-1", "epic-2"]);
+    expect(groups.get("epic-1")?.map((item) => item.row.sourceId)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(groups.get("epic-2")?.map((item) => item.row.sourceId)).toEqual([
+      "c",
+    ]);
+  });
+});
+
 /**
  * `useNeedsYouItems` against a real `useCloudNotificationsStore` snapshot
  * (finding 3): the cloud store keys its rows by `cloudNotificationFeedId`,
@@ -203,5 +256,52 @@ describe("useNeedsYouItems (cloud store wiring)", () => {
 
     expect(result.current).toHaveLength(1);
     expect(result.current[0]?.agentTitle).toBe("Deploy checkout fix");
+  });
+});
+
+describe("withLiveTitles", () => {
+  // Filed as "Untitled agent" under task "Deploy checkout fix" (`buildRow`).
+  const filed = selectNeedsYouItems([buildRow({})], () => "Untitled agent")[0];
+
+  it.each([
+    [
+      "the chat's own title, when this window holds the chat",
+      null,
+      { title: "Using Ask Question Tool" },
+      "Using Ask Question Tool",
+    ],
+    [
+      "no name, when the chat it holds is untitled",
+      null,
+      { title: null },
+      null,
+    ],
+    [
+      "the filed name, when it holds no record of the chat",
+      null,
+      null,
+      "Untitled agent",
+    ],
+    [
+      "no name, when the chat's title only repeats the filed task's",
+      null,
+      { title: "Deploy checkout fix" },
+      null,
+    ],
+    [
+      "no name, when the chat's title only repeats the task's own title",
+      "Checkout",
+      { title: "Checkout" },
+      null,
+    ],
+  ] as const)("names the agent by %s", (_name, task, agent, expected) => {
+    expect(withLiveTitles(filed, task, agent).agentTitle).toBe(expected);
+  });
+
+  it("names the task by its own title where this window holds it, else by the filed one", () => {
+    expect(withLiveTitles(filed, "Checkout", null).taskTitle).toBe("Checkout");
+    expect(withLiveTitles(filed, null, null).taskTitle).toBe(
+      "Deploy checkout fix",
+    );
   });
 });

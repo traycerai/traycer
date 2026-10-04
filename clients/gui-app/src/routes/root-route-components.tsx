@@ -3,6 +3,8 @@ import { OrganizationProvider } from "@/hooks/organization/organization-provider
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
+import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-lifecycle-analytics-bridge";
+import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
@@ -18,6 +20,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
+import { ProfileCopyFlowHost } from "@/components/settings/panels/profile-copy/profile-copy-flow-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
@@ -89,6 +92,12 @@ export function RootComponent() {
       <MenuCommandListener />
       <HostTrayCommandListener />
       <DesktopDialogHost />
+      {/* The host quit modal: on every route, signed in or not, so a quit is
+          always answered in-window rather than by main's native prompt. */}
+      <HostQuitDecisionBridge />
+      {/* Reports a lifecycle mode once it is written (main's change push),
+          whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
+      <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
@@ -149,6 +158,12 @@ export function RootComponent() {
               <SystemTabModalHost />
               <ChatSearchDialogHost />
               <SweepReviewDialogHost />
+              {/* The profile-copy dialog. Here rather than in Settings: Providers
+                  settings drops its body while a deep link moves its host scope,
+                  which would unmount a live sign-in on the very navigation "Open
+                  profile" makes; and not behind the default-host scope, because
+                  a copy dials only the hosts it captured. */}
+              <ProfileCopyFlowHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
               <NotificationsMobileSheet />

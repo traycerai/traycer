@@ -11,6 +11,7 @@ import {
   toggleStatusBarSurface,
   withBarHost,
   withBarSide,
+  withShownProfileIds,
   insertRailDivider,
   liveAgentsInStrip,
   moveCanvasOrderMember,
@@ -28,6 +29,8 @@ import {
   unstackRail,
   unstackRailPanel,
   TOOLBAR_REGION_IDS,
+  WIDE_READING_WIDTH_MAX_PX,
+  WIDE_READING_WIDTH_MIN_PX,
   type LayoutArrangement,
   type SideStripView,
   type TabStripPlacement,
@@ -1302,7 +1305,7 @@ describe("stacking and unstacking (L-168)", () => {
     );
   });
 
-  it("refuses a target whose stack already holds the max, with the `full` cue (L-181)", () => {
+  it("joins a fifth panel onto a stack of four: a stack has no cap (L-181)", () => {
     const fourMember: ReadonlyArray<RailEntry> = [
       panel("railAgents"),
       stack("stack:railAgents+railArtifacts+railTerminals+railBrowsers"),
@@ -1314,17 +1317,26 @@ describe("stacking and unstacking (L-168)", () => {
     const arrangement = withRail(fourMember);
 
     expect(railStackJoin(arrangement.rail, "git-diff", "chats", "panel")).toBe(
-      "full",
+      "join",
     );
     expect(
-      railStackJoin(arrangement.rail, "git-diff", "artifacts", "panel"),
-    ).toBe("full");
-    expect(stackRailPanels(arrangement, "git-diff", "chats", "panel")).toBe(
-      arrangement,
-    );
+      idsOf(
+        normalizeRail(
+          stackRailPanels(arrangement, "git-diff", "chats", "panel").rail,
+        ),
+      ),
+    ).toEqual([
+      "railAgents",
+      "stack:railAgents+railArtifacts+railTerminals+railBrowsers+railGitDiff",
+      "railArtifacts",
+      "railTerminals",
+      "railBrowsers",
+      "railGitDiff",
+      ...idsOf(FLAT_RAIL).slice(5),
+    ]);
   });
 
-  it("builds up to a 4-member stack one join at a time, then refuses the 5th", () => {
+  it("builds a stack one join at a time", () => {
     let arrangement = withRail(DEFAULT_RAIL);
     arrangement = stackRailPanels(
       arrangement,
@@ -1351,10 +1363,6 @@ describe("stacking and unstacking (L-168)", () => {
       "railSharing",
       "railComments",
     ]);
-
-    expect(stackRailPanels(arrangement, "git-diff", "chats", "panel")).toBe(
-      arrangement,
-    );
   });
 
   it("lets a stacked SOURCE leave its pair and join a new one (L-170)", () => {
@@ -1500,7 +1508,7 @@ describe("stacking and unstacking (L-168)", () => {
       ]);
     });
 
-    it("joins two whole stacks together up to the max, and refuses past it", () => {
+    it("joins two whole stacks together, whatever their combined size", () => {
       const rail: ReadonlyArray<RailEntry> = [
         panel("railAgents"),
         stack("stack:railAgents+railArtifacts+railTerminals"),
@@ -1516,7 +1524,7 @@ describe("stacking and unstacking (L-168)", () => {
       ];
       const arrangement = withRail(rail);
 
-      // 3 carried + 1 lone = 4, exactly the max: a whole-stack carry joins.
+      // 3 carried + 1 lone: a whole-stack carry joins.
       expect(
         railStackJoin(arrangement.rail, "chats", "pull-requests", "stack"),
       ).toBe("join");
@@ -1540,13 +1548,28 @@ describe("stacking and unstacking (L-168)", () => {
         "railComments",
       ]);
 
-      // 3 carried + 2 already stacked = 5, past the max: refused.
+      // 3 carried + 2 already stacked: five, joined like any other.
       expect(
         railStackJoin(arrangement.rail, "chats", "git-diff", "stack"),
-      ).toBe("full");
-      expect(stackRailPanels(arrangement, "chats", "git-diff", "stack")).toBe(
-        arrangement,
-      );
+      ).toBe("join");
+      expect(
+        idsOf(
+          normalizeRail(
+            stackRailPanels(arrangement, "chats", "git-diff", "stack").rail,
+          ),
+        ),
+      ).toEqual([
+        "railBrowsers",
+        "stack:railBrowsers+railGitDiff+railAgents+railArtifacts+railTerminals",
+        "railGitDiff",
+        "railAgents",
+        "railArtifacts",
+        "railTerminals",
+        "railPullRequests",
+        "railFileTree",
+        "railSharing",
+        "railComments",
+      ]);
     });
 
     it("lets a section-header drag of a MIDDLE member out, leaving the rest stacked", () => {
@@ -1694,7 +1717,7 @@ describe("stacking and unstacking (L-168)", () => {
       expect(railPanelToStackBelow(FLAT_RAIL, "railComments")).toBeNull();
     });
 
-    it("refuses once the combined total would exceed the max", () => {
+    it("offers the join below a stack of four: a stack has no cap", () => {
       const fourAboveOne: ReadonlyArray<RailEntry> = [
         panel("railAgents"),
         stack("stack:railAgents+railArtifacts+railTerminals+railBrowsers"),
@@ -1704,7 +1727,9 @@ describe("stacking and unstacking (L-168)", () => {
         ...FLAT_RAIL.slice(4),
       ];
 
-      expect(railPanelToStackBelow(fourAboveOne, "railBrowsers")).toBeNull();
+      expect(railPanelToStackBelow(fourAboveOne, "railBrowsers")).toBe(
+        "railGitDiff",
+      );
     });
 
     it("joins the two blocks with no member moving", () => {
@@ -1985,6 +2010,47 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
   );
 });
 
+/**
+ * `wideReadingWidthPx` is not one of L-133's small enum fields - it is a
+ * clamped number, so it gets its own describe rather than joining the
+ * `it.each` table above (which asserts strict membership, not a range).
+ */
+describe("resolvePersistedArrangement: wideReadingWidthPx (clamped, not enum)", () => {
+  it("falls back to the default on an absent or non-numeric value", () => {
+    expect(resolvePersistedArrangement({}).wideReadingWidthPx).toBe(
+      DEFAULT_ARRANGEMENT.wideReadingWidthPx,
+    );
+    for (const value of ["1200", null, {}, NaN, Infinity, -Infinity]) {
+      expect(
+        resolvePersistedArrangement({ wideReadingWidthPx: value })
+          .wideReadingWidthPx,
+        JSON.stringify(value),
+      ).toBe(DEFAULT_ARRANGEMENT.wideReadingWidthPx);
+    }
+  });
+
+  it("keeps a valid in-range value verbatim", () => {
+    expect(
+      resolvePersistedArrangement({ wideReadingWidthPx: 1600 })
+        .wideReadingWidthPx,
+    ).toBe(1600);
+  });
+
+  it("clamps a value below the floor up to the slider's own minimum", () => {
+    expect(
+      resolvePersistedArrangement({ wideReadingWidthPx: 200 })
+        .wideReadingWidthPx,
+    ).toBe(WIDE_READING_WIDTH_MIN_PX);
+  });
+
+  it("clamps a value above the ceiling down to the slider's own maximum", () => {
+    expect(
+      resolvePersistedArrangement({ wideReadingWidthPx: 100_000 })
+        .wideReadingWidthPx,
+    ).toBe(WIDE_READING_WIDTH_MAX_PX);
+  });
+});
+
 describe("where Add divider puts one when the rail ends in a stack", () => {
   it("steps over the link rather than splitting the pair", () => {
     const endsStacked = normalizeRail([
@@ -2005,5 +2071,35 @@ describe("where Add divider puts one when the rail ends in a stack", () => {
       "stack:railSharing+railComments",
       "railComments",
     ]);
+  });
+});
+
+describe("withShownProfileIds", () => {
+  const HOST_ID = "host-1";
+
+  it("replaces one provider's list and leaves the rest of the host alone", () => {
+    const before = { [HOST_ID]: { codex: [null], "claude-code": ["work"] } };
+    expect(withShownProfileIds(before, HOST_ID, "codex", [null, "a"])).toEqual({
+      [HOST_ID]: { codex: [null, "a"], "claude-code": ["work"] },
+    });
+  });
+
+  it("drops an emptied provider, and an emptied host, rather than storing []", () => {
+    expect(
+      withShownProfileIds(
+        { [HOST_ID]: { codex: ["a"], "claude-code": ["b"] } },
+        HOST_ID,
+        "codex",
+        [],
+      ),
+    ).toEqual({ [HOST_ID]: { "claude-code": ["b"] } });
+    expect(
+      withShownProfileIds(
+        { [HOST_ID]: { codex: ["a"] } },
+        HOST_ID,
+        "codex",
+        [],
+      ),
+    ).toEqual({});
   });
 });

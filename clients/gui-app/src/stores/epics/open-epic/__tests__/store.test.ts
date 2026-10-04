@@ -457,109 +457,6 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  // ── retryTransport: the plan-denial rebuild and the edit it must not trade ──
-  //
-  // Two arms, because `retryTransport` is a REQUEST the store may refuse and
-  // both answers are behaviour. Upstream's version reopened the stream client
-  // the store itself owned, so the replica and its queue survived underneath
-  // and there was nothing to refuse; here the worker holds the clients over a
-  // proxied transport and the provider owns the socket, so a retry is a NEW
-  // session and nothing carries a replica across one.
-  it("asks its owner to rebuild the transport when the session is clean", () => {
-    const { factory, handle } = fakeFactory();
-    const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
-    handle().callbacks.onSnapshot(
-      buildMeta("editor", new Y.Doc()),
-      emptySnapshot(),
-    );
-    // The only state this is ever called about: the host closed the stream
-    // with a terminal plan denial, and its reprobe deadline has come due.
-    handle().callbacks.onConnectionStatus(
-      "closed",
-      {
-        kind: "fatalError",
-        details: {
-          code: "PLAN_RESTRICTED",
-          reason: "remote access unavailable",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        },
-      },
-      false,
-    );
-
-    // WHY THE GATE READS `isDirty` AND NOT `isClean()`, asserted rather than
-    // left to a comment, because `isClean()` is the substitution a reader
-    // makes on sight. This session holds nothing unsynced and `isClean()`
-    // still reads false: it ALSO requires an open transport, which a
-    // plan-denied session has by definition lost. Gating on it would refuse
-    // every session the reprobe exists to recover, and the rebuild would
-    // never once fire.
-    expect(opened.store.getState().isDirty).toBe(false);
-    expect(opened.isClean()).toBe(false);
-
-    opened.retryTransport();
-    expect(opened.retryTransportRequests()).toBe(1);
-
-    opened.dispose();
-  });
-
-  it("refuses the rebuild while the session holds unsynced Epic edits", () => {
-    const { factory, handle } = fakeFactory();
-    const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
-    handle().callbacks.onSnapshot(
-      buildMeta("editor", new Y.Doc()),
-      emptySnapshot(),
-    );
-    handle().callbacks.onConnectionStatus(
-      "closed",
-      {
-        kind: "fatalError",
-        details: {
-          code: "PLAN_RESTRICTED",
-          reason: "remote access unavailable",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        },
-      },
-      false,
-    );
-    opened.doc.getMap("epic").set("title", "Buffered title");
-
-    expect(opened.store.getState().isDirty).toBe(true);
-    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
-
-    opened.retryTransport();
-
-    // Rebuilding here would destroy the only copy of these edits - the rule
-    // `session-registry` states as "never destroy a session holding unsynced
-    // edits", and whose violation is on record as the F10 data loss. So the
-    // request is refused, and refused SILENTLY: no failure is presented for
-    // something the user never asked for, and the buffer keeps waiting for a
-    // transport it can actually flush through.
-    expect(opened.retryTransportRequests()).toBe(0);
-    expect(opened.doc.getMap("epic").get("title")).toBe("Buffered title");
-    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
-
-    opened.dispose();
-  });
-
   it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
@@ -1355,59 +1252,85 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  // The two terminal codes s0 added carry a host-authored `reason` aimed at a
-  // log line. The renderer substitutes copy for exactly those two; the
+  // `ROOM_UNINITIALIZED` carries a host-authored `reason` aimed at a log line.
+  // The renderer substitutes copy for exactly that one terminal code; the
   // UNAUTHORIZED test above is the other half of this guard - it pins that an
   // unmapped code still surfaces `reason` verbatim, so a mapping that swallowed
   // every code would fail there rather than pass here.
-  it.each([
-    {
+  it("renders copy instead of the raw host reason for a terminal ROOM_UNINITIALIZED close", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-room_uninitialized",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "ROOM_UNINITIALIZED",
+          reason: "tiptap room uninitialized for epic-room-1",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      true,
+    );
+
+    const error = opened.store.getState().snapshotFetchError;
+    expect(error).toEqual({
       code: "ROOM_UNINITIALIZED",
-      reason: "tiptap room uninitialized for epic-room-1",
-      expected:
+      message:
         "This epic cannot be opened because its collaboration room was never initialized.",
-    },
-    {
+      upgradeGuidance: null,
+    });
+    // Copy replaces the message, never the discriminant.
+    expect(error?.code).toBe("ROOM_UNINITIALIZED");
+    opened.dispose();
+  });
+
+  // Cloud sync is on every plan, so `ENTITLEMENT_REQUIRED` has no copy of its
+  // own: a host that still sends it gets the same verbatim `reason` as any
+  // other unmapped code, not a sentence about the account's plan.
+  it("surfaces the host's own reason for a terminal ENTITLEMENT_REQUIRED close", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-entitlement_required",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "ENTITLEMENT_REQUIRED",
+          reason: "free tier has no cloud sync",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      true,
+    );
+
+    expect(opened.store.getState().snapshotFetchError).toEqual({
       code: "ENTITLEMENT_REQUIRED",
-      reason: "free tier has no cloud sync",
-      expected: "Cloud sync is not available on your current plan.",
-    },
-  ])(
-    "renders copy instead of the raw host reason for a terminal $code close",
-    ({ code, reason, expected }) => {
-      const { factory, handle } = fakeFactory();
-      const opened = openStoreForTest({
-        epicId: `epic-${code.toLowerCase()}`,
-        userId: null,
-        factories: {
-          streamClientFactory: factory,
-          laneSelection: null,
-        },
-        writeCommand: null,
-      });
-
-      handle().callbacks.onConnectionStatus(
-        "closed",
-        {
-          kind: "fatalError",
-          details: {
-            code,
-            reason,
-            incompatibleMethods: null,
-            upgradeGuidance: null,
-          },
-        },
-        true,
-      );
-
-      const error = opened.store.getState().snapshotFetchError;
-      expect(error).toEqual({ code, message: expected, upgradeGuidance: null });
-      // The banner keys its Upgrade button off `code`, so the code must survive
-      // the substitution - copy replaces the message, never the discriminant.
-      expect(error?.code).toBe(code);
-      opened.dispose();
-    },
-  );
+      message: "free tier has no cloud sync",
+      upgradeGuidance: null,
+    });
+    opened.dispose();
+  });
 
   // ── B6: artifact-room-scoped frame handling ──────────────────────────────────────
 

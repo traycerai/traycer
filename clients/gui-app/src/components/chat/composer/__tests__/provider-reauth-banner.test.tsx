@@ -19,9 +19,22 @@ import type {
 // OAuth (browser login) and/or pasting a fresh credential into an env var. A
 // *rejected* credential never reaches the banner (it surfaces as a generic error
 // row); API-key-only providers (Cursor) have no capability and no banner.
+//
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the attempt's own `AbortSignal`.
 type AwaitLoginVariables = {
+  readonly request: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
+};
+// Mirrors `providers.cancelLogin`'s request fields the mocked hook forwards -
+// same rationale as `AwaitLoginVariables` above.
+type CancelLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
+  readonly holderId: string | null;
 };
 // Mirrors only the fields the ambient flow hook actually reads off
 // `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`,
@@ -128,8 +141,16 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
   useProvidersCancelLogin: () => ({
     mutate: mocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      mocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: mocks.cancelLoginPending,
   }),
+}));
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
 }));
 vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
   useProvidersSubmitLoginCode: () => ({
@@ -940,10 +961,13 @@ describe("<ProviderReauthBanner />", () => {
     // Spinner shows, and we await the host's completion edge instead of a
     // 2s `forceAuthRefresh` poll.
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
-    expect(mocks.awaitLoginMutate).toHaveBeenCalledWith(
-      { providerId: "claude-code", profileId: null },
-      expect.anything(),
-    );
+    const [awaitVariables, awaitOptions] = latestAwaitLoginCall();
+    expect(awaitVariables.request).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+    });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
+    expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
   it("does not show a code-paste field for a provider without the codePaste capability", async () => {
@@ -1559,6 +1583,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -1704,6 +1729,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      holderId: null,
     });
   });
 

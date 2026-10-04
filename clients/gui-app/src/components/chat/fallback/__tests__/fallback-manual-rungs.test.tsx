@@ -14,6 +14,8 @@ import type {
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { FallbackRungRefusalDetail } from "@traycer/protocol/host/chat-fallback";
+import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
+import { AGENT_FAILURE_REASONS } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
@@ -1906,6 +1908,109 @@ describe("FallbackManualRungActions", () => {
       const root = screen.getByRole("button", { name: "Retry" }).parentElement
         ?.parentElement;
       expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
+  });
+
+  /**
+   * The wait explanation is a rate-limit-only fact.
+   *
+   * The card's one standing wait line (`beyond_cap`: "This limit resets at …
+   * longer than Traycer is set to wait") is about a RATE LIMIT, but the host
+   * derives `waitDisposition` from the failed tuple's reset gauge alone. So a
+   * turn that failed for an unrelated reason - a spent quota, a stream that
+   * ended with no terminal event, a model that went away - can arrive
+   * `beyond_cap` whenever the gauge reads that way, and would be told about a
+   * limit it never hit. `waitExplanationFor` gates the line on
+   * `REASON_ELIGIBLE_RUNGS[attempt.failure.reason].includes("wait")`, the
+   * shared matrix the host engine reads too.
+   *
+   * Every case uses `beyond_cap`, the one disposition the card still stands a
+   * line for (clutter cuts, 2026-09-27): a case on any other disposition would
+   * pass with the gate deleted. The control - `rate_limit` keeps the line - is
+   * "renders the beyond-cap sentence, with and without a named reset time"
+   * above.
+   */
+  describe("the wait explanation is a rate-limit-only fact", () => {
+    it("does not show the beyond-cap sentence for missing_terminal_event, and still renders Retry", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "missing_terminal_event" },
+          eligibleRungs: ["retry"],
+          waitDisposition: "beyond_cap",
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // A stalled stream has no reset boundary to be "beyond the cap" of, and
+      // `REASON_ELIGIBLE_RUNGS.missing_terminal_event` carries no "wait" rung.
+      expect(screen.queryByText(/Traycer is set to wait/)).toBeNull();
+    });
+
+    it("does not show the beyond-cap sentence for a non-wait reason (billing), with a reset time in hand", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: {
+            reason: "billing",
+            resetsAt: RESETS_AT,
+            resetsAtSource: "provider",
+          },
+          eligibleRungs: ["retry"],
+          waitDisposition: "beyond_cap",
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // `REASON_ELIGIBLE_RUNGS.billing` is `["profile", "tier"]` - no "wait".
+      // Matches both wordings of the sentence, which share this clause.
+      expect(screen.queryByText(/Traycer is set to wait/)).toBeNull();
+    });
+
+    /**
+     * The generalised sweep: EVERY reason `REASON_ELIGIBLE_RUNGS` marks as
+     * carrying no `"wait"` rung gets no wait sentence - not only the two
+     * hand-picked above. Iterates `AGENT_FAILURE_REASONS` - the typed list a
+     * `LastFailedAttempt.failure.reason` actually draws from - and indexes
+     * `REASON_ELIGIBLE_RUNGS` with it directly, the same way the production
+     * gate does, so a new reason added to the protocol with no "wait" rung is
+     * covered here without this file changing. `auth` is in the sweep: the
+     * card renders a signed-out failure's actions like any other.
+     */
+    it("finds at least one non-wait reason, and none of them show the beyond-cap sentence", () => {
+      const nonWaitReasons = AGENT_FAILURE_REASONS.filter(
+        (reason) => !REASON_ELIGIBLE_RUNGS[reason].includes("wait"),
+      );
+      // Not vacuous - falsification: an empty filter would make the loop
+      // below assert nothing and pass for the wrong reason entirely.
+      expect(nonWaitReasons.length).toBeGreaterThan(0);
+
+      for (const reason of nonWaitReasons) {
+        seedAttempt(
+          lastFailedAttempt({
+            userMessageId: USER_MESSAGE_ID,
+            turnId: TURN_ID,
+            failure: { reason },
+            eligibleRungs: ["retry"],
+            waitDisposition: "beyond_cap",
+            switchDisposition: "unknown",
+            failedTuple: null,
+          }),
+        );
+        const { unmount } = renderActions(TURN_ID);
+        expect(
+          screen.getByRole("button", { name: "Retry" }),
+          reason,
+        ).toBeDefined();
+        expect(screen.queryByText(/Traycer is set to wait/), reason).toBeNull();
+        unmount();
+      }
     });
   });
 });

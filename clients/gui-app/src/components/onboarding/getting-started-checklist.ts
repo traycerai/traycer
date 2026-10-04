@@ -7,10 +7,13 @@ import {
 import {
   isSetupGuideAvailable,
   setupGuideLength,
+  setupGuideStepsFor,
   type SetupGuideId,
 } from "@/stores/onboarding/setup-guides";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useHostBinding } from "@/lib/host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 
 const CARDS = [
@@ -83,6 +86,7 @@ function cardPresentation(
     readonly completedAt: number | null;
     readonly progress: Record<SetupGuideId, number>;
     readonly shell: { readonly browserView: boolean };
+    readonly layoutEditor: boolean;
     readonly hostBound: boolean;
   },
 ): CardPresentation {
@@ -98,9 +102,14 @@ function cardPresentation(
       unavailableReason: null,
     };
   }
-  const total = setupGuideLength(id);
+  // Stored progress counts the guide's whole step list, so "done" compares
+  // against that; the printed total counts only the steps this shell walks.
+  const length = setupGuideLength(id);
+  const total = setupGuideStepsFor(id, {
+    layoutEditor: input.layoutEditor,
+  }).length;
   const step = input.progress[id];
-  const done = step === total;
+  const done = step === length;
   const started = step >= 0;
   let unavailableReason: string | null = null;
   if (!isSetupGuideAvailable(id, input.shell))
@@ -110,7 +119,7 @@ function cardPresentation(
   let status = "Not started";
   let action = "Start guide";
   if (started) {
-    status = `Step ${step + 1} of ${total}`;
+    status = `Step ${Math.min(step + 1, total)} of ${total}`;
     action = "Resume";
   }
   if (done) {
@@ -120,7 +129,7 @@ function cardPresentation(
   return {
     done,
     started,
-    completed: Math.max(0, step),
+    completed: Math.min(Math.max(0, step), total),
     total,
     status,
     action,
@@ -154,6 +163,8 @@ export function useGettingStartedChecklist(): {
   const progress = useOnboardingStore((state) => state.setupProgress);
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
   const hostBinding = useHostBinding();
+  const availability = useSettingsAvailabilityContext();
+  const layoutEditor = isLayoutEditorAvailable(availability);
   const shell = { browserView: browserView !== null };
   const complete = useOnboardingStore((state) =>
     onboardingCompletedCount(state, shell),
@@ -165,6 +176,7 @@ export function useGettingStartedChecklist(): {
         completedAt,
         progress,
         shell,
+        layoutEditor,
         hostBound: hostBinding !== null,
       }),
     })),

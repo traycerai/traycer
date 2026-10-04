@@ -85,6 +85,12 @@ export function useQuoteSelection(params: {
     const handleMouseUp = (event: MouseEvent): void => {
       const target = event.target;
       if (!(target instanceof Node) || !container.contains(target)) return;
+      // Only a plain primary-button release is a quote gesture. A right-click
+      // on macOS selects the word under the pointer before its menu opens, and
+      // reading that selection here would pop the quote button beside the
+      // menu over text the user never chose to select. Control-click is the
+      // same gesture there, released as the primary button with `ctrlKey`.
+      if (event.button !== 0 || event.ctrlKey) return;
       // Defer the Selection read by one frame: on double-click-drag and
       // shift-click the browser can finalize (extend) the selection AFTER
       // mouseup, so a synchronous read here would snapshot a stale/incomplete

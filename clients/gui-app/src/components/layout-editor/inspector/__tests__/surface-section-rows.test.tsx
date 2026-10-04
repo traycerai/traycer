@@ -50,7 +50,9 @@ function renderSurface(regionId: RegionId): void {
 }
 
 function row(id: string): HTMLElement {
-  const node = document.querySelector(`[data-sortable-id="${id}"]`);
+  const node = document.querySelector(
+    `[data-sortable-id="${id}"], [data-region-section="${id}"]`,
+  );
   if (!(node instanceof HTMLElement)) throw new Error(`no such row: ${id}`);
   return node;
 }
@@ -75,7 +77,7 @@ describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 
       .querySelectorAll<HTMLButtonElement>("[role='radio']")[0];
   }
 
-  it("disables Location, Side and Metrics while Hidden with agent rows off, and says 'these settings'", () => {
+  it("disables Location and Metrics while Hidden with agent rows off, and says 'these settings'", () => {
     useLayoutStore.getState().setRegionValues("resourceMonitor", {
       shown: "hidden",
       agentRows: false,
@@ -86,10 +88,9 @@ describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 
       "div[data-region-detail]",
     );
     expect(detail).not.toBeNull();
-    expect(firstRadio("Resource monitor position").matches(":disabled")).toBe(
+    expect(firstRadio("Resource monitor location").matches(":disabled")).toBe(
       true,
     );
-    expect(firstRadio("Resource monitor side").matches(":disabled")).toBe(true);
     for (const checkbox of within(row("resourceMonitor")).getAllByRole(
       "checkbox",
     )) {
@@ -100,17 +101,16 @@ describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 
     ).not.toBeNull();
   });
 
-  it("keeps Metrics editable while Hidden with agent rows on, disables Location and Side, and says 'its other settings'", () => {
+  it("keeps Metrics editable while Hidden with agent rows on, disables Location, and says 'its other settings'", () => {
     useLayoutStore.getState().setRegionValues("resourceMonitor", {
       shown: "hidden",
       agentRows: true,
     });
     renderSurface("resourceMonitor");
 
-    expect(firstRadio("Resource monitor position").matches(":disabled")).toBe(
+    expect(firstRadio("Resource monitor location").matches(":disabled")).toBe(
       true,
     );
-    expect(firstRadio("Resource monitor side").matches(":disabled")).toBe(true);
     for (const checkbox of within(row("resourceMonitor")).getAllByRole(
       "checkbox",
     )) {
@@ -127,10 +127,7 @@ describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 
     });
     renderSurface("resourceMonitor");
 
-    expect(firstRadio("Resource monitor position").matches(":disabled")).toBe(
-      false,
-    );
-    expect(firstRadio("Resource monitor side").matches(":disabled")).toBe(
+    expect(firstRadio("Resource monitor location").matches(":disabled")).toBe(
       false,
     );
     for (const checkbox of within(row("resourceMonitor")).getAllByRole(
@@ -147,27 +144,31 @@ describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 
     });
     renderSurface("usageLimits");
 
-    const positionRadio = within(row("usageLimits"))
-      .getByRole("radiogroup", { name: "Usage limits position" })
-      .querySelectorAll<HTMLButtonElement>("[role='radio']")[0];
-    expect(positionRadio.matches(":disabled")).toBe(true);
-    for (const checkbox of within(row("usageLimits")).getAllByRole(
-      "checkbox",
-    )) {
-      expect(checkbox.matches(":disabled")).toBe(true);
-    }
+    const usage = within(row("usageLimits"));
+    const radios = [
+      ...usage
+        .getByRole("radiogroup", { name: "Usage limits location" })
+        .querySelectorAll<HTMLButtonElement>("[role='radio']"),
+      ...usage
+        .getByRole("radiogroup", { name: "Density" })
+        .querySelectorAll<HTMLButtonElement>("[role='radio']"),
+    ];
+    for (const radio of radios) expect(radio.matches(":disabled")).toBe(true);
+    expect(
+      usage.getByRole("switch", { name: "Reset time" }).matches(":disabled"),
+    ).toBe(true);
     expect(
       screen.getByText("Show Usage limits to change these settings."),
     ).not.toBeNull();
   });
 });
 
-describe("the two bar readings' Position rows (L-156)", () => {
-  function rowControl(label: string): HTMLElement {
+describe("the two bar readings' Location row", () => {
+  function picker(label: string): HTMLElement {
     return screen.getByRole("radiogroup", { name: label });
   }
 
-  it("writes only its own region and its own axis", () => {
+  it("writes only its own region, the bar always and the end only for the status bar", () => {
     renderSurface("resourceMonitor");
 
     // The usage cluster is put somewhere it did not ship first, so a write
@@ -181,24 +182,28 @@ describe("the two bar readings' Position rows (L-156)", () => {
     });
 
     fireEvent.click(
-      within(rowControl("Resource monitor position")).getByRole("radio", {
+      within(picker("Resource monitor location")).getByRole("radio", {
         name: "Tab strip",
       }),
     );
+    let after = useLayoutStore.getState().arrangement;
+    expect(after.resourceHost).toBe("header");
+    // The tab strip has no end, so the old one is kept for the way back.
+    expect(after.resourceSide).toBe("right");
+
     fireEvent.click(
-      within(rowControl("Resource monitor side")).getByRole("radio", {
-        name: "Left",
+      within(picker("Resource monitor location")).getByRole("radio", {
+        name: "Status bar left",
       }),
     );
-
-    const after = useLayoutStore.getState().arrangement;
-    expect(after.resourceHost).toBe("header");
+    after = useLayoutStore.getState().arrangement;
+    expect(after.resourceHost).toBe("status-bar");
     expect(after.resourceSide).toBe("left");
     expect(after.usageHost).toBe("status-bar");
     expect(after.usageSide).toBe("right");
   });
 
-  it("reverts one row at a time (L-133)", () => {
+  it("reverts the bar and the end together, as one row (L-133)", () => {
     renderSurface("usageLimits");
 
     act(() => {
@@ -210,17 +215,13 @@ describe("the two bar readings' Position rows (L-156)", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Revert Alignment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revert Location" }));
 
     const after = useLayoutStore.getState().arrangement;
+    expect(after.usageHost).toBe("status-bar");
     expect(after.usageSide).toBe("left");
-    // The bar row is the one that still has something to put back.
-    expect(after.usageHost).toBe("header");
     expect(
-      screen.getByRole("button", { name: "Revert Location" }),
-    ).not.toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Revert Alignment" }),
+      screen.queryByRole("button", { name: "Revert Location" }),
     ).toBeNull();
   });
 });

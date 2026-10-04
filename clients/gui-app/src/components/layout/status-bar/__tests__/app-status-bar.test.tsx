@@ -721,54 +721,45 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
   });
 
   /**
-   * The resource readout answers with its OWN verbs (L-144).
+   * The resource readout answers with its OWN menu (L-144).
    *
    * The bar's menu stands down over it - it is the resource popover's trigger,
-   * and the bar's own quick verbs name `usageLimits`, the segment beside this
-   * one - so for as long as the segment had no menu of its own it was the one
-   * piece of the strip that answered no right-click at all.
+   * and the bar's menu is about the usage cluster beside it - so for as long
+   * as the segment had no menu of its own it was the one piece of the strip
+   * that answered no right-click at all. Both menus offer the way into the
+   * editor, so what tells them apart is the bar's provider checkboxes.
    *
    * Nested Radix triggers do not both fire: the inner one defaults the shared
    * event prevented before the outer trigger's composed opener runs.
+   *
+   * LV2-05 / L-129: the menu is wanted in an editor session at least as much
+   * as at rest, and that is where it used to be firewalled.
    */
-  it("answers a right-click on the resource segment with the resource monitor's verbs", () => {
-    windowedProviders = twoWindowedProviders();
-    render(<AppStatusBar />);
+  it.each([
+    { label: "at rest", editing: false },
+    { label: "while the layout editor is open", editing: true },
+  ])(
+    "answers a right-click on the resource segment with the segment's own menu, $label",
+    ({ editing }) => {
+      windowedProviders = twoWindowedProviders();
+      if (editing) {
+        useLayoutEditorStore.getState().beginSession({
+          entry: "pointer",
+          source: "direct_ui",
+          startedAt: 0,
+          origin: { kind: "tab" },
+        });
+      }
+      render(<AppStatusBar />);
 
-    fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
+      fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
 
-    expect(
-      screen.getByTestId("layout-quick-verb-resourceMonitor-hide"),
-    ).not.toBeNull();
-    expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
-    // The bar's menu, not the segment's: its provider checkboxes and its own
-    // region's verbs are what must NOT be on screen here.
-    expect(
-      screen.queryByRole("menuitemcheckbox", { name: "Codex" }),
-    ).toBeNull();
-    expect(
-      screen.queryByTestId("layout-quick-verb-usageLimits-hide"),
-    ).toBeNull();
-  });
-
-  it("answers the same right-click while the layout editor is open", () => {
-    // LV2-05 / L-129: the verbs are wanted in a session at least as much as at
-    // rest, and that is where they used to be firewalled.
-    windowedProviders = twoWindowedProviders();
-    useLayoutEditorStore.getState().beginSession({
-      entry: "pointer",
-      source: "direct_ui",
-      startedAt: 0,
-      origin: { kind: "tab" },
-    });
-    render(<AppStatusBar />);
-
-    fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
-
-    expect(
-      screen.getByTestId("layout-quick-verb-resourceMonitor-hide"),
-    ).not.toBeNull();
-  });
+      expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
+      expect(
+        screen.queryByRole("menuitemcheckbox", { name: "Codex" }),
+      ).toBeNull();
+    },
+  );
 
   it("leaves the left click on the resource segment to the panel", () => {
     // The menu wraps the POPOVER, never the node the popover hands to
@@ -923,7 +914,7 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       kind: "session",
       usedPercent: 34,
       resetsAt: null,
-      severity: "healthy",
+      severity: "running_low",
     } as const;
     const claudeWindow = {
       ...codexWindow,
@@ -958,9 +949,10 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       ],
     };
 
-    // The same readings, part by part, on both viewports: the percentage,
-    // the mode word and the window's label in the text, and one mini bar per
-    // reading - with every account drawn and none folded away.
+    // The same readings, part by part, on both viewports: the percentage and
+    // the window's label in the text and one mini bar per reading (a
+    // running-low profile is the expanded form) - with every account drawn
+    // and none folded away.
     function expectFullReadings(): void {
       expect(
         screen
@@ -970,11 +962,11 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
       expect(
         screen.getByTestId("status-bar-window-codex:primary").textContent,
-      ).toBe("34% used 5h");
+      ).toBe("34%5h");
       expect(
         screen.getByTestId("status-bar-window-claude-code:fiveHour")
           .textContent,
-      ).toBe("57% used 5h");
+      ).toBe("57%5h");
       expect(
         screen
           .getAllByTestId("status-bar-provider-mini-bar")
@@ -992,36 +984,13 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
     expectFullReadings();
   });
 
-  it("leaves app.rate-limits.open to the header it is sharing the screen with", () => {
-    // The slot holds ONE handler and an unregister clears only its own, so a
-    // strip that registered here would displace the mobile header's and then
-    // - unmounting for the keyboard or the drawer - take the chord away
-    // outright, with the header button still on screen and its effect long
-    // past re-running. Nothing is lost: the cluster's own trigger is a tap
-    // away, and it opens the same panel.
+  it("holds app.rate-limits.open on a mobile viewport, where the header draws no gauge beside it", () => {
+    // The phone header gives its usage glyph up while this footer is on, and
+    // this footer only mounts there while it is on - so the footer is the
+    // chord's one owner rather than a rival for it.
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     render(<AppStatusBar />);
-
-    act(() => {
-      expect(
-        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
-      ).toBe(false);
-    });
-
-    expect(screen.queryByTestId("rate-limit-popover-stub")).toBeNull();
-  });
-
-  it("takes the chord back when the window is no longer narrow", () => {
-    // The registration follows the viewport rather than the mount, so a
-    // desktop window narrowed and widened again is not left chordless.
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    const view = render(<AppStatusBar />);
-
-    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    act(() => {
-      view.rerender(<AppStatusBar />);
-    });
 
     act(() => {
       expect(
@@ -1037,10 +1006,9 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
  * Which mount holds `app.resources.open`, decided by the strip and handed to
  * the popover as a prop (the popover's own suite owns honouring it).
  *
- * The resource popover is mounted by the HEADER as well as by the strip, so
- * unlike the usage chord this cannot be a flat "stand down when narrow": with
- * the header's monitor switched off there is no other mount, and standing
- * down would leave the action with no owner at all.
+ * The resource popover is mounted by the HEADER as well as by the strip, but
+ * never both at once: on desktop placement keeps them apart, and the phone
+ * header draws no monitor while the footer is on.
  */
 describe("<AppStatusBar /> resource action ownership", () => {
   const DESKTOP_VIEWPORT_WIDTH = 1280;
@@ -1084,37 +1052,18 @@ describe("<AppStatusBar /> resource action ownership", () => {
     expect(claimsOpenAction()).toBe("true");
   });
 
-  it("stands down on a mobile viewport while the header draws its own monitor", () => {
-    // Both are on screen there - the header keeps its monitor whatever the
-    // footer does - and the header is the one that survives an open keyboard
-    // or nav drawer, so the strip must not displace its handler and then
-    // delete the slot on the way out. `resourceMonitor.shown` is one switch
-    // now (L-48): the default "shown" is what both mounts read, so no
-    // explicit set is needed to put the header's monitor on screen.
+  it("claims it on a mobile viewport too, where the header gives its monitor up to the footer", () => {
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     render(<AppStatusBar />);
 
-    expect(claimsOpenAction()).toBe("false");
+    expect(claimsOpenAction()).toBe("true");
   });
 
   // The old "header off, strip on" case is gone with it: `resourceMonitor` is
   // ONE switch (L-48) now, so turning the header's monitor off also drops the
   // strip's own segment - there is no longer a state where the strip has a
   // popover to claim ownership of while the header draws none.
-
-  it("takes it back when the window is no longer narrow", () => {
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    const view = render(<AppStatusBar />);
-    expect(claimsOpenAction()).toBe("false");
-
-    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    act(() => {
-      view.rerender(<AppStatusBar />);
-    });
-
-    expect(claimsOpenAction()).toBe("true");
-  });
 });
 
 // The rest of the old "Customize editing" / "disabled-usage provider ghosts
@@ -1233,6 +1182,20 @@ describe("<AppStatusBar /> reading placement (L-156)", () => {
 
     expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
     expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
+  });
+
+  it("fixes the ends on a narrow viewport whatever side either reading names", () => {
+    // L-162: the phone footer has fixed ends - usage at the start, resources
+    // at the end - and the usage panel opens over the start. The stored sides
+    // are a desktop window's and are left as they were.
+    setViewportWidth(390);
+    place({ usageSide: "right", resourceSide: "left", mobileFooter: true });
+    render(<AppStatusBar />);
+
+    expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
+    expect(lastPopoverProps).toEqual({ side: "top", align: "start" });
+    expect(useLayoutStore.getState().arrangement.usageSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.resourceSide).toBe("left");
   });
 
   it("opens the usage panel at the end the cluster is on", () => {

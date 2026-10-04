@@ -338,9 +338,9 @@ describe("deriveWindowNarration", () => {
     });
 
     it("keeps update-host reachable at first launch - the grace must not swallow a dead incompatible host", () => {
-      // The sharp edge of the rule above: `update-host` and `plan-restricted`
-      // BOTH derive from dead leases, so a grace that ignored deadness would
-      // make them unreachable on the very launch they matter most.
+      // The sharp edge of the rule above: `update-host` derives from a dead
+      // lease, so a grace that ignored deadness would make it unreachable on
+      // the very launch it matters most.
       const detail = {
         code: "protocol-major-behind",
         hostVersion: "1.2.3",
@@ -504,27 +504,8 @@ describe("deriveWindowNarration", () => {
       });
     });
 
-    it("does NOT wait over an all-plan-restricted fleet", () => {
-      // The upgrade CTA is the whole answer on that arm, and withholding it
-      // until the directory answers withholds the only action there is.
-      const state = deriveWindowNarration(
-        baseInput({
-          attached: true,
-          effectiveHostId: null,
-          leases: [deadLease("host-a", { reason: "plan-restricted" })],
-          localHostExpected: false,
-          discoveryConcluded: false,
-        }),
-      );
-      expect(state).toEqual({
-        kind: "narrating",
-        cause: "no-usable-host",
-        variant: { kind: "plan-restricted" },
-      });
-    });
-
     it("still waits when the scan would have said offline anyway", () => {
-      // The discriminating control for the two cases above: same unconcluded
+      // The discriminating control for the case above: same unconcluded
       // discovery, a dead lease that is merely offline, and nothing actionable
       // to withhold - so the wait applies.
       const state = deriveWindowNarration(
@@ -821,16 +802,7 @@ describe("deriveNoHostVariant precedence", () => {
     });
   });
 
-  it("2. every lease dead plan-restricted (>=1) => plan-restricted", () => {
-    const leases = [
-      deadLease("host-a", { reason: "plan-restricted" }),
-      deadLease("host-b", { reason: "plan-restricted" }),
-    ];
-    const variant = deriveNoHostVariant(leases, "host-a");
-    expect(variant).toEqual({ kind: "plan-restricted" });
-  });
-
-  it("3. no target incompatibility, some other lease is dead-incompatible => update-host on it", () => {
+  it("2. no target incompatibility, some other lease is dead-incompatible => update-host on it", () => {
     const detail = incompatibility({ code: "other-behind" });
     const leases = [
       deadLease("host-target", { reason: "offline" }),
@@ -841,7 +813,7 @@ describe("deriveNoHostVariant precedence", () => {
       kind: "update-host",
       hostId: "host-other",
       detail,
-      // Arm 3: the incompatible host is NOT the target, so the action - which
+      // Arm 2: the incompatible host is NOT the target, so the action - which
       // re-provisions THIS machine - must be withheld. Carried on the variant
       // rather than re-derived at the card, because `canManageHost` answers a
       // different question ("is the target this machine") and reads as this
@@ -850,38 +822,9 @@ describe("deriveNoHostVariant precedence", () => {
     });
   });
 
-  it("4. mixed offline + plan-restricted => offline", () => {
-    const leases = [
-      deadLease("host-a", { reason: "offline" }),
-      deadLease("host-b", { reason: "plan-restricted" }),
-    ];
-    const variant = deriveNoHostVariant(leases, null);
-    expect(variant).toEqual({ kind: "offline" });
-  });
-
-  it("5. empty lease list => offline, not plan-restricted (vacuous-every guard)", () => {
+  it("3. empty lease list => offline", () => {
     const variant = deriveNoHostVariant([], null);
     expect(variant).toEqual({ kind: "offline" });
-  });
-
-  it("6. mixed plan-restricted target + incompatible other falls through to update-host", () => {
-    const detail = incompatibility({ code: "other-behind" });
-    const leases = [
-      deadLease("host-target", { reason: "plan-restricted" }),
-      deadLease("host-other", { reason: "incompatible", detail }),
-    ];
-    const variant = deriveNoHostVariant(leases, "host-target");
-    expect(variant).toEqual({
-      kind: "update-host",
-      hostId: "host-other",
-      detail,
-      // Arm 3: the incompatible host is NOT the target, so the action - which
-      // re-provisions THIS machine - must be withheld. Carried on the variant
-      // rather than re-derived at the card, because `canManageHost` answers a
-      // different question ("is the target this machine") and reads as this
-      // guard without being one.
-      isTargetHost: false,
-    });
   });
 });
 

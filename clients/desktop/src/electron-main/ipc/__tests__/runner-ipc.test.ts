@@ -35,6 +35,7 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { FakeHostController } from "./fake-host-controller";
+import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
   createSigningKey,
   jwksResponse,
@@ -620,6 +621,11 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.acknowledgeQuitRequest,
           RunnerHostInvoke.respondToQuitRequest,
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+          // Host quit round-trip: the modal's
+          // answer, plus the preload-internal readiness and servicing ack.
+          RunnerHostInvoke.hostQuitRespond,
+          RunnerHostInvoke.hostQuitListening,
+          RunnerHostInvoke.hostQuitAcknowledge,
           // H10: main captures the final browser state directly off the
           // `BrowserSessionsRegistry` on quit - there is no renderer round
           // trip left to ack, so this channel is gone.
@@ -721,6 +727,9 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.traycerMaintenanceInstallationInfo,
           RunnerHostInvoke.traycerMaintenanceInstallVersion,
           RunnerHostInvoke.traycerHostRestartIfIdle,
+          // The lifecycle card's idle-gated SERVICE restart (host-lifecycle-
+          // modes), registered by the same call.
+          RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
           RunnerHostInvoke.traycerDoctorRepairQueued,
           RunnerHostInvoke.traycerDoctorRepairIfIdle,
           // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
@@ -2428,8 +2437,24 @@ describe("RunnerIpcBridge", () => {
       bridge.getUnsyncedEditsSnapshot(),
     );
 
-    expect(windowA.sentMessages).toEqual([]);
-    expect(windowB.sentMessages).toEqual([
+    // Revealing the target window (already-focused windowB) touches the
+    // registry's MRU and can fan a windows-list change out to every window,
+    // windowA included - that fan-out is not what this test is about. What
+    // matters is that windowA never gets pulled into the quit prompt itself.
+    expect(
+      windowA.sentMessages.filter(
+        (message) =>
+          message.channel === RunnerHostEvent.quitRequested ||
+          message.channel === RunnerHostEvent.hostQuitRequest,
+      ),
+    ).toEqual([]);
+    // windowB may also see the same reveal's windows-list fan-out; what
+    // matters is that it got exactly one quitRequested, with this snapshot.
+    expect(
+      windowB.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.quitRequested,
+      ),
+    ).toEqual([
       {
         channel: RunnerHostEvent.quitRequested,
         payload: {
@@ -3975,6 +4000,7 @@ describe("RunnerIpcBridge", () => {
     hostController.respawn = async () => ({
       kind: "failed",
       message: "Traycer needs approval in System Settings.",
+      errorCode: null,
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
@@ -4102,6 +4128,108 @@ describe("RunnerIpcBridge", () => {
       await expect(
         seedFrom({ enrollment: null, pid: null }),
       ).resolves.toBeNull();
+    });
+  });
+
+  // An app booted in `none` lifecycle mode runs no local host, so the two
+  // host-bridge answers that name or revive one must not: the seed would
+  // rewrite this machine's cloud row into a "booting local" entry, and a
+  // respawn would start the host the user switched off. Each pairs with a
+  // `managed` control on the SAME files and controller, so a none-mode answer
+  // cannot pass merely because the fixture had nothing to report.
+  describe("none lifecycle mode", () => {
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), "traycer-host-ipc-none-"));
+    });
+
+    afterEach(async () => {
+      setAppliedLocalHostCapability("managed");
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    async function installEnrolledBridge(): Promise<{
+      readonly hostController: FakeHostController;
+      readonly invoke: (channel: string) => Promise<unknown>;
+      readonly dispose: () => void;
+    }> {
+      const host = new FakeHost();
+      host.identityEnrollmentFile = join(dir, "identity", "enrollment.json");
+      host.pidMetadataFile = join(dir, "pid.json");
+      await mkdir(join(dir, "identity"), { recursive: true });
+      await writeFile(
+        host.identityEnrollmentFile,
+        JSON.stringify({ hostId: "enrolled-current" }),
+      );
+      const hostController = new FakeHostController();
+      const mod = await import("../register-runner-ipc");
+      const bridge = new mod.RunnerIpcBridge({
+        host,
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+      return {
+        hostController,
+        invoke: async (channel) => {
+          const handler = ipcMainState.handlers.get(channel);
+          if (handler === undefined) {
+            throw new Error(`${channel} handler missing`);
+          }
+          return handler(bareEvent());
+        },
+        dispose: () => bridge.dispose(),
+      };
+    }
+
+    it("managed: lastKnownLocalHostId answers the enrolled id (control)", async () => {
+      setAppliedLocalHostCapability("managed");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.lastKnownLocalHostId),
+      ).resolves.toBe("enrolled-current");
+      bridge.dispose();
+    });
+
+    it("none: lastKnownLocalHostId answers null despite an enrollment record", async () => {
+      setAppliedLocalHostCapability("none");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.lastKnownLocalHostId),
+      ).resolves.toBeNull();
+      bridge.dispose();
+    });
+
+    it("managed: requestHostRespawn reaches the controller (control)", async () => {
+      setAppliedLocalHostCapability("managed");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.requestHostRespawn),
+      ).resolves.toEqual({ kind: "restarted" });
+      expect(bridge.hostController.respawnCalls).toBe(1);
+      // This channel has no `expectedHostId` to build a lane-head guard from,
+      // so it must go through the controller's unguarded FORCE path, not the
+      // idle-gated one.
+      expect(bridge.hostController.respawnCallArgs).toEqual([
+        { intent: { kind: "background" }, mode: "force" },
+      ]);
+      bridge.dispose();
+    });
+
+    it("none: requestHostRespawn is declined with zero respawn calls", async () => {
+      setAppliedLocalHostCapability("none");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.requestHostRespawn),
+      ).resolves.toEqual(expect.objectContaining({ kind: "declined" }));
+      expect(bridge.hostController.respawnCalls).toBe(0);
+      bridge.dispose();
     });
   });
 

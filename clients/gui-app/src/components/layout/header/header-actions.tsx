@@ -7,23 +7,23 @@ import { NotificationsBell } from "@/components/notifications/notifications-bell
 import { GhostRegionPicture } from "@/components/layout-editor/ghost-region";
 import { LayoutRegionContextMenu } from "@/components/layout-editor/region-quick-verbs";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
-import { useBarPlacements, useRegionShown } from "@/lib/layout-overrides";
-import {
-  barClusterRegionsAt,
-  type EdgeSide,
-} from "@/lib/layout/layout-arrangement";
+import { useStripReadingRegions } from "@/components/layout/header/use-strip-reading-regions";
+import { useRegionDensity, useRegionShown } from "@/lib/layout-overrides";
+import { resolveReadingDensity } from "@/lib/layout/reading-density";
 import { cn } from "@/lib/utils";
-import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import {
+  barReadingForm,
+  type StripReadingPlacement,
+} from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * One end of the header's own row: the readings that named THIS bar and this
- * side (L-156).
+ * The readings placed in the tab strip, drawn before History.
  *
- * The header's half of "each reading picks its bar and its side". Under the
- * shipped arrangement both are in the strip and both clusters are empty; a
- * reading moved up draws here, and the other one stays exactly where it was,
- * which is the whole point of the four fields.
+ * A tab strip has no side, so both readings sit in this one place whatever
+ * their saved sides say. When both are shown and both resolve to Compact they
+ * share one activity button: two halves under one group, a 1px divider between.
+ * Otherwise each draws as its own button (an item alone, or any Detailed one).
  *
  * The DESKTOP header's half only: `MobileAppHeader` keeps both controls
  * unconditionally, because a mobile viewport does not answer this question
@@ -31,18 +31,41 @@ import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
  * header that respected `status-bar` would leave a phone with neither control
  * until someone found that switch.
  */
-export function HeaderBarCluster(props: {
-  readonly side: EdgeSide;
-}): ReactNode {
-  const placements = useBarPlacements();
-  // Both draw their readings, not a glyph: the header has the room, and a
-  // glyph could follow none of a reading's own settings (G6).
-  return barClusterRegionsAt(placements, "header", props.side).map((region) =>
+export function HeaderBarCluster(): ReactNode {
+  const regions = useStripReadingRegions();
+  const usageShown = useRegionShown("usageLimits");
+  const resourceShown = useRegionShown("resourceMonitor");
+  const usageCompact =
+    resolveReadingDensity(useRegionDensity("usageLimits"), "top-strip") ===
+    "compact";
+  const resourceCompact =
+    resolveReadingDensity(useRegionDensity("resourceMonitor"), "top-strip") ===
+    "compact";
+  const activityButton =
+    regions.length === 2 &&
+    usageShown &&
+    resourceShown &&
+    usageCompact &&
+    resourceCompact;
+  const drawn = regions.map((region) =>
     region === "usageLimits" ? (
-      <HeaderUsageRegion key={region} form="inline" />
+      <HeaderUsageRegion key={region} placement="top-strip" />
     ) : (
-      <HeaderResourceRegion key={region} form="inline" />
+      <HeaderResourceRegion key={region} placement="top-strip" />
     ),
+  );
+  if (!activityButton) return drawn;
+  return (
+    <div
+      role="group"
+      aria-label="Activity"
+      data-testid="activity-button"
+      className="inline-flex items-center gap-px"
+    >
+      {drawn[0]}
+      <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
+      {drawn[1]}
+    </div>
   );
 }
 
@@ -63,10 +86,11 @@ export function HeaderBarCluster(props: {
  * is the un-registering one (two elements on one key displace each other).
  */
 export function HeaderUsageRegion(props: {
-  /** How the button draws: the header's readings, or the strip's (F6). */
-  readonly form: BarReadingForm;
+  /** Where the button sits; its density decides how it draws there. */
+  readonly placement: StripReadingPlacement;
 }): ReactNode {
   const shown = useRegionShown("usageLimits");
+  const form = barReadingForm(props.placement, useRegionDensity("usageLimits"));
   const { ref, editing } = useLayoutRegion({
     regionId: "usageLimits",
     instanceId: null,
@@ -81,7 +105,7 @@ export function HeaderUsageRegion(props: {
           editing ? "inline-flex items-center gap-2 empty:hidden" : "contents",
         )}
       >
-        {shown ? <RateLimitIconButton form={props.form} /> : null}
+        {shown ? <RateLimitIconButton form={form} /> : null}
         {/* Hidden and pointed at: the passive depiction in place, never the
           live control - it fetches (L-14, L-62). */}
         {shown ? null : <GhostRegionPicture regionId="usageLimits" />}
@@ -104,10 +128,14 @@ export function HeaderUsageRegion(props: {
  * be mounted on a desktop viewport.
  */
 export function HeaderResourceRegion(props: {
-  /** How the button draws: the header's readings, or the strip's (F6). */
-  readonly form: BarReadingForm;
+  /** Where the button sits; its density decides how it draws there. */
+  readonly placement: StripReadingPlacement;
 }): ReactNode {
   const shown = useRegionShown("resourceMonitor");
+  const form = barReadingForm(
+    props.placement,
+    useRegionDensity("resourceMonitor"),
+  );
   const { ref, editing } = useLayoutRegion({
     regionId: "resourceMonitor",
     instanceId: null,
@@ -123,7 +151,7 @@ export function HeaderResourceRegion(props: {
         {shown ? (
           <ResourceMonitorPopover
             trigger="header-button"
-            form={props.form}
+            form={form}
             claimsOpenAction
           />
         ) : null}

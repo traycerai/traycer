@@ -16,7 +16,6 @@ import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { UNARY_RESPONSE_TIMEOUT_MS } from "./config";
 
 export type { IRemoteSession, SessionLivenessProbe };
-export { PLAN_RESTRICTED_FATAL_CODE } from "@traycer/protocol/host-transport/remote/session";
 
 /**
  * The desktop client's liveness probe: the method a silence candidate sends to

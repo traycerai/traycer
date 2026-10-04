@@ -7,7 +7,12 @@ import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
-import { withCliUpdateContender } from "../host/update-contender";
+import {
+  withCliAttemptMutation,
+  withCliSupervisorRelaunchSegment,
+  withCliUpdateContender,
+  withCliUpdateExecutionSegment,
+} from "../host/update-contender";
 import { startHostServiceWithAttempt } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
@@ -66,6 +71,11 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
       (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
         err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
     ) {
+      // Only the attempt's refusal: it is raised at admission, before any
+      // swap, and a busy lock may be the very restart this completes.
+      if (err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) {
+        await startBesideUpdateAttempt(environment);
+      }
       const outcome: FinalizeSwapOutcome = { status: "lock-timeout" };
       return { data: outcome, human: humanForOutcome(outcome), exitCode: 0 };
     }
@@ -125,12 +135,179 @@ async function runFinalizeUpgradeSwapWithAttempt(
   contenderOptions: WithCliUpdateContenderOptions,
 ): Promise<FinalizeSwapOutcome> {
   return runFinalizeUpgradeSwapWithStart(opts, () =>
-    startHostServiceWithAttempt(
-      capability,
-      contenderOptions,
-      createServiceController(),
-      serviceLabelFor(opts.environment),
-    ),
+    startHostWithAttempt(opts.environment, capability, contenderOptions),
+  );
+}
+
+async function startHostWithAttempt(
+  environment: Environment,
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<void> {
+  const outcome = await startHostServiceWithAttempt(
+    capability,
+    contenderOptions,
+    // Completes the restart whose stop released the CLI binary: a restart
+    // relaunch leg, so `maintenance` (`host/lifecycle-origin.ts`).
+    "maintenance",
+    createServiceController(),
+    serviceLabelFor(environment),
+  );
+  // Not expected here: the stop that released the binary ended the old
+  // supervisor, and it removed its records. A live one means something
+  // else brought the service back first, and its supervisor hands the host
+  // back itself - which is what this start was for.
+  if (outcome.kind === "supervisor-relaunching") {
+    createCliLogger(environment).info(
+      "Finalize-upgrade start left the host to the service's live supervisor",
+      {
+        environment,
+        supervisorPid: outcome.supervisorPid,
+      },
+    );
+  }
+}
+
+/**
+ * The start this command owes when a standing update attempt refused its
+ * swap.
+ *
+ * On Windows this command runs as the detached helper that completes a
+ * `host restart` (`commands/host-restart.ts`), and that restart - admitted
+ * under `recovery-maintenance` - has already STOPPED the service and left the
+ * start to this command. `service-maintenance` refuses every nonterminal
+ * record, so a routine park that admitted the stop refused the start that
+ * completes it, and the host stayed down.
+ *
+ * The swap stays deferred exactly as before: no marker, `pendingUpgrade`
+ * kept, so the next `host restart` finalizes it. Only the start runs, and
+ * under one of two admissions, in this order:
+ *
+ *  1. as the service's own supervisor relaunch is
+ *     (`withCliSupervisorRelaunchSegment`): parked for work, parked on an
+ *     activation of the installed generation, or interrupted in a phase
+ *     whose own next act is that start;
+ *  2. where that refuses, as the restart it completes was: under
+ *     `recovery-maintenance`, and only for a record whose recovery action is
+ *     `restart-current` - the verdict that restart stopped the host under
+ *     (`commands/host-restart.ts`). A POSIX restart relaunches in-process
+ *     under that same verdict, so the helper's start now matches it.
+ *
+ * A stop-only record (`applying`, `preparing` to activate,
+ * `waiting-to-activate`) is left to the attempt's own continuation, and a
+ * busy lock leaves the host as it is - the outcome before this existed.
+ */
+async function startBesideUpdateAttempt(
+  environment: Environment,
+): Promise<void> {
+  const logger = createCliLogger(environment);
+  try {
+    await startAsSupervisorRelaunch(environment, logger);
+    return;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    if (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY) {
+      logStartNotAdmitted(environment, logger, err.code);
+      return;
+    }
+    if (err.code !== CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) throw err;
+  }
+  try {
+    await startAsRestartCompletion(environment, logger);
+  } catch (err) {
+    if (
+      err instanceof CliError &&
+      (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
+        err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
+    ) {
+      logStartNotAdmitted(environment, logger, err.code);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function startAsSupervisorRelaunch(
+  environment: Environment,
+  logger: ILogger,
+): Promise<void> {
+  const relaunchOptions: WithCliUpdateContenderOptions = {
+    environment,
+    reason: "cli-finalize-upgrade",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "supervisor-relaunch-maintenance",
+  };
+  await withCliSupervisorRelaunchSegment(
+    relaunchOptions,
+    (capability, context) =>
+      withCliAttemptMutation(capability, relaunchOptions, async () => {
+        logger.info(
+          "Finalize-upgrade deferred its CLI swap and is starting the installed host beside a standing update attempt",
+          {
+            environment,
+            attemptId: context.activeAttempt?.attemptId ?? null,
+            phase: context.activeAttempt?.phase ?? null,
+          },
+        );
+        await startServiceBestEffort(
+          () => startHostWithAttempt(environment, capability, relaunchOptions),
+          environment,
+          logger,
+        );
+      }),
+  );
+}
+
+async function startAsRestartCompletion(
+  environment: Environment,
+  logger: ILogger,
+): Promise<void> {
+  const recoveryOptions: WithCliUpdateContenderOptions = {
+    environment,
+    reason: "cli-finalize-upgrade",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "recovery-maintenance",
+  };
+  await withCliUpdateExecutionSegment(
+    recoveryOptions,
+    async (capability, context) => {
+      const attempt = {
+        environment,
+        attemptId: context.activeAttempt?.attemptId ?? null,
+        phase: context.activeAttempt?.phase ?? null,
+      };
+      if (context.recoveryAction !== "restart-current") {
+        logger.info(
+          "Finalize-upgrade left the host as it was: the standing update attempt's own continuation starts it",
+          attempt,
+        );
+        return;
+      }
+      await withCliAttemptMutation(capability, recoveryOptions, async () => {
+        logger.info(
+          "Finalize-upgrade deferred its CLI swap and is starting the installed host to complete the restart that stopped it",
+          attempt,
+        );
+        await startServiceBestEffort(
+          () => startHostWithAttempt(environment, capability, recoveryOptions),
+          environment,
+          logger,
+        );
+      });
+    },
+  );
+}
+
+function logStartNotAdmitted(
+  environment: Environment,
+  logger: ILogger,
+  code: string,
+): void {
+  logger.info(
+    "Finalize-upgrade left the host as it was: the standing update attempt does not admit its start",
+    { environment, code },
   );
 }
 
@@ -149,10 +326,10 @@ async function runFinalizeUpgradeSwapWithStart(
   });
 
   // The service was stopped by the `host restart` that scheduled this
-  // helper, and on Windows that restart deliberately skips its own
-  // relaunch (`helperOwnsServiceStart`) - so THIS process owns bringing
-  // the host back, on every path, not just the one where the swap
-  // succeeded. Any outcome that returns without starting it leaves the
+  // helper, and on Windows that restart, once the helper armed,
+  // deliberately skips its own relaunch (`helperOwnsServiceStart`) - so
+  // THIS process owns bringing the host back, on every path, not just
+  // the one where the swap succeeded. Any outcome that returns without starting it leaves the
   // machine with no running host because a CLI self-upgrade did not
   // complete, which is a strictly worse failure than the un-upgraded CLI
   // it was trying to avoid.

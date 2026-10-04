@@ -252,6 +252,8 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
         reachable: false,
         localAttempt: null,
         removedByUser: false,
+        lastEnsureFailure: null,
+        updateDeferral: null,
         checkedAt: new Date().toISOString(),
       };
     },
@@ -289,6 +291,11 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
     deregisterService: () => {
       throw new Error(
         "fakeHostController.deregisterService: not used by these tests",
+      );
+    },
+    refreshServiceDefinition: () => {
+      throw new Error(
+        "fakeHostController.refreshServiceDefinition: not used by these tests",
       );
     },
     respawn: () => {

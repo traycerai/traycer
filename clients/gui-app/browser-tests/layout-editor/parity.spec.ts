@@ -285,7 +285,8 @@ test("every live region leaf resolves the same icon box, colour and type scale a
 
 test("the clipped Usage limits picture measures data-clipped and resolves a mask", async () => {
   // The clip fade on the one picture that can outgrow the inspector (LV2-14).
-  // Eight usage providers in a 292px stage is more than fits, and both halves
+  // Six windowed providers, one of them running low and so expanded, in a
+  // 292px stage is more than fits, and both halves
   // of the answer are real layout that jsdom cannot decide: the MEASURED
   // `data-clipped` (scrollWidth against clientWidth) and the `CLIP_FADE` mask
   // the attribute turns on.
@@ -300,7 +301,7 @@ test("the clipped Usage limits picture measures data-clipped and resolves a mask
   expect(clipFade.error, "clip fade: the fixture drew no clip case").toBeNull();
   expect(
     clipFade.clipped,
-    `clip fade: eight providers in a ${String(clipFade.frameWidth)}px stage measured data-clipped="${String(clipFade.clipped)}" (content ${String(clipFade.scrollWidth)}px in ${String(clipFade.clientWidth)}px)`,
+    `clip fade: every windowed provider in a ${String(clipFade.frameWidth)}px stage measured data-clipped="${String(clipFade.clipped)}" (content ${String(clipFade.scrollWidth)}px in ${String(clipFade.clientWidth)}px)`,
   ).toBe("true");
   expect(
     clipFade.mask === "none" || clipFade.mask === "",

@@ -31,6 +31,7 @@ import {
   resolveRgb,
   samplePixelAt,
   sameRgb,
+  type Rgb,
 } from "../support/layout-editor/pixels.ts";
 import { SURFACE_FRAME } from "../support/layout-editor/shell.ts";
 import {
@@ -54,10 +55,11 @@ import { nextFrames } from "../support/fixtures.ts";
 // `h-9` frame), a 1px border, the same corners all round (a joined tab opens
 // its bottom two square) - centred in the 40px header, with ground under every
 // unjoined box (an inactive tab's hover) and the surface frame flush against the header's bottom edge.
-// Nothing of the strip reaches below the header, no folder-tab cap or baseline
-// cover is drawn, and no rule spans the strip: a tab's colour is a short mark
-// (`TAB_COLOR_MARK_CLASS`, 24x2px), never a line across it. An inactive tab's
-// real hover is the same box.
+// Nothing of the strip reaches below the header but a tab's colour line on the
+// sheets' top border, no folder-tab cap or baseline cover is drawn, and no rule
+// spans the strip: a tab's colour line (`TabColorEdgeLine`) is exactly its own
+// tab's width, never a line across the strip. An inactive tab's real hover is
+// the same box.
 //
 // What decides these is a box laid out by a real engine and the ground painted
 // under it, which jsdom has neither of.
@@ -97,8 +99,6 @@ test.beforeEach(async () => {
 const HEADER_TAB_BOX_HEIGHT = 32;
 /** A filled element this thin is a line: `TAB_COLOR_MARK_CLASS` is `h-0.5` (2px), the tallest thing the strip draws as a mark. */
 const THIN_LINE_MAX_HEIGHT = 3;
-/** A rule spans at least this share of the strip. */
-const RULE_STRIP_SHARE = 0.5;
 /** The header tabs' ground: the drag holds the tab this far off its slot before it is read. */
 const HEADER_DRAG_TRAVEL = 48;
 
@@ -111,6 +111,14 @@ interface ThinLine {
   readonly name: string;
   readonly width: number;
   readonly height: number;
+  /**
+   * The width of the single strip item (`[data-strip-item-id]`) this line
+   * sits inside, or `null` off any item. A coloured tab's own edge-to-edge
+   * mark (`TabColorEdgeLine`) is exactly its own item's width; a rule that
+   * actually spans the strip - the folder-baseline language F4 retired - has
+   * no such bound, or exceeds it.
+   */
+  readonly ownItemWidth: number | null;
 }
 
 interface HeaderRead {
@@ -185,15 +193,30 @@ const headerProbe = (scope: HeaderScope): string => `(() => {
     activePseudo: activeRoot === null ? [] : [...pseudo(activeRoot), ...pseudo(activeBox)],
     caps: document.querySelectorAll('[data-testid^="tab-cap"], [data-testid="tab-baseline-cover"]').length,
     newButton: box(document.querySelector('[data-testid="tab-new"]')),
-    // Every painted part of the strip: nothing may reach below the header.
+    // Every painted part of the strip: nothing may reach below the header but
+    // a tab's colour line, which lies on the sheets' 1px top border where the
+    // joined tab's feet turn out (TabColorEdgeLine), and the scroller's clip
+    // box, which reaches that far to draw it and paints nothing itself.
     below: header === null ? [] : painted
       .filter(({ r }) => r.bottom > header.getBoundingClientRect().bottom + 0.5)
+      .filter(({ node, r }) => !(
+        ["tab-color-edge-line", "header-tab-strip-scroll"].includes(node.getAttribute("data-testid") ?? "") &&
+        r.bottom <= header.getBoundingClientRect().bottom + 1.5
+      ))
       .map(({ node, r }) => label(node, r, r.bottom)),
     // Every thin FILLED element in the strip, whatever it is called: the
     // folder-baseline language F4 retired is one of these spanning the strip.
     thinLines: painted
       .filter(({ node, r }) => r.height <= ${String(THIN_LINE_MAX_HEIGHT)} && getComputedStyle(node).backgroundColor !== "rgba(0, 0, 0, 0)")
-      .map(({ node, r }) => ({ name: node.getAttribute("data-testid") ?? node.tagName.toLowerCase(), width: r.width, height: r.height })),
+      .map(({ node, r }) => {
+        const item = node.closest("[data-strip-item-id]");
+        return {
+          name: node.getAttribute("data-testid") ?? node.tagName.toLowerCase(),
+          width: r.width,
+          height: r.height,
+          ownItemWidth: item === null ? null : item.getBoundingClientRect().width,
+        };
+      }),
   };
 })()`;
 
@@ -217,16 +240,16 @@ function stripProblems(read: HeaderRead): string[] {
       `part of the tab strip reaches below the header (bottom ${read.header.bottom.toFixed(1)}): ${read.below.join(", ")}`,
     );
   }
-  // A rule is a line spanning the strip - or spanning the tab it sits under -
-  // not a tab's short colour mark.
-  const spanning = Math.min(
-    read.strip.width * RULE_STRIP_SHARE,
-    read.active === null ? Number.POSITIVE_INFINITY : read.active.width,
+  // A rule crosses a tab boundary - no single strip item bounds it, or it
+  // reaches wider than the one it sits in - unlike a tab's own edge-to-edge
+  // colour mark (`TabColorEdgeLine`), which is exactly that tab's own width
+  // and never wider.
+  const rules = read.thinLines.filter(
+    (line) => line.ownItemWidth === null || line.width > line.ownItemWidth + 1,
   );
-  const rules = read.thinLines.filter((line) => line.width >= spanning);
   if (rules.length > 0) {
     problems.push(
-      `a thin rule runs across the strip (at least ${spanning.toFixed(0)}px wide) instead of a short colour mark: ${rules.map((line) => `${line.name} ${line.width.toFixed(0)}x${line.height.toFixed(1)}`).join(", ")}`,
+      `a thin rule crosses a tab boundary instead of staying a tab's own colour mark: ${rules.map((line) => `${line.name} ${line.width.toFixed(0)}x${line.height.toFixed(1)}${line.ownItemWidth === null ? " (off any strip item)" : ` (its item is ${line.ownItemWidth.toFixed(0)}px)`}`).join(", ")}`,
     );
   }
   return problems;
@@ -366,24 +389,46 @@ async function boxProblems(
 }
 
 /**
+ * A coloured tab's own edge-to-edge mark, resolved from its rendered pixel:
+ * `null` where the tab carries none. Read at the DOM element the tab draws
+ * (`tab-color-edge-line`), not the arrangement's stored colour string, since
+ * that is what a screenshot can actually show under it.
+ */
+async function ownColorEdgeRgb(
+  page: Page,
+  tabSelector: string,
+): Promise<Rgb | null> {
+  return page.evaluate<Rgb | null>(`(() => {
+    const node = document.querySelector(${JSON.stringify(`${tabSelector} [data-testid="tab-color-edge-line"]`)});
+    if (node === null) return null;
+    const match = getComputedStyle(node).backgroundColor.match(/\\d+/g);
+    return match === null ? null : match.slice(0, 3).map(Number);
+  })()`);
+}
+
+/**
  * Pixels: ground between an UNJOINED box and the header's own bottom edge. The
  * active tab of this fixture is always joined (its bridge fills that strip with
  * the sheet's fill instead, the sheet join in index.css), and so is a split
  * pair as a group, so the unjoined box that is on screen is an inactive tab's
- * hover.
+ * hover. A COLOURED inactive tab's own edge-to-edge mark (`TabColorEdgeLine`)
+ * sits in this exact band regardless of hover, so its own colour is allowed
+ * here too - the claim is "nothing ELSE paints here", not "nothing paints
+ * here at all".
  */
 async function groundUnderProblems(
   page: Page,
   box: { readonly cx: number; readonly bottom: number },
+  ownColor: Rgb | null,
 ): Promise<string[]> {
   const ground = await resolveRgb(page, "var(--shell-ground)");
   const y = box.bottom + 1.5;
   const pixel = await samplePixelAt(page, box.cx, y);
-  return sameRgb(pixel, ground, 2)
-    ? []
-    : [
-        `no ground between the box and the header's bottom (${box.cx.toFixed(0)}, ${y.toFixed(0)}): ${rgbText(pixel)}, ground ${rgbText(ground)}`,
-      ];
+  if (sameRgb(pixel, ground, 2)) return [];
+  if (ownColor !== null && sameRgb(pixel, ownColor, 2)) return [];
+  return [
+    `no ground between the box and the header's bottom (${box.cx.toFixed(0)}, ${y.toFixed(0)}): ${rgbText(pixel)}, ground ${rgbText(ground)}${ownColor === null ? "" : `, own colour ${rgbText(ownColor)}`}`,
+  ];
 }
 
 async function eventuallyNoProblems(
@@ -509,8 +554,12 @@ test("an inactive tab's real hover is the same box as the active one, with groun
         hover.radius === lone.radius,
       `${theme}: the hover box (y ${hover.y.toFixed(1)}, h ${hover.height.toFixed(1)}, r ${hover.radius}) is not the active box's (y ${lone.y.toFixed(1)}, h ${lone.height.toFixed(1)}, r ${lone.radius})`,
     ).toBe(true);
+    const ownColor = await ownColorEdgeRgb(
+      page,
+      '[data-testid="tab-epic-fixture-alpha"]',
+    );
     expect(
-      await groundUnderProblems(page, hover),
+      await groundUnderProblems(page, hover, ownColor),
       `${theme}: the ground under Alpha's hover box`,
     ).toEqual([]);
     await moveTo(page, 1, 1);

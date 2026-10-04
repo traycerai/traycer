@@ -3,6 +3,7 @@ import {
   agentActivityTiers,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
+import { displayTitle } from "@/lib/display-title";
 import {
   useRegisteredEpicLiveAgentIds,
   useRegisteredEpicLiveAgents,
@@ -188,8 +189,9 @@ function WarmAgentList(props: { readonly epicId: string }): ReactNode {
                 : BACKGROUND_ACTIVITY_TITLE
             }
           />
-          <span className="min-w-0 truncate text-foreground">
-            {agent.title ?? "Untitled agent"}
+          {/* Fades at the edge, as the strip's titles do. */}
+          <span className="header-tab-title-text min-w-0 flex-1 text-foreground">
+            {displayTitle(agent.title ?? "", "agent")}
           </span>
         </li>
       ))}

@@ -102,8 +102,8 @@ describe("mintAttachGrantViaHttp", () => {
   });
 });
 
-describe("mintAttachGrantViaHttp plan-restricted discrimination", () => {
-  it("403 + reason plan_restricted → plan-restricted (entitlement, not auth)", async () => {
+describe("mintAttachGrantViaHttp 403 handling", () => {
+  it("a 403 whose body carries reason plan_restricted is an ordinary unauthorized, like any other 403", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () =>
@@ -117,9 +117,12 @@ describe("mintAttachGrantViaHttp plan-restricted discrimination", () => {
         ),
       ),
     );
-    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
-      kind: "plan-restricted",
-    });
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({ kind: "unauthorized" });
+    if (result.kind === "unauthorized") {
+      expect(result.detail).toContain("HTTP 403");
+      expect(result.context).toContain("plan_restricted");
+    }
   });
 
   it("403 with an unparsable body stays a credential rejection", async () => {
@@ -169,7 +172,7 @@ describe("createAttachGrantProvider", () => {
     });
   });
 
-  it("surfaces plan-restricted distinctly; collapses other failures to unavailable", async () => {
+  it("collapses every non-ok mint to unavailable, a plan_restricted 403 body included", async () => {
     const provider = createAttachGrantProvider({
       authnBaseUrl: AUTHN,
       hostId: HOST_ID,
@@ -185,7 +188,7 @@ describe("createAttachGrantProvider", () => {
         ),
       ),
     );
-    expect(await provider()).toEqual({ kind: "plan-restricted" });
+    expect(await provider()).toMatchObject({ kind: "unavailable" });
 
     vi.stubGlobal(
       "fetch",

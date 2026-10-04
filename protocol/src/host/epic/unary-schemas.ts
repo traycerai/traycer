@@ -3108,3 +3108,77 @@ export const searchArtifactsResponseSchema = lazySchema(() =>
 export type SearchArtifactsResponse = z.infer<
   typeof searchArtifactsResponseSchema
 >;
+
+// ─── epic.continueSubagent@1.0 ───────────────────────────────────────────────
+//
+// Carries a native subagent's conversation on as a chat of its own. The GUI
+// names the subagent by the CARD it is looking at - the parent chat and the
+// `subagent` block id - and the host derives everything else from the parent
+// chat's record and that block: which harness, which provider session, and
+// where the chat lands (the parent's epic, nested under the parent, bound to
+// the parent's workspace). No provider session id crosses the wire.
+//
+// The result is a COPY made through session import: messages sent to it reach
+// neither the running subagent nor the parent. A second request for the same
+// subagent answers `existing` with the chat the first one made.
+
+export const continueSubagentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    chatId: z.string().min(1),
+    blockId: z.string().min(1),
+  }),
+);
+export type ContinueSubagentRequest = z.infer<
+  typeof continueSubagentRequestSchema
+>;
+
+/**
+ * Why a subagent could not be continued. Closed, so the GUI can word each:
+ *
+ * - `unsupported_harness`  - this version continues Codex and Claude
+ *                            subagents only;
+ * - `block_not_subagent`   - the block is not a subagent card the host holds;
+ * - `still_running`        - the subagent has not finished; its conversation
+ *                            is still being written;
+ * - `session_unreadable`   - the provider's record of the subagent could not
+ *                            be read (gone, truncated, or the provider refused);
+ * - `creation_failed`      - the chat could not be created in the parent's
+ *                            epic.
+ */
+export const continueSubagentRefusalReasonSchema = lazySchema(() =>
+  z.enum([
+    "unsupported_harness",
+    "block_not_subagent",
+    "still_running",
+    "session_unreadable",
+    "creation_failed",
+  ]),
+);
+export type ContinueSubagentRefusalReason = z.infer<
+  typeof continueSubagentRefusalReasonSchema
+>;
+
+export const continueSubagentResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("created"),
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("existing"),
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("refused"),
+      reason: continueSubagentRefusalReasonSchema,
+      // For the person reading it; the host logs it too.
+      detail: z.string(),
+    }),
+  ]),
+);
+export type ContinueSubagentResponse = z.infer<
+  typeof continueSubagentResponseSchema
+>;
