@@ -69,6 +69,11 @@ pipx install pre-commit   # or: brew install pre-commit
 pre-commit install
 ```
 
+If you installed the hooks before October 2026, run `pre-commit install` once
+more: it now also installs the `commit-msg` hook that checks the DCO sign-off,
+and for a maintainer pull request into `main` that hook is the only check of
+it.
+
 The hooks then run on every commit; run them on demand with
 `pre-commit run --all-files`. Tests are intentionally excluded from the hook
 and run as separate CI checks. Run a targeted test locally when it helps your

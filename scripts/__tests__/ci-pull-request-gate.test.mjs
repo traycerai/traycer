@@ -476,38 +476,33 @@ describe("trunk-red.yml", () => {
     expect(jobs[0].permissions).toEqual({ actions: "write" });
   });
 
-  it("acts only on a failed push run", () => {
+  it("acts only on a first-attempt push run", () => {
     const condition = normalize(Object.values(workflow.jobs)[0].if);
     expect(condition).toContain("github.event.workflow_run.event == 'push'");
     // Its own retry is attempt two: the job that started it waits for it, so
     // a second run of this workflow must not retry or post again.
     expect(condition).toContain("github.event.workflow_run.run_attempt == 1");
-    expect(condition).toContain(
-      "github.event.workflow_run.conclusion == 'failure'",
-    );
-    expect(condition).toContain(
-      "github.event.workflow_run.conclusion == 'timed_out'",
-    );
   });
 
-  // The conclusions the job acts on are exactly these three: a failed run, a
-  // run that timed out, and a run that could not start (`startup_failure`, a
-  // broken workflow file, which cannot be retried and is posted as such). A
-  // cancelled run is a person's decision and is never posted. Read from the
-  // parsed `if`, as the set of `conclusion == '<x>'` terms, so a fourth value
-  // (or a `!=`) reds this.
-  it("acts on exactly failure, timed_out and startup_failure, and never on cancelled", () => {
+  // The job answers every conclusion except the three that are not a break:
+  // success, skipped and a person's cancellation. The release gates refuse
+  // every other conclusion (neutral, action_required, stale too), so the alert
+  // covers the same set. Read from the parsed `if`: it names exactly those
+  // three with `!=`, and holds no `conclusion ==` comparison at all, so
+  // nobody can bring a list of bad conclusions back.
+  it("answers every conclusion except success, skipped and cancelled, with no conclusion == list", () => {
     const condition = normalize(Object.values(workflow.jobs)[0].if);
-    const accepted = [
+    const excluded = [
       ...condition.matchAll(
-        /github\.event\.workflow_run\.conclusion == '([a-z_]+)'/g,
+        /github\.event\.workflow_run\.conclusion != '([a-z_]+)'/g,
       ),
     ]
       .map((match) => match[1])
       .sort();
-    expect(accepted).toEqual(["failure", "startup_failure", "timed_out"]);
-    expect(condition).not.toContain("cancelled");
-    expect(condition).not.toContain("workflow_run.conclusion !=");
+    expect(excluded).toEqual(["cancelled", "skipped", "success"]);
+    expect(condition).not.toMatch(/workflow_run\.conclusion\s*==/);
+    expect(condition).not.toContain("failure");
+    expect(condition).not.toContain("timed_out");
   });
 
   // One retry in all, whoever starts it: the attempt is read before every
