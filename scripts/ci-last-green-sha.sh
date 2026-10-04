@@ -15,8 +15,10 @@
 #
 # Prints one SHA: the head of the newest successful push run of
 # <workflow file> on <branch> that is <before> or an ancestor of it. That is
-# <before> itself whenever the previous push was green, so a healthy branch
-# compares exactly as it did.
+# <before> itself whenever the previous push's run has finished green. While
+# that run is still going it is not yet a pass, so the range reaches back to
+# the last finished green one and this run re-tests the merges in flight:
+# wider, never narrower.
 #
 # Falls back to <before>, with a warning, when the runs cannot be read or none
 # qualifies. That fallback narrows the range, the unsafe direction, and is
