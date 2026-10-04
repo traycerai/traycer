@@ -151,6 +151,7 @@ function currentAvailabilityContext(): SettingsAvailabilityContext {
     runnerHost: mountedRunnerHost,
     featureSettings: null,
     mobileApp: false,
+    phoneLayout: false,
   };
 }
 

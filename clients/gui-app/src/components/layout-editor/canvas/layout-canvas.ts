@@ -12,11 +12,16 @@ import { armCanvasDrag } from "@/components/layout-editor/canvas/region-drag";
 import { createSelectionRing } from "@/components/layout-editor/canvas/selection-ring";
 import { armSurfaceDrag } from "@/components/layout-editor/canvas/surface-drag";
 import { SURFACE_PLACEMENT } from "@/components/layout-editor/canvas/surface-placement";
+import { readLayoutFacts } from "@/components/layout-editor/inspector/use-layout-form-context";
 import {
   LAYOUT_REGION_IDS,
   regionFacts,
   regionStateWord,
 } from "@/components/layout-editor/regions/region-facts";
+import {
+  sameLayoutFacts,
+  type LayoutFacts,
+} from "@/components/layout-editor/regions/row-availability";
 import { decoratedHoverRegion } from "@/components/layout-editor/use-layout-region";
 import { layoutTransitionRunning } from "@/lib/layout/editor-motion";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
@@ -73,23 +78,27 @@ export function useLayoutCanvas(column: HTMLElement | null): void {
     // label means building the whole 22-region value set to read one region's
     // state word (G1-04's rule, which `layout-form.tsx` follows in this
     // same commit). The label changes only when the pointer moves to another
-    // region or the layout is written, so those are the two things this
-    // remembers.
+    // region, the layout is written, or a fact a state word reads changes
+    // (Voice input, which the mic's "Turn on" verb writes from right here), so
+    // those are the things this remembers.
     let lastLabel: {
       readonly regionId: RegionId;
       readonly snapshot: LayoutSnapshot;
+      readonly facts: LayoutFacts;
       readonly label: string;
     } | null = null;
     const labelFor = (regionId: RegionId): string => {
       const snapshot = getLayoutSnapshot();
+      const facts = readLayoutFacts();
       if (
         lastLabel !== null &&
         lastLabel.regionId === regionId &&
-        sameLayout(lastLabel.snapshot, snapshot)
+        sameLayout(lastLabel.snapshot, snapshot) &&
+        sameLayoutFacts(lastLabel.facts, facts)
       )
         return lastLabel.label;
-      const label = hoverChipLabel(regionId, snapshot);
-      lastLabel = { regionId, snapshot, label };
+      const label = hoverChipLabel(regionId, snapshot, facts);
+      lastLabel = { regionId, snapshot, facts, label };
       return label;
     };
 
@@ -452,9 +461,13 @@ function chipPlacement(regionId: RegionId): HoverChipPlacement {
  * it is built from rather than reading one, so the caller's cache and this
  * answer can never be about two different layouts.
  */
-function hoverChipLabel(regionId: RegionId, snapshot: LayoutSnapshot): string {
+function hoverChipLabel(
+  regionId: RegionId,
+  snapshot: LayoutSnapshot,
+  facts: LayoutFacts,
+): string {
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
-  const state = regionStateWord(regionId, values, snapshot.arrangement);
+  const state = regionStateWord(regionId, values, snapshot.arrangement, facts);
   return `${regionFacts(regionId).name} · ${state}`;
 }
 

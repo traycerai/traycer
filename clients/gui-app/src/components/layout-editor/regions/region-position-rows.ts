@@ -50,40 +50,23 @@ export function positionAxisChanged(
 
 /**
  * Whether THIS region alone sits somewhere other than where it shipped - the
- * question the index's changed dot asks (I-17).
+ * question a row's changed dot and its revert ask (I-17, T2).
  *
- * The same three row shapes as {@link positionRowChanged}, and the same answer
- * for two of them: a host and a side are already this region's own. An order
- * group is where the two questions part. {@link positionRowChanged} asks about
- * the GROUP, which is right for the revert that puts the whole group back and
- * wrong for a dot: all nine rail regions share the `rail` group, and the
- * shipped panel grouping arrives as dividers (L-49), so one carried divider
- * lit every sidebar row before the user had touched anything.
- *
- * MOVED here means: this region's index among its group's REGIONS, counted
- * with the rail's dividers left out, differs from its index in
- * `DEFAULT_ARRANGEMENT`. Dividers are left out because adding one shifts every
- * entry below it without moving any panel relative to its neighbours - the
- * boundary moved, not the row. A region its group no longer holds is absent
- * from both lists and has not moved.
+ * Its host and its side, never its place in an order group. An order is a
+ * fact about the LIST, not about one row in it: one drag shifts the index of
+ * every row below it, so a per-row reading lit many rows, and each one's
+ * revert put the whole group back - order, dividers and stacks. The list's
+ * own header owns that dot and that revert, and nothing else does.
  */
 export function regionPositionMoved(
   snapshot: LayoutSnapshot,
   region: RegionId,
 ): boolean {
-  const arrangement = snapshot.arrangement;
-  return positionRows(region).some((row) => {
-    switch (row.kind) {
-      case "position-host":
-      case "position-side":
-        return rowChanged(arrangement, region, row);
-      case "position-order":
-        return (
-          groupRegionIds(arrangement, row.group).indexOf(region) !==
-          groupRegionIds(DEFAULT_ARRANGEMENT, row.group).indexOf(region)
-        );
-    }
-  });
+  return positionRows(region).some(
+    (row) =>
+      row.kind !== "position-order" &&
+      rowChanged(snapshot.arrangement, region, row),
+  );
 }
 
 /** One Position row measured against the shipped arrangement, by axis. */
@@ -108,37 +91,19 @@ function rowChanged(
   }
 }
 
-/** One order group's REGIONS, in order; the rail's non-region entries out. */
-function groupRegionIds(
-  arrangement: LayoutArrangement,
-  group: OrderGroupId,
-): ReadonlyArray<string> {
-  switch (group) {
-    case "dock":
-      return arrangement.dock;
-    case "toolbarLeft":
-      return arrangement.toolbarLeft;
-    case "toolbarRight":
-      return arrangement.toolbarRight;
-    case "usageProviders":
-      return arrangement.usageProviders;
-    case "rail":
-      return arrangement.rail.flatMap((entry) =>
-        entry.kind === "panel" ? [entry.id] : [],
-      );
-  }
-}
-
 /**
- * Every Position row of this region put back, leaving every other region
- * alone: the whole-region revert the page offers on a row (L-95).
+ * This region's host and side put back, leaving every other region alone: the
+ * whole-region revert the page offers on a row (L-95). Its place in an order
+ * group stays, for the reason {@link regionPositionMoved} gives; the list's
+ * header puts the order back ({@link revertOrderGroup}).
  */
 export function revertPositionRow(
   arrangement: LayoutArrangement,
   region: RegionId,
 ): LayoutArrangement {
   return positionRows(region).reduce(
-    (current, row): LayoutArrangement => revertRow(current, region, row),
+    (current, row): LayoutArrangement =>
+      row.kind === "position-order" ? current : revertRow(current, region, row),
     arrangement,
   );
 }
@@ -204,7 +169,11 @@ function positionRows(region: RegionId): ReadonlyArray<PositionRow> {
   });
 }
 
-function revertOrderGroup(
+/**
+ * One order group back to its shipped order - for the rail, its dividers and
+ * stacks with it. What a list header's revert writes, and nothing else does.
+ */
+export function revertOrderGroup(
   arrangement: LayoutArrangement,
   group: OrderGroupId,
 ): LayoutArrangement {

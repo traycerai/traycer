@@ -433,7 +433,7 @@
    The sample tab is `splitEligibility: "ineligible"`, so no second surface is
    ever presented beside it, and the app-wide chrome around it draws each of
    its regions once (the status bar is not even mounted while the usage cluster
-   is hosted in the header - `statusBarShown`).
+   is hosted in the header - `useStatusBarVisible`).
 
    So the selected region is always the anchor instance, and the travelling
    ring is the whole of the selection signal. The 2px `--foreground` outline

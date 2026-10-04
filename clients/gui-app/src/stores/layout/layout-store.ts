@@ -1,10 +1,8 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   DEFAULT_ARRANGEMENT,
-  statusBarShown,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import {
@@ -262,17 +260,6 @@ export function useLayoutSnapshot(): LayoutSnapshot {
   return useMemo(
     () => ({ basePreset, overrides, arrangement }),
     [basePreset, overrides, arrangement],
-  );
-}
-
-/**
- * `statusBarShown` over the live store and the live viewport - the mount
- * decision the shell and the strip's own controls share.
- */
-export function useStatusBarShown(): boolean {
-  const isMobileViewport = useIsMobileViewport();
-  return useLayoutStore((state) =>
-    statusBarShown(state.arrangement, isMobileViewport),
   );
 }
 

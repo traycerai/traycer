@@ -855,6 +855,8 @@ export function AppFrameRailEntries({
   return railDisplayEntries(
     arrangement.rail,
     (regionId) => values[regionId].shown !== "hidden",
+    // The app at rest, so a divider is spacing between two drawn icons.
+    "spacing",
   ).map((entry) => {
     if (entry.kind === "divider") {
       // The space a divider is at rest, and nothing else (L-11, L-140): a

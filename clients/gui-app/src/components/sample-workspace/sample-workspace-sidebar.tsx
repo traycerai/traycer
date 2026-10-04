@@ -119,7 +119,11 @@ export function SampleWorkspaceSidebar(): ReactNode {
     );
   const drawn = (regionId: RailRegionId): boolean =>
     panelShown(regionId) || regionId === hovered || regionId === selected;
-  const entries = railDisplayEntries(rail, drawn);
+  const entries = railDisplayEntries(
+    rail,
+    drawn,
+    dividersEditing ? "handles" : "spacing",
+  );
   const displayedRegion =
     RAIL_REGION_IDS.find((id) => id === selected && drawn(id)) ??
     firstPanel(entries);

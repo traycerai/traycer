@@ -33,6 +33,7 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 interface CapturedToastAction {
   readonly label: string;
@@ -277,6 +278,63 @@ describe("<LayoutRegionContextMenu />", () => {
     expect(regionValue("toolActivity", "size")).toBe("full");
     expect(toasts.at(-1)?.message).toBe("Tool activity open");
     toasts.at(-1)?.onAutoClose?.();
+  });
+});
+
+describe("the microphone while Voice input is off (C4)", () => {
+  beforeEach(() => {
+    useSettingsStore.getState().setVoiceInputEnabled(false);
+  });
+
+  afterEach(() => {
+    useSettingsStore.getState().setVoiceInputEnabled(true);
+  });
+
+  it("offers 'Turn on Voice input' instead of Hide or Show, which would write a value nothing reads", () => {
+    render(<Harness regionId="mic" />);
+    openMenu();
+
+    expect(
+      screen.getByRole("menuitem", { name: "Turn on Voice input" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("layout-quick-verb-mic-hide")).toBeNull();
+    expect(screen.queryByTestId("layout-quick-verb-mic-show")).toBeNull();
+    // The way into the editor stays.
+    expect(screen.getByTestId("customize-layout-menu-item")).toBeTruthy();
+  });
+
+  it("turns Voice input on, and the toast's Undo turns it back off", () => {
+    render(<Harness regionId="mic" />);
+    openMenu();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Turn on Voice input" }),
+    );
+
+    expect(useSettingsStore.getState().voiceInputEnabled).toBe(true);
+    expect(toasts.at(-1)?.message).toBe("Voice input on");
+
+    toasts.at(-1)?.action.onClick();
+
+    expect(useSettingsStore.getState().voiceInputEnabled).toBe(false);
+  });
+
+  it("offers Hide again once Voice input is on", () => {
+    useSettingsStore.getState().setVoiceInputEnabled(true);
+    render(<Harness regionId="mic" />);
+    openMenu();
+
+    expect(screen.getByTestId("layout-quick-verb-mic-hide")).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Turn on Voice input" }),
+    ).toBeNull();
+  });
+
+  it("leaves every other region's verbs alone", () => {
+    render(<Harness regionId="minimap" />);
+    openMenu();
+
+    expect(screen.getByTestId("layout-quick-verb-minimap-hide")).toBeTruthy();
   });
 });
 

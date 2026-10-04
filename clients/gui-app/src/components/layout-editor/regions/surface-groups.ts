@@ -1,7 +1,11 @@
-import { LAYOUT_REGION_LIST } from "@/components/layout-editor/regions/region-facts";
+import {
+  LAYOUT_REGION_LIST,
+  regionFacts,
+} from "@/components/layout-editor/regions/region-facts";
 import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
+import type { LayoutFormContext } from "@/components/layout-editor/regions/row-availability";
 import type { OrderGroupId } from "@/lib/layout/layout-arrangement";
-import type { RegionId } from "@/lib/layout/region-id";
+import type { RegionId, ToolbarRegionId } from "@/lib/layout/region-id";
 
 /**
  * The tier above the region registry: what a SURFACE owns (L-92, L-95).
@@ -98,6 +102,44 @@ export const SURFACE_ORDER_GROUPS: Readonly<
  */
 export function orderGroupListLabel(group: OrderGroupId): string {
   return group === "rail" ? "Sidebar panels" : ORDER_GROUPS[group].label;
+}
+
+/**
+ * Whether a list draws its header. The phone layout's toolbar is not
+ * reordered (its members are fixed), so its lists are plain rows there with
+ * no "Drag to reorder" line over them.
+ */
+export function orderGroupHeaded(
+  group: OrderGroupId,
+  narrow: boolean,
+): boolean {
+  return !narrow || (group !== "toolbarLeft" && group !== "toolbarRight");
+}
+
+/**
+ * The toolbar members the phone layout draws, in its own fixed order: Attach
+ * image on the left; the model chip (no label, the same picker) and the
+ * microphone on the right (C3).
+ */
+const PHONE_TOOLBAR: Readonly<
+  Record<"toolbarLeft" | "toolbarRight", ReadonlyArray<ToolbarRegionId>>
+> = {
+  toolbarLeft: ["attachImage"],
+  toolbarRight: ["model", "mic"],
+};
+
+/**
+ * One toolbar list's rows: what this layout draws, less any region whose
+ * shell gate leaves it out of this shell (the microphone where dictation is
+ * refused). An empty answer is a list the form does not draw at all.
+ */
+export function toolbarMembers(
+  group: "toolbarLeft" | "toolbarRight",
+  narrow: boolean,
+  context: LayoutFormContext,
+): ReadonlyArray<ToolbarRegionId> {
+  const ids = narrow ? PHONE_TOOLBAR[group] : context.arrangement[group];
+  return ids.filter((id) => regionFacts(id).shellGate(context.shell));
 }
 
 /**

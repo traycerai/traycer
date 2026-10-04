@@ -4,6 +4,7 @@ import {
   regionWhere,
 } from "@/components/layout-editor/regions/region-facts";
 import { BAR_HOST_OPTIONS } from "@/components/layout-editor/regions/region-grammar";
+import type { LayoutFacts } from "@/components/layout-editor/regions/row-availability";
 import {
   DEFAULT_ARRANGEMENT,
   type BarHost,
@@ -18,6 +19,8 @@ import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
  * the tabs are a vertical strip there is no header, and in every placement
  * the place is called the tab strip, never "Header" or "Top bar".
  */
+
+const FACTS: LayoutFacts = { voiceInputEnabled: true };
 
 function arrangementWith(
   placement: TabStripPlacement,
@@ -117,6 +120,7 @@ describe("the index state word of a bar reading", () => {
           "usageLimits",
           values,
           arrangementWith(placement, "header", "left"),
+          FACTS,
         ),
       ).toBe("Tab strip, start");
       expect(
@@ -124,6 +128,7 @@ describe("the index state word of a bar reading", () => {
           "resourceMonitor",
           values,
           arrangementWith(placement, "header", "right"),
+          FACTS,
         ),
       ).toBe("Tab strip, end");
     },
@@ -136,6 +141,7 @@ describe("the index state word of a bar reading", () => {
           "usageLimits",
           values,
           arrangementWith(placement, "status-bar", "right"),
+          FACTS,
         ),
       ).toBe("Status bar, right");
     }

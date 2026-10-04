@@ -145,25 +145,27 @@ describe("inspector keyboard model (L-31)", () => {
   });
 
   it("keeps an area whose region now reads the typed state word, and opens it with that row on Enter", () => {
-    // Todo's own name and keywords never say "chip" - "Full row" is its
-    // default state word - so ITS match here can only come from the row's own
-    // CURRENT state, not from label/keyword search (Model also matches "chip",
-    // as its own registry keyword, but ranks below a state-word hit).
-    useLayoutStore.getState().setRegionValues("todo", { size: "chip" });
+    // Access's own name and keywords never say "icon only" - "Icon and label"
+    // is its default state word - so ITS match here can only come from the
+    // row's own CURRENT state, not from label/keyword search. The state word
+    // is a phrase no other row names: "chip" is not one, since Context
+    // usage's "Chip style" row is a detail-row label and outranks a state
+    // word, and "hidden" is a keyword on Task tabs' area.
+    useLayoutStore.getState().setRegionValues("access", { size: "chip" });
     render(<Harness onExit={() => {}} />);
     const filterInput = screen.getByRole("textbox", { name: "Find a setting" });
 
-    fireEvent.change(filterInput, { target: { value: "chip" } });
+    fireEvent.change(filterInput, { target: { value: "icon only" } });
     expect(
-      document.querySelector('[data-layout-find-result="todo"]'),
+      document.querySelector('[data-layout-find-result="access"]'),
     ).not.toBeNull();
     expect(screen.queryByText("Task tabs")).toBeNull();
 
     fireEvent.keyDown(filterInput, { key: "Enter" });
 
     expect(useLayoutEditorStore.getState().area).toBe("composer");
-    expect(useLayoutEditorStore.getState().selected).toBe("todo");
-    expect(useLayoutEditorStore.getState().openRows).toContain("todo");
+    expect(useLayoutEditorStore.getState().selected).toBe("access");
+    expect(useLayoutEditorStore.getState().openRows).toContain("access");
   });
 });
 

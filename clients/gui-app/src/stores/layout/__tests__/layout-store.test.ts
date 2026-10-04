@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_USAGE_ROW_KEYS } from "@/lib/context-usage-rows";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
-import { layoutChanges, regionChanged } from "@/lib/layout/layout-diff";
+import { layoutChanges, regionChangedKeys } from "@/lib/layout/layout-diff";
 import { type LayoutValues } from "@/lib/layout/layout-values";
 import {
   effectiveLayoutValues,
@@ -154,7 +154,7 @@ describe("useLayoutStore", () => {
       // ... and it is NOT a change, because nothing about the picture differs
       // from the base. That is the half the header, the dot and the revert
       // read, and it is measured rather than stored.
-      expect(regionChanged(getLayoutSnapshot(), "model")).toBe(false);
+      expect(regionChangedKeys(getLayoutSnapshot(), "model")).toEqual([]);
       expect(changeCount(getLayoutSnapshot())).toBe(0);
     });
 
@@ -287,8 +287,8 @@ describe("useLayoutStore", () => {
         .setRegionValues("usageLimits", { density: "compact" });
       const snapshot = getLayoutSnapshot();
 
-      expect(regionChanged(snapshot, "usageLimits")).toBe(true);
-      expect(regionChanged(snapshot, "model")).toBe(false);
+      expect(regionChangedKeys(snapshot, "usageLimits")).toEqual(["density"]);
+      expect(regionChangedKeys(snapshot, "model")).toEqual([]);
     });
   });
 

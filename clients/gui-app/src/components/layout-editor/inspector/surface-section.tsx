@@ -1,29 +1,19 @@
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import {
-  isMinimapSideRowAvailable,
-  type SettingsAvailabilityContext,
-} from "@/lib/settings/settings-availability";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { RevertButton } from "@/components/layout-editor/inspector/inspector-row";
+import { useLayoutFormHost } from "@/components/layout-editor/inspector/layout-form-host";
 import { RegionDisplayControl } from "@/components/layout-editor/inspector/region-controls";
 import { UsageProfilesList } from "@/components/layout-editor/inspector/usage-profiles";
+import { useLayoutFormContext } from "@/components/layout-editor/inspector/use-layout-form-context";
 import { assertNever } from "@/components/layout-editor/inspector/rows/assert-never";
 import {
-  FineTuneRows,
+  FineTuneRowView,
   type FineTuneRowFacts,
 } from "@/components/layout-editor/inspector/rows/fine-tune-row";
-import { fineTuneRowLiveWhileHidden } from "@/components/layout-editor/inspector/region-control-io";
 import { setRegionShown } from "@/components/layout-editor/layout-gestures";
 import {
-  compactIgnoredRows,
   densityDescription,
+  readingFormPlacement,
 } from "@/components/layout-editor/regions/reading-placement";
-import {
-  readingPlacement,
-  readingStyleApplies,
-  resolvedReadingDensity,
-} from "@/lib/layout/reading-density";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
@@ -40,10 +30,7 @@ import {
   PositionSideRow,
 } from "@/components/layout-editor/inspector/rows/position-row";
 import { StyleRow } from "@/components/layout-editor/inspector/rows/style-row";
-import {
-  SurfaceLeadingRows,
-  SurfaceTrailingRows,
-} from "@/components/layout-editor/inspector/rows/surface-placement-rows";
+import { SurfaceAreaRows } from "@/components/layout-editor/inspector/rows/surface-placement-rows";
 import { SortableList } from "@/components/layout-editor/inspector/sortable-list";
 import { useSortableRowPadding } from "@/components/layout-editor/inspector/sortable-row-padding";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
@@ -51,46 +38,47 @@ import { HOME_TAB_PHONE_HINT } from "@/components/layout-editor/regions/top-bar-
 import {
   LAYOUT_REGION_LIST,
   regionFacts,
-  regionRowAvailable,
+  regionHasDisplayControl,
   type AnyGrammarRow,
 } from "@/components/layout-editor/regions/region-facts";
 import {
+  LOCATION_ROW_ID,
+  SIDE_ROW_ID,
   SURFACE_GROUPS,
   type SurfaceGroupId,
 } from "@/components/layout-editor/regions/region-grammar";
+import { revertOrderGroup } from "@/components/layout-editor/regions/region-position-rows";
 import {
-  regionPositionMoved,
-  revertPositionRow,
-} from "@/components/layout-editor/regions/region-position-rows";
+  INDEPENDENT,
+  orderedRows,
+  outlivesGate,
+  type LayoutFormContext,
+  type OrderedRow,
+  type RowDependency,
+} from "@/components/layout-editor/regions/row-availability";
+import {
+  regionRowChanged,
+  revertedRegionRow,
+} from "@/components/layout-editor/regions/surface-diff";
 import {
   looseSurfaceRegions,
+  orderGroupHeaded,
   orderGroupListLabel,
   SURFACE_ORDER_GROUPS,
+  toolbarMembers,
 } from "@/components/layout-editor/regions/surface-groups";
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
-import {
-  layoutChanges,
-  regionChanged,
-  reorderedGroups,
-  revertLayoutChange,
-  usageProvidersChanged,
-  type LayoutChange,
-} from "@/lib/layout/layout-diff";
+import { reorderedGroups } from "@/lib/layout/layout-diff";
 import {
   asBarRegionId,
   BAR_REGION_IDS,
-  DEFAULT_ARRANGEMENT,
   type BarRegionId,
-  type LayoutArrangement,
   type OrderGroupId,
 } from "@/lib/layout/layout-arrangement";
-import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
-import {
-  regionValuesHidden,
-  type LayoutValues,
-} from "@/lib/layout/layout-values";
+import { regionValuesHidden } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
+import { isMobileFooterRowAvailable } from "@/lib/settings/settings-availability";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
   getLayoutSnapshot,
@@ -105,6 +93,11 @@ import {
  * Every region is a ROW with its one display control (L-121), a revert while
  * it is changed and, where it has more to say, a disclosure that opens its Location,
  * Side, Style and detail rows in place (L-89). There is no deeper level.
+ *
+ * Which rows exist, where each sits and how it says it is off is the
+ * registry's (`regions/row-availability.ts`, P1): every row here is ordered by
+ * `orderedRows` and drawn through the one row shell, against the one
+ * {@link LayoutFormContext} this section builds.
  *
  * `selectedRow` is the region the editor's canvas has selected: its row is
  * highlighted, and the host opens it through `openRows`.
@@ -124,9 +117,11 @@ export function SurfaceSection(props: {
 }): ReactNode {
   const { surface, snapshot, openRows, onToggleRow, onSelectRow, selectedRow } =
     props;
-  const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
-  const narrow = useIsMobileViewport();
-  const availability = useSettingsAvailabilityContext();
+  const context = useLayoutFormContext();
+  const values = context.values;
+  const narrow = context.shell.phoneLayout;
+  const footerGateId = useId();
+  const footerGated = surface === "statusBar" && footerOff(context);
 
   function selectHandler(regionId: RegionId): (() => void) | null {
     if (onSelectRow === null) return null;
@@ -146,12 +141,14 @@ export function SurfaceSection(props: {
     // A disclosure only where opening it shows something: the region's own
     // detail rows, or its presence rule (G6).
     const discloses =
-      hint !== null ||
-      regionDetailRows(regionId, narrow, availability).length > 0;
+      hint !== null || regionDetailRows(regionId, context).length > 0;
     return {
       ...BARE_ROW,
       hint,
-      control: <RegionDisplayControl regionId={regionId} values={values} />,
+      availability: regionFacts(regionId).availability(context),
+      control: regionHasDisplayControl(regionId, narrow) ? (
+        <RegionDisplayControl regionId={regionId} values={values} />
+      ) : null,
       revert: changed ? (
         <RevertButton
           label={`Revert ${regionFacts(regionId).name}`}
@@ -164,7 +161,8 @@ export function SurfaceSection(props: {
         <RegionRowDetail
           regionId={regionId}
           snapshot={snapshot}
-          values={values}
+          context={context}
+          gateId={null}
         />
       ) : null,
       open: discloses && openRows.includes(id),
@@ -176,20 +174,31 @@ export function SurfaceSection(props: {
     };
   }
 
-  const loose = looseSurfaceRegions(surface);
+  const loose = looseSurfaceRegions(surface).filter((regionId) =>
+    regionPresent(regionId, context),
+  );
   const groups = SURFACE_ORDER_GROUPS[surface];
 
   return (
     <div data-layout-area-form={surface} className="flex flex-col">
-      <SurfaceLeadingRows surface={surface} />
+      <SurfaceAreaRows surface={surface} place="leading" context={context} />
+      {footerGated ? (
+        // The ONE reason for every reading row below (U1), under the switch
+        // it names; each gated row's group points here.
+        <GateHint id={footerGateId}>
+          Turn on Status bar on small screens to use these. Show still decides
+          the header icons.
+        </GateHint>
+      ) : null}
       {surface === "statusBar"
         ? BAR_REGION_IDS.map((regionId) => (
             <ReadingSection
               key={regionId}
               regionId={regionId}
               snapshot={snapshot}
-              values={values}
+              context={context}
               selected={selectedRow === regionId}
+              gateId={footerGated ? footerGateId : null}
             />
           ))
         : null}
@@ -205,177 +214,257 @@ export function SurfaceSection(props: {
         <SurfaceOrderList
           key={group}
           group={group}
-          snapshot={snapshot}
-          values={values}
+          context={context}
           decorate={decorate}
           selectedRow={selectedRow}
         />
       ))}
-      <SurfaceTrailingRows surface={surface} />
+      <SurfaceAreaRows surface={surface} place="trailing" context={context} />
     </div>
   );
 }
 
 /**
+ * Whether the phone layout draws its footer off: then the two readings are
+ * the header's icons, which read nothing below Show (U1). The same predicate
+ * the switch's own row exists by.
+ */
+function footerOff(context: LayoutFormContext): boolean {
+  return (
+    isMobileFooterRowAvailable(context.shell) &&
+    !context.arrangement.mobileFooter
+  );
+}
+
+/**
  * One order group as a headed list: the list's name with its own revert, and
- * how it is operated (L-127, LV2-18).
+ * how it is operated (L-127, LV2-18). A group with no member here draws
+ * nothing - no heading over an empty list, no rule under it.
  */
 function SurfaceOrderList(props: {
   readonly group: OrderGroupId;
-  readonly snapshot: LayoutSnapshot;
-  readonly values: LayoutValues;
+  readonly context: LayoutFormContext;
   readonly decorate: (id: string) => SortableRowDecoration;
   readonly selectedRow: RegionId | null;
 }): ReactNode {
-  const { group, snapshot, values, decorate, selectedRow } = props;
-  const arrangement = snapshot.arrangement;
-  const narrow = useIsMobileViewport();
-  const movable =
-    !narrow || (group !== "toolbarLeft" && group !== "toolbarRight");
-  const moved = movable && reorderedGroups(arrangement).includes(group);
+  const { group, context, decorate, selectedRow } = props;
+  const arrangement = context.arrangement;
+  const narrow = context.shell.phoneLayout;
+  if (
+    (group === "toolbarLeft" || group === "toolbarRight") &&
+    toolbarMembers(group, narrow, context).length === 0
+  )
+    return null;
+  const headed = orderGroupHeaded(group, narrow);
+  const moved = headed && reorderedGroups(arrangement).includes(group);
   return (
-    <div className="flex flex-col">
-      <div className="border-b border-border/40">
-        <OrderGroupHeader
-          group={group}
-          revert={
-            moved ? (
-              <RevertButton
-                label={`Revert ${orderGroupListLabel(group)} order`}
-                onRevert={() => {
-                  writeArrangement(revertedOrderGroup(group, arrangement));
-                }}
-              />
-            ) : null
-          }
-        />
-      </div>
+    // A list with no header still starts on a rule, as every other row does.
+    <div
+      className={cn("flex flex-col", !headed && "border-t border-border/40")}
+    >
+      {headed ? (
+        <div className="border-b border-border/40">
+          <OrderGroupHeader
+            group={group}
+            revert={
+              moved ? (
+                <RevertButton
+                  label={`Revert ${orderGroupListLabel(group)} order`}
+                  onRevert={() => {
+                    writeArrangement(revertOrderGroup(arrangement, group));
+                  }}
+                />
+              ) : null
+            }
+          />
+        </div>
+      ) : null}
       <OrderGroupList
         group={group}
         selectedId={selectedRow}
-        values={values}
+        values={context.values}
         arrangement={arrangement}
         decorate={decorate}
+        context={context}
       />
     </div>
   );
 }
 
 /**
- * A group put back through the one seam that knows how: any region whose
- * Position row names this group reverts the whole list, because that is what a
- * `position-order` revert has always meant (L-57).
+ * A region's detail row as the section orders it: every kind its disclosure
+ * draws, under the one id its siblings name it by (`depends.under`).
  */
-function revertedOrderGroup(
-  group: OrderGroupId,
-  arrangement: LayoutArrangement,
-): LayoutArrangement {
-  const member = LAYOUT_REGION_LIST.find((region) =>
-    region.rows.some(
-      (row) => row.kind === "position-order" && row.group === group,
-    ),
-  );
-  return member === undefined
-    ? arrangement
-    : revertPositionRow(arrangement, member.id);
+type DetailRow =
+  | {
+      readonly kind: "position-host";
+      readonly id: string;
+      readonly depends: RowDependency;
+    }
+  | {
+      readonly kind: "position-side";
+      readonly id: string;
+      readonly depends: RowDependency;
+      readonly description: string;
+    }
+  | {
+      readonly kind: "style";
+      readonly id: string;
+      readonly depends: RowDependency;
+      readonly row: Extract<AnyGrammarRow, { readonly kind: "style" }>;
+    }
+  | {
+      readonly kind: "fine-tune";
+      readonly id: string;
+      readonly depends: RowDependency;
+      readonly row: FineTuneRowFacts;
+    }
+  | {
+      readonly kind: "children";
+      readonly id: string;
+      readonly depends: RowDependency;
+    };
+
+/**
+ * A region's detail rows in the order they are drawn, each with what it says
+ * about itself; a row its rule leaves out of this shell is not here.
+ * `position-order` IS the list the region's row sits in, so it is no detail.
+ */
+function regionDetailRows(
+  regionId: RegionId,
+  context: LayoutFormContext,
+): ReadonlyArray<OrderedRow<DetailRow>> {
+  // Annotated rather than inferred: indexing the registry with a UNION of ids
+  // gives a union of arrays, and a `flatMap` on one of those has no single
+  // callable signature.
+  const declared: ReadonlyArray<AnyGrammarRow> = LAYOUT_REGIONS[regionId].rows;
+  const rows = declared.flatMap((row): ReadonlyArray<DetailRow> => {
+    switch (row.kind) {
+      case "position-host":
+        return [{ kind: row.kind, id: LOCATION_ROW_ID, depends: row.depends }];
+      case "position-side":
+        return [
+          {
+            kind: row.kind,
+            id: SIDE_ROW_ID,
+            depends: row.depends,
+            description: row.description,
+          },
+        ];
+      case "style":
+        return [{ kind: row.kind, id: row.key, depends: row.depends, row }];
+      case "fine-tune":
+        return row.rows.map((detail): DetailRow => ({
+          kind: "fine-tune",
+          id: detail.id,
+          depends: detail.depends,
+          row: detail,
+        }));
+      case "children":
+        return [{ kind: row.kind, id: row.level, depends: INDEPENDENT }];
+      case "position-order":
+        return [];
+      default:
+        return assertNever(row);
+    }
+  });
+  return orderedRows(rows, context);
 }
 
 /**
- * What the row's disclosure opens: Location, Side, Style and the detail rows.
+ * What the row's disclosure opens: Location, Side, Style and the detail rows,
+ * in `orderedRows`' order, each saying through the row shell what it depends
+ * on.
  *
- * While the region is Hidden they stay readable and disabled, and say how to
- * change them: a disabled `fieldset` turns every control off without taking
- * any of them out of the accessibility tree. A detail row something else still
- * reads stays live (`liveWhileHidden`, L-174), so the hint then names only the
- * rest.
+ * While the region is Hidden - or, for a reading, while the phone layout's
+ * footer is off (`gateId`) - they stay readable and disabled, and a hint
+ * above them (or the area's one footer reason) says how to change them: a
+ * disabled `fieldset` turns every control off without taking any of them out
+ * of the accessibility tree, and each points `aria-describedby` at the hint.
+ * A detail row something else still reads stays live (its rule answers
+ * `liveOutsideGate`, L-174), so the hint then names only the rest.
  */
 function RegionRowDetail(props: {
   readonly regionId: RegionId;
   readonly snapshot: LayoutSnapshot;
-  readonly values: LayoutValues;
+  readonly context: LayoutFormContext;
+  /** The area's own reason these rows are off, or `null`. */
+  readonly gateId: string | null;
 }): ReactNode {
-  const { regionId, snapshot, values } = props;
-  const narrow = useIsMobileViewport();
-  const availability = useSettingsAvailabilityContext();
-  const gutter = useSortableRowPadding();
-  const rows = regionDetailRows(regionId, narrow, availability).filter(
-    (row) =>
-      // A phone's footer hides no row by density, as `readingFineTuneRows` has it.
-      narrow ||
-      row.kind !== "style" ||
-      row.key !== "readingStyle" ||
-      readingStyleApplies(values.usageLimits.density, snapshot.arrangement),
-  );
+  const { regionId, snapshot, context, gateId } = props;
+  const hintId = useId();
+  const rows = regionDetailRows(regionId, context);
   if (rows.length === 0) return null;
-  const hidden = regionValuesHidden(values[regionId]);
-  const someLive =
-    hidden &&
-    rows.some(
-      (row) =>
-        row.kind === "fine-tune" &&
-        row.rows.some((detail) =>
-          fineTuneRowLiveWhileHidden(detail, values[regionId]),
-        ),
-    );
+  const hidden = regionValuesHidden(context.values[regionId]);
+  const gates = [hidden ? hintId : null, gateId].filter(
+    (id): id is string => id !== null,
+  );
+  const someLive = rows.some((ordered) => outlivesGate(ordered.availability));
   return (
     <div data-region-detail={regionId}>
       {hidden ? (
-        <div className={gutter.row}>
-          <p className="ml-11 text-ui-xs text-muted-foreground">
-            Show {regionFacts(regionId).name} to change{" "}
-            {someLive ? "its other settings" : "these settings"}.
-          </p>
-        </div>
+        <GateHint id={hintId}>
+          Show {regionFacts(regionId).name} to change{" "}
+          {someLive ? "its other settings" : "these settings"}.
+        </GateHint>
       ) : null}
-      {rows.map((row) => (
-        <fieldset
-          key={detailRowKey(row)}
-          // Fine-tune rows decide per row, so one can outlive a Hidden region.
-          disabled={hidden ? row.kind !== "fine-tune" : false}
-          className="m-0 min-w-0 border-0 p-0"
-        >
-          <DetailRowView
-            row={row}
-            regionId={regionId}
-            values={values}
-            snapshot={snapshot}
-          />
-        </fieldset>
-      ))}
+      {rows.map((ordered) => {
+        const gated = gates.length > 0 && !outlivesGate(ordered.availability);
+        return (
+          <fieldset
+            key={ordered.row.id}
+            disabled={gated}
+            aria-describedby={gated ? gates.join(" ") : undefined}
+            className="m-0 min-w-0 border-0 p-0"
+          >
+            <DetailRowView
+              ordered={ordered}
+              regionId={regionId}
+              snapshot={snapshot}
+              context={context}
+            />
+          </fieldset>
+        );
+      })}
     </div>
   );
 }
 
 /**
- * A detail row's identity among its siblings. A region can hold several style
- * rows and several fine-tune groups (Usage limits' Reading style sits between
- * two), so the kind alone names no one of them.
+ * Why a whole group of rows is off, above them: the label column, the host's
+ * description size.
  */
-function detailRowKey(row: AnyGrammarRow): string {
-  switch (row.kind) {
-    case "style":
-      return `style:${row.key}`;
-    case "fine-tune":
-      return `fine-tune:${row.rows.map((detail) => detail.id).join("+")}`;
-    default:
-      return row.kind;
-  }
+function GateHint(props: {
+  readonly id: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const gutter = useSortableRowPadding();
+  const page = useLayoutFormHost() === "page";
+  return (
+    <div className={gutter.row}>
+      <p
+        id={props.id}
+        className={cn(
+          "ml-11 max-w-[72ch] text-pretty text-muted-foreground",
+          page ? "text-ui-sm" : "text-ui-xs",
+        )}
+      >
+        {props.children}
+      </p>
+    </div>
+  );
 }
 
-/**
- * One detail row, drawn by the module that owns its KIND. `position-order` IS
- * the list the row sits in and `children` is the Providers list beside it, so
- * neither is a detail.
- */
+/** One detail row, drawn by the module that owns its KIND. */
 function DetailRowView(props: {
-  readonly row: AnyGrammarRow;
+  readonly ordered: OrderedRow<DetailRow>;
   readonly regionId: RegionId;
-  readonly values: LayoutValues;
   readonly snapshot: LayoutSnapshot;
+  readonly context: LayoutFormContext;
 }): ReactNode {
-  const { row, regionId, values, snapshot } = props;
-  const arrangement = snapshot.arrangement;
-  const narrow = useIsMobileViewport();
+  const { ordered, regionId, snapshot, context } = props;
+  const { row, depth, availability } = ordered;
+  const arrangement = context.arrangement;
   switch (row.kind) {
     case "position-host":
       return (
@@ -383,6 +472,8 @@ function DetailRowView(props: {
           regionId={regionId}
           arrangement={arrangement}
           snapshot={snapshot}
+          availability={availability}
+          depth={depth}
         />
       );
     case "position-side":
@@ -392,99 +483,93 @@ function DetailRowView(props: {
           arrangement={arrangement}
           snapshot={snapshot}
           description={row.description}
+          availability={availability}
+          depth={depth}
         />
       );
     case "style":
       return (
         <StyleRow
-          label={row.label}
-          description={row.description}
-          styleKey={row.key}
-          labelPlacement={row.labelPlacement}
-          examples={row.examples}
+          anchor={null}
+          icon={null}
+          label={row.row.label}
+          description={row.row.description}
+          styleKey={row.row.key}
+          labelPlacement={row.row.labelPlacement}
+          examples={row.row.examples}
           regionId={regionId}
-          values={values}
+          values={context.values}
           arrangement={arrangement}
+          availability={availability}
+          depth={depth}
         />
       );
-    case "fine-tune": {
-      const bar = asBarRegionId(regionId);
+    case "fine-tune":
       return (
-        <FineTuneRows
-          rows={
-            bar === null
-              ? row.rows
-              : readingFineTuneRows({
-                  rows: row.rows,
-                  region: bar,
-                  values,
-                  arrangement,
-                  narrow,
-                })
-          }
+        <FineTuneRowView
+          row={withDensityDescription(row.row, regionId, context)}
           regionId={regionId}
-          regionValues={values[regionId]}
-          regionHidden={regionValuesHidden(values[regionId])}
+          regionValues={context.values[regionId]}
+          arrangement={arrangement}
+          availability={availability}
+          depth={depth}
         />
       );
-    }
-    case "position-order":
     case "children":
-      return null;
+      return (
+        <UsageProfilesList
+          arrangement={arrangement}
+          values={context.values}
+          context={context}
+        />
+      );
     default:
       return assertNever(row);
   }
 }
 
 /**
- * A bar reading's detail rows for where it sits now: the Density row says what
- * Auto is at that spot, and the rows a Compact reading ignores are left out.
- * A phone's footer has one density, so it draws no Density row and hides none.
+ * A bar reading's Density row says what Auto is where the reading is drawn
+ * now - the phone layout's footer being the status bar.
  */
-function readingFineTuneRows(input: {
-  readonly rows: ReadonlyArray<FineTuneRowFacts>;
-  readonly region: BarRegionId;
-  readonly values: LayoutValues;
-  readonly arrangement: LayoutArrangement;
-  readonly narrow: boolean;
-}): ReadonlyArray<FineTuneRowFacts> {
-  const { rows, region, values, arrangement, narrow } = input;
-  if (narrow) return rows.filter((row) => row.id !== "density");
-  const density = values[region].density;
-  const compact =
-    resolvedReadingDensity(density, arrangement, region) === "compact";
-  const ignored = compactIgnoredRows(region);
-  return rows
-    .filter((row) => !compact || !ignored.includes(row.id))
-    .map((row) =>
-      row.id === "density"
-        ? {
-            ...row,
-            description: densityDescription(
-              region,
-              readingPlacement(arrangement, region),
-              arrangement.tabStripPlacement,
-            ),
-          }
-        : row,
-    );
+function withDensityDescription(
+  row: FineTuneRowFacts,
+  regionId: RegionId,
+  context: LayoutFormContext,
+): FineTuneRowFacts {
+  const bar = asBarRegionId(regionId);
+  if (bar === null || row.id !== "density") return row;
+  return {
+    ...row,
+    description: densityDescription(
+      bar,
+      readingFormPlacement(context, bar),
+      context.arrangement.tabStripPlacement,
+    ),
+  };
 }
 
 /**
  * One of the two readings as its own section: its name, a Show switch, then its
  * Location and detail rows, with the Profiles list under Usage limits. Always
  * open - a section this short has nothing to disclose.
+ *
+ * Show stays live while the phone layout's footer is off: it is what decides
+ * the header's icon then.
  */
 function ReadingSection(props: {
   readonly regionId: BarRegionId;
   readonly snapshot: LayoutSnapshot;
-  readonly values: LayoutValues;
+  readonly context: LayoutFormContext;
   readonly selected: boolean;
+  readonly gateId: string | null;
 }): ReactNode {
-  const { regionId, snapshot, values, selected } = props;
+  const { regionId, snapshot, context, selected, gateId } = props;
   const facts = regionFacts(regionId);
   const gutter = useSortableRowPadding();
-  const shown = !regionValuesHidden(values[regionId]);
+  // Both hosts can be mounted at once, so the switch's id is per instance.
+  const showId = useId();
+  const shown = !regionValuesHidden(context.values[regionId]);
   const changed = regionRowChanged(snapshot, regionId);
   return (
     <section
@@ -509,9 +594,9 @@ function ReadingSection(props: {
           </span>
         ) : null}
         <div className="ml-auto flex items-center gap-2 text-muted-foreground">
-          <label htmlFor={`show-${regionId}`}>Show</label>
+          <label htmlFor={showId}>Show</label>
           <Switch
-            id={`show-${regionId}`}
+            id={showId}
             data-region-show={regionId}
             aria-label={`Show ${facts.name}`}
             checked={shown}
@@ -524,91 +609,27 @@ function ReadingSection(props: {
       <RegionRowDetail
         regionId={regionId}
         snapshot={snapshot}
-        values={values}
+        context={context}
+        gateId={gateId}
       />
-      {regionId === "usageLimits" && shown ? (
-        <UsageProfilesList arrangement={snapshot.arrangement} values={values} />
-      ) : null}
     </section>
   );
 }
 
-/** The grammar row kinds a row's disclosure draws. */
-const DETAIL_ROW_KINDS: ReadonlyArray<string> = [
-  "position-host",
-  "position-side",
-  "style",
-  "fine-tune",
-];
-
-function regionDetailRows(
+/** Whether a region is a row in this shell at all (its shell gate). */
+function regionPresent(
   regionId: RegionId,
-  narrow: boolean,
-  availability: SettingsAvailabilityContext,
-): ReadonlyArray<AnyGrammarRow> {
-  // Annotated rather than inferred: indexing the registry with a UNION of ids
-  // gives a union of arrays, and a `filter` on one of those has no single
-  // callable signature.
-  const declared: ReadonlyArray<AnyGrammarRow> = LAYOUT_REGIONS[regionId].rows;
-  return declared.filter(
-    (row) =>
-      DETAIL_ROW_KINDS.includes(row.kind) &&
-      regionRowAvailable(regionId, row, narrow) &&
-      (regionId !== "minimap" ||
-        row.kind !== "position-side" ||
-        isMinimapSideRowAvailable(availability)),
-  );
-}
-
-/**
- * Whether this region differs from what shipped, in any of the three ways it
- * can - its values, where it sits, or (for Usage limits) its Profiles list's
- * hidden providers and order (P-6, P-7). A provider's limits are not counted:
- * they are edited in Settings ▸ Providers.
- */
-function regionRowChanged(
-  snapshot: LayoutSnapshot,
-  regionId: RegionId,
+  context: LayoutFormContext,
 ): boolean {
-  return (
-    regionChanged(snapshot, regionId) ||
-    regionPositionMoved(snapshot, regionId) ||
-    (regionId === "usageLimits" && usageProvidersChanged(snapshot.arrangement))
-  );
+  return regionFacts(regionId).shellGate(context.shell);
 }
 
 /**
- * Everything this row's dot measures, put back as ONE step: its values, where
- * it sits, and - for Usage limits - its hidden providers and their order,
- * leaving each provider's limits alone.
+ * Everything this row's dot measures (`regionRowChanged`), put back as ONE
+ * step. Order stays: it is the list header's revert (T2).
  */
 function revertRegion(regionId: RegionId): void {
-  const snapshot = getLayoutSnapshot();
-  const changes: ReadonlyArray<LayoutChange> = [
-    ...layoutChanges(snapshot).styles.filter(
-      (change) => change.region === regionId,
-    ),
-    ...(regionId === "usageLimits"
-      ? layoutChanges(snapshot).arrangement.filter(
-          (change) =>
-            change.kind === "order" && change.group === "usageProviders",
-        )
-      : []),
-  ];
-  const reverted = changes.reduce(
-    (current, change) => revertLayoutChange(current, change),
-    snapshot,
-  );
-  const placed = regionPositionMoved(snapshot, regionId)
-    ? revertPositionRow(reverted.arrangement, regionId)
-    : reverted.arrangement;
-  const next: LayoutSnapshot = {
-    ...reverted,
-    arrangement:
-      regionId === "usageLimits"
-        ? { ...placed, hiddenProviders: DEFAULT_ARRANGEMENT.hiddenProviders }
-        : placed,
-  };
+  const next = revertedRegionRow(getLayoutSnapshot(), regionId);
   useLayoutEditorStore.getState().recordGesture(() => {
     useLayoutStore.getState().replaceAll(next);
   });
