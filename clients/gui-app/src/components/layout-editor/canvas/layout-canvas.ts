@@ -42,6 +42,7 @@ import {
 } from "@/components/layout-editor/regions/region-grammar";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { getLayoutSnapshot } from "@/stores/layout/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * The canvas half of an editor session: what the pointer is on, and where the
@@ -231,12 +232,18 @@ export function useLayoutCanvas(column: HTMLElement | null): void {
       // re-rendered, where the unmount cleanup below never runs at all.
       if (state.leaving && !previous.leaving) cancelLayoutDrag();
     });
+    // A fact a state word reads (Voice input) lives in the settings store, and
+    // the mic's "Turn on" verb writes it while the pointer rests on the region.
+    const unsubscribeFacts = useSettingsStore.subscribe((state, previous) => {
+      if (state.voiceInputEnabled !== previous.voiceInputEnabled) paint();
+    });
     document.addEventListener("pointermove", onPointerMove, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     column.addEventListener("pointerleave", onPointerLeave);
 
     return () => {
       unsubscribe();
+      unsubscribeFacts();
       document.removeEventListener("pointermove", onPointerMove, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
       column.removeEventListener("pointerleave", onPointerLeave);
