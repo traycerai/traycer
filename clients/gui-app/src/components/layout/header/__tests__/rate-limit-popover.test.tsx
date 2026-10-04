@@ -4033,7 +4033,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
     expect(screen.queryByTestId("rate-limit-rail-limited-dot")).toBeNull();
   });
 
-  it("keeps the banner above the content of every tab", () => {
+  it("leaves a limited profile off the banner on its own provider's tab, and keeps it on every other tab", () => {
     showLimited([
       limitedSegment({
         providerId: "codex",
@@ -4045,8 +4045,14 @@ describe("<RateLimitPopover /> limited profiles", () => {
     ]);
 
     expect(screen.getAllByTestId("rate-limit-limited-banner")).toHaveLength(1);
+
     fireEvent.click(screen.getByRole("tab", { name: /^Codex/ }));
-    expect(screen.getAllByTestId("rate-limit-limited-banner")).toHaveLength(1);
+    expect(screen.queryByTestId("rate-limit-limited-banner")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^Claude Code/ }));
+    const banners = screen.getAllByTestId("rate-limit-limited-banner");
+    expect(banners).toHaveLength(1);
+    expect(banners[0].textContent).toContain("pro20x");
   });
 
   it("marks only the provider with a limited profile on the rail, leaving the order alone", () => {
