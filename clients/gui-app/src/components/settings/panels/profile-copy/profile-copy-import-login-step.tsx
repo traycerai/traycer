@@ -42,6 +42,7 @@ export function ProfileCopyImportLoginStep(props: {
   readonly login: ProfileImportLoginFlow;
   readonly names: ProfileCopyNames;
   readonly destinationIsLocal: boolean;
+  readonly disabled: boolean;
   readonly onCancel: () => void;
 }): ReactNode {
   const { login, names, destinationIsLocal } = props;
@@ -109,7 +110,7 @@ export function ProfileCopyImportLoginStep(props: {
         <CodePasteField
           key={login.codePaste.attemptId}
           codePaste={login.codePaste}
-          disabled={login.cancelPending}
+          disabled={login.cancelPending || props.disabled}
           visibleLabel
         />
       ) : null}
@@ -122,7 +123,7 @@ export function ProfileCopyImportLoginStep(props: {
           type="button"
           size="sm"
           variant="destructive"
-          disabled={login.cancelPending}
+          disabled={login.cancelPending || props.disabled}
           onClick={props.onCancel}
         >
           {login.cancelPending ? <MutedAgentSpinner /> : null}

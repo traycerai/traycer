@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+import { ProfileSyncModal } from "../profile-sync/profile-sync-modal";
 import type { ReactNode } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
@@ -8,6 +10,7 @@ import { ProfileCopyIncomingDraftView } from "./profile-copy-incoming-draft-view
 import { ProfileCopyNewCopy } from "./profile-copy-new-copy";
 import { ProfileCopyOperationView } from "./profile-copy-operation-view";
 import { useProfileCopyHosts } from "./profile-copy-shared";
+import { useProfileSyncPending } from "@/hooks/providers/use-profile-sync";
 
 /**
  * The open dialog's body. It - not the always-mounted host - reads the
@@ -20,6 +23,14 @@ function ProfileCopyFlowBody(props: {
   const { view } = props;
   const hosts = useProfileCopyHosts();
   switch (view.kind) {
+    case "sync":
+      return (
+        <ProfileSyncModal
+          sourceHostId={view.sourceHostId}
+          initialProvider={view.providerId}
+          hosts={hosts}
+        />
+      );
     case "new":
       return (
         <ProfileCopyNewCopy
@@ -56,26 +67,49 @@ function ProfileCopyFlowBody(props: {
  * navigation "Open profile" performs. Every host this renders against comes
  * from the flow store's captured ids; nothing here reads a scoped, active or
  * effective host. Closing stops this window's reads and nothing on any host.
+ * Sync RPCs keep their observers mounted until they settle, so leaving cannot
+ * discard the submitted draft or its eventual inline answer.
  */
 export function ProfileCopyFlowHost(): ReactNode {
   const view = useProfileCopyFlowStore((state) => state.view);
+  return view === null ? null : <ProfileCopyFlowDialog view={view} />;
+}
+
+/** Only an open flow subscribes to its source's pending sync requests. */
+function ProfileCopyFlowDialog(props: {
+  readonly view: ProfileCopyFlowView;
+}): ReactNode {
+  const { view } = props;
   const session = useProfileCopyFlowStore((state) => state.session);
   const close = useProfileCopyFlowStore((state) => state.close);
+  const pending = useProfileSyncPending(
+    view.kind === "sync" ? view.sourceHostId : null,
+  );
   return (
     <Dialog
-      open={view !== null}
+      open
       onOpenChange={(open) => {
-        if (!open) close();
+        if (!open && !pending) close();
       }}
     >
-      {view !== null ? (
-        <DialogContent
-          layout="banded"
-          className="flex max-h-[min(85dvh,44rem)] flex-col overflow-hidden sm:max-w-[min(34rem,var(--safe-area-width))]"
-        >
-          <ProfileCopyFlowBody key={session} view={view} />
-        </DialogContent>
-      ) : null}
+      <DialogContent
+        layout="banded"
+        showCloseButton={!pending}
+        onEscapeKeyDown={(event) => {
+          if (pending) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (pending) event.preventDefault();
+        }}
+        className={cn(
+          "flex max-h-[min(85dvh,44rem)] flex-col overflow-hidden",
+          view.kind === "sync"
+            ? "sm:max-w-2xl"
+            : "sm:max-w-[min(34rem,var(--safe-area-width))]",
+        )}
+      >
+        <ProfileCopyFlowBody key={session} view={view} />
+      </DialogContent>
     </Dialog>
   );
 }

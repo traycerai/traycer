@@ -38,7 +38,7 @@ export function useProfileCopyVerifyMutation(
         attempt.attemptId,
       ),
       onSuccess: (response) => {
-        writeProfileCopyDraftOutcome(queryClient, response.outcome);
+        return writeProfileCopyDraftOutcome(queryClient, response.outcome);
       },
     },
     mapVariables: (variables) => variables,
@@ -62,7 +62,7 @@ export function useProfileCopyConfirmVerificationMutation(
         attempt.attemptId,
       ),
       onSuccess: (response) => {
-        writeProfileCopyDraftOutcome(queryClient, response.outcome);
+        return writeProfileCopyDraftOutcome(queryClient, response.outcome);
       },
     },
     mapVariables: (variables) => variables,
@@ -86,7 +86,7 @@ export function useProfileCopyConfirmIdentityMutation(
         attempt.attemptId,
       ),
       onSuccess: (response) => {
-        writeProfileCopyDraftOutcome(queryClient, response.outcome);
+        return writeProfileCopyDraftOutcome(queryClient, response.outcome);
       },
     },
     mapVariables: (variables) => variables,
@@ -111,7 +111,7 @@ export function useProfileCopySetPreferenceMutation(
         attempt.attemptId,
       ),
       onSuccess: (response) => {
-        writeProfileCopyDraftOutcome(queryClient, response.outcome);
+        return writeProfileCopyDraftOutcome(queryClient, response.outcome);
       },
     },
     mapVariables: (variables) => variables,
@@ -133,7 +133,7 @@ export function useProfileCopyCancelDraftMutation(
         attempt.attemptId,
       ),
       onSuccess: (response) => {
-        writeProfileCopyDraftOutcome(queryClient, response.outcome);
+        return writeProfileCopyDraftOutcome(queryClient, response.outcome);
       },
     },
     mapVariables: (variables) => variables,
