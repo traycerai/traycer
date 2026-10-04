@@ -318,6 +318,32 @@ describe("toastFromHostError", () => {
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
 
+  it("names the host's full disk for E_HOST_STORAGE_FULL instead of the bare fallback", () => {
+    toastFromHostError(
+      makeError(
+        "E_HOST_STORAGE_FULL",
+        "The host machine is out of disk space.",
+      ),
+      "Couldn't create epic.",
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "The host machine is out of disk space. Free some space on it, then try again.",
+    );
+  });
+
+  it("keeps the disk-space copy when the caller asked for raw host detail", () => {
+    toastFromHostErrorWithDetail(
+      makeError(
+        "E_HOST_STORAGE_FULL",
+        "sqlite statement failed: shape=COMMIT code=SQLITE_FULL",
+      ),
+      "Couldn't create agent.",
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "The host machine is out of disk space. Free some space on it, then try again.",
+    );
+  });
+
   it("shows the fallback for any other error code", () => {
     toastFromHostError(
       makeError("RPC_ERROR", "test error"),
