@@ -16,7 +16,9 @@ name: Trunk red
 # workflow run from an event that token caused, so a second `workflow_run` for
 # attempt two is not something to build on. Attempts after the first are
 # ignored here (the `if:` below), and the job that started the retry polls it
-# to the end. A cancelled run is ignored: a person cancelled it.
+# to the end. A cancelled run is ignored: a person cancelled it. A run that
+# could not start (`startup_failure`, a broken workflow file) cannot be
+# retried either, and is posted as such.
 #
 # Only push runs count. A pull-request run is its author's to read, a schedule
 # run (CodeQL's weekly scan) has no commit to blame, and a manual run is
@@ -60,6 +62,7 @@ jobs:
       && (
         github.event.workflow_run.conclusion == 'failure'
         || github.event.workflow_run.conclusion == 'timed_out'
+        || github.event.workflow_run.conclusion == 'startup_failure'
       )
     runs-on: ubuntu-latest
     # The longest retried leg is the macOS packaging job; the poll below gives
@@ -108,24 +111,30 @@ jobs:
                   -X POST -H 'Content-Type: application/json' --data-binary @- "${SLACK_WEBHOOK}" >/dev/null
           }
 
-          # The API can refuse a re-run for a few seconds after a run completes.
-          rerun_started=false
+          # One retry in all, whoever starts it. The attempt is read before
+          # every request: once a person has re-run the run, theirs is the
+          # retry, and asking again would start a third attempt whose pass
+          # would hide two failures. The API can also refuse a re-run for a
+          # few seconds after a run completes, hence the three tries.
+          attempt_now() {
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.run_attempt' || echo 1
+          }
+          retry_exists=false
           for try in 1 2 3; do
+            if [ "$(attempt_now)" -ge 2 ]; then
+              retry_exists=true
+              break
+            fi
             if gh run rerun "${RUN_ID}" --failed --repo "${GITHUB_REPOSITORY}"; then
-              rerun_started=true
+              retry_exists=true
               break
             fi
             echo "Re-run request ${try} was refused; waiting before the next."
             sleep 15
           done
-          if [ "${rerun_started}" != "true" ]; then
-            # Refused because a person already re-ran it: theirs is the retry,
-            # so wait for that one instead of calling the run unretryable.
-            attempt_now="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.run_attempt')" || attempt_now=1
-            if [ "${attempt_now:-1}" -lt 2 ]; then
-              post "failed and could not be retried"
-              exit 0
-            fi
+          if [ "${retry_exists}" != "true" ] && [ "$(attempt_now)" -lt 2 ]; then
+            post "failed and could not be retried"
+            exit 0
           fi
 
           # Poll the retry to its end. The run's status goes back to queued once

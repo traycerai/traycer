@@ -134,21 +134,43 @@ describe("ci-last-green-sha.sh", () => {
     expect(result.stdout.trim()).toBe(c2);
   });
 
-  it("prints <before> and warns when gh fails", () => {
+  // No base is answered with the all-zero SHA, which every caller treats as
+  // "compare everything". The previous push is never the answer then: it would
+  // narrow the range on a failed read, and a red merge would be forgotten.
+  const ALL_ZERO = "0000000000000000000000000000000000000000";
+
+  it("prints the all-zero SHA, never <before>, and warns when gh fails", () => {
     const [, , c3] = commits;
     const result = run(["test.yml", "main", c3], { fail: true });
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(c3);
+    expect(result.stdout.trim()).toBe(ALL_ZERO);
+    expect(result.stdout).not.toContain(c3);
     expect(result.stderr).toContain("::warning::");
-    expect(result.stderr).toContain("comparing against the previous push");
+    expect(result.stderr).toContain(
+      "could not read the successful push runs of test.yml on main; comparing everything.",
+    );
+    expect(result.stderr).not.toContain("previous push");
   });
 
-  it("prints <before> and warns when no successful run is an ancestor", () => {
+  it("prints the all-zero SHA, never <before>, and warns when no successful run is an ancestor", () => {
     const [, , c3, , c5] = commits;
     const result = run(["test.yml", "main", c3], { runs: [c5] });
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(c3);
+    expect(result.stdout.trim()).toBe(ALL_ZERO);
+    expect(result.stdout).not.toContain(c3);
     expect(result.stderr).toContain("::warning::");
+    expect(result.stderr).toContain(
+      `no successful push run of test.yml on main is an ancestor of ${c3.slice(0, 12)}; comparing everything.`,
+    );
+    expect(result.stderr).not.toContain("previous push");
+  });
+
+  it("prints the all-zero SHA when the API lists no successful run at all", () => {
+    const [, , c3] = commits;
+    const result = run(["test.yml", "main", c3], { runs: [] });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(ALL_ZERO);
+    expect(result.stderr).toContain("comparing everything.");
   });
 
   it("prints <before> unchanged, without asking gh, when it is not a commit", () => {

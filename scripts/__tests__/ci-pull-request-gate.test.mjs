@@ -392,6 +392,35 @@ describe("a job that narrows a push run compares against the last green push", (
     expect(finder.run).toContain('echo "NX_BASE=${base}" >> "$GITHUB_ENV"');
   });
 
+  // The script answers the all-zero SHA when it has no base, and `nx affected`
+  // cannot take that as `--base`. The step maps any answer that is not a commit
+  // to the repository's first commit, which makes every project affected, and
+  // does it BEFORE the answer is written to NX_BASE. Asserted on the parsed
+  // step's `run` text, in order, so a reformat of the YAML cannot hide it.
+  it("pre-commit.yml: an answer that is not a commit becomes the first commit, before NX_BASE is written", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "pre-commit.yml",
+    );
+    const finder = workflow.jobs["workspace-checks"].steps.find((step) =>
+      String(step.run ?? "").includes(LAST_GREEN),
+    );
+    const run = String(finder.run);
+    const verify = run.indexOf("git rev-parse --verify");
+    const firstCommit = run.indexOf("git rev-list --max-parents=0 HEAD");
+    const write = run.indexOf("NX_BASE=");
+    expect(verify).toBeGreaterThan(-1);
+    expect(firstCommit).toBeGreaterThan(-1);
+    expect(write).toBeGreaterThan(-1);
+    expect(run.indexOf(LAST_GREEN)).toBeLessThan(verify);
+    expect(verify).toBeLessThan(firstCommit);
+    expect(firstCommit).toBeLessThan(write);
+    // The test is on the commit the answer names, and the fallback replaces
+    // the answer itself.
+    expect(run).toMatch(
+      /if ! git rev-parse --verify --quiet "\$\{base\}\^\{commit\}" >\/dev\/null; then\s+base="\$\(git rev-list --max-parents=0 HEAD \| tail -n 1\)"\s+fi/,
+    );
+  });
+
   it("browser-regressions.yml: the filter reads the answer from the step's output", () => {
     const { workflow } = workflows.find(
       ({ file }) => file === "browser-regressions.yml",
@@ -461,9 +490,63 @@ describe("trunk-red.yml", () => {
     );
   });
 
+  // The conclusions the job acts on are exactly these three: a failed run, a
+  // run that timed out, and a run that could not start (`startup_failure`, a
+  // broken workflow file, which cannot be retried and is posted as such). A
+  // cancelled run is a person's decision and is never posted. Read from the
+  // parsed `if`, as the set of `conclusion == '<x>'` terms, so a fourth value
+  // (or a `!=`) reds this.
+  it("acts on exactly failure, timed_out and startup_failure, and never on cancelled", () => {
+    const condition = normalize(Object.values(workflow.jobs)[0].if);
+    const accepted = [
+      ...condition.matchAll(
+        /github\.event\.workflow_run\.conclusion == '([a-z_]+)'/g,
+      ),
+    ]
+      .map((match) => match[1])
+      .sort();
+    expect(accepted).toEqual(["failure", "startup_failure", "timed_out"]);
+    expect(condition).not.toContain("cancelled");
+    expect(condition).not.toContain("workflow_run.conclusion !=");
+  });
+
+  // One retry in all, whoever starts it: the attempt is read before every
+  // re-run request, so a person's re-run is the retry and no third attempt
+  // starts.
+  it("reads the run attempt before every re-run request", () => {
+    const run = Object.values(workflow.jobs)[0]
+      .steps.map((step) => String(step.run ?? ""))
+      .join("\n");
+    expect(run).toContain("attempt_now()");
+    const loop = run.slice(run.indexOf("for try in 1 2 3"));
+    const read = loop.indexOf("attempt_now");
+    const rerun = loop.indexOf("gh run rerun");
+    expect(read).toBeGreaterThan(-1);
+    expect(rerun).toBeGreaterThan(-1);
+    expect(read).toBeLessThan(rerun);
+  });
+
   it("interpolates no expression into a run body", () => {
     for (const step of Object.values(workflow.jobs)[0].steps) {
       expect(String(step.run ?? "")).not.toContain("${{");
     }
+  });
+});
+
+// The DCO check on a maintainer commit rests on this. A maintainer pull request
+// into `main` runs no DCO job in CI (the gate above), so the `commit-msg` hook
+// is the only check that a commit is signed off. CONTRIBUTING.md documents a
+// bare `pre-commit install`, which installs only the hook types named by
+// `default_install_hook_types`; without `commit-msg` in that list the DCO hook
+// never runs.
+describe(".pre-commit-config.yaml", () => {
+  const config = parse(
+    readFileSync(join(REPO_ROOT, ".pre-commit-config.yaml"), "utf8"),
+  );
+
+  it("installs both pre-commit and commit-msg on a bare `pre-commit install`", () => {
+    expect(Array.isArray(config.default_install_hook_types)).toBe(true);
+    expect(config.default_install_hook_types).toContain("pre-commit");
+    expect(config.default_install_hook_types).toContain("commit-msg");
   });
 });

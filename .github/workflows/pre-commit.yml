@@ -75,6 +75,12 @@ jobs:
         run: |
           set -euo pipefail
           base="$(scripts/ci-last-green-sha.sh pre-commit.yml "$BRANCH" "$BEFORE")"
+          # No base (the lookup failed, nothing green yet, or a `before` that is
+          # not in this history): `nx affected` needs a commit, and the one that
+          # makes every project affected is the repository's first.
+          if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+            base="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
           echo "NX_BASE=${base}" >> "$GITHUB_ENV"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         if: matrix.lane == 'static'

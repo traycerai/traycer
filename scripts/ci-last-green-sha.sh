@@ -20,10 +20,12 @@
 # the last finished green one and this run re-tests the merges in flight:
 # wider, never narrower.
 #
-# Falls back to <before>, with a warning, when the runs cannot be read or none
-# qualifies. That fallback narrows the range, the unsafe direction, and is
-# taken anyway: a base that is not a commit would fail the job that asked, and
-# a red run for an API hiccup is worse than one narrow comparison.
+# When the runs cannot be read, or no successful run is an ancestor, there is
+# no base, and the answer is the all-zero SHA: every caller already treats a
+# base that is not a commit as "compare everything". The previous push is
+# never the answer then. It would narrow the range, and narrowing on a failed
+# read is how a red merge gets forgotten: the cost of the other choice is one
+# full run.
 #
 # Needs `gh`, a `GH_TOKEN` with `actions: read`, and a checkout with history
 # (`fetch-depth: 0`) to test ancestry.
@@ -38,9 +40,9 @@ workflow=$1
 branch=$2
 before=$3
 
-fallback() {
-  echo "::warning::$1; comparing against the previous push." >&2
-  echo "${before}"
+no_base() {
+  echo "::warning::$1; comparing everything." >&2
+  echo "0000000000000000000000000000000000000000"
   exit 0
 }
 
@@ -53,7 +55,7 @@ fi
 
 candidates="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=${branch}&event=push&status=success&per_page=100" \
   --jq '.workflow_runs[].head_sha')" \
-  || fallback "could not read the successful push runs of ${workflow} on ${branch}"
+  || no_base "could not read the successful push runs of ${workflow} on ${branch}"
 
 # Newest first. A run that finished out of order can belong to a commit after
 # <before>; only <before> or an ancestor of it is a base for this push.
@@ -65,4 +67,4 @@ while IFS= read -r sha; do
   fi
 done <<<"${candidates}"
 
-fallback "no successful push run of ${workflow} on ${branch} is an ancestor of ${before:0:12}"
+no_base "no successful push run of ${workflow} on ${branch} is an ancestor of ${before:0:12}"
