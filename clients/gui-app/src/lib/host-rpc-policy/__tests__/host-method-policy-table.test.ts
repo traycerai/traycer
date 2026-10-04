@@ -129,8 +129,15 @@ function checkResponse(
 
 const PROFILE_COPY_UNPOLLED_LATEST_METHODS = [
   "providers.profileCopy.preview",
+  "providers.profileCopy.sync.preview",
   "host.profileCopy.preflight",
   "host.profileCopy.receipt",
+] as const;
+
+// The sync history is polled on a fixed 5s cadence: unlike `status`, nothing
+// classifies it, because a rule on this host advances with no user action.
+const PROFILE_COPY_FIXED_LATEST_METHODS = [
+  "providers.profileCopy.sync.list",
 ] as const;
 
 const PROFILE_COPY_CONDITION_LATEST_METHODS = [
@@ -141,6 +148,7 @@ const PROFILE_COPY_CONDITION_LATEST_METHODS = [
 
 const PROFILE_COPY_LATEST_METHODS = [
   ...PROFILE_COPY_UNPOLLED_LATEST_METHODS,
+  ...PROFILE_COPY_FIXED_LATEST_METHODS,
   ...PROFILE_COPY_CONDITION_LATEST_METHODS,
 ] as const;
 
@@ -159,6 +167,11 @@ const PROFILE_COPY_FIFO_METHODS = [
   "providers.profileCopy.login.cancel",
   "host.profileCopy.import",
   "host.profileCopy.cancel",
+  "providers.profileCopy.sync.start",
+  "providers.profileCopy.sync.saveRule",
+  "providers.profileCopy.sync.stopRule",
+  "providers.profileCopy.sync.resolve",
+  "host.profileCopy.applySync",
 ] as const;
 
 const PROFILE_COPY_JOIN_METHODS = [
@@ -218,6 +231,13 @@ describe("host method poll policy table", () => {
         mode: "latest",
         joinResponseTimeoutMs: null,
         poll: null,
+      });
+    }
+    for (const method of PROFILE_COPY_FIXED_LATEST_METHODS) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "latest",
+        joinResponseTimeoutMs: null,
+        poll: { kind: "fixed", intervalMs: 5_000 },
       });
     }
     for (const method of PROFILE_COPY_CONDITION_LATEST_METHODS) {

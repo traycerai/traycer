@@ -80,6 +80,8 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 }));
 
 function resetStores(): void {
+  // reset() also forgets the account-scoped retry request ids.
+  useProfileCopyFlowStore.getState().reset();
   useProfileCopyFlowStore.setState({
     view: null,
     session: 0,
@@ -284,6 +286,219 @@ describe("ProfileCopyOperationView", () => {
       ).toBeTruthy(),
     );
     expect(screen.queryByRole("button", { name: "Start again" })).toBeNull();
+  });
+
+  it("keeps the current Retry replacement when the next status read fails", async () => {
+    const queryClient = createAppQueryClient();
+    const REPLACEMENT = "55555555-5555-4555-8555-555555555558";
+    let statusFails = false;
+    const piAttempt = (attemptId: string) =>
+      profileCopyAttempt({ attemptId, destinationHostId: "pi-host" });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "providers.list": () => ({
+          providers: [
+            claudeProviderState([managedProfile(SOURCE_PROFILE_ID, "Work")]),
+          ],
+          native: null,
+        }),
+        "providers.profileCopy.status": () => {
+          if (statusFails) {
+            throw rpcError("FORBIDDEN", "providers.profileCopy.status");
+          }
+          return {
+            sourceHostId: SOURCE_HOST_ID,
+            operationId: OPERATION_ID,
+            outcomes: [
+              recordedOutcome({
+                state: "signed-in",
+                attempt: profileCopyAttempt({
+                  destinationHostId: DEST_HOST_ID,
+                }),
+              }),
+              recordedOutcome({
+                state: "quarantined",
+                reason: "writer-unconfirmed",
+                attempt: piAttempt(ATTEMPT_TWO_ID),
+              }),
+            ],
+          };
+        },
+        "providers.profileCopy.draftStatus": (params) => ({
+          result: "current" as const,
+          outcome: recordedOutcome({
+            state: "signed-in",
+            attempt: params.attempt,
+          }),
+        }),
+        "providers.profileCopy.retry": () => ({
+          result: "current" as const,
+          outcome: recordedOutcome({
+            state: "preparing",
+            revision: 1,
+            attempt: piAttempt(REPLACEMENT),
+          }),
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        harness.hosts.find((host) => host.hostId === hostId)?.entry ??
+        hostDirectoryEntry(hostId, hostId),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-op",
+      }),
+    );
+    harness.spine = spine;
+    plantHandle(true);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyFlowHost />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      useProfileCopyFlowStore.getState().open({
+        kind: "operation",
+        operationId: OPERATION_ID,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Interrupted — retry required")).toBeTruthy(),
+    );
+    // The next status read (the one the retry triggers) fails.
+    statusFails = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(
+        messenger.calls.some(
+          (call) => call.method === "providers.profileCopy.retry",
+        ),
+      ).toBe(true),
+    );
+    // The replacement is shown anyway: the old interrupted row and its Retry
+    // are gone, though no status read could confirm them.
+    await waitFor(() =>
+      expect(screen.queryByText("Interrupted — retry required")).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("keeps the current receipt a stale-revision Retry answer carries when the next status read fails", async () => {
+    const queryClient = createAppQueryClient();
+    let statusFails = false;
+    const piAttempt = (attemptId: string) =>
+      profileCopyAttempt({ attemptId, destinationHostId: "pi-host" });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "providers.list": () => ({
+          providers: [
+            claudeProviderState([managedProfile(SOURCE_PROFILE_ID, "Work")]),
+          ],
+          native: null,
+        }),
+        "providers.profileCopy.status": () => {
+          if (statusFails) {
+            throw rpcError("FORBIDDEN", "providers.profileCopy.status");
+          }
+          return {
+            sourceHostId: SOURCE_HOST_ID,
+            operationId: OPERATION_ID,
+            outcomes: [
+              recordedOutcome({
+                state: "signed-in",
+                attempt: profileCopyAttempt({
+                  destinationHostId: DEST_HOST_ID,
+                }),
+              }),
+              recordedOutcome({
+                state: "quarantined",
+                reason: "writer-unconfirmed",
+                attempt: piAttempt(ATTEMPT_TWO_ID),
+              }),
+            ],
+          };
+        },
+        "providers.profileCopy.draftStatus": (params) => ({
+          result: "current" as const,
+          outcome: recordedOutcome({
+            state: "signed-in",
+            attempt: params.attempt,
+          }),
+        }),
+        "providers.profileCopy.retry": () => ({
+          result: "stale-revision" as const,
+          // The same attempt, already at a newer revision and signed in.
+          outcome: recordedOutcome({
+            state: "signed-in",
+            revision: 2,
+            attempt: piAttempt(ATTEMPT_TWO_ID),
+          }),
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        harness.hosts.find((host) => host.hostId === hostId)?.entry ??
+        hostDirectoryEntry(hostId, hostId),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-op",
+      }),
+    );
+    harness.spine = spine;
+    plantHandle(true);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyFlowHost />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      useProfileCopyFlowStore.getState().open({
+        kind: "operation",
+        operationId: OPERATION_ID,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Interrupted — retry required")).toBeTruthy(),
+    );
+    // The next status read (the one the retry triggers) fails.
+    statusFails = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(
+        messenger.calls.some(
+          (call) => call.method === "providers.profileCopy.retry",
+        ),
+      ).toBe(true),
+    );
+    // The newer receipt is shown anyway: the interrupted row and its Retry are
+    // gone, though no status read could confirm it.
+    await waitFor(() =>
+      expect(screen.queryByText("Interrupted — retry required")).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getAllByText("Signed in")).toHaveLength(2);
   });
 
   it("shows mixed rows and reuses retryRequestId on a second click at the same revision", async () => {

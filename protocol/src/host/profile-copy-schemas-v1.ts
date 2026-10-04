@@ -1,3 +1,5 @@
+/** Frozen copy RPC 1.0 schemas. Keep the shipped host-id restriction here;
+ * canonical copy/sync schemas evolve separately in profile-copy-schemas.ts. */
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -12,9 +14,12 @@ export const profileCopyIdSchema = lazySchema(() => z.string().uuid());
 export const profileCopySourceProfileIdSchema = lazySchema(() =>
   z.union([profileCopyIdSchema, z.literal("ambient")]),
 );
-/** Canonical host ids are opaque; preserve their bytes within wire bounds. */
 export const profileCopyHostIdSchema = lazySchema(() =>
-  z.string().min(1).max(128),
+  z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/),
 );
 export const profileCopyRevisionSchema = lazySchema(() =>
   z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),

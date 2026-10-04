@@ -437,3 +437,33 @@ export function profileCopyOperationRows(
 export function profileCopyAttemptKey(attempt: ProfileCopyAttempt): string {
   return `${attempt.operationId}:${attempt.attemptId}`;
 }
+
+/** A transfer keeps this identity when Retry replaces its attempt. */
+export function profileCopyTransferKey(attempt: ProfileCopyAttempt): string {
+  return JSON.stringify([
+    attempt.sourceHostId,
+    attempt.operationId,
+    attempt.destinationHostId,
+    attempt.providerId,
+    attempt.sourceProfileId,
+  ]);
+}
+
+/** Merge an authoritative Retry answer without replacing a later receipt. */
+export function reconcileProfileCopyRetryOutcome(
+  current: ProfileCopyOutcome,
+  requested: ProfileCopyAttempt,
+  outcome: ProfileCopyOutcome,
+): ProfileCopyOutcome {
+  const transfer = profileCopyTransferKey(requested);
+  if (
+    profileCopyTransferKey(current.attempt) !== transfer ||
+    profileCopyTransferKey(outcome.attempt) !== transfer ||
+    (current.attempt.attemptId !== requested.attemptId &&
+      current.attempt.attemptId !== outcome.attempt.attemptId) ||
+    (current.attempt.attemptId === outcome.attempt.attemptId &&
+      current.revision > outcome.revision)
+  )
+    return current;
+  return outcome;
+}

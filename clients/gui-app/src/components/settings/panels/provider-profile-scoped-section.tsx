@@ -31,7 +31,8 @@ import {
   ProviderProfilesRefreshButton,
 } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
-import { ProfileCopyEntryButton } from "./profile-copy/profile-copy-entry-button";
+import { ProfileSyncEntryButton } from "./profile-sync/profile-sync-entry-button";
+import { profileCopyWireProvider } from "@/lib/profile-copy/profile-copy-model";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
@@ -219,10 +220,10 @@ function ProfileScopedSectionMessages(props: {
  * even when there is only the terminal/default profile, so the page does not
  * switch visual languages after the first managed profile is added.
  * Everything below the header - the selected profile's details, usage limits,
- * and actions - is scoped to `selectedProfileId`. Renders nothing when the
- * provider reports zero profiles (the pre-multi-profile / flag-off shape);
- * the caller keeps the plain unscoped `ProviderRateLimitForProvider` mounted
- * for that case.
+ * and actions - is scoped to `selectedProfileId`. With zero profiles, only
+ * the transferable provider's sync entry remains, so persistent rules are
+ * still reachable. The caller keeps the plain unscoped
+ * `ProviderRateLimitForProvider` mounted for that case.
  */
 export function ProviderProfileScopedSection(
   props: ProviderProfileScopedSectionProps,
@@ -251,7 +252,8 @@ export function ProviderProfileScopedSection(
     startInReauth ? "sign-in" : "manage",
   );
 
-  if (profiles.length === 0) return null;
+  if (profiles.length === 0)
+    return <EmptyProviderProfiles state={state} hostId={hostId} />;
 
   const selectedProfile =
     profiles.find(
@@ -285,7 +287,12 @@ export function ProviderProfileScopedSection(
       <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
+            <ProfileSyncEntryButton
+              hostId={hostId}
+              providerId={state.providerId}
+              profile={selectedProfile}
+            />
             <TooltipWrapper
               label={addProfileDisabledReason}
               side="top"
@@ -395,11 +402,6 @@ export function ProviderProfileScopedSection(
               </span>
             </TooltipWrapper>
           ) : null}
-          <ProfileCopyEntryButton
-            hostId={hostId}
-            providerId={state.providerId}
-            profile={selectedProfile}
-          />
           <TooltipWrapper
             label={
               managementHeldReason ??
@@ -476,6 +478,32 @@ export function ProviderProfileScopedSection(
         profileEnablementPending={profileEnablementPending}
         onSetProfileEnabled={onSetProfileEnabled}
       />
+    </section>
+  );
+}
+
+function EmptyProviderProfiles(props: {
+  readonly state: ProviderCliState;
+  readonly hostId: string | null;
+}): ReactNode {
+  if (
+    props.hostId === null ||
+    profileCopyWireProvider(props.state.providerId) === null
+  )
+    return null;
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-ui-sm font-medium text-foreground">Profiles</div>
+        <ProfileSyncEntryButton
+          hostId={props.hostId}
+          providerId={props.state.providerId}
+          profile={null}
+        />
+      </div>
+      <p className="text-ui-xs text-muted-foreground">
+        No profiles on this device.
+      </p>
     </section>
   );
 }
