@@ -1,4 +1,5 @@
 import { PROFILE_SYNC_RPC_METHODS } from "./profile-sync-contracts";
+import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
 import { PROFILE_COPY_RPC_METHODS } from "./profile-copy-contracts";
 import {
   organizationReadV10,
@@ -11521,12 +11522,18 @@ type AssertNever<T extends never> = T;
 // Keep the already named profile families out of the large tail literal so
 // their versioned schemas do not push its declaration emission over TS7056.
 type HostRpcProfileMethods = typeof PROFILE_COPY_RPC_METHODS &
-  typeof PROFILE_SYNC_RPC_METHODS;
+  typeof PROFILE_SYNC_RPC_METHODS &
+  typeof PROFILE_SYNC_LINK_RPC_METHODS;
 
 type DuplicateHostRpcMethodNames =
   | Extract<
       keyof typeof PROFILE_COPY_RPC_METHODS,
       keyof typeof PROFILE_SYNC_RPC_METHODS
+    >
+  | Extract<
+      keyof typeof PROFILE_SYNC_LINK_RPC_METHODS,
+      | keyof typeof PROFILE_COPY_RPC_METHODS
+      | keyof typeof PROFILE_SYNC_RPC_METHODS
     >
   | Extract<
       keyof HostRpcProfileMethods,
@@ -11629,6 +11636,7 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_DEFINITION,
   ...PROFILE_COPY_RPC_METHODS,
   ...PROFILE_SYNC_RPC_METHODS,
+  ...PROFILE_SYNC_LINK_RPC_METHODS,
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,

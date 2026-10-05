@@ -1883,6 +1883,43 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Profile sync. The overview is statuses only and is read from the source
+  // host while its dialog is open; the three `host.*` methods travel between
+  // two linked hosts and are never sent by an app.
+  "providers.profileSync.overview": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
+  },
+  "providers.profileSync.syncNow": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileSync.setKeepInSync": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileSync.acceptAccount": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileSync.apply": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileSync.offerCredential": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileSync.fetchCredential": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "providers.profileCopy.preview": { ...LATEST_SCHEDULING, poll: null },
   "providers.profileCopy.status": {
     ...LATEST_SCHEDULING,
