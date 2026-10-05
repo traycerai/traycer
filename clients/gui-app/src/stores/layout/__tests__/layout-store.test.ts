@@ -210,6 +210,28 @@ describe("useLayoutStore", () => {
     });
   });
 
+  describe("readings on agent rows by preset", () => {
+    it.each([
+      ["default", false],
+      ["compact", false],
+      ["detailed", true],
+    ] as const)(
+      "%s resolves agentRows to %s, whatever was set before",
+      (presetId, expected) => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("resourceMonitor", { agentRows: !expected });
+
+        useLayoutStore.getState().applyPreset(presetId);
+
+        expect(
+          effectiveLayoutValues(presetId, getLayoutSnapshot().overrides)
+            .resourceMonitor.agentRows,
+        ).toBe(expected);
+      },
+    );
+  });
+
   describe("applying a preset that changes nothing", () => {
     it("neither notifies subscribers nor writes storage when the current preset is applied over no overrides", () => {
       const listener = vi.fn();
