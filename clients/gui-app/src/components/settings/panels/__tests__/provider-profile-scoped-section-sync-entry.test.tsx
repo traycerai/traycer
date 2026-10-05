@@ -148,19 +148,19 @@ describe("<ProviderProfileScopedSection /> sync entry boundary", () => {
   });
   afterEach(cleanup);
 
-  it("hands the sync entry the selected profile when profiles exist", () => {
+  it("hands the sync entry the host and provider when profiles exist", () => {
     renderSection(state([profile("first"), profile("second")]), "second");
     const last = entry.props.at(-1);
     expect(last?.hostId).toBe("host-1");
     expect(last?.providerId).toBe("claude-code");
-    expect(last?.profile?.profileId).toBe("second");
   });
 
-  it("hands the sync entry no profile when the provider has none", () => {
+  it("hands the sync entry the host and provider when the provider has none", () => {
     renderSection(state([]), null);
     const last = entry.props.at(-1);
     expect(last).toBeDefined();
-    expect(last?.profile).toBeNull();
+    expect(last?.hostId).toBe("host-1");
+    expect(last?.providerId).toBe("claude-code");
     // The empty copy is true whatever the host negotiated.
     expect(screen.getByText("No profiles on this device.")).toBeTruthy();
     expect(screen.queryByText(/automatic sync rules/)).toBeNull();

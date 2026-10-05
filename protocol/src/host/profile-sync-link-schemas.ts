@@ -55,6 +55,9 @@ export const profileSyncReasonSchema = lazySchema(() =>
     "account-unknown",
     "destination-refused",
     "transfer-failed",
+    /** The profile was removed on the other device; an explicit sync adds it
+     * again. */
+    "removed-on-device",
   ]),
 );
 export type ProfileSyncReason = z.infer<typeof profileSyncReasonSchema>;
@@ -136,6 +139,10 @@ export const profileSyncCredentialSchema = lazySchema(() =>
         kind: z.literal("claude-oauth"),
         /** The `claudeAiOauth` object only; MCP sign-ins never travel. */
         document: providerDocumentSchema,
+        /** The `oauthAccount` block of the profile's `.claude.json`, which is
+         * where the CLI keeps who the sign-in belongs to. `null` when the
+         * source has none yet. */
+        account: providerDocumentSchema.nullable(),
       }),
       z.strictObject({
         kind: z.literal("codex-auth-file"),
@@ -187,6 +194,10 @@ export const hostProfileSyncApplyRequestSchema = lazySchema(() =>
     credential: profileSyncCredentialSchema,
     /** Set only by the explicit accept-account action. */
     acceptAccountChange: z.boolean(),
+    /** Set until the source has had this link confirmed once. A destination
+     * that does not know a link creates a profile only for a new one; for any
+     * other the profile was removed there, and it answers so. */
+    newLink: z.boolean(),
   }),
 );
 export type HostProfileSyncApplyRequest = z.infer<

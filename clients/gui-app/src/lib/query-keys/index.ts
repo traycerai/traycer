@@ -47,7 +47,7 @@ export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
-export { profileCopyMutationKeys } from "@/lib/query-keys/profile-copy-mutation-keys";
+export { profileSyncKeys } from "@/lib/query-keys/profile-sync-keys";
 export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
 export {
   autoJudgeWriteScope,

@@ -2,34 +2,45 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
-// The Sync profiles dialog (`ProfileCopyFlowHost`, `sync` view), in real
-// Chrome: what jsdom cannot decide about it - its box inside a real viewport,
-// whether the body scrolls while the header and footer stay pinned, hit
-// testing on the provider picker and destination rows, and how it paints in
-// both themes.
+// The Sync profiles dialog (`ProfileSyncModalHost`), in real Chrome: what
+// jsdom cannot decide about it - its box inside a real viewport, whether the
+// body scrolls while the header and footer stay pinned, whether long names and
+// row actions stay inside it at a narrow width, that real Escape and
+// outside-click input close it while a request is in flight, and how it paints
+// in both themes.
 //
-// The fixture (`src/__tests__/browser/profile-sync-modal.tsx`) answers a
-// provider catalog, an empty sync history and an empty preview. It simulates
-// no transfer, so nothing here is evidence about real devices: the logic is in
-// `profile-sync-modal.test.tsx` (jsdom). The Automatic sync rule editor is
-// shown only as layout; saving a rule is not exercised. Two-device behaviour is NOT covered
-// here and still requires verification against real hosts.
+// The fixture (`src/__tests__/browser/profile-sync-modal.tsx`) answers a fixed
+// overview: one device kept in sync with two profiles that need the user, one
+// never synced, one offline. It syncs nothing, so nothing here is evidence
+// about real devices: the dialog's logic is in `profile-sync-modal.test.tsx`
+// (jsdom), and two-device behaviour is verified against real hosts.
 
 const DIALOG = '[data-slot="dialog-content"]';
 const FOOTER = '[data-slot="dialog-footer"]';
 const BODY = '[data-slot="dialog-content"] .overflow-y-auto';
 const DESKTOP = { width: 1280, height: 800 };
-const SMALL = { width: 390, height: 520 };
+const NARROW = { width: 390, height: 520 };
+const LONG_DEVICE = /Travel laptop/;
 
 async function openDialog(page: Page, mode: "light" | "dark"): Promise<void> {
   await page.goto(fixture("profile-sync-modal"));
   await page.waitForFunction("window.__profileSyncProbe?.ready === true");
   await page.evaluate(
-    `window.__profileSyncProbe.setTheme(${JSON.stringify(mode)}); window.__profileSyncProbe.open(null);`,
+    `window.__profileSyncProbe.setTheme(${JSON.stringify(mode)}); window.__profileSyncProbe.open();`,
   );
   await expect(page.locator(DIALOG)).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: /Build VM/ })).toBeVisible();
+  // Settled: the overview has answered and every device row is drawn.
+  await expect(
+    page.getByRole("region", { name: "Old Mac mini" }),
+  ).toBeVisible();
   await nextFrames(page, 3);
+}
+
+/** Air's own list: the offline device has a "Show all 13" of its own. */
+async function showAllOnAir(page: Page): Promise<void> {
+  const air = page.getByRole("region", { name: "Air", exact: true });
+  await air.getByRole("button", { name: "Show all 13" }).click();
+  await expect(air.getByRole("button", { name: "Show fewer" })).toBeVisible();
 }
 
 async function boxOf(locator: Locator): Promise<{
@@ -45,7 +56,7 @@ async function boxOf(locator: Locator): Promise<{
 
 for (const viewport of [
   { name: "desktop", size: DESKTOP },
-  { name: "small", size: SMALL },
+  { name: "narrow", size: NARROW },
 ]) {
   test.describe(`${viewport.name} viewport`, () => {
     test.use({ viewport: viewport.size });
@@ -69,131 +80,115 @@ for (const viewport of [
       expect(pageOverflow).toBeLessThanOrEqual(0);
     });
 
-    test("the tab strip sits above the scroll body without overlapping it", async ({
+    test("every profile shown scrolls the body while Done stays pinned", async ({
       page,
     }) => {
       await openDialog(page, "light");
-      const tabs = await boxOf(page.getByRole("tablist"));
-      const body = await boxOf(page.locator(BODY).first());
-      expect(tabs.height).toBeGreaterThan(0);
-      expect(tabs.y + tabs.height).toBeLessThanOrEqual(body.y + 0.5);
-      // The first section's heading starts below the tabs, not under them.
-      const heading = await boxOf(
-        page.getByRole("heading", { name: "Providers" }),
-      );
-      expect(heading.y).toBeGreaterThanOrEqual(tabs.y + tabs.height);
-    });
-
-    test("the body scrolls while the footer stays pinned", async ({ page }) => {
-      await openDialog(page, "light");
-      const body = page.locator(BODY).first();
+      // Expanding grows the dialog up to its cap, so the footer is measured
+      // once the rows are in: what must not move it is the body scrolling.
+      await showAllOnAir(page);
+      await nextFrames(page, 2);
       const footerBefore = await boxOf(page.locator(FOOTER));
+      const body = page.locator(BODY).first();
       const metrics = await body.evaluate((element) => ({
         scrollHeight: element.scrollHeight,
         clientHeight: element.clientHeight,
       }));
-      if (viewport.name === "small") {
-        // Too short to hold every row: the body, not the page, takes the overflow.
+      if (viewport.name === "narrow") {
+        // Too short to hold thirteen rows: the body, not the page or the
+        // dialog box, takes the overflow.
         expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
         await body.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
         });
         await nextFrames(page, 2);
-        const scrolled = await body.evaluate((element) => element.scrollTop);
-        expect(scrolled).toBeGreaterThan(0);
+        expect(
+          await body.evaluate((element) => element.scrollTop),
+        ).toBeGreaterThan(0);
       }
       const footerAfter = await boxOf(page.locator(FOOTER));
       expect(footerAfter.y).toBeCloseTo(footerBefore.y, 0);
-      await expect(
-        page.getByRole("button", { name: "Sync now" }),
-      ).toBeInViewport();
+      expect(footerAfter.y + footerAfter.height).toBeLessThanOrEqual(
+        viewport.size.height,
+      );
+      await expect(page.getByRole("button", { name: "Done" })).toBeInViewport();
     });
 
-    test("provider picker and destination rows take real input", async ({
+    test("long names and row actions stay inside the dialog", async ({
       page,
     }) => {
       await openDialog(page, "light");
-      const trigger = page.getByRole("button", { name: "Choose providers" });
-      await trigger.click();
-      await expect(page.getByRole("option", { name: /Claude/ })).toBeVisible();
-      await page.keyboard.press("Escape");
-      // No device is chosen by default; picking one updates the footer.
-      await expect(page.getByText("Choose destination devices.")).toBeVisible();
-      await page.getByRole("checkbox", { name: /Build VM/ }).click();
-      await expect(page.getByText("Choose destination devices.")).toHaveCount(
-        0,
-      );
-      // The long device name truncates inside its row instead of widening it.
-      const row = page.getByRole("checkbox", { name: /Travel laptop/ });
-      await expect(row).toBeVisible();
+      await showAllOnAir(page);
       const dialog = await boxOf(page.locator(DIALOG));
-      const rowBox = await boxOf(row);
-      expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(
-        dialog.x + dialog.width,
+      const right = dialog.x + dialog.width;
+      const body = page.locator(BODY).first();
+      // No row widens the body sideways.
+      const sideways = await body.evaluate(
+        (element) => element.scrollWidth - element.clientWidth,
       );
+      expect(sideways).toBeLessThanOrEqual(0);
+      for (const control of [
+        page.getByRole("heading", { name: LONG_DEVICE }),
+        page.getByRole("button", { name: "Sign in on Mac Studio" }),
+        page.getByRole("button", { name: "Sync the new account" }),
+        page.getByRole("button", { name: "Sync now" }),
+        page.getByRole("switch", { name: LONG_DEVICE }),
+        page.getByText(/A profile with a deliberately long name/),
+      ]) {
+        const box = await boxOf(control);
+        expect(box.x).toBeGreaterThanOrEqual(dialog.x);
+        expect(box.x + box.width).toBeLessThanOrEqual(right + 0.5);
+      }
     });
 
-    for (const mode of ["light", "dark"] as const) {
-      test(`automatic rule editor with the provider picker open in the ${mode} theme`, async ({
-        page,
-      }, testInfo) => {
-        await page.emulateMedia({ colorScheme: mode });
-        await openDialog(page, mode);
-        await page.getByRole("tab", { name: /Automatic sync/ }).click();
-        await page.getByRole("button", { name: "Add device" }).click();
-        await expect(page.getByText("Add automatic sync")).toBeVisible();
-        await page
-          .getByRole("combobox", { name: "Destination device" })
-          .click();
-        await page.getByRole("option", { name: /Build VM/ }).click();
-        // A new rule starts with every provider chosen, so both show in the picker.
-        const trigger = page.getByRole("button", { name: "Choose providers" });
-        await expect(trigger).toContainText("Claude");
-        await expect(trigger).toContainText("Codex");
-        await trigger.click();
-        await expect(
-          page.getByRole("option", { name: /Claude/ }),
-        ).toBeVisible();
-        await expect(page.getByRole("option", { name: /Codex/ })).toBeVisible();
-        const dialog = await boxOf(page.locator(DIALOG));
-        for (const name of [/Claude/, /Codex/]) {
-          const option = await boxOf(page.getByRole("option", { name }));
-          expect(option.y).toBeGreaterThanOrEqual(0);
-          expect(option.y + option.height).toBeLessThanOrEqual(
-            viewport.size.height,
-          );
-          expect(option.x + option.width).toBeLessThanOrEqual(
-            viewport.size.width,
-          );
-        }
-        expect(dialog.y + dialog.height).toBeLessThanOrEqual(
-          viewport.size.height,
-        );
-        await nextFrames(page, 3);
-        const filename = `profile-sync-rule-editor-${viewport.name}-${mode}.png`;
-        const path = testInfo.outputPath(filename);
-        await page.screenshot({ path, animations: "disabled" });
-        await testInfo.attach(filename, { path, contentType: "image/png" });
-      });
-    }
+    test("Escape closes the dialog while a request is in flight", async ({
+      page,
+    }) => {
+      await openDialog(page, "light");
+      await page.evaluate("window.__profileSyncProbe.holdRequests(true)");
+      const syncNow = page.getByRole("button", { name: "Sync now" });
+      await syncNow.click();
+      // The request is in flight: its own control is the only thing disabled.
+      await expect(syncNow).toBeDisabled();
+      await expect(
+        page.getByRole("switch", { name: "Keep Air in sync" }),
+      ).toBeEnabled();
+      await page.keyboard.press("Escape");
+      await expect(page.locator(DIALOG)).toHaveCount(0);
+      // Reopened, the same request is still shown on the control that sent it.
+      await page.evaluate("window.__profileSyncProbe.open()");
+      await expect(
+        page.getByRole("button", { name: "Sync now" }),
+      ).toBeDisabled();
+    });
+
+    test("a click outside closes the dialog while a request is in flight", async ({
+      page,
+    }) => {
+      await openDialog(page, "light");
+      await page.evaluate("window.__profileSyncProbe.holdRequests(true)");
+      const keepInSync = page.getByRole("switch", { name: "Keep Air in sync" });
+      await keepInSync.click();
+      await expect(keepInSync).toBeDisabled();
+      const dialog = await boxOf(page.locator(DIALOG));
+      // A point on the dim, clear of the dialog box on both viewports.
+      await page.mouse.click(
+        Math.round(dialog.x + dialog.width / 2),
+        Math.max(2, Math.round(dialog.y / 2)),
+      );
+      await expect(page.locator(DIALOG)).toHaveCount(0);
+    });
 
     for (const mode of ["light", "dark"] as const) {
       test(`renders in the ${mode} theme`, async ({ page }, testInfo) => {
         await page.emulateMedia({ colorScheme: mode });
         await openDialog(page, mode);
-        await page.getByRole("checkbox", { name: /Build VM/ }).click();
-        // Settled: the footer has left "Checking selection…" for the preview's count.
+        await expect(page.getByText("11 synced")).toBeVisible();
+        await expect(page.getByText("2 need you")).toBeVisible();
+        await expect(page.getByText("Not synced yet")).toBeVisible();
         await expect(
-          page.getByText("0 profile transfers selected"),
+          page.getByText("Device offline · syncs when it connects"),
         ).toBeVisible();
-        // The click scrolled the row into view; capture the top-of-modal composition.
-        await page
-          .locator(BODY)
-          .first()
-          .evaluate((element) => {
-            element.scrollTop = 0;
-          });
-        await nextFrames(page, 3);
         const filename = `profile-sync-${viewport.name}-${mode}.png`;
         const path = testInfo.outputPath(filename);
         const shot = await page.screenshot({ path, animations: "disabled" });

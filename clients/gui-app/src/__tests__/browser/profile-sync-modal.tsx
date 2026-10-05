@@ -7,11 +7,12 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
-import { ProfileCopyFlowHost } from "@/components/settings/panels/profile-copy/profile-copy-flow-host";
-import {
-  claudeProviderState,
-  managedProfile,
-} from "@/components/settings/panels/profile-copy/__tests__/profile-copy-component-fixtures";
+import type {
+  ProfileSyncDevice,
+  ProfileSyncItem,
+  ProfileSyncOverview,
+} from "@traycer/protocol/host/profile-sync-link-schemas";
+import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -22,25 +23,26 @@ import {
 } from "@/lib/host";
 import "@/lib/theme-applier";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
+import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import "@/index.css";
 
 /**
- * The production `ProfileCopyFlowHost` with a `sync` view, over a mock host
- * messenger. It exists for what jsdom cannot decide about the Sync profiles
- * dialog - where its box sits in a real viewport, whether its body scrolls
- * while the header and footer stay pinned, and how it paints in both themes
- * (driven by `browser-tests/profile-sync-modal.spec.ts`).
+ * The production `ProfileSyncModalHost` over a mock host messenger. It exists
+ * for what jsdom cannot decide about the Sync profiles dialog - where its box
+ * sits in a real viewport, whether its body scrolls while the header and
+ * footer stay pinned, whether long names and row actions stay inside it, that
+ * real Escape and outside-click input close it mid-request, and how it paints
+ * in both themes (driven by `browser-tests/profile-sync-modal.spec.ts`).
  *
- * It simulates NO transfer and proves nothing about real devices: the
- * messenger answers a catalog, an empty history and an empty preview, so the
- * only things on screen are the picker and the destination list. Real
- * two-device behaviour requires verification against real hosts.
+ * It syncs NOTHING and proves nothing about real devices: the messenger
+ * answers a fixed overview and applies the three intents to it in memory.
+ * Real two-device behaviour requires verification against real hosts.
  *
  * `window.__profileSyncProbe` gates it: `ready` once the host runtime has a
- * request context, `open(providerId)` opens the dialog from the store exactly
- * as the Providers settings entry does, and `setTheme(mode)` flips the theme.
+ * request context, `open()` opens the dialog from the store exactly as the
+ * Providers settings entry does, `setTheme(mode)` flips the theme, and
+ * `holdRequests(true)` makes every intent after it stay in flight.
  */
 
 const LOCAL_HOST: LocalHostSnapshot = {
@@ -52,17 +54,20 @@ const LOCAL_HOST: LocalHostSnapshot = {
   displayName: "Mac Studio",
   availability: "available",
 };
+const AIR_HOST_ID = "fixture-host-air";
+const LAPTOP_HOST_ID = "fixture-host-laptop";
+const MINI_HOST_ID = "fixture-host-mini";
 const REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   {
-    hostId: "fixture-host-builder",
-    label: "Build VM",
+    hostId: AIR_HOST_ID,
+    label: "Air",
     kind: "remote",
-    websocketUrl: "ws://127.0.0.1:9/builder",
+    websocketUrl: "ws://127.0.0.1:9/air",
     version: "1.2.3",
     transportDialability: "dialable",
   },
   {
-    hostId: "fixture-host-laptop",
+    hostId: LAPTOP_HOST_ID,
     label:
       "Travel laptop with a deliberately long device name that must truncate",
     kind: "remote",
@@ -71,7 +76,7 @@ const REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
     transportDialability: "dialable",
   },
   {
-    hostId: "fixture-host-mini",
+    hostId: MINI_HOST_ID,
     label: "Old Mac mini",
     kind: "remote",
     websocketUrl: null,
@@ -99,6 +104,97 @@ const REGISTRY: HostListResponse = {
     },
   })),
 };
+
+function profileUuid(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+}
+
+const SYNCED_NAMES = [
+  "Personal",
+  "Work",
+  "Company",
+  "Side project",
+  "Client A",
+  "Client B",
+  "Research",
+  "Team",
+  "Sandbox",
+  "Staging",
+  "A profile with a deliberately long name that must truncate in its row",
+] as const;
+
+/** 13 profiles: two that need the user, eleven behind "Show all 13". */
+const AIR_ITEMS: ProfileSyncItem[] = [
+  {
+    providerId: "claude",
+    sourceProfileId: profileUuid(1),
+    name: "Surya 2",
+    status: "sign-in-needed",
+    reason: null,
+  },
+  {
+    providerId: "codex",
+    sourceProfileId: profileUuid(2),
+    name: "Team",
+    status: "cannot-sync",
+    reason: "account-changed",
+  },
+  ...SYNCED_NAMES.map((name, index): ProfileSyncItem => ({
+    providerId: index % 2 === 0 ? "claude" : "grok",
+    sourceProfileId: profileUuid(index + 3),
+    name,
+    status: "synced",
+    reason: null,
+  })),
+];
+
+/** The source cannot reach it: every profile waits for the device. */
+const MINI_ITEMS: ProfileSyncItem[] = AIR_ITEMS.map(
+  (item): ProfileSyncItem => ({
+    ...item,
+    status: "device-offline",
+    reason: null,
+  }),
+);
+
+let devices: ProfileSyncDevice[] = [
+  { hostId: AIR_HOST_ID, keepInSync: true, items: AIR_ITEMS },
+  { hostId: MINI_HOST_ID, keepInSync: true, items: MINI_ITEMS },
+];
+let holdingRequests = false;
+
+function overview(): ProfileSyncOverview {
+  return {
+    sourceHostId: LOCAL_HOST.hostId,
+    profileCount: AIR_ITEMS.length,
+    devices,
+  };
+}
+
+/** One device's record replaced, or added when the source had none. */
+function writeDevice(
+  hostId: string,
+  update: (previous: ProfileSyncDevice | null) => ProfileSyncDevice,
+): void {
+  const previous = devices.find((device) => device.hostId === hostId) ?? null;
+  devices = [
+    ...devices.filter((device) => device.hostId !== hostId),
+    update(previous),
+  ];
+}
+
+function syncingItems(): ProfileSyncItem[] {
+  return AIR_ITEMS.map((item): ProfileSyncItem => ({
+    ...item,
+    status: "syncing",
+    reason: null,
+  }));
+}
+
+/** A held intent never answers, so its control stays pending. */
+function held(): Promise<ProfileSyncOverview> {
+  return new Promise<ProfileSyncOverview>(() => {});
+}
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -144,35 +240,47 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         install: null,
       }),
       "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
-      "providers.list": () => ({
-        providers: [
-          claudeProviderState([
-            managedProfile("33333333-3333-4333-8333-333333333333", "Work"),
-            managedProfile("44444444-4444-4444-8444-444444444444", "Personal"),
-          ]),
-          {
-            ...claudeProviderState([
-              managedProfile("55555555-5555-4555-8555-555555555555", "Main"),
-            ]),
-            providerId: "codex",
-          },
-        ],
-        native: null,
-      }),
-      "providers.profileCopy.sync.list": () => ({ batches: [], rules: [] }),
-      "providers.profileCopy.sync.preview": (params) => ({
-        selection: params,
-        revision: "a".repeat(64),
-        items: [],
-      }),
+      "providers.profileSync.overview": () => overview(),
+      "providers.profileSync.syncNow": (params) => {
+        if (holdingRequests) return held();
+        writeDevice(params.destinationHostId, (previous) => ({
+          hostId: params.destinationHostId,
+          keepInSync: previous?.keepInSync ?? false,
+          items: syncingItems(),
+        }));
+        return overview();
+      },
+      "providers.profileSync.setKeepInSync": (params) => {
+        if (holdingRequests) return held();
+        writeDevice(params.destinationHostId, (previous) => ({
+          hostId: params.destinationHostId,
+          keepInSync: params.enabled,
+          items: previous?.items ?? syncingItems(),
+        }));
+        return overview();
+      },
+      "providers.profileSync.acceptAccount": (params) => {
+        if (holdingRequests) return held();
+        writeDevice(params.destinationHostId, (previous) => ({
+          hostId: params.destinationHostId,
+          keepInSync: previous?.keepInSync ?? false,
+          items: (previous?.items ?? []).map((item): ProfileSyncItem =>
+            item.providerId === params.providerId &&
+            item.sourceProfileId === params.sourceProfileId
+              ? { ...item, status: "syncing", reason: null }
+              : item,
+          ),
+        }));
+        return overview();
+      },
     },
   });
 
 interface ProfileSyncProbe {
   readonly ready: boolean;
-  readonly sourceHostId: string;
-  readonly open: (providerId: "claude" | "codex" | null) => void;
+  readonly open: () => void;
   readonly setTheme: (mode: "light" | "dark") => void;
+  readonly holdRequests: (hold: boolean) => void;
 }
 interface ProbeWindow extends Window {
   __profileSyncProbe?: ProfileSyncProbe;
@@ -197,16 +305,14 @@ export function RequestContext(props: {
   useLayoutEffect(() => {
     probeWindow.__profileSyncProbe = {
       ready,
-      sourceHostId: LOCAL_HOST.hostId,
-      open: (providerId) => {
-        useProfileCopyFlowStore.getState().open({
-          kind: "sync",
-          sourceHostId: LOCAL_HOST.hostId,
-          providerId,
-        });
+      open: () => {
+        useProfileSyncModalStore.getState().open(LOCAL_HOST.hostId);
       },
       setTheme: (mode) => {
         useSettingsStore.getState().setTheme(mode);
+      },
+      holdRequests: (hold) => {
+        holdingRequests = hold;
       },
     };
   }, [ready]);
@@ -229,7 +335,7 @@ export function Page(): ReactNode {
         >
           <TooltipProvider>
             <RequestContext>
-              <ProfileCopyFlowHost />
+              <ProfileSyncModalHost />
             </RequestContext>
           </TooltipProvider>
         </HostRuntimeProvider>

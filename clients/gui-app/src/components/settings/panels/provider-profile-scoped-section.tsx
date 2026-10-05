@@ -32,7 +32,7 @@ import {
 } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
 import { ProfileSyncEntryButton } from "./profile-sync/profile-sync-entry-button";
-import { profileCopyWireProvider } from "@/lib/profile-copy/profile-copy-model";
+import { profileSyncWireProvider } from "@/lib/profile-sync/profile-sync-presentation";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
@@ -291,7 +291,6 @@ export function ProviderProfileScopedSection(
             <ProfileSyncEntryButton
               hostId={hostId}
               providerId={state.providerId}
-              profile={selectedProfile}
             />
             <TooltipWrapper
               label={addProfileDisabledReason}
@@ -488,7 +487,7 @@ function EmptyProviderProfiles(props: {
 }): ReactNode {
   if (
     props.hostId === null ||
-    profileCopyWireProvider(props.state.providerId) === null
+    profileSyncWireProvider(props.state.providerId) === null
   )
     return null;
   return (
@@ -498,7 +497,6 @@ function EmptyProviderProfiles(props: {
         <ProfileSyncEntryButton
           hostId={props.hostId}
           providerId={props.state.providerId}
-          profile={null}
         />
       </div>
       <p className="text-ui-xs text-muted-foreground">

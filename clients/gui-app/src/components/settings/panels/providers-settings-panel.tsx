@@ -75,8 +75,6 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
-import { ProfileCopyIncomingSection } from "./profile-copy/profile-copy-incoming-section";
-import { ProfileCopyRecentSection } from "./profile-copy/profile-copy-recent-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
@@ -1457,18 +1455,6 @@ function ProviderTabBody({
             state={state}
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}
-          />
-          {/* Copies arriving on this host, then copies this window sent from
-              it. Both name hosts by the ids their copies captured; neither
-              follows the scope once a copy is opened. */}
-          <ProfileCopyIncomingSection
-            hostId={profileTab.hostId}
-            providerId={state.providerId}
-          />
-          <ProfileCopyRecentSection
-            hostId={profileTab.hostId}
-            providerId={state.providerId}
-            profiles={state.profiles}
           />
           <div
             className={cn(

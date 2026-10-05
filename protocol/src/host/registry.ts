@@ -1,6 +1,4 @@
-import { PROFILE_SYNC_RPC_METHODS } from "./profile-sync-contracts";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
-import { PROFILE_COPY_RPC_METHODS } from "./profile-copy-contracts";
 import {
   organizationReadV10,
   organizationReadV11,
@@ -11506,8 +11504,8 @@ type HostRpcNotificationMethodMap = {
   };
 };
 
-// The six local literals and two profile families must not declare the same
-// method. Nothing about the merge
+// The six local literals and the profile sync family must not declare the
+// same method. Nothing about the merge
 // below would tell you if they did: the spread silently keeps the LAST
 // occurrence, while the intersection claims a method that has two
 // contradictory version lines - so a duplicate would compile, type-check, and
@@ -11519,22 +11517,11 @@ type HostRpcNotificationMethodMap = {
 // cannot be dropped as unused (`tsc -b` reports TS6196 for one).
 type AssertNever<T extends never> = T;
 
-// Keep the already named profile families out of the large tail literal so
-// their versioned schemas do not push its declaration emission over TS7056.
-type HostRpcProfileMethods = typeof PROFILE_COPY_RPC_METHODS &
-  typeof PROFILE_SYNC_RPC_METHODS &
-  typeof PROFILE_SYNC_LINK_RPC_METHODS;
+// Keep the already named profile sync family out of the large tail literal so
+// its versioned schemas do not push its declaration emission over TS7056.
+type HostRpcProfileMethods = typeof PROFILE_SYNC_LINK_RPC_METHODS;
 
 type DuplicateHostRpcMethodNames =
-  | Extract<
-      keyof typeof PROFILE_COPY_RPC_METHODS,
-      keyof typeof PROFILE_SYNC_RPC_METHODS
-    >
-  | Extract<
-      keyof typeof PROFILE_SYNC_LINK_RPC_METHODS,
-      | keyof typeof PROFILE_COPY_RPC_METHODS
-      | keyof typeof PROFILE_SYNC_RPC_METHODS
-    >
   | Extract<
       keyof HostRpcProfileMethods,
       | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
@@ -11608,8 +11595,8 @@ type DuplicateHostRpcMethodNames =
 /**
  * The definition every consumer sees.
  *
- * Five of the six local literals and both profile families contribute their
- * own precise `typeof`. The
+ * Five of the six local literals and the profile sync family contribute
+ * their own precise `typeof`. The
  * notification literal contributes `HostRpcNotificationMethodMap` instead:
  * its post-v1 minors carry the large protocol Zod unions that tip declaration
  * emit over TS7056's serialization ceiling, so those slots are manually named
@@ -11634,8 +11621,6 @@ type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
 
 const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_DEFINITION,
-  ...PROFILE_COPY_RPC_METHODS,
-  ...PROFILE_SYNC_RPC_METHODS,
   ...PROFILE_SYNC_LINK_RPC_METHODS,
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,

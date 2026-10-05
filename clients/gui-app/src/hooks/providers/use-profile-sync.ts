@@ -1,310 +1,249 @@
 import {
-  useQueryClient,
   useIsMutating,
-  type UseQueryResult,
+  useMutationState,
+  useQueryClient,
+  type QueryClient,
   type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcRegistry } from "@/lib/host";
+  ProfileSyncOverview,
+  ProfileSyncProvider,
+} from "@traycer/protocol/host/profile-sync-link-schemas";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
-  useHostQuery,
-  useHostQueryWithResponseMap,
   useHostMutation,
+  useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
-import {
-  profileSyncListKey,
-  reconcileSyncListBatch,
-  refreshProfileSyncAfterWrite,
-  writeProfileSyncSavedRule,
-  writeProfileSyncStoppedRule,
-} from "@/hooks/providers/profile-sync-cache";
-import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
-import { profileCopyDraftMutationAttempt } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
-import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
-import type {
-  ProfileSyncSelection,
-  ProfileSyncPreview,
-  ProfileSyncList,
-  ProfileSyncScope,
-  ProfileSyncResolve,
-  ProfileSyncItem,
-  ProfileSyncRule,
-  ProfileSyncBatch,
-} from "@traycer/protocol/host/profile-sync-schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { profileSyncKeys } from "@/lib/query-keys/profile-sync-keys";
 
-function sameSyncScope(
-  left: ProfileSyncScope,
-  right: ProfileSyncScope,
-): boolean {
-  if (left.kind === "all" || right.kind === "all")
-    return left.kind === right.kind;
-  const providers = new Set(right.providers);
-  return (
-    left.providers.length === right.providers.length &&
-    left.providers.every((provider) => providers.has(provider))
-  );
+/**
+ * Profile sync, as the app sees it: one polled overview read from the SOURCE
+ * host and three intents sent to it. The app never talks to a destination and
+ * never holds a sign-in; every answer is statuses only.
+ */
+
+/** An answer about another source must never land in this source's cache. */
+function assertOverviewForSource(
+  overview: ProfileSyncOverview,
+  sourceHostId: string,
+): void {
+  if (overview.sourceHostId !== sourceHostId) {
+    throw new Error("The device returned sync status for another source.");
+  }
 }
 
-/** Keep source and nested destination observers mounted until their RPCs settle. */
-export function useProfileSyncPending(hostId: string | null): boolean {
+/**
+ * Every intent answers with the overview it produced. Publishing it makes the
+ * click's effect visible at once; the refetch behind it then picks up whatever
+ * the host has done since, because a sync keeps moving after the answer.
+ */
+function publishOverview(
+  queryClient: QueryClient,
+  sourceHostId: string,
+  overview: ProfileSyncOverview,
+): void {
+  const queryKey = profileSyncKeys.overview(sourceHostId);
+  queryClient.setQueryData<ProfileSyncOverview>(queryKey, overview);
+  void queryClient.invalidateQueries({ queryKey });
+}
+
+/** Polled while a dialog observes it; a closed dialog reads nothing. */
+export function useProfileSyncOverview(
+  sourceHostId: string,
+): UseQueryResult<ProfileSyncOverview, HostRpcError> {
+  return useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "providers.profileSync.overview",
+    ProfileSyncOverview
+  >({
+    client: useHostClientForHostId(sourceHostId),
+    method: "providers.profileSync.overview",
+    params: { sourceHostId },
+    cacheKeyIdentity: undefined,
+    options: { poll: true, retry: false },
+    // Checked before caching: a rejected poll keeps the last valid overview.
+    mapResponse: ({ response }) => {
+      assertOverviewForSource(response, sourceHostId);
+      return response;
+    },
+  });
+}
+
+/** Sync everything supported to one device now. Safe to repeat. */
+export function useProfileSyncNow(
+  sourceHostId: string,
+  destinationHostId: string,
+): UseMutationResult<ProfileSyncOverview, HostRpcError, void> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.profileSync.syncNow",
+    unknown,
+    void
+  >({
+    client: useHostClientForHostId(sourceHostId),
+    method: "providers.profileSync.syncNow",
+    mapVariables: () => ({ sourceHostId, destinationHostId }),
+    onResponse: (overview) => assertOverviewForSource(overview, sourceHostId),
+    options: {
+      mutationKey: profileSyncKeys.syncNow(sourceHostId, destinationHostId),
+      onSuccess: (overview) =>
+        publishOverview(queryClient, sourceHostId, overview),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't start the sync. Try again."),
+    },
+  });
+}
+
+export interface ProfileSyncKeepInSyncVariables {
+  readonly enabled: boolean;
+}
+
+/** Turning it on also syncs at once; that is the host's doing, not a second call. */
+export function useProfileSyncSetKeepInSync(
+  sourceHostId: string,
+  destinationHostId: string,
+): UseMutationResult<
+  ProfileSyncOverview,
+  HostRpcError,
+  ProfileSyncKeepInSyncVariables
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.profileSync.setKeepInSync",
+    unknown,
+    ProfileSyncKeepInSyncVariables
+  >({
+    client: useHostClientForHostId(sourceHostId),
+    method: "providers.profileSync.setKeepInSync",
+    mapVariables: ({ enabled }) => ({
+      sourceHostId,
+      destinationHostId,
+      enabled,
+    }),
+    onResponse: (overview) => assertOverviewForSource(overview, sourceHostId),
+    options: {
+      mutationKey: profileSyncKeys.setKeepInSync(
+        sourceHostId,
+        destinationHostId,
+      ),
+      onSuccess: (overview) =>
+        publishOverview(queryClient, sourceHostId, overview),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't change Keep in sync. Try again."),
+    },
+  });
+}
+
+/** The one explicit action after a synced profile changed account on the source. */
+export function useProfileSyncAcceptAccount(
+  sourceHostId: string,
+  destinationHostId: string,
+  providerId: ProfileSyncProvider,
+  sourceProfileId: string,
+): UseMutationResult<ProfileSyncOverview, HostRpcError, void> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.profileSync.acceptAccount",
+    unknown,
+    void
+  >({
+    client: useHostClientForHostId(sourceHostId),
+    method: "providers.profileSync.acceptAccount",
+    mapVariables: () => ({
+      sourceHostId,
+      destinationHostId,
+      providerId,
+      sourceProfileId,
+    }),
+    onResponse: (overview) => assertOverviewForSource(overview, sourceHostId),
+    options: {
+      mutationKey: profileSyncKeys.acceptAccount(
+        sourceHostId,
+        destinationHostId,
+        providerId,
+        sourceProfileId,
+      ),
+      onSuccess: (overview) =>
+        publishOverview(queryClient, sourceHostId, overview),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't sync the new account. Try again."),
+    },
+  });
+}
+
+/**
+ * Pending is read from the mutation cache by key, not from the hook instance
+ * that sent it: the dialog can be closed while a request is in flight, and a
+ * reopened dialog has to show that request on the control it belongs to.
+ */
+export function useProfileSyncNowPending(
+  sourceHostId: string,
+  destinationHostId: string,
+): boolean {
   return (
     useIsMutating({
-      predicate: (mutation) => {
-        if (hostId === null) return false;
-        const key = mutation.options.mutationKey;
-        const method = key?.[0];
-        if (
-          key?.[1] === hostId &&
-          typeof method === "string" &&
-          (method.startsWith("providers.profileCopy.sync.") ||
-            method === "providers.profileCopy.retry")
-        ) {
-          return true;
-        }
-        return (
-          profileCopyDraftMutationAttempt(key, mutation.state.variables)
-            ?.sourceHostId === hostId
-        );
-      },
+      mutationKey: profileSyncKeys.syncNow(sourceHostId, destinationHostId),
+      exact: true,
     }) > 0
   );
 }
 
-export function useProfileSyncList(
-  hostId: string,
-): UseQueryResult<ProfileSyncList, HostRpcError> {
-  const queryClient = useQueryClient();
-  return useHostQueryWithResponseMap<
-    HostRpcRegistry,
-    "providers.profileCopy.sync.list",
-    ProfileSyncList
-  >({
-    client: useHostClientForHostId(hostId),
-    method: "providers.profileCopy.sync.list",
-    params: { sourceHostId: hostId },
-    cacheKeyIdentity: undefined,
-    options: { poll: true, retry: false },
-    mapResponse: ({ response }) => {
-      // Validate against this request before caching: a rejected poll must
-      // retain the last valid source-local history and its mounted editors.
-      if (
-        response.batches.some((batch) => batch.sourceHostId !== hostId) ||
-        response.rules.some((rule) => rule.sourceHostId !== hostId)
-      ) {
-        throw new Error("The device returned sync history for another source.");
-      }
-      const { forgetSyncRuleId } = useProfileCopyFlowStore.getState();
-      for (const rule of response.rules)
-        forgetSyncRuleId(hostId, rule.destinationHostId, rule.ruleId);
-      const previous = queryClient.getQueryData<ProfileSyncList>(
-        profileSyncListKey(hostId),
-      );
-      // Destination writes can advance a receipt before the source driver.
-      // Reconcile before caching so closing the dialog cannot lose that receipt.
-      return {
-        ...response,
-        batches: response.batches.map((batch) => {
-          const retained = previous?.batches.find(
-            (prior) => prior.batchId === batch.batchId,
-          );
-          return retained === undefined
-            ? batch
-            : reconcileSyncListBatch(batch, retained);
-        }),
-      };
-    },
-  });
-}
-export function useProfileSyncPreview(
-  hostId: string,
-  selection: ProfileSyncSelection | null,
-): UseQueryResult<ProfileSyncPreview, HostRpcError> {
-  return useHostQuery<HostRpcRegistry, "providers.profileCopy.sync.preview">({
-    client: useHostClientForHostId(hostId),
-    method: "providers.profileCopy.sync.preview",
-    params: selection ?? {
-      sourceHostId: hostId,
-      scope: { kind: "all" },
-      destinationHostIds: [],
-    },
-    cacheKeyIdentity: undefined,
-    options: { enabled: selection !== null, retry: false, staleTime: 15_000 },
-  });
+export function useProfileSyncAcceptAccountPending(
+  sourceHostId: string,
+  destinationHostId: string,
+  providerId: ProfileSyncProvider,
+  sourceProfileId: string,
+): boolean {
+  return (
+    useIsMutating({
+      mutationKey: profileSyncKeys.acceptAccount(
+        sourceHostId,
+        destinationHostId,
+        providerId,
+        sourceProfileId,
+      ),
+      exact: true,
+    }) > 0
+  );
 }
 
-export function useProfileSyncStart(
-  hostId: string,
-): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">,
-  HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">,
-  ProfileSyncBatch | undefined
-> {
-  const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "providers.profileCopy.sync.start",
-    ProfileSyncBatch | undefined
-  >({
-    client: useHostClientForHostId(hostId),
-    method: "providers.profileCopy.sync.start",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: profileSyncMutationKeys.start(hostId),
-      onMutate: (request) =>
-        queryClient
-          .getQueryData<ProfileSyncList>(profileSyncListKey(hostId))
-          ?.batches.find((batch) => batch.batchId === request.batchId),
-      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId, null),
-    },
-  });
+function requestedKeepInSync(variables: unknown): boolean | null {
+  if (
+    typeof variables !== "object" ||
+    variables === null ||
+    !("enabled" in variables)
+  ) {
+    return null;
+  }
+  return typeof variables.enabled === "boolean" ? variables.enabled : null;
 }
 
-export function useProfileSyncSaveRule(
-  hostId: string,
-): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.saveRule">,
-  HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.saveRule">,
-  ProfileSyncRule | undefined
-> {
-  const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "providers.profileCopy.sync.saveRule",
-    ProfileSyncRule | undefined
-  >({
-    client: useHostClientForHostId(hostId),
-    method: "providers.profileCopy.sync.saveRule",
-    mapVariables: (variables) => variables,
-    onResponse: (response, request) => {
-      if (
-        request.sourceHostId !== hostId ||
-        response.sourceHostId !== request.sourceHostId ||
-        response.ruleId !== request.ruleId ||
-        response.destinationHostId !== request.destinationHostId ||
-        response.paused !== request.paused ||
-        response.revision <= request.expectedRevision ||
-        !sameSyncScope(response.scope, request.scope)
-      ) {
-        throw new Error("The device returned another sync rule.");
-      }
+/**
+ * The value a pending Keep in sync request asked for, or `null` when none is
+ * in flight. The switch shows it while the request runs, so it moves on the
+ * click instead of waiting for the answer.
+ */
+export function useProfileSyncRequestedKeepInSync(
+  sourceHostId: string,
+  destinationHostId: string,
+): boolean | null {
+  const requested = useMutationState({
+    filters: {
+      mutationKey: profileSyncKeys.setKeepInSync(
+        sourceHostId,
+        destinationHostId,
+      ),
+      exact: true,
+      status: "pending",
     },
-    options: {
-      mutationKey: profileSyncMutationKeys.saveRule(hostId),
-      onMutate: (request) =>
-        queryClient
-          .getQueryData<ProfileSyncList>(profileSyncListKey(hostId))
-          ?.rules.find(
-            (rule) => rule.destinationHostId === request.destinationHostId,
-          ),
-      onSuccess: (rule, _request, submitted) =>
-        refreshProfileSyncAfterWrite(queryClient, hostId, () => {
-          writeProfileSyncSavedRule(queryClient, rule, submitted);
-          useProfileCopyFlowStore
-            .getState()
-            .forgetSyncRuleId(hostId, rule.destinationHostId, rule.ruleId);
-        }),
-    },
+    select: (mutation) => requestedKeepInSync(mutation.state.variables),
   });
-}
-
-export function useProfileSyncStopRule(
-  hostId: string,
-): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.stopRule">,
-  HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.stopRule">
-> {
-  const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "providers.profileCopy.sync.stopRule"
-  >({
-    client: useHostClientForHostId(hostId),
-    method: "providers.profileCopy.sync.stopRule",
-    mapVariables: (variables) => variables,
-    onResponse: (response, request) => {
-      if (
-        request.sourceHostId !== hostId ||
-        response.batches.some((batch) => batch.sourceHostId !== hostId) ||
-        response.rules.some((rule) => rule.sourceHostId !== hostId) ||
-        response.rules.some((rule) => rule.ruleId === request.ruleId)
-      ) {
-        throw new Error("The device did not confirm stopping this sync rule.");
-      }
-    },
-    options: {
-      mutationKey: profileSyncMutationKeys.stopRule(hostId),
-      onSuccess: (response, request) =>
-        refreshProfileSyncAfterWrite(queryClient, hostId, () => {
-          writeProfileSyncStoppedRule(
-            queryClient,
-            hostId,
-            request.ruleId,
-            response,
-          );
-          useProfileCopyFlowStore
-            .getState()
-            .forgetStoppedSyncRuleId(hostId, request.ruleId);
-        }),
-    },
-  });
-}
-
-export interface ProfileSyncResolveVariables extends ProfileSyncResolve {
-  readonly providerId: ProfileSyncItem["providerId"];
-  readonly sourceProfileId: ProfileSyncItem["sourceProfileId"];
-  readonly destinationHostId: string;
-}
-
-export function useProfileSyncResolve(
-  hostId: string,
-): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.resolve">,
-  HostRpcError,
-  ProfileSyncResolveVariables
-> {
-  const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "providers.profileCopy.sync.resolve",
-    unknown,
-    ProfileSyncResolveVariables
-  >({
-    client: useHostClientForHostId(hostId),
-    method: "providers.profileCopy.sync.resolve",
-    mapVariables: (variables) => ({
-      sourceHostId: variables.sourceHostId,
-      batchId: variables.batchId,
-      operationId: variables.operationId,
-      action: variables.action,
-      expectedDestination: variables.expectedDestination,
-    }),
-    onResponse: (response, request) => {
-      if (
-        request.sourceHostId !== hostId ||
-        response.sourceHostId !== request.sourceHostId ||
-        response.batchId !== request.batchId ||
-        !response.items.some(
-          (item) =>
-            item.operationId === request.operationId &&
-            item.providerId === request.providerId &&
-            item.sourceProfileId === request.sourceProfileId &&
-            item.destinationHostId === request.destinationHostId,
-        )
-      ) {
-        throw new Error("The device returned another sync resolution.");
-      }
-    },
-    options: {
-      mutationKey: profileSyncMutationKeys.resolve(hostId),
-      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId, null),
-    },
-  });
+  return requested.at(-1) ?? null;
 }
