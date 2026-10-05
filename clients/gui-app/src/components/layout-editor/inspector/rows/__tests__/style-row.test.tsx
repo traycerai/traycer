@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { StyleRow } from "@/components/layout-editor/inspector/rows/style-row";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
+import { LIVE } from "@/components/layout-editor/regions/row-availability";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -34,6 +35,8 @@ function renderModelStyleRow(key: string) {
   const values = effectiveLayoutValues(state.basePreset, state.overrides);
   return render(
     <StyleRow
+      anchor={null}
+      icon={null}
       label={row.label}
       description={row.description}
       styleKey={row.key}
@@ -42,6 +45,8 @@ function renderModelStyleRow(key: string) {
       regionId="model"
       values={values}
       arrangement={DEFAULT_ARRANGEMENT}
+      availability={LIVE}
+      depth={0}
     />,
   );
 }

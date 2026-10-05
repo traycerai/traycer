@@ -18,6 +18,14 @@ export interface LayoutEditorLease {
   readonly expiresAt: number;
 }
 
+/**
+ * What every door that names the editor says while another window holds it
+ * (L-32, T6): the palette's row, the chrome's menu item, the Settings button,
+ * and the door's own refusal.
+ */
+export const LAYOUT_EDITOR_HELD_ELSEWHERE_REASON =
+  "Open in another window. Your layout is saved there.";
+
 /** How long a lease stands without a heartbeat, and how often one is sent. */
 const LEASE_TTL_MS = 6000;
 const HEARTBEAT_MS = 2000;

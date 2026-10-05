@@ -75,8 +75,6 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
-import { ProfileCopyIncomingSection } from "./profile-copy/profile-copy-incoming-section";
-import { ProfileCopyRecentSection } from "./profile-copy/profile-copy-recent-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
@@ -1127,10 +1125,20 @@ function ProviderDetail({
     state,
     isSelectedHostLocal,
   );
+  // A focus intent names a profile by its wire `profileId`, while the selection
+  // holds its commit id - `null` for the Terminal account, whose wire id is
+  // the "ambient" sentinel. Comparing the two raw values made a sign-in link
+  // to the Terminal account select the row and then never open its sign-in.
+  const focusedProfile =
+    initialProfileId === null
+      ? null
+      : (state.profiles.find(
+          (profile) => profile.profileId === initialProfileId,
+        ) ?? null);
   const shouldStartInReauth =
     initialSignIn &&
-    initialProfileId !== null &&
-    selectedProfileId === initialProfileId &&
+    focusedProfile !== null &&
+    selectedProfileId === profileCommitId(focusedProfile) &&
     canAddProfile;
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
@@ -1457,18 +1465,6 @@ function ProviderTabBody({
             state={state}
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}
-          />
-          {/* Copies arriving on this host, then copies this window sent from
-              it. Both name hosts by the ids their copies captured; neither
-              follows the scope once a copy is opened. */}
-          <ProfileCopyIncomingSection
-            hostId={profileTab.hostId}
-            providerId={state.providerId}
-          />
-          <ProfileCopyRecentSection
-            hostId={profileTab.hostId}
-            providerId={state.providerId}
-            profiles={state.profiles}
           />
           <div
             className={cn(

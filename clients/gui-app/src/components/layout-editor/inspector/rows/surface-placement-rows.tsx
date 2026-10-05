@@ -3,6 +3,7 @@ import {
   Cpu,
   Layers,
   MoveHorizontal,
+  Paintbrush,
   PanelLeft,
   PanelTop,
   Smartphone,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { useLayoutFormHost } from "@/components/layout-editor/inspector/layout-form-host";
 import { LayoutFormRow } from "@/components/layout-editor/inspector/rows/layout-form-row";
+import { StyleRow } from "@/components/layout-editor/inspector/rows/style-row";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
 import { Button } from "@/components/ui/button";
 import { navigateToLayoutRegion } from "@/lib/settings-navigation";
@@ -20,16 +22,24 @@ import { PicturedOptions } from "@/components/layout-editor/inspector/pictured-o
 import { AppFrameStripTaskRows } from "@/components/layout-editor/inspector/app-frame-chrome";
 import { writeArrangementField } from "@/lib/layout/arrangement-gestures";
 import {
+  AREA_ROWS,
+  type AreaRowId,
+} from "@/components/layout-editor/regions/area-rows";
+import { TOOLBAR_STYLE_EXAMPLES } from "@/components/layout-editor/regions/composer-regions";
+import {
   EDGE_SIDE_OPTIONS,
   READING_WIDTH_OPTIONS,
-  SIDE_STRIP_VIEW_AT_TOP,
   SIDE_STRIP_VIEW_OPTIONS,
   TAB_OVERFLOW_OPTIONS,
   TAB_STRIP_PLACEMENT_OPTIONS,
   type SurfaceGroupId,
 } from "@/components/layout-editor/regions/region-grammar";
+import {
+  orderedRows,
+  type LayoutFormContext,
+  type ShownRowAvailability,
+} from "@/components/layout-editor/regions/row-availability";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import {
   DEFAULT_ARRANGEMENT,
   WIDE_READING_WIDTH_MAX_PX,
@@ -44,11 +54,7 @@ import {
   tabStripPlacementChanged,
 } from "@/lib/layout/layout-diff";
 import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
-import {
-  useLayoutSnapshot,
-  useLayoutStore,
-} from "@/stores/layout/layout-store";
-import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { Switch } from "@/components/ui/switch";
 import {
   Slider,
@@ -64,17 +70,18 @@ import {
 
 /**
  * The rows that belong to an AREA rather than to a region: where the task tabs
- * sit, what their side strip shows and how they overflow; which side of the
+ * sit, how they overflow and what their side strip shows; which side of the
  * task canvas the sidebar takes and whether agent rows carry resource
- * readings; the Composer's fixed Message queue note; and the small-screen
- * status bar.
+ * readings; the reading width; the composer toolbar's style; and the
+ * small-screen status bar.
  *
  * Neither the tab strip nor the sidebar column is a region, so these rows sit
  * in their area's form in both hosts, drawn as a `LayoutFormRow`. Each reads
  * the STORED arrangement, writes it as one recorded gesture (L-18) and offers
- * a revert only while the value differs from the shipped one. Label,
- * description and availability are the Settings search definitions', so a
- * search result and the row say the same thing.
+ * a revert only while the value differs from the shipped one. Label and
+ * description are the Settings search definitions', so a search result and
+ * the row say the same thing. Which rows an area draws, in what order, nested
+ * under what and with what reason is `regions/area-rows.ts`'s (P1).
  */
 
 const TAB_STRIP_PLACEMENT_ROW = LAYOUT.definitions.tabStripPlacement;
@@ -83,81 +90,108 @@ const TAB_OVERFLOW_ROW = LAYOUT.definitions.taskTabLayout;
 const SIDEBAR_SIDE_ROW = LAYOUT.definitions.sidebarSide;
 const READING_WIDTH_ROW = LAYOUT.definitions.readingWidth;
 const RESOURCE_READINGS_ROW = LAYOUT.definitions.resourceReadings;
+const TOOLBAR_STYLE_ROW = LAYOUT.definitions.toolbarStyle;
 const MOBILE_FOOTER_ROW = LAYOUT.definitions.mobileFooter;
 
-/** An area's own rows that come before its lists. */
-export function SurfaceLeadingRows(props: {
-  readonly surface: SurfaceGroupId;
-}): ReactNode {
-  if (props.surface === "topBar") {
-    return (
-      <>
-        <TabStripPositionRow />
-        <SideStripViewRow />
-        <TabOverflowRow />
-      </>
-    );
-  }
-  if (props.surface === "sidebar") return <SidebarSideRow />;
-  if (props.surface === "chat") {
-    return (
-      <>
-        <ReadingWidthRow />
-        <WideReadingWidthRow />
-      </>
-    );
-  }
-  return null;
-}
-
-/** An area's own rows that come after its lists. */
-export function SurfaceTrailingRows(props: {
-  readonly surface: SurfaceGroupId;
-}): ReactNode {
-  if (props.surface === "sidebar") return <ResourceReadingsRow />;
-  if (props.surface === "statusBar") return <MobileFooterRow />;
-  return null;
+/** What every area row takes from where the registry places it. */
+interface AreaRowPlacement {
+  readonly availability: ShownRowAvailability;
+  readonly depth: 0 | 1;
 }
 
 /**
- * One area row, or nothing where its definition says the build has no use for
- * it (the installed mobile app). `status` stands in place of the description:
- * why the control is disabled, or the description with a control of its own.
+ * An area's own rows before its lists (`leading`) or after them
+ * (`trailing`), in the registry's order, each under the row that controls it.
  */
-function PlacementRow(props: {
-  readonly row: SettingsRowDefinition;
-  readonly icon: LucideIcon;
-  readonly control: ReactNode;
-  readonly onRevert: (() => void) | null;
-  readonly revertLabel: string;
-  readonly status: ReactNode;
-  /** A control that is a list of its own, under the label. */
-  readonly stacked: boolean;
-  readonly selected: boolean;
+export function SurfaceAreaRows(props: {
+  readonly surface: SurfaceGroupId;
+  readonly place: "leading" | "trailing";
+  readonly context: LayoutFormContext;
 }): ReactNode {
-  const { row, icon, control, onRevert, revertLabel, status } = props;
-  const availability = useSettingsAvailabilityContext();
-  if (!row.availableWhen(availability)) return null;
+  const { surface, place, context } = props;
+  const rows = orderedRows(
+    AREA_ROWS.filter((row) => row.surface === surface && row.place === place),
+    context,
+  );
+  return rows.map(({ row, depth, availability }) => (
+    <AreaRowView
+      key={row.id}
+      id={row.id}
+      context={context}
+      availability={availability}
+      depth={depth}
+    />
+  ));
+}
+
+function AreaRowView(
+  props: AreaRowPlacement & {
+    readonly id: AreaRowId;
+    readonly context: LayoutFormContext;
+  },
+): ReactNode {
+  const { id, context, ...placement } = props;
+  switch (id) {
+    case "tabStripPlacement":
+      return <TabStripPositionRow {...placement} />;
+    case "taskTabLayout":
+      return <TabOverflowRow {...placement} />;
+    case "sideStripView":
+      return <SideStripViewRow {...placement} />;
+    case "sidebarSide":
+      return <SidebarSideRow {...placement} />;
+    case "resourceReadings":
+      return <ResourceReadingsRow {...placement} context={context} />;
+    case "readingWidth":
+      return <ReadingWidthRow {...placement} />;
+    case "wideReadingWidth":
+      return <WideReadingWidthRow {...placement} />;
+    case "toolbarStyle":
+      return <ToolbarStyleRow {...placement} context={context} />;
+    case "mobileFooter":
+      return <MobileFooterRow {...placement} />;
+  }
+}
+
+/** One area row, worded by its Settings search definition. */
+function PlacementRow(
+  props: AreaRowPlacement & {
+    readonly row: SettingsRowDefinition;
+    readonly icon: LucideIcon;
+    readonly control: ReactNode;
+    readonly onRevert: (() => void) | null;
+    readonly revertLabel: string;
+    /** The definition's description, or text carrying a link of the row's own. */
+    readonly description: ReactNode;
+    /** A control that is a list of its own, under the label. */
+    readonly stacked: boolean;
+    readonly selected: boolean;
+  },
+): ReactNode {
+  const { row, icon, control, onRevert, revertLabel } = props;
   return (
     <LayoutFormRow
       anchor={row.anchor ?? null}
       icon={icon}
       label={row.label}
-      description={status ?? row.description ?? null}
+      description={props.description}
       control={control}
       onRevert={onRevert}
       revertLabel={revertLabel}
       stacked={props.stacked}
       selected={props.selected}
+      availability={props.availability}
+      depth={props.depth}
     />
   );
 }
 
 /** Where the task tabs sit: across the top, or a vertical strip at an edge. */
-export function TabStripPositionRow(): ReactNode {
+export function TabStripPositionRow(props: AreaRowPlacement): ReactNode {
   const arrangement = useLayoutStore((state) => state.arrangement);
   return (
     <PlacementRow
+      {...props}
       row={TAB_STRIP_PLACEMENT_ROW}
       icon={PanelTop}
       onRevert={
@@ -171,7 +205,7 @@ export function TabStripPositionRow(): ReactNode {
           : null
       }
       revertLabel="Reset tab placement to default: Top"
-      status={null}
+      description={TAB_STRIP_PLACEMENT_ROW.description}
       stacked={false}
       selected={false}
       control={
@@ -203,14 +237,14 @@ export function TabStripPositionRow(): ReactNode {
  * the one area row that selects: pressing or focusing it rings that list, and
  * a press on the list selects it (`LayoutSettingId`).
  */
-export function SideStripViewRow(): ReactNode {
+export function SideStripViewRow(props: AreaRowPlacement): ReactNode {
   const arrangement = useLayoutStore((state) => state.arrangement);
   const selected = useLayoutEditorStore(
     (state) => state.selectedSetting === "sideStripView",
   );
-  const atTop = arrangement.tabStripPlacement === "top";
   return (
     <PlacementRow
+      {...props}
       row={SIDE_STRIP_VIEW_ROW}
       icon={Layers}
       onRevert={
@@ -224,14 +258,16 @@ export function SideStripViewRow(): ReactNode {
           : null
       }
       revertLabel="Reset side tab view to default: Tabs only"
-      status={atTop ? SIDE_STRIP_VIEW_AT_TOP : null}
+      description={SIDE_STRIP_VIEW_ROW.description}
       stacked
       selected={selected}
       control={
         <PicturedOptions
           label="Side tab view"
           value={arrangement.sideStripView}
-          disabled={atTop}
+          // The row's fieldset turns the radios off; the pictures dim with
+          // them by the same `disabled` state.
+          disabled={props.availability.kind === "disabled"}
           labelPlacement="above"
           onChange={(next) => {
             const option = SIDE_STRIP_VIEW_OPTIONS.find(
@@ -263,10 +299,11 @@ export function SideStripViewRow(): ReactNode {
 }
 
 /** Which side of the task canvas the sidebar sits on. */
-export function SidebarSideRow(): ReactNode {
+export function SidebarSideRow(props: AreaRowPlacement): ReactNode {
   const arrangement = useLayoutStore((state) => state.arrangement);
   return (
     <PlacementRow
+      {...props}
       row={SIDEBAR_SIDE_ROW}
       icon={PanelLeft}
       onRevert={
@@ -280,7 +317,7 @@ export function SidebarSideRow(): ReactNode {
           : null
       }
       revertLabel="Reset sidebar side to default"
-      status={null}
+      description={SIDEBAR_SIDE_ROW.description}
       stacked={false}
       selected={false}
       control={
@@ -299,12 +336,13 @@ export function SidebarSideRow(): ReactNode {
 }
 
 /** How wide the transcript, the composer and an artifact's body run. */
-export function ReadingWidthRow(): ReactNode {
+export function ReadingWidthRow(props: AreaRowPlacement): ReactNode {
   const readingWidth = useLayoutStore(
     (state) => state.arrangement.readingWidth,
   );
   return (
     <PlacementRow
+      {...props}
       row={READING_WIDTH_ROW}
       icon={UnfoldHorizontal}
       onRevert={
@@ -318,7 +356,7 @@ export function ReadingWidthRow(): ReactNode {
             }
       }
       revertLabel="Reset reading width to default: Comfortable"
-      status={null}
+      description={READING_WIDTH_ROW.description}
       stacked={false}
       selected={false}
       control={
@@ -337,13 +375,12 @@ export function ReadingWidthRow(): ReactNode {
 }
 
 /**
- * The wide column's own width, as a slider beneath the Reading width row -
- * visible only while `readingWidth` is "wide" (the same conditional-row
- * pattern `surface-section.tsx`'s `tabStripHosted` gate uses for the Display
- * row: read the sibling value, drop the row where it has nothing to do). The
- * floor matches today's fixed wide column, so the slider never reads
- * narrower than "Wide" has always meant; the ceiling is generous, since
- * `useReadingWidthStyle` viewport-clamps whatever is actually applied.
+ * The wide column's own width, as a slider under the Reading width row. It
+ * stays in place while Comfortable, disabled and saying so (C5), rather than
+ * coming and going with the choice above it. The floor matches today's fixed
+ * wide column, so the slider never reads narrower than "Wide" has always
+ * meant; the ceiling is generous, since the column is never wider than the
+ * pane it is drawn in (`useReadingWidthStyle`).
  *
  * `draftPx` is `null` whenever the thumb is at rest, so the slider reads the
  * STORE value directly and always stays fresh against a revert, an undo, or
@@ -353,25 +390,18 @@ export function ReadingWidthRow(): ReactNode {
  * writing on every intermediate `onValueChange` would flood undo with one
  * step per pixel.
  */
-export function WideReadingWidthRow(): ReactNode {
-  const readingWidth = useLayoutStore(
-    (state) => state.arrangement.readingWidth,
-  );
+export function WideReadingWidthRow(props: AreaRowPlacement): ReactNode {
   const storedPx = useLayoutStore(
     (state) => state.arrangement.wideReadingWidthPx,
   );
   const [draftPx, setDraftPx] = useState<number | null>(null);
-  const availability = useSettingsAvailabilityContext();
-  // Withheld wherever its parent row is: a slider under a missing row.
-  if (readingWidth !== "wide" || !READING_WIDTH_ROW.availableWhen(availability))
-    return null;
   const px = draftPx ?? storedPx;
   return (
     <LayoutFormRow
       anchor={null}
       icon={null}
       label="Wide column width"
-      description={`${px}px, clamped to the window width near its edge.`}
+      description={`${px}px. Never wider than the pane it is in.`}
       onRevert={
         storedPx === DEFAULT_ARRANGEMENT.wideReadingWidthPx
           ? null
@@ -385,6 +415,8 @@ export function WideReadingWidthRow(): ReactNode {
       revertLabel={`Reset wide column width to default: ${DEFAULT_ARRANGEMENT.wideReadingWidthPx}px`}
       stacked
       selected={false}
+      availability={props.availability}
+      depth={props.depth}
       control={
         <Slider
           className="min-w-0 flex-1"
@@ -392,6 +424,9 @@ export function WideReadingWidthRow(): ReactNode {
           min={WIDE_READING_WIDTH_MIN_PX}
           max={WIDE_READING_WIDTH_MAX_PX}
           step={WIDE_READING_WIDTH_STEP_PX}
+          // A slider's thumb is not a form control, so the row's fieldset
+          // cannot turn it off; it is told directly.
+          disabled={props.availability.kind === "disabled"}
           onValueChange={(next) => {
             setDraftPx(next[0]);
           }}
@@ -420,20 +455,14 @@ export function WideReadingWidthRow(): ReactNode {
  * How tabs fit a horizontal strip. A side strip stacks its tabs and never
  * scrolls or shrinks them sideways, so while the tabs sit at a side the
  * control is disabled and says why; the stored value is kept for the way back.
- * The installed mobile app always draws its tabs at the top.
  */
-export function TabOverflowRow(): ReactNode {
+export function TabOverflowRow(props: AreaRowPlacement): ReactNode {
   const taskTabLayout = useLayoutStore(
     (state) => state.arrangement.taskTabLayout,
   );
-  const placement = useLayoutStore(
-    (state) => state.arrangement.tabStripPlacement,
-  );
-  const availability = useSettingsAvailabilityContext();
-  const atSide =
-    TAB_STRIP_PLACEMENT_ROW.availableWhen(availability) && placement !== "top";
   return (
     <PlacementRow
+      {...props}
       row={TAB_OVERFLOW_ROW}
       icon={MoveHorizontal}
       onRevert={
@@ -447,7 +476,7 @@ export function TabOverflowRow(): ReactNode {
             }
       }
       revertLabel="Reset tab overflow to default: Scroll"
-      status={atSide ? "Available when tabs are at the top." : null}
+      description={TAB_OVERFLOW_ROW.description}
       stacked={false}
       selected={false}
       control={
@@ -455,7 +484,6 @@ export function TabOverflowRow(): ReactNode {
           ariaLabel="Tab overflow"
           options={TAB_OVERFLOW_OPTIONS}
           value={taskTabLayout}
-          disabled={atSide}
           onChange={(next) => {
             if (next !== "scroll" && next !== "shrink") return;
             writeArrangementField("taskTabLayout", next);
@@ -473,10 +501,10 @@ export function TabOverflowRow(): ReactNode {
  * readings is the monitor's own Metrics choice (L-174), so the description
  * links there.
  */
-export function ResourceReadingsRow(): ReactNode {
-  const snapshot = useLayoutSnapshot();
-  const on = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides)
-    .resourceMonitor.agentRows;
+export function ResourceReadingsRow(
+  props: AreaRowPlacement & { readonly context: LayoutFormContext },
+): ReactNode {
+  const on = props.context.values.resourceMonitor.agentRows;
   const page = useLayoutFormHost() === "page";
   // Each host opens the monitor's row its own way: the page lands on it as a
   // settings result does, the editor opens its area with the row expanded.
@@ -491,6 +519,7 @@ export function ResourceReadingsRow(): ReactNode {
   };
   return (
     <PlacementRow
+      {...props}
       row={RESOURCE_READINGS_ROW}
       icon={Cpu}
       onRevert={
@@ -503,7 +532,7 @@ export function ResourceReadingsRow(): ReactNode {
       revertLabel="Reset readings on agent rows"
       stacked={false}
       selected={false}
-      status={
+      description={
         <>
           {RESOURCE_READINGS_ROW.description}{" "}
           <Button
@@ -530,14 +559,43 @@ export function ResourceReadingsRow(): ReactNode {
 }
 
 /**
- * Whether the strip is drawn at all on a narrow viewport (L-51). Only the
- * installed mobile app has the switch: every other build draws the footer
- * whenever a reading names it.
+ * The whole composer toolbar's chrome - attach, access, model and the
+ * microphone - drawn as the real buttons (C3). Stored on Model, the one
+ * toolbar region that never hides (G6), and an area row because it styles
+ * every member of the toolbar rather than one.
  */
-function MobileFooterRow(): ReactNode {
+function ToolbarStyleRow(
+  props: AreaRowPlacement & { readonly context: LayoutFormContext },
+): ReactNode {
+  const { context } = props;
+  return (
+    <StyleRow
+      anchor={TOOLBAR_STYLE_ROW.anchor ?? null}
+      icon={Paintbrush}
+      label={TOOLBAR_STYLE_ROW.label}
+      description={TOOLBAR_STYLE_ROW.description}
+      styleKey="toolbarStyle"
+      labelPlacement="end"
+      examples={TOOLBAR_STYLE_EXAMPLES}
+      regionId="model"
+      values={context.values}
+      arrangement={context.arrangement}
+      availability={props.availability}
+      depth={props.depth}
+    />
+  );
+}
+
+/**
+ * Whether the phone layout draws its footer at all (L-51). While it is off,
+ * the phone header draws the two readings as icons, and the settings under
+ * this row do nothing; the area says so once, under this row (U1).
+ */
+function MobileFooterRow(props: AreaRowPlacement): ReactNode {
   const arrangement = useLayoutStore((state) => state.arrangement);
   return (
     <PlacementRow
+      {...props}
       row={MOBILE_FOOTER_ROW}
       icon={Smartphone}
       onRevert={
@@ -551,7 +609,7 @@ function MobileFooterRow(): ReactNode {
           : null
       }
       revertLabel="Reset the small-screen status bar"
-      status={null}
+      description={MOBILE_FOOTER_ROW.description}
       stacked={false}
       selected={false}
       control={

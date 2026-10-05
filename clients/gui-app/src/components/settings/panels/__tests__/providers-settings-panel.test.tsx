@@ -239,14 +239,6 @@ vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-// The profile-copy entry button and Recent copies list label devices from the
-// account's host list, which is a real TanStack query. This suite is about the
-// panel, not copying, so the list is empty and the button renders disabled.
-// `use-host-options` is stubbed with only the member this subtree calls.
-vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => ({ hosts: [] }),
-}));
-
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));
@@ -5579,6 +5571,112 @@ describe("<ProvidersSettingsPanel />", () => {
         {
           providerId: "claude-code",
           profileId: "work-profile",
+          createProfile: null,
+          holderId: null,
+        },
+        expect.anything(),
+      );
+    });
+  });
+
+  it("opens a signed-out Terminal-account deep link and starts sign-in", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [
+            {
+              kind: "bundled",
+              path: "/opt/traycer/bin/codex",
+              version: "1.0.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+        }),
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "work-profile",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "claude",
+      hostId: "local",
+      profileId: "ambient",
+      startSignIn: true,
+    });
+    hostScopeMocks.hostId = "local";
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      railProviderRow("Claude Code", true).getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", {
+          name: "Terminal account, Terminal, Signed out",
+          hidden: true,
+        })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Terminal account" }),
+    ).toBeDefined();
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledWith(
+        {
+          providerId: "claude-code",
+          profileId: "ambient",
           createProfile: null,
           holderId: null,
         },

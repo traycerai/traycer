@@ -279,7 +279,7 @@ const logicalStreamPort: LogicalStreamPort = {
   streamOutboundDebtBytes: () => 0,
 };
 
-/** Uses the production remote per-stream implementation and its frame/open order. */
+/** Uses the production remote per-stream implementation, which opens on its first frame. */
 class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly sessions: LogicalStream[] = [];
   private readonly negotiatedVersion: SchemaVersion = { major: 2, minor: 1 };

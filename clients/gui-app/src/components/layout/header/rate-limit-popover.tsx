@@ -957,7 +957,7 @@ function RateLimitPopoverScopedBody({
           onClose={onClose}
         />
         <div className="min-h-0 min-w-0 overflow-y-auto p-3">
-          <LimitedProfileBanners limited={limited} />
+          <LimitedProfileBanners limited={limited} openTab={resolvedTab} />
           {resolvedTab === "overview" ? (
             <RateLimitOverview
               railTabs={railTabs}
@@ -1309,20 +1309,26 @@ function RailTab({
 }
 
 /**
- * One banner per limited profile, at the top of the content area and above
- * whichever tab is open: the limit is a fact about the account, not about the
- * tab. State only, with no action - the chat using that provider already
- * offers the switch. Nothing renders when no profile is limited.
+ * One banner per limited profile whose own card is not on the open tab, at
+ * the top of the content area. Overview draws a provider's condensed windows
+ * only and another provider's tab draws nothing of this account, so there the
+ * banner is what names the blocked account and when it is back. A provider's
+ * own tab already says both on the profile's card, so its accounts get no
+ * banner there. State only, with no action - the chat using that provider
+ * already offers the switch. Nothing renders when no banner is left to draw.
  */
 function LimitedProfileBanners({
   limited,
+  openTab,
 }: {
   readonly limited: ReadonlyArray<LimitedProfile>;
+  readonly openTab: RateLimitPopoverTab;
 }): ReactNode {
-  if (limited.length === 0) return null;
+  const offTab = limited.filter((profile) => profile.providerId !== openTab);
+  if (offTab.length === 0) return null;
   return (
     <div className="mb-3 flex flex-col gap-2">
-      {limited.map((profile) => (
+      {offTab.map((profile) => (
         <div
           key={`${profile.providerId}:${profile.profileId ?? ""}`}
           role="status"

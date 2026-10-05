@@ -20,7 +20,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
-import { ProfileCopyFlowHost } from "@/components/settings/panels/profile-copy/profile-copy-flow-host";
+import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
@@ -158,12 +158,12 @@ export function RootComponent() {
               <SystemTabModalHost />
               <ChatSearchDialogHost />
               <SweepReviewDialogHost />
-              {/* The profile-copy dialog. Here rather than in Settings: Providers
+              {/* The Sync profiles dialog. Here rather than in Settings: Providers
                   settings drops its body while a deep link moves its host scope,
-                  which would unmount a live sign-in on the very navigation "Open
-                  profile" makes; and not behind the default-host scope, because
-                  a copy dials only the hosts it captured. */}
-              <ProfileCopyFlowHost />
+                  which is the navigation "Sign in on <source>" makes; and not
+                  behind the default-host scope, because it reads only the
+                  source host it captured. */}
+              <ProfileSyncModalHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
               <NotificationsMobileSheet />

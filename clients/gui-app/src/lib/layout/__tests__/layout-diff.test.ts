@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  layoutChanges,
   layoutModified,
   providerChanged,
   resetLayout,
   resetWouldChange,
+  revertLayoutChange,
+  revertSessionLine,
+  sessionLayoutChanges,
   usageProvidersChanged,
 } from "@/lib/layout/layout-diff";
 import {
@@ -105,8 +109,12 @@ describe("what the page can see as changed", () => {
     ).toBe(true);
   });
 
-  it("answers for the whole arrangement, field by field", () => {
-    expect(layoutModified(snapshotWith(DEFAULT_ARRANGEMENT))).toBe(false);
+  // T5: a preset never moves anything, so an arrangement change is listed for
+  // its own revert but never marks the applied preset Modified.
+  it("lists the whole arrangement, field by field, without marking the preset Modified", () => {
+    expect(
+      layoutChanges(snapshotWith(DEFAULT_ARRANGEMENT)).arrangement,
+    ).toEqual([]);
     const eachOne: ReadonlyArray<Partial<LayoutArrangement>> = [
       { usageHost: "header" },
       { minimapSide: "left" },
@@ -122,11 +130,69 @@ describe("what the page can see as changed", () => {
       { wideReadingWidthPx: 1600 },
     ];
     for (const patch of eachOne) {
+      const snapshot = snapshotWith({ ...DEFAULT_ARRANGEMENT, ...patch });
       expect(
-        layoutModified(snapshotWith({ ...DEFAULT_ARRANGEMENT, ...patch })),
+        layoutChanges(snapshot).arrangement.length,
         JSON.stringify(patch),
-      ).toBe(true);
+      ).toBeGreaterThan(0);
+      expect(layoutModified(snapshot), JSON.stringify(patch)).toBe(false);
     }
+  });
+});
+
+describe("the pinned breakdown's field order (C2)", () => {
+  const SWAPPED = [...DEFAULT_ARRANGEMENT.pinnedContextFieldOrder].reverse();
+  const reordered = snapshotWith({
+    ...DEFAULT_ARRANGEMENT,
+    pinnedContextFieldOrder: SWAPPED,
+  });
+
+  it("is one change in the list, and never marks the applied preset Modified", () => {
+    expect(layoutChanges(reordered).arrangement).toEqual([
+      { kind: "pinnedFieldOrder" },
+    ]);
+    expect(
+      layoutChanges(snapshotWith(DEFAULT_ARRANGEMENT)).arrangement,
+    ).toEqual([]);
+    expect(layoutModified(reordered)).toBe(false);
+  });
+
+  it("is one line in what an editor session changed, against the order it opened with", () => {
+    const entry = snapshotWith(DEFAULT_ARRANGEMENT);
+
+    expect(sessionLayoutChanges(entry, reordered).arrangement).toEqual([
+      { kind: "pinnedFieldOrder" },
+    ]);
+    // Moved and moved back in one session is no change.
+    expect(sessionLayoutChanges(reordered, reordered).arrangement).toEqual([]);
+  });
+
+  it("is put back to the shipped order by its change line's revert", () => {
+    const [change] = layoutChanges(reordered).arrangement;
+
+    expect(
+      revertLayoutChange(reordered, change).arrangement.pinnedContextFieldOrder,
+    ).toEqual(DEFAULT_ARRANGEMENT.pinnedContextFieldOrder);
+  });
+
+  it("is put back to the SESSION's opening order by a session line's revert, not the shipped one", () => {
+    const entry = snapshotWith({
+      ...DEFAULT_ARRANGEMENT,
+      pinnedContextFieldOrder: SWAPPED,
+    });
+    const current = snapshotWith({
+      ...DEFAULT_ARRANGEMENT,
+      pinnedContextFieldOrder: DEFAULT_ARRANGEMENT.pinnedContextFieldOrder,
+    });
+    const { arrangement } = sessionLayoutChanges(entry, current);
+
+    expect(arrangement).toEqual([{ kind: "pinnedFieldOrder" }]);
+    expect(
+      revertSessionLine(current, entry, {
+        kind: "changes",
+        changes: arrangement,
+      }).arrangement.pinnedContextFieldOrder,
+    ).toEqual(SWAPPED);
   });
 });
 

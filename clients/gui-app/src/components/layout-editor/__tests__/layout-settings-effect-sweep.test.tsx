@@ -80,6 +80,9 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   runnerHost: null,
   featureSettings: null,
   mobileApp: isMobileApp(),
+  // Both windows are composed at a desktop width: the phone layout is not
+  // drawn, so the rows only it draws (the small-screen footer) have no control.
+  phoneLayout: false,
 };
 
 const WINDOWS: ReadonlyArray<SweepWindow> = ["sample", "epic"];
@@ -486,11 +489,12 @@ const DEFINITION_SWEEP: Record<
   chat: heading("the Chat card; its rows are swept as themselves"),
   readingWidth: SWEPT,
   composer: heading("the Composer card; its rows are swept as themselves"),
+  toolbarStyle: SWEPT,
   statusBar: heading(
     "the Usage and resources card; its rows are swept as themselves",
   ),
   mobileFooter: notSwept(
-    "the row exists only in the installed mobile app (isMobileFooterRowAvailable), and it decides what draws only on a mobile viewport; this composition is a desktop window, so there is no control to operate and nothing to draw",
+    "the row exists only where the phone layout is drawn (isMobileFooterRowAvailable: the installed app, or a browser tab below 768px), and it decides what draws only there; this composition is a desktop window, so there is no control to operate and nothing to draw",
   ),
   resetLayout: SWEPT,
   resetLayoutAction: SWEPT,
@@ -523,7 +527,7 @@ const ARRANGEMENT_SWEEP: Record<keyof LayoutArrangement, Sweep | NotSwept> = {
   statusBarParked: SWEPT,
   pinnedContextFieldOrder: SWEPT,
   mobileFooter: notSwept(
-    "see the mobileFooter row: only the installed mobile app offers it, and it decides the status bar only on a mobile viewport",
+    "see the mobileFooter row: only the phone layout offers it, and it decides the status bar only there",
   ),
   dividerSeq: SWEPT,
   tabStripPlacement: SWEPT,
@@ -757,7 +761,10 @@ function addCheckboxControls(
 ): void {
   for (const node of root.querySelectorAll<HTMLElement>('[role="checkbox"]')) {
     if (!operable(node)) continue;
+    // A pinned breakdown's field is a row of its own list, named by its
+    // checkbox (`Show <field>`); a metric check is named by its label.
     const label =
+      node.getAttribute("aria-label") ??
       node.closest("label")?.textContent ??
       root.ownerDocument.querySelector(`label[for="${node.id}"]`)
         ?.textContent ??
@@ -771,7 +778,7 @@ function addButtonControls(
   controls: Map<string, PageControl>,
 ): void {
   for (const node of root.querySelectorAll<HTMLElement>(
-    "button:not([role='switch'])",
+    "button:not([role='switch']):not([role='checkbox'])",
   )) {
     if (!operable(node)) continue;
     const name = nameOf(node);

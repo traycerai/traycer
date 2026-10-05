@@ -1,7 +1,12 @@
 # Pre-commit hooks. https://pre-commit.com
-# Install once:  pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg
+# Install once:  pipx install pre-commit && pre-commit install
 # Run on demand: pre-commit run --all-files
 default_stages: [pre-commit]
+# A bare `pre-commit install` (what CONTRIBUTING.md documents) installs these
+# two. Without this it installs `pre-commit` alone and the DCO hook, a
+# `commit-msg` hook, never runs; a maintainer pull request into `main` runs no
+# DCO job in CI either (AGENTS.md, "When CI runs"), so the hook is the check.
+default_install_hook_types: [pre-commit, commit-msg]
 # Service emitter goldens are byte-for-byte emitter OUTPUT (a CRLF VBS, a
 # non-executable launcher script body): no hook may rewrite or lint them.
 exclude: ^clients/traycer-cli/src/service/platforms/__tests__/emitter-goldens/

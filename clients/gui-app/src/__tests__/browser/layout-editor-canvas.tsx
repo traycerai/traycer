@@ -63,7 +63,10 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
-import { useArrangementValue } from "@/lib/layout-overrides";
+import {
+  useArrangementValue,
+  useStatusBarVisible,
+} from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { writeArrangementField } from "@/lib/layout/arrangement-gestures";
 import {
@@ -114,7 +117,6 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   getLayoutSnapshot,
   useLayoutStore,
-  useStatusBarShown,
 } from "@/stores/layout/layout-store";
 import { sampleWorkspaceTabModule } from "@/stores/tabs/kinds/sample-workspace";
 import { tabItemId } from "@/stores/tabs/layout";
@@ -1396,7 +1398,7 @@ function EpicSurfaceStandIn(): ReactNode {
   // directly rather than through the real `EpicShell`.
   const stripEdge = sideTabStripEdge(useArrangementValue("tabStripPlacement"));
   const canvasSeam = stripEdge === sidebarSide ? null : stripEdge;
-  const statusBarShown = useStatusBarShown();
+  const statusBarShown = useStatusBarVisible();
   const handle = (
     <SidebarWidthResizeHandle side={sidebarSide} hidden={mainCollapsed} />
   );

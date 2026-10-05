@@ -104,6 +104,23 @@ To pick a profile for the next turn, use the profile dropdown in the composer's 
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/provider-profile-add.mp4" label="Add a managed provider profile" />
 
+### Sync Profiles Across Devices
+
+Use **Sync profiles…** on **Profiles & Limits** to copy the profiles on the host selected in Settings to your other devices. Sync covers Claude Code, Codex, Grok, and Antigravity profiles. It copies the sign-in itself, so a synced profile is ready to use on the other device without signing in again.
+
+The dialog lists your other devices. For each one:
+
+- **Sync now** copies every supported profile to that device once.
+- **Keep in sync** also sends profiles you add later, and name and color changes, as they happen. Turning it off keeps the profiles already on the device. An offline device catches up when it connects.
+
+Closing the dialog doesn't stop a sync. A Terminal account arrives as a regular profile, and the other device's own Terminal account is never changed. Once a profile is synced, a sign-in that refreshes on one device is passed to the other, so neither is signed out.
+
+Under each device, every profile has one status: **Synced**, **Syncing**, **Sign in needed**, **Device offline**, **Update needed**, or **Can't sync** with the reason. Profiles that need attention are listed first, and **Show all** lists the rest. After you fix a **Can't sync** reason, click **Sync now** to try again.
+
+- **Sign in needed**: the profile is signed out on the device you are syncing from. The button on that row opens its sign-in there.
+- **Is now signed in to a different account**: you switched the account on the device the profile was synced from. The other device keeps the old account until you click **Sync the new account**.
+- **Are signed in to different accounts**: the account was switched on the device that received the profile. Sync never replaces either account. Sign in to the same account on both devices to resume.
+
 ## Signing In Again
 
 When a provider is signed out, the composer shows a banner above the input.

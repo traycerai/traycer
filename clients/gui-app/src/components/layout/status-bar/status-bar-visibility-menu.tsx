@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from "react";
+import { Fragment, type MouseEvent, type ReactNode } from "react";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -8,8 +8,8 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { CustomizeLayoutMenuItem } from "@/components/layout-editor/customize-layout-menu-item";
-import { LayoutRegionVerbItems } from "@/components/layout-editor/region-quick-verbs";
 import { setRegionShown } from "@/components/layout-editor/layout-gestures";
+import { regionFacts } from "@/components/layout-editor/regions/region-facts";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
 import {
@@ -69,9 +69,11 @@ export function StatusBarVisibilityMenu(
   props: StatusBarVisibilityMenuProps,
 ): ReactNode {
   const hiddenProviders = useArrangementValue("hiddenProviders");
-  const resourcesShown = useRegionShown("resourceMonitor");
+  const shown: Readonly<Record<BarRegionId, boolean>> = {
+    usageLimits: useRegionShown("usageLimits"),
+    resourceMonitor: useRegionShown("resourceMonitor"),
+  };
   const regions = props.regions;
-  const showsMonitor = regions.includes("resourceMonitor");
   // The door names ONE region, and it is the first the bar draws: the editor
   // opens on it, and every other reading here is one click away in the index.
   // A bar drawing nothing opens the index instead of asserting a region.
@@ -82,6 +84,29 @@ export function StatusBarVisibilityMenu(
   // write a value with no visible effect on the viewport it was pressed on,
   // and leave it waiting for the next desktop window.
   const narrowViewport = useIsMobileViewport();
+  // The rule before the door only between two groups that both drew something.
+  const anyAbove =
+    regions.length > 0 || props.providers.length > 0 || !narrowViewport;
+  // Under Usage limits' own switch when the bar draws it, since they are its
+  // providers; on their own otherwise.
+  const providerItems = props.providers.map((provider) => (
+    <ContextMenuCheckboxItem
+      key={provider.providerId}
+      checked={!hiddenProviders.includes(provider.providerId)}
+      onCheckedChange={() => {
+        // The whole arrangement is read at write time rather than
+        // subscribed: this menu needs it only to spread it (G1-14).
+        setArrangement({
+          ...useLayoutStore.getState().arrangement,
+          hiddenProviders: hiddenProviders.includes(provider.providerId)
+            ? hiddenProviders.filter((id) => id !== provider.providerId)
+            : [...hiddenProviders, provider.providerId],
+        });
+      }}
+    >
+      {provider.label}
+    </ContextMenuCheckboxItem>
+  ));
 
   return (
     <ContextMenu>
@@ -103,37 +128,26 @@ export function StatusBarVisibilityMenu(
         {props.children}
       </ContextMenuTrigger>
       <ContextMenuContent>
-        {props.providers.map((provider) => (
-          <ContextMenuCheckboxItem
-            key={provider.providerId}
-            checked={!hiddenProviders.includes(provider.providerId)}
-            onCheckedChange={() => {
-              // The whole arrangement is read at write time rather than
-              // subscribed: this menu needs it only to spread it (G1-14).
-              setArrangement({
-                ...useLayoutStore.getState().arrangement,
-                hiddenProviders: hiddenProviders.includes(provider.providerId)
-                  ? hiddenProviders.filter((id) => id !== provider.providerId)
-                  : [...hiddenProviders, provider.providerId],
-              });
-            }}
-          >
-            {provider.label}
-          </ContextMenuCheckboxItem>
+        {/* One Show switch per reading the bar is drawing, the same for
+            both (the section header's switch in the form): the registry
+            gives these regions no quick verbs, so this is their one way to
+            hide from here. Only a reading in THIS bar: a switch here over one
+            drawn in the top bar would make something disappear up there
+            because of a right-click down here (L-159). */}
+        {regions.map((regionId) => (
+          <Fragment key={regionId}>
+            <ContextMenuCheckboxItem
+              checked={shown[regionId]}
+              onCheckedChange={(checked) => {
+                setRegionShown(regionId, checked);
+              }}
+            >
+              {regionFacts(regionId).name}
+            </ContextMenuCheckboxItem>
+            {regionId === "usageLimits" ? providerItems : null}
+          </Fragment>
         ))}
-        {/* Only while the readout is in THIS bar: a switch here over a
-            monitor drawn in the top bar would make something disappear up
-            there because of a right-click down here (L-159). */}
-        {showsMonitor ? (
-          <ContextMenuCheckboxItem
-            checked={resourcesShown}
-            onCheckedChange={(checked) => {
-              setRegionShown("resourceMonitor", checked);
-            }}
-          >
-            Resource monitor
-          </ContextMenuCheckboxItem>
-        ) : null}
+        {regions.includes("usageLimits") ? null : providerItems}
         {narrowViewport ? null : (
           <ContextMenuItem
             onSelect={() => {
@@ -155,23 +169,10 @@ export function StatusBarVisibilityMenu(
             Move to tab strip
           </ContextMenuItem>
         )}
-        <ContextMenuSeparator />
-        {/* The bar's own quick verbs and the way in (L-19, L-159). The items
-            above are one per segment; what these add is a set of verbs for
-            each reading the bar is DRAWING - the readout's own segment menu
-            wins over the segment itself, so these are what the bar's padding
-            answers - and one "Customize layout...", which replaces the old
-            jump to the Layout settings page: customizing is the editor's job
-            now, and the door lands on that page by itself when the window is
-            too narrow. */}
-        {regions.map((regionId) => (
-          <LayoutRegionVerbItems
-            key={regionId}
-            regionId={regionId}
-            separator={false}
-          />
-        ))}
-        {regions.length > 0 ? <ContextMenuSeparator /> : null}
+        {anyAbove ? <ContextMenuSeparator /> : null}
+        {/* The way in (L-19, L-159), which replaces the old jump to the
+            Layout settings page: customizing is the editor's job now, and the
+            door lands on that page by itself when the window is too narrow. */}
         <CustomizeLayoutMenuItem target={doorTarget} />
       </ContextMenuContent>
     </ContextMenu>

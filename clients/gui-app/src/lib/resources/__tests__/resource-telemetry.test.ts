@@ -175,15 +175,42 @@ describe("createResourceTelemetrySampler", () => {
     const harness = createHarness();
     harness.setHeap({ usedMb: 100, limitMb: 4096 });
     harness.sampleOnce();
-    harness.setNow(HOUR_MS);
-    harness.setHeap({ usedMb: 200, limitMb: 4096 });
+    harness.setNow(RESOURCE_SAMPLE_INTERVAL_MS);
+    harness.setHeap({ usedMb: 400, limitMb: 4096 });
     harness.sampleOnce();
-    harness.setNow(2 * HOUR_MS);
-    harness.setHeap({ usedMb: 300, limitMb: 4096 });
+    harness.setNow(2 * RESOURCE_SAMPLE_INTERVAL_MS);
+    harness.setHeap({ usedMb: 700, limitMb: 4096 });
     harness.sampleOnce();
 
-    expect(harness.sampleEvents[0].heap_slope_mb_per_h).toBeNull();
+    expect(harness.sampleEvents[1].heap_slope_mb_per_h).toBeNull();
+    // 300 MB per 3-hour sample.
     expect(harness.sampleEvents[2].heap_slope_mb_per_h).toBe(100);
+  });
+
+  it("measures the slope over the last four samples only", () => {
+    const harness = createHarness();
+    // A spike at boot, then flat: once the spike rolls out of the window the
+    // slope must stop reporting it.
+    const heaps = [1000, 100, 100, 100, 100];
+    heaps.forEach((usedMb, index) => {
+      harness.setNow(index * RESOURCE_SAMPLE_INTERVAL_MS);
+      harness.setHeap({ usedMb, limitMb: 4096 });
+      harness.sampleOnce();
+    });
+
+    expect(harness.sampleEvents[3].heap_slope_mb_per_h).toBeLessThan(0);
+    expect(harness.sampleEvents[4].heap_slope_mb_per_h).toBe(0);
+  });
+
+  it("reports a sustained tier on every sample at the 3-hour cadence", () => {
+    const harness = createHarness();
+    harness.setHeap({ usedMb: 1600, limitMb: 4096 });
+    for (let index = 0; index < 3; index++) {
+      harness.setNow(index * RESOURCE_SAMPLE_INTERVAL_MS);
+      harness.sampleOnce();
+    }
+
+    expect(harness.pressureEvents).toHaveLength(3);
   });
 
   it("throttles a sustained tier but reports an escalation immediately", () => {
@@ -264,6 +291,38 @@ describe("createResourceTelemetrySampler", () => {
 });
 
 describe("createResourceTelemetrySampler timer schedule", () => {
+  it("samples every 3 hours", () => {
+    expect(RESOURCE_SAMPLE_INTERVAL_MS).toBe(3 * HOUR_MS);
+  });
+
+  it("emits one sample at boot and one per 3 hours after it", () => {
+    vi.useFakeTimers();
+    try {
+      const sample = vi.fn();
+      const sampler = createResourceTelemetrySampler({
+        now: () => Date.now(),
+        startedAtMs: Date.now(),
+        readJsHeap: () => ({ usedMb: 100, limitMb: 4096 }),
+        collectContext: () => ({ openTabs: 0 }),
+        emit: { sample, pressure: () => {} },
+      });
+      const dispose = sampler.start();
+
+      vi.advanceTimersByTime(3 * HOUR_MS - 1);
+      expect(sample).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(sample).toHaveBeenCalledTimes(2);
+
+      // A full day: the boot sample plus eight 3-hour samples.
+      vi.advanceTimersByTime(21 * HOUR_MS);
+      expect(sample).toHaveBeenCalledTimes(9);
+
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("samples once at the first-delay boundary and again each interval", () => {
     vi.useFakeTimers();
     try {

@@ -113,10 +113,11 @@ export function openHostTunnel(
     }
   }
 
-  // Handled one microtask late, in arrival order. A logical stream only turns
-  // `open` AFTER its first frame's handler returns, and drops client frames
-  // until then - so handling `accept` inline would discard exactly the bytes
-  // it releases (everything written while waiting for it).
+  // Handled one microtask late, in arrival order, so no frame is acted on
+  // inside the session's inbound dispatch. A logical stream drops client
+  // frames until it is `open`, and it is open before its first frame's handler
+  // runs - so the bytes `accept` releases (everything written while waiting
+  // for it) are sent.
   const inbox: Array<{
     readonly envelope: StreamFrameEnvelope;
     readonly binaryPayload: Uint8Array | null;

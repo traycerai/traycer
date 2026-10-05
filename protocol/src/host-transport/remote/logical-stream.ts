@@ -250,7 +250,16 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     return this.disposed;
   }
 
-  /** Delivers an inbound application stream frame to the consumer. */
+  /**
+   * Delivers an inbound application stream frame to the consumer.
+   *
+   * A frame is also what OPENS the stream: this transport has no subscribe
+   * ack, so the host's first frame is its answer to the SUBSCRIBE. `open` is
+   * reported BEFORE that frame is handed on, the order the local session
+   * keeps. A consumer starts its cycle on `open` and reads the cycle's answer
+   * from the frame; told `open` afterwards, it resets what the frame had just
+   * established, and an open stream owes nothing further to restore it.
+   */
   deliverServerFrame(
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
@@ -262,8 +271,12 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     if (handler === null) {
       return false;
     }
-    handler(envelope, binaryPayload);
     this.transition("open", null, null);
+    // The status handler runs inside that transition and may close the stream.
+    if (this.isDisposed()) {
+      return false;
+    }
+    handler(envelope, binaryPayload);
     return true;
   }
 

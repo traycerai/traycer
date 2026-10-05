@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { RevertButton } from "@/components/layout-editor/inspector/inspector-row";
@@ -12,6 +12,11 @@ import {
   type SortableRowDecoration,
 } from "@/components/layout-editor/inspector/rows/order-row-items";
 import { useSortableRowPadding } from "@/components/layout-editor/inspector/sortable-row-padding";
+import { RowAvailabilityLine } from "@/components/layout-editor/inspector/rows/row-availability-line";
+import {
+  disabledBy,
+  type LayoutFormContext,
+} from "@/components/layout-editor/regions/row-availability";
 import { toggleHiddenProvider } from "@/components/layout-editor/layout-gestures";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
@@ -41,8 +46,9 @@ import { cn } from "@/lib/utils";
 export function UsageProfilesList(props: {
   readonly arrangement: LayoutArrangement;
   readonly values: LayoutValues;
+  readonly context: LayoutFormContext;
 }): ReactNode {
-  const { arrangement, values } = props;
+  const { arrangement, values, context } = props;
   const usage = useLayoutUsage();
   // The providers whose profiles are folded away; open is the default.
   const [collapsed, setCollapsed] = useState<ReadonlyArray<string>>([]);
@@ -62,6 +68,7 @@ export function UsageProfilesList(props: {
           label={`${shown ? "Hide" : "Show"} ${name}`}
           shown={shown}
           disabled={false}
+          describedBy={null}
           onToggle={() => {
             toggleHiddenProvider(providerId, arrangement, !shown);
           }}
@@ -121,10 +128,15 @@ export function UsageProfilesList(props: {
         values={values}
         arrangement={arrangement}
         decorate={decorate}
+        context={context}
       />
     </div>
   );
 }
+
+/** Why the last profile drawn has no Hide (U5). */
+const LAST_PROFILE_REASON =
+  "One profile stays shown. Hide the provider instead.";
 
 /** One provider's profiles, each with its own eye for the watched host. */
 function ProviderProfileRows(props: {
@@ -135,6 +147,7 @@ function ProviderProfileRows(props: {
   const { providerId, profiles, arrangement } = props;
   const { hostId, profileSelection } = useLayoutUsage();
   const gutter = useSortableRowPadding();
+  const listId = useId();
   const drawn = resolveStatusBarProfileIds(
     profileSelection,
     providerId,
@@ -146,8 +159,9 @@ function ProviderProfileRows(props: {
         const profileId = profileCommitId(profile);
         const shown = drawn.includes(profileId);
         // The last account drawn stays: a provider that draws nothing is what
-        // the provider's own eye is for.
+        // the provider's own eye is for, and the row says so.
         const last = shown && drawn.length <= 1;
+        const reasonId = `${listId}-${profile.profileId}`;
         return (
           <li
             key={profile.profileId}
@@ -159,19 +173,35 @@ function ProviderProfileRows(props: {
             )}
           >
             <span aria-hidden className="w-7 shrink-0" />
-            <AccentDot
-              profileId={profile.profileId}
-              accentColor={profile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span className="min-w-0 flex-1 truncate">{profile.label}</span>
+            {/* Top-aligned as a form row's label block is, so the dot stays on
+              the name's line when the reason wraps under it. */}
+            <div className="flex min-w-0 flex-1 items-start gap-2">
+              <span className="flex h-lh shrink-0 items-center">
+                <AccentDot
+                  profileId={profile.profileId}
+                  accentColor={profile.accentColor}
+                  label={null}
+                  variant="inline"
+                  size="default"
+                  className={undefined}
+                />
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate">{profile.label}</span>
+                {last ? (
+                  <RowAvailabilityLine
+                    id={reasonId}
+                    availability={disabledBy(LAST_PROFILE_REASON, null)}
+                    layoutClassName={null}
+                  />
+                ) : null}
+              </div>
+            </div>
             <EyeButton
               label={`${shown ? "Hide" : "Show"} ${profile.label}`}
               shown={shown}
               disabled={hostId === null || last}
+              describedBy={last ? reasonId : null}
               onToggle={() => {
                 if (hostId === null) return;
                 writeArrangement({
@@ -199,6 +229,8 @@ function EyeButton(props: {
   readonly label: string;
   readonly shown: boolean;
   readonly disabled: boolean;
+  /** The reason a disabled eye gives, or `null`. */
+  readonly describedBy: string | null;
   readonly onToggle: () => void;
 }): ReactNode {
   const { label, shown, disabled, onToggle } = props;
@@ -208,6 +240,7 @@ function EyeButton(props: {
       variant="ghost"
       size="icon-xs"
       aria-label={label}
+      aria-describedby={props.describedBy ?? undefined}
       disabled={disabled}
       onClick={(event) => {
         event.stopPropagation();
