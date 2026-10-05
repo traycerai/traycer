@@ -262,6 +262,9 @@ describe("the sample sidebar's body", () => {
   });
 
   it("shows a resource usage chip on each agent row when agent rows readings are on", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { agentRows: true });
     render(<SampleWorkspaceSidebar />);
 
     const chips = sidebarBody().querySelectorAll(
@@ -270,10 +273,7 @@ describe("the sample sidebar's body", () => {
     expect(chips).toHaveLength(SAMPLE_SIDEBAR_AGENTS.length);
   });
 
-  it("shows no resource usage chip when agent rows readings are off", () => {
-    useLayoutStore
-      .getState()
-      .setRegionValues("resourceMonitor", { agentRows: false });
+  it("shows no resource usage chip when agent rows readings are off (the default)", () => {
     render(<SampleWorkspaceSidebar />);
 
     const chips = sidebarBody().querySelectorAll(

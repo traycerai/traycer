@@ -112,7 +112,7 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
     // `agentRows` is stored in the Resource monitor's bag but is a Sidebar row.
     name: "sidebar: the agent rows' readings, though they live in the Resource monitor's values (T4)",
     surface: "sidebar",
-    snapshot: withOverrides({ resourceMonitor: { agentRows: false } }),
+    snapshot: withOverrides({ resourceMonitor: { agentRows: true } }),
   },
   {
     // `toolbarStyle` is stored in the Model bag but is a Composer area row.
@@ -323,9 +323,9 @@ describe("the Context usage row carries the pinned breakdown's order (C2)", () =
  * revert on that row cannot undo a setting it does not show.
  */
 describe("a value another area's row sets is not its owner's (T4)", () => {
-  const agentRowsOff: LayoutSnapshot = {
+  const agentRowsOn: LayoutSnapshot = {
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    overrides: { resourceMonitor: { agentRows: false } },
+    overrides: { resourceMonitor: { agentRows: true } },
   };
   const toolbarBordered: LayoutSnapshot = {
     ...DEFAULT_LAYOUT_SNAPSHOT,
@@ -333,10 +333,10 @@ describe("a value another area's row sets is not its owner's (T4)", () => {
   };
 
   it("lights neither Resource monitor's row nor Model's row, only the area that draws it", () => {
-    expect(regionRowChanged(agentRowsOff, "resourceMonitor")).toBe(false);
+    expect(regionRowChanged(agentRowsOn, "resourceMonitor")).toBe(false);
     expect(regionRowChanged(toolbarBordered, "model")).toBe(false);
-    expect(surfaceChanged(agentRowsOff, "sidebar")).toBe(true);
-    expect(surfaceChanged(agentRowsOff, "statusBar")).toBe(false);
+    expect(surfaceChanged(agentRowsOn, "sidebar")).toBe(true);
+    expect(surfaceChanged(agentRowsOn, "statusBar")).toBe(false);
     expect(surfaceChanged(toolbarBordered, "composer")).toBe(true);
   });
 
@@ -344,7 +344,7 @@ describe("a value another area's row sets is not its owner's (T4)", () => {
     const snapshot: LayoutSnapshot = {
       ...DEFAULT_LAYOUT_SNAPSHOT,
       overrides: {
-        resourceMonitor: { agentRows: false, cpu: false },
+        resourceMonitor: { agentRows: true, cpu: false },
         model: { toolbarStyle: "bordered", style: "bars" },
       },
     };
@@ -362,7 +362,7 @@ describe("a value another area's row sets is not its owner's (T4)", () => {
     ).model;
 
     expect(monitor.cpu).toBe(true);
-    expect(monitor.agentRows).toBe(false);
+    expect(monitor.agentRows).toBe(true);
     expect(model.style).toBe("text");
     expect(model.toolbarStyle).toBe("bordered");
   });
