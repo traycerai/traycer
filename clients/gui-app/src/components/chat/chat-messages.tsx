@@ -2759,9 +2759,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // fine to scroll by and useless to persist: reindex the transcript before
     // the tab is reopened and that same key names a different row, which
     // `restoreChatTabState` accepts as an exact match and restores to. Saving
-    // no anchor at all is the better answer - restore falls back to the offset
-    // and to its pending-hydration correction, both of which are built for
-    // "the anchor is not resolvable yet".
+    // no anchor lets a reopened tab follow the latest content instead.
     const anchorMessageId =
       resolvedAnchorMessageId !== null &&
       isUnplacedRowKey(resolvedAnchorMessageId)

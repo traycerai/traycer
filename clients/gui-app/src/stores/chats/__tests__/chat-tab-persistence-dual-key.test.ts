@@ -199,6 +199,35 @@ describe("chat-tab-persistence-key", () => {
 });
 
 describe("ticket 15 dual-key scroll cache", () => {
+  it.each([null, 2])(
+    "follows latest when saved free scroll has no anchor (index %s)",
+    (anchorIndex) => {
+      const id = chatIdIdentity("missing-anchor");
+      const messages = makeMessages(3);
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: null,
+        anchorIndex,
+        offset: 48,
+      });
+
+      const expected = {
+        mode: "following-end",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      };
+      expect(
+        restoreChatTabState(
+          id,
+          messages.map((message) => message.id),
+        ),
+      ).toEqual(expected);
+      expect(restoreChatTabState(id, [])).toEqual(expected);
+    },
+  );
+
   it("RESTORE-FIRST: saved following-end and free-scrolling both round-trip (tab-key)", () => {
     const messages = makeMessages(6);
     const id = chatIdIdentity("pane-a");
