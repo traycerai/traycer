@@ -52,6 +52,7 @@ export const profileSyncReasonSchema = lazySchema(() =>
     "keychain-store",
     "keychain-locked",
     "account-changed",
+    "account-mismatch",
     "account-unknown",
     "destination-refused",
     "transfer-failed",
@@ -170,6 +171,28 @@ export const profileSyncCredentialSchema = lazySchema(() =>
 );
 export type ProfileSyncCredential = z.infer<typeof profileSyncCredentialSchema>;
 
+/** Each provider's store holds one kind of sign-in (Antigravity: two). A
+ * request naming one provider and carrying another's sign-in is refused at
+ * the wire, before any host looks for a profile to put it in. */
+export function profileSyncCredentialFitsProvider(
+  providerId: ProfileSyncProvider,
+  credential: ProfileSyncCredential,
+): boolean {
+  switch (providerId) {
+    case "claude":
+      return credential.kind === "claude-oauth";
+    case "codex":
+      return credential.kind === "codex-auth-file";
+    case "grok":
+      return credential.kind === "grok-auth-file";
+    case "antigravity":
+      return (
+        credential.kind === "antigravity-oauth" ||
+        credential.kind === "antigravity-api-key"
+      );
+  }
+}
+
 export const profileSyncProfileSettingsSchema = lazySchema(() =>
   z.strictObject({
     name: z.string().min(1).max(128),
@@ -184,21 +207,27 @@ export type ProfileSyncProfileSettings = z.infer<
 
 /** Source host to destination host: create or update one profile. */
 export const hostProfileSyncApplyRequestSchema = lazySchema(() =>
-  z.strictObject({
-    linkId: linkIdSchema,
-    providerId: profileSyncProviderSchema,
-    sourceProfileId: profileSyncSourceProfileIdSchema,
-    profile: profileSyncProfileSettingsSchema,
-    accountId: accountIdSchema,
-    generation: generationSchema,
-    credential: profileSyncCredentialSchema,
-    /** Set only by the explicit accept-account action. */
-    acceptAccountChange: z.boolean(),
-    /** Set until the source has had this link confirmed once. A destination
-     * that does not know a link creates a profile only for a new one; for any
-     * other the profile was removed there, and it answers so. */
-    newLink: z.boolean(),
-  }),
+  z
+    .strictObject({
+      linkId: linkIdSchema,
+      providerId: profileSyncProviderSchema,
+      sourceProfileId: profileSyncSourceProfileIdSchema,
+      profile: profileSyncProfileSettingsSchema,
+      accountId: accountIdSchema,
+      generation: generationSchema,
+      credential: profileSyncCredentialSchema,
+      /** Set only by the explicit accept-account action. */
+      acceptAccountChange: z.boolean(),
+      /** Set until the source has had this link confirmed once. A destination
+       * that does not know a link creates a profile only for a new one; for
+       * any other the profile was removed there, and it answers so. */
+      newLink: z.boolean(),
+    })
+    .refine(
+      (value) =>
+        profileSyncCredentialFitsProvider(value.providerId, value.credential),
+      { message: "Sign-in does not belong to this provider" },
+    ),
 );
 export type HostProfileSyncApplyRequest = z.infer<
   typeof hostProfileSyncApplyRequestSchema
@@ -217,13 +246,19 @@ export type HostProfileSyncApplyResponse = z.infer<
 
 /** Either linked host to its peer: a higher generation for an existing link. */
 export const hostProfileSyncOfferRequestSchema = lazySchema(() =>
-  z.strictObject({
-    linkId: linkIdSchema,
-    providerId: profileSyncProviderSchema,
-    accountId: accountIdSchema,
-    generation: generationSchema,
-    credential: profileSyncCredentialSchema,
-  }),
+  z
+    .strictObject({
+      linkId: linkIdSchema,
+      providerId: profileSyncProviderSchema,
+      accountId: accountIdSchema,
+      generation: generationSchema,
+      credential: profileSyncCredentialSchema,
+    })
+    .refine(
+      (value) =>
+        profileSyncCredentialFitsProvider(value.providerId, value.credential),
+      { message: "Sign-in does not belong to this provider" },
+    ),
 );
 export type HostProfileSyncOfferRequest = z.infer<
   typeof hostProfileSyncOfferRequestSchema

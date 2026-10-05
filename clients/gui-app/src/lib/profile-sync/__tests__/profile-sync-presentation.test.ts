@@ -10,9 +10,11 @@ import type {
 import {
   groupProfileSyncItems,
   profileSyncDeviceSummary,
+  profileSyncHasRetryableItems,
   profileSyncItemAction,
   profileSyncItemDetail,
   profileSyncItemNeedsUser,
+  profileSyncItemShownByDefault,
   profileSyncReasonSentence,
   profileSyncWireProvider,
   type ProfileSyncNames,
@@ -52,7 +54,8 @@ const REASON_SENTENCES: ReadonlyArray<{
   {
     reason: "keychain-locked",
     provider: "claude",
-    sentence: "The keychain on MacBook is locked",
+    sentence:
+      "A keychain is locked. Unlock it on both devices, then sync again.",
   },
   {
     reason: "account-changed",
@@ -60,23 +63,29 @@ const REASON_SENTENCES: ReadonlyArray<{
     sentence: "MacBook is now signed in to a different account",
   },
   {
-    reason: "account-unknown",
+    reason: "account-mismatch",
     provider: "grok",
+    sentence:
+      "MacBook and Office Linux are signed in to different accounts. Sign in to the same account on both to resume.",
+  },
+  {
+    reason: "account-unknown",
+    provider: "antigravity",
     sentence: "The account isn't identified yet",
   },
   {
     reason: "destination-refused",
-    provider: "antigravity",
+    provider: "claude",
     sentence: "Office Linux refused this profile",
   },
   {
     reason: "transfer-failed",
-    provider: "claude",
-    sentence: "Couldn't reach Office Linux, retrying",
+    provider: "codex",
+    sentence: "Couldn't sync to Office Linux, retrying",
   },
   {
     reason: "removed-on-device",
-    provider: "codex",
+    provider: "grok",
     sentence: "Removed on Office Linux",
   },
 ];
@@ -176,6 +185,7 @@ describe("profileSyncItemAction", () => {
     });
     expect(profileSyncItemAction(row)).toBe("sign-in");
     expect(profileSyncItemNeedsUser(row)).toBe(true);
+    expect(profileSyncItemShownByDefault(row)).toBe(true);
   });
 
   it("offers accept-account for cannot-sync with account-changed", () => {
@@ -188,6 +198,20 @@ describe("profileSyncItemAction", () => {
     });
     expect(profileSyncItemAction(row)).toBe("accept-account");
     expect(profileSyncItemNeedsUser(row)).toBe(true);
+    expect(profileSyncItemShownByDefault(row)).toBe(true);
+  });
+
+  it("offers no action for cannot-sync with account-mismatch, and still lists it by default", () => {
+    const row = item({
+      providerId: "grok",
+      sourceProfileId: "ambient",
+      name: "Work",
+      status: "cannot-sync",
+      reason: "account-mismatch",
+    });
+    expect(profileSyncItemAction(row)).toBeNull();
+    expect(profileSyncItemNeedsUser(row)).toBe(false);
+    expect(profileSyncItemShownByDefault(row)).toBe(true);
   });
 
   it("offers no action for cannot-sync with removed-on-device", () => {
@@ -200,55 +224,65 @@ describe("profileSyncItemAction", () => {
     });
     expect(profileSyncItemAction(row)).toBeNull();
     expect(profileSyncItemNeedsUser(row)).toBe(false);
+    expect(profileSyncItemShownByDefault(row)).toBe(true);
   });
 
   it("offers no action for every other status", () => {
-    const rows: readonly ProfileSyncItem[] = [
-      item({
-        providerId: "claude",
-        sourceProfileId: "ambient",
-        name: "Work",
-        status: "synced",
-        reason: null,
-      }),
-      item({
-        providerId: "claude",
-        sourceProfileId: "ambient",
-        name: "Work",
-        status: "syncing",
-        reason: null,
-      }),
-      item({
-        providerId: "claude",
-        sourceProfileId: "ambient",
-        name: "Work",
-        status: "device-offline",
-        reason: null,
-      }),
-      item({
-        providerId: "claude",
-        sourceProfileId: "ambient",
-        name: "Work",
-        status: "update-needed",
-        reason: null,
-      }),
-      item({
-        providerId: "claude",
-        sourceProfileId: "ambient",
-        name: "Work",
-        status: "cannot-sync",
-        reason: "provider-disabled",
-      }),
-    ];
-    for (const row of rows) {
+    const synced = item({
+      providerId: "claude",
+      sourceProfileId: "ambient",
+      name: "Work",
+      status: "synced",
+      reason: null,
+    });
+    const syncing = item({
+      providerId: "claude",
+      sourceProfileId: "ambient",
+      name: "Work",
+      status: "syncing",
+      reason: null,
+    });
+    const deviceOffline = item({
+      providerId: "claude",
+      sourceProfileId: "ambient",
+      name: "Work",
+      status: "device-offline",
+      reason: null,
+    });
+    const updateNeeded = item({
+      providerId: "claude",
+      sourceProfileId: "ambient",
+      name: "Work",
+      status: "update-needed",
+      reason: null,
+    });
+    const cannotSync = item({
+      providerId: "claude",
+      sourceProfileId: "ambient",
+      name: "Work",
+      status: "cannot-sync",
+      reason: "provider-disabled",
+    });
+    for (const row of [
+      synced,
+      syncing,
+      deviceOffline,
+      updateNeeded,
+      cannotSync,
+    ]) {
       expect(profileSyncItemAction(row)).toBeNull();
       expect(profileSyncItemNeedsUser(row)).toBe(false);
     }
+    expect(profileSyncItemShownByDefault(synced)).toBe(false);
+    expect(profileSyncItemShownByDefault(syncing)).toBe(false);
+    expect(profileSyncItemShownByDefault(deviceOffline)).toBe(false);
+    expect(profileSyncItemShownByDefault(updateNeeded)).toBe(true);
+    expect(profileSyncItemShownByDefault(cannotSync)).toBe(true);
   });
 });
 
 describe("groupProfileSyncItems", () => {
-  it("keeps needs-you rows in host order and sorts the rest problems → syncing → synced", () => {
+  it("lists action rows first in host order, then other cannot-sync, then update-needed; rest is offline → syncing → synced", () => {
     const signInFirst = item({
       providerId: "claude",
       sourceProfileId: "11111111-1111-4111-8111-111111111111",
@@ -263,19 +297,26 @@ describe("groupProfileSyncItems", () => {
       status: "synced",
       reason: null,
     });
-    const accountChanged = item({
-      providerId: "grok",
-      sourceProfileId: "33333333-3333-4333-8333-333333333333",
-      name: "Account changed",
-      status: "cannot-sync",
-      reason: "account-changed",
-    });
     const removed = item({
       providerId: "antigravity",
       sourceProfileId: "44444444-4444-4444-8444-444444444444",
       name: "Removed",
       status: "cannot-sync",
       reason: "removed-on-device",
+    });
+    const accountMismatch = item({
+      providerId: "claude",
+      sourceProfileId: "99999999-9999-4999-8999-999999999999",
+      name: "Mismatch",
+      status: "cannot-sync",
+      reason: "account-mismatch",
+    });
+    const accountChanged = item({
+      providerId: "grok",
+      sourceProfileId: "33333333-3333-4333-8333-333333333333",
+      name: "Account changed",
+      status: "cannot-sync",
+      reason: "account-changed",
     });
     const updateNeeded = item({
       providerId: "claude",
@@ -310,6 +351,7 @@ describe("groupProfileSyncItems", () => {
       synced,
       signInFirst,
       removed,
+      accountMismatch,
       accountChanged,
       updateNeeded,
       signInSecond,
@@ -317,18 +359,85 @@ describe("groupProfileSyncItems", () => {
       offline,
     ]);
 
-    expect(grouped.needsUser).toEqual([
+    expect(grouped.shown).toEqual([
       signInFirst,
       accountChanged,
       signInSecond,
-    ]);
-    expect(grouped.rest).toEqual([
       removed,
+      accountMismatch,
       updateNeeded,
-      offline,
-      syncing,
-      synced,
     ]);
+    expect(grouped.rest).toEqual([offline, syncing, synced]);
+  });
+});
+
+describe("profileSyncHasRetryableItems", () => {
+  it("is false for an empty list", () => {
+    expect(profileSyncHasRetryableItems([])).toBe(false);
+  });
+
+  it("is false when the only cannot-sync row is account-changed", () => {
+    expect(
+      profileSyncHasRetryableItems([
+        item({
+          providerId: "codex",
+          sourceProfileId: "ambient",
+          name: "Work",
+          status: "cannot-sync",
+          reason: "account-changed",
+        }),
+        item({
+          providerId: "claude",
+          sourceProfileId: "11111111-1111-4111-8111-111111111111",
+          name: "Synced",
+          status: "synced",
+          reason: null,
+        }),
+        item({
+          providerId: "grok",
+          sourceProfileId: "22222222-2222-4222-8222-222222222222",
+          name: "Sign in",
+          status: "sign-in-needed",
+          reason: null,
+        }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("is true for cannot-sync with a reason other than account-changed, including a null reason", () => {
+    expect(
+      profileSyncHasRetryableItems([
+        item({
+          providerId: "claude",
+          sourceProfileId: "ambient",
+          name: "Missing",
+          status: "cannot-sync",
+          reason: "provider-not-installed",
+        }),
+      ]),
+    ).toBe(true);
+    expect(
+      profileSyncHasRetryableItems([
+        item({
+          providerId: "grok",
+          sourceProfileId: "ambient",
+          name: "Mismatch",
+          status: "cannot-sync",
+          reason: "account-mismatch",
+        }),
+      ]),
+    ).toBe(true);
+    expect(
+      profileSyncHasRetryableItems([
+        item({
+          providerId: "codex",
+          sourceProfileId: "ambient",
+          name: "Unknown",
+          status: "cannot-sync",
+          reason: null,
+        }),
+      ]),
+    ).toBe(true);
   });
 });
 
@@ -339,6 +448,7 @@ describe("profileSyncDeviceSummary", () => {
         profileSyncDeviceSummary({
           device: null,
           reach: "reachable",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 3,
         }),
@@ -374,6 +484,7 @@ describe("profileSyncDeviceSummary", () => {
             }),
           ]),
           reach: "reachable",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 3,
         }),
@@ -412,10 +523,11 @@ describe("profileSyncDeviceSummary", () => {
               sourceProfileId: "33333333-3333-4333-8333-333333333333",
               name: "D",
               status: "cannot-sync",
-              reason: "provider-disabled",
+              reason: "account-mismatch",
             }),
           ]),
           reach: "reachable",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 4,
         }),
@@ -423,7 +535,76 @@ describe("profileSyncDeviceSummary", () => {
     ).toBe("2 need you · 2 can't sync");
   });
 
-  it("leads with Device offline when the directory says the machine is offline", () => {
+  it("uses the long offline copy when Keep in sync is on", () => {
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: null,
+          reach: "offline",
+          keepInSync: true,
+          deviceName: "Office Linux",
+          profileCount: 0,
+        }),
+      ),
+    ).toBe("Device offline · syncs when it connects");
+  });
+
+  it("uses the long offline copy when a row is already waiting or syncing", () => {
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: device([
+            item({
+              providerId: "claude",
+              sourceProfileId: "ambient",
+              name: "A",
+              status: "device-offline",
+              reason: null,
+            }),
+          ]),
+          reach: "offline",
+          keepInSync: false,
+          deviceName: "Office Linux",
+          profileCount: 1,
+        }),
+      ),
+    ).toBe("Device offline · syncs when it connects");
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: device([
+            item({
+              providerId: "codex",
+              sourceProfileId: "ambient",
+              name: "B",
+              status: "syncing",
+              reason: null,
+            }),
+          ]),
+          reach: "offline",
+          keepInSync: false,
+          deviceName: "Office Linux",
+          profileCount: 1,
+        }),
+      ),
+    ).toBe("Device offline · syncs when it connects");
+  });
+
+  it("uses the short offline copy for a never-synced device with Keep in sync off", () => {
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: null,
+          reach: "offline",
+          keepInSync: false,
+          deviceName: "Office Linux",
+          profileCount: 2,
+        }),
+      ),
+    ).toBe("Device offline");
+  });
+
+  it("uses the short offline copy when every row is synced and Keep in sync is off", () => {
     expect(
       summaryText(
         profileSyncDeviceSummary({
@@ -437,14 +618,15 @@ describe("profileSyncDeviceSummary", () => {
             }),
           ]),
           reach: "offline",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 1,
         }),
       ),
-    ).toBe("Device offline · syncs when it connects");
+    ).toBe("Device offline");
   });
 
-  it("leads with Device offline when every item is device-offline", () => {
+  it("uses the long offline copy when every item is device-offline, even if reach is reachable", () => {
     expect(
       summaryText(
         profileSyncDeviceSummary({
@@ -465,6 +647,7 @@ describe("profileSyncDeviceSummary", () => {
             }),
           ]),
           reach: "reachable",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 2,
         }),
@@ -478,6 +661,7 @@ describe("profileSyncDeviceSummary", () => {
         profileSyncDeviceSummary({
           device: null,
           reach: "update-required",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 2,
         }),
@@ -491,6 +675,7 @@ describe("profileSyncDeviceSummary", () => {
         profileSyncDeviceSummary({
           device: device([]),
           reach: "reachable",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 0,
         }),
@@ -504,6 +689,7 @@ describe("profileSyncDeviceSummary", () => {
         profileSyncDeviceSummary({
           device: device([]),
           reach: "reachable",
+          keepInSync: false,
           deviceName: "Office Linux",
           profileCount: 3,
         }),

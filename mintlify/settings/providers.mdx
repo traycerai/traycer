@@ -106,19 +106,20 @@ To pick a profile for the next turn, use the profile dropdown in the composer's 
 
 ### Sync Profiles Across Devices
 
-Use **Sync profiles…** on **Profiles & Limits** to send profiles from the host selected in Settings to other devices on your account. The dialog keeps that source host fixed while it is open.
+Use **Sync profiles…** on **Profiles & Limits** to copy the profiles on the host selected in Settings to your other devices. Sync covers Claude Code, Codex, Grok, and Antigravity profiles. It copies the sign-in itself, so a synced profile is ready to use on the other device without signing in again.
 
-1. On **Sync now**, choose the providers and destination devices.
-2. Review the profile preview for each destination. Availability depends on the provider and destination; a profile may need sign-in or other attention.
-3. Click **Sync now**, then review the results for each profile. Follow any sign-in or confirmation steps shown there.
+The dialog lists your other devices. For each one:
 
-Closing the dialog does not cancel the run. Reopen **Sync profiles…** and select a **Recent runs** entry to check it. If a result is waiting for confirmation, use **Check status** before starting another transfer.
+- **Sync now** copies every supported profile to that device once.
+- **Keep in sync** also sends profiles you add later, and name and color changes, as they happen. Turning it off keeps the profiles already on the device. An offline device catches up when it connects.
 
-**Automatic sync** keeps profiles in sync in one direction, from this source host to a destination. Click **Add device**, choose the destination and providers, then **Enable automatic sync**. The rule includes future profiles for the selected providers; **All supported providers, including future providers** also includes providers added later. Offline devices wait until both devices are connected.
+Closing the dialog doesn't stop a sync. A Terminal account arrives as a regular profile, and the other device's own Terminal account is never changed. Once a profile is synced, a sign-in that refreshes on one device is passed to the other, so neither is signed out.
 
-Use **Edit**, **Pause**, **Resume**, or **Stop…** to manage a rule. Pausing or stopping keeps profiles already on the destination. Removing a profile from the source also leaves its destination copy intact.
+Under each device, every profile has one status: **Synced**, **Syncing**, **Sign in needed**, **Device offline**, **Update needed**, or **Can't sync** with the reason. Profiles that need attention are listed first, and **Show all** lists the rest. After you fix a **Can't sync** reason, click **Sync now** to try again.
 
-If a destination profile's settings were edited, its result shows **Destination edited**. Review the source and destination values, then choose **Keep destination & pause** or **Use source settings**. Other profiles can continue syncing while that conflict waits for your decision. If the source account has changed, **Use source settings** is unavailable. Follow the notice to sign in to the original account or create a new profile for the new account.
+- **Sign in needed**: the profile is signed out on the device you are syncing from. The button on that row opens its sign-in there.
+- **Is now signed in to a different account**: you switched the account on the device the profile was synced from. The other device keeps the old account until you click **Sync the new account**.
+- **Are signed in to different accounts**: the account was switched on the device that received the profile. Sync never replaces either account. Sign in to the same account on both devices to resume.
 
 ## Signing In Again
 

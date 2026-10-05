@@ -33,6 +33,7 @@ import {
   groupProfileSyncItems,
   profileSyncDeviceSummary,
   profileSyncGuiProvider,
+  profileSyncHasRetryableItems,
   profileSyncItemAction,
   profileSyncItemDetail,
   profileSyncItemKey,
@@ -136,7 +137,7 @@ function overviewErrorText(error: HostRpcError, sourceName: string): string {
 
 /**
  * The Sync profiles dialog's one screen: a row per other device, the profiles
- * that need the user under it, and Done.
+ * that need attention under it, and Done.
  *
  * It never locks. Nothing here gates closing on a request, and a request in
  * flight is shown only on the control that sent it - the work is the source
@@ -266,14 +267,16 @@ function ProfileSyncDeviceCard(props: {
   const summary = profileSyncDeviceSummary({
     device: row.device,
     reach: row.reach,
+    keepInSync,
     deviceName: row.name,
     profileCount: props.profileCount,
   });
   const items = row.device?.items ?? [];
   const groups = groupProfileSyncItems(items);
-  const shown = showAll
-    ? [...groups.needsUser, ...groups.rest]
-    : groups.needsUser;
+  const shown = showAll ? [...groups.shown, ...groups.rest] : groups.shown;
+  // A followed device syncs by itself, so the button is there only for what
+  // an explicit sync retries.
+  const syncNowOffered = !keepInSync || profileSyncHasRetryableItems(items);
   return (
     <section
       aria-label={row.name}
@@ -293,7 +296,7 @@ function ProfileSyncDeviceCard(props: {
             ))}
           </p>
         </div>
-        {keepInSync ? null : (
+        {syncNowOffered ? (
           <Button
             type="button"
             size="sm"
@@ -309,7 +312,7 @@ function ProfileSyncDeviceCard(props: {
             ) : null}
             Sync now
           </Button>
-        )}
+        ) : null}
         <label className="flex items-center gap-2 text-ui-xs text-muted-foreground">
           {keepInSyncPending ? <MutedAgentSpinner /> : null}
           Keep in sync

@@ -1125,10 +1125,20 @@ function ProviderDetail({
     state,
     isSelectedHostLocal,
   );
+  // A focus intent names a profile by its wire `profileId`, while the selection
+  // holds its commit id - `null` for the Terminal account, whose wire id is
+  // the "ambient" sentinel. Comparing the two raw values made a sign-in link
+  // to the Terminal account select the row and then never open its sign-in.
+  const focusedProfile =
+    initialProfileId === null
+      ? null
+      : (state.profiles.find(
+          (profile) => profile.profileId === initialProfileId,
+        ) ?? null);
   const shouldStartInReauth =
     initialSignIn &&
-    initialProfileId !== null &&
-    selectedProfileId === initialProfileId &&
+    focusedProfile !== null &&
+    selectedProfileId === profileCommitId(focusedProfile) &&
     canAddProfile;
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,

@@ -29,6 +29,7 @@ const SOURCE_HOST_ID = "host-source";
 const OFFICE_HOST_ID = "host-office";
 const PHONE_HOST_ID = "host-phone";
 const OFFLINE_HOST_ID = "host-offline";
+const CABIN_HOST_ID = "host-cabin";
 const REMOVED_HOST_ID = "host-removed";
 const UNKNOWN_HOST_ID = "host-unknown";
 const OTHER_SOURCE_HOST_ID = "host-other-source";
@@ -36,6 +37,8 @@ const SIGN_IN_PROFILE_ID = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT_PROFILE_ID = "22222222-2222-4222-8222-222222222222";
 const SYNCED_PROFILE_ID = "33333333-3333-4333-8333-333333333333";
 const REMOVED_PROFILE_ID = "44444444-4444-4444-8444-444444444444";
+const MISMATCH_PROFILE_ID = "55555555-5555-4555-8555-555555555555";
+const MISSING_PROFILE_ID = "66666666-6666-4666-8666-666666666666";
 
 const testState = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
@@ -126,10 +129,10 @@ function phoneHost(): HostScopeOption {
   });
 }
 
-function offlineHost(): HostScopeOption {
+function offlineHost(hostId: string, name: string): HostScopeOption {
   return hostScopeOptionFixture({
-    hostId: OFFLINE_HOST_ID,
-    name: "Travel laptop",
+    hostId,
+    name,
     health: {
       state: "offline",
       label: "Offline",
@@ -192,6 +195,14 @@ function collapsedText(element: Element): string {
   return element.textContent.replace(/\s+/g, " ").trim();
 }
 
+function nthListItem(container: HTMLElement, index: number): HTMLElement {
+  const rows = within(container).getAllByRole("listitem");
+  if (index >= rows.length) {
+    throw new Error(`expected listitem ${String(index)}`);
+  }
+  return rows[index];
+}
+
 function emptyOfficeOverview(): ProfileSyncOverview {
   return overview({
     sourceHostId: SOURCE_HOST_ID,
@@ -217,21 +228,25 @@ const NEEDS_USER_ITEMS: readonly ProfileSyncItem[] = [
   }),
 ];
 
+const CANNOT_SYNC_NO_ACTION: ProfileSyncItem = item({
+  providerId: "antigravity",
+  sourceProfileId: REMOVED_PROFILE_ID,
+  name: "Taken off",
+  status: "cannot-sync",
+  reason: "removed-on-device",
+});
+
+const SYNCED_ITEM: ProfileSyncItem = item({
+  providerId: "grok",
+  sourceProfileId: SYNCED_PROFILE_ID,
+  name: "Already there",
+  status: "synced",
+  reason: null,
+});
+
 const REST_ITEMS: readonly ProfileSyncItem[] = [
-  item({
-    providerId: "grok",
-    sourceProfileId: SYNCED_PROFILE_ID,
-    name: "Already there",
-    status: "synced",
-    reason: null,
-  }),
-  item({
-    providerId: "antigravity",
-    sourceProfileId: REMOVED_PROFILE_ID,
-    name: "Taken off",
-    status: "cannot-sync",
-    reason: "removed-on-device",
-  }),
+  SYNCED_ITEM,
+  CANNOT_SYNC_NO_ACTION,
 ];
 
 function officeWithItems(): ProfileSyncOverview {
@@ -299,7 +314,7 @@ describe("<ProfileSyncModalHost />", () => {
     expect(keep.disabled).toBe(false);
   });
 
-  it("shows need-you rows first without expanding, each with one action, and the rest after Show all N", async () => {
+  it("shows action and other cannot-sync rows without expanding, and the rest after Show all N", async () => {
     answerOverview(officeWithItems());
     renderHost(makeQueryClient());
     await openDialog();
@@ -310,24 +325,27 @@ describe("<ProfileSyncModalHost />", () => {
     if (summary === null) throw new Error("expected a device summary");
     expect(collapsedText(summary)).toBe("1 synced · 2 need you · 1 can't sync");
 
-    const rows = within(office).getAllByRole("listitem");
-    expect(rows).toHaveLength(2);
-    expect(collapsedText(rows[0])).toContain("Claude Code · Needs sign-in");
-    expect(within(rows[0]).getAllByRole("button")).toHaveLength(1);
+    expect(within(office).getAllByRole("listitem")).toHaveLength(3);
+    const signInRow = nthListItem(office, 0);
+    expect(collapsedText(signInRow)).toContain("Claude Code · Needs sign-in");
+    expect(within(signInRow).getAllByRole("button")).toHaveLength(1);
     expect(
-      within(rows[0]).getByRole<HTMLButtonElement>("button", {
+      within(signInRow).getByRole<HTMLButtonElement>("button", {
         name: "Sign in on MacBook",
       }),
     ).toBeTruthy();
-    expect(collapsedText(rows[1])).toContain("Codex · New account");
-    expect(within(rows[1]).getAllByRole("button")).toHaveLength(1);
+    const accountRow = nthListItem(office, 1);
+    expect(collapsedText(accountRow)).toContain("Codex · New account");
+    expect(within(accountRow).getAllByRole("button")).toHaveLength(1);
     expect(
-      within(rows[1]).getByRole<HTMLButtonElement>("button", {
+      within(accountRow).getByRole<HTMLButtonElement>("button", {
         name: "Sync the new account",
       }),
     ).toBeTruthy();
+    const removedRow = nthListItem(office, 2);
+    expect(collapsedText(removedRow)).toContain("Antigravity · Taken off");
+    expect(within(removedRow).queryByRole("button")).toBeNull();
     expect(collapsedText(office)).not.toContain("Grok · Already there");
-    expect(collapsedText(office)).not.toContain("Antigravity · Taken off");
 
     const showAll = within(office).getByRole<HTMLButtonElement>("button", {
       name: "Show all 4",
@@ -342,19 +360,18 @@ describe("<ProfileSyncModalHost />", () => {
     ).toBe("true");
     expect(within(office).getAllByRole("listitem")).toHaveLength(4);
     expect(collapsedText(office)).toContain("Grok · Already there");
-    expect(collapsedText(office)).toContain("Antigravity · Taken off");
   });
 
   it("has no Show all button when nothing is hidden", async () => {
     answerOverview(
       overview({
         sourceHostId: SOURCE_HOST_ID,
-        profileCount: 2,
+        profileCount: 3,
         devices: [
           {
             hostId: OFFICE_HOST_ID,
             keepInSync: false,
-            items: [...NEEDS_USER_ITEMS],
+            items: [...NEEDS_USER_ITEMS, CANNOT_SYNC_NO_ACTION],
           },
         ],
       }),
@@ -363,13 +380,13 @@ describe("<ProfileSyncModalHost />", () => {
     await openDialog();
 
     const office = await screen.findByRole("region", { name: "Office Linux" });
-    expect(within(office).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(office).getAllByRole("listitem")).toHaveLength(3);
     expect(
       within(office).queryByRole("button", { name: /Show all/ }),
     ).toBeNull();
   });
 
-  it("renders Sync now only when the device is not kept in sync, and clicking it sends syncNow", async () => {
+  it("renders Sync now when Keep in sync is off, and not for a kept-in-sync device with nothing to retry", async () => {
     testState.hosts = [sourceHost(), officeHost(), phoneHost()];
     answerOverview(
       overview({
@@ -667,7 +684,7 @@ describe("<ProfileSyncModalHost />", () => {
     testState.hosts = [
       sourceHost(),
       officeHost(),
-      offlineHost(),
+      offlineHost(OFFLINE_HOST_ID, "Travel laptop"),
       removedHost(),
     ];
     answerOverview(
@@ -692,12 +709,198 @@ describe("<ProfileSyncModalHost />", () => {
     await openDialog();
 
     const travel = await screen.findByRole("region", { name: "Travel laptop" });
+    expect(within(travel).getByText("Device offline")).toBeTruthy();
     expect(
-      within(travel).getByText("Device offline · syncs when it connects"),
-    ).toBeTruthy();
+      within(travel).queryByText("Device offline · syncs when it connects"),
+    ).toBeNull();
     expect(screen.queryByRole("region", { name: "Old desktop" })).toBeNull();
     expect(screen.queryByRole("region", { name: "MacBook" })).toBeNull();
     expect(screen.getByRole("region", { name: "Unknown device" })).toBeTruthy();
+  });
+
+  it("lists a cannot-sync row without an action before expanding, with no button", async () => {
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 2,
+        devices: [
+          {
+            hostId: OFFICE_HOST_ID,
+            keepInSync: false,
+            items: [CANNOT_SYNC_NO_ACTION, SYNCED_ITEM],
+          },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+
+    const office = await screen.findByRole("region", { name: "Office Linux" });
+    expect(within(office).getAllByRole("listitem")).toHaveLength(1);
+    const row = nthListItem(office, 0);
+    expect(collapsedText(row)).toContain("Antigravity · Taken off");
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(collapsedText(office)).not.toContain("Grok · Already there");
+  });
+
+  it("shows an account-mismatch row's sentence and no button", async () => {
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 1,
+        devices: [
+          {
+            hostId: OFFICE_HOST_ID,
+            keepInSync: false,
+            items: [
+              item({
+                providerId: "grok",
+                sourceProfileId: MISMATCH_PROFILE_ID,
+                name: "Mismatch",
+                status: "cannot-sync",
+                reason: "account-mismatch",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+
+    const office = await screen.findByRole("region", { name: "Office Linux" });
+    expect(within(office).getAllByRole("listitem")).toHaveLength(1);
+    const row = nthListItem(office, 0);
+    expect(collapsedText(row)).toContain("Grok · Mismatch");
+    expect(collapsedText(row)).toContain(
+      "MacBook and Office Linux are signed in to different accounts. Sign in to the same account on both to resume.",
+    );
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("shows Sync now on a kept-in-sync device with a retryable can't-sync row, and clicking it sends syncNow", async () => {
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 1,
+        devices: [
+          {
+            hostId: OFFICE_HOST_ID,
+            keepInSync: true,
+            items: [
+              item({
+                providerId: "claude",
+                sourceProfileId: MISSING_PROFILE_ID,
+                name: "Missing CLI",
+                status: "cannot-sync",
+                reason: "provider-not-installed",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+    const user = userEvent.setup();
+
+    const office = await screen.findByRole("region", { name: "Office Linux" });
+    const keep = within(office).getByRole<HTMLButtonElement>("switch", {
+      name: "Keep Office Linux in sync",
+    });
+    expect(keep.getAttribute("aria-checked")).toBe("true");
+    await user.click(
+      within(office).getByRole<HTMLButtonElement>("button", {
+        name: "Sync now",
+      }),
+    );
+    await waitFor(() => {
+      expect(testState.request).toHaveBeenCalledWith(
+        "providers.profileSync.syncNow",
+        {
+          sourceHostId: SOURCE_HOST_ID,
+          destinationHostId: OFFICE_HOST_ID,
+        },
+      );
+    });
+  });
+
+  it("hides Sync now on a kept-in-sync device whose only problem row is account-changed", async () => {
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 2,
+        devices: [
+          {
+            hostId: OFFICE_HOST_ID,
+            keepInSync: true,
+            items: [
+              item({
+                providerId: "codex",
+                sourceProfileId: ACCOUNT_PROFILE_ID,
+                name: "New account",
+                status: "cannot-sync",
+                reason: "account-changed",
+              }),
+              SYNCED_ITEM,
+            ],
+          },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+
+    const office = await screen.findByRole("region", { name: "Office Linux" });
+    expect(
+      within(office)
+        .getByRole<HTMLButtonElement>("switch", {
+          name: "Keep Office Linux in sync",
+        })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      within(office).queryByRole("button", { name: "Sync now" }),
+    ).toBeNull();
+    expect(
+      within(office).getByRole<HTMLButtonElement>("button", {
+        name: "Sync the new account",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("reads Device offline for an offline never-synced device, and the long copy when Keep in sync is on", async () => {
+    testState.hosts = [
+      sourceHost(),
+      offlineHost(OFFLINE_HOST_ID, "Travel laptop"),
+      offlineHost(CABIN_HOST_ID, "Cabin"),
+    ];
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 1,
+        devices: [
+          {
+            hostId: CABIN_HOST_ID,
+            keepInSync: true,
+            items: [],
+          },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+
+    const travel = await screen.findByRole("region", { name: "Travel laptop" });
+    expect(within(travel).getByText("Device offline")).toBeTruthy();
+    expect(
+      within(travel).queryByText("Device offline · syncs when it connects"),
+    ).toBeNull();
+
+    const cabin = screen.getByRole("region", { name: "Cabin" });
+    expect(
+      within(cabin).getByText("Device offline · syncs when it connects"),
+    ).toBeTruthy();
   });
 
   it("shows the retry sentence when the overview errors with no data", async () => {
