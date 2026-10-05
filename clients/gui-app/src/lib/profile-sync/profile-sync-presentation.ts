@@ -162,17 +162,18 @@ export function profileSyncItemNeedsUser(item: ProfileSyncItem): boolean {
 }
 
 /**
- * A row is listed without expanding when the user can do something about it:
- * every "Can't sync", "Sign in needed" and "Update needed" row, whether or
- * not it carries a button. The device line counts these, so a count the list
- * does not show would send the user looking for rows that are hidden.
+ * A row is listed without expanding when the user can do something about that
+ * profile: every "Can't sync" and "Sign in needed" row, whether or not it
+ * carries a button. The device line counts these, so a count the list does
+ * not show would send the user looking for rows that are hidden.
+ *
+ * "Update needed" stays behind "Show all". It is a fact about the DEVICE, not
+ * the profile: a device on an old build reports it for every profile at once,
+ * and thirteen rows repeating one sentence push the other devices off the
+ * screen. The device line says it once.
  */
 export function profileSyncItemShownByDefault(item: ProfileSyncItem): boolean {
-  return (
-    item.status === "cannot-sync" ||
-    item.status === "sign-in-needed" ||
-    item.status === "update-needed"
-  );
+  return item.status === "cannot-sync" || item.status === "sign-in-needed";
 }
 
 /** Rows with an action lead; the hidden rest ends with what is simply done. */
@@ -198,9 +199,9 @@ function byItemOrder(left: ProfileSyncItem, right: ProfileSyncItem): number {
 }
 
 export interface ProfileSyncItemGroups {
-  /** Always listed: rows with an action first, then the other problems. */
+  /** Always listed: rows with an action first, then the other "Can't sync". */
   readonly shown: readonly ProfileSyncItem[];
-  /** Behind "Show all": waiting and syncing rows, synced last. */
+  /** Behind "Show all": update-needed, waiting and syncing rows, synced last. */
   readonly rest: readonly ProfileSyncItem[];
 }
 
@@ -275,6 +276,12 @@ function deviceOfflineSummary(
   ];
 }
 
+function updateRequiredSummary(
+  deviceName: string,
+): readonly ProfileSyncSummaryPart[] {
+  return [{ text: `Update Traycer on ${deviceName}`, tone: "warning" }];
+}
+
 /** A device's one-line summary, as the parts a " · " joins. */
 export function profileSyncDeviceSummary(input: {
   /** `null` for a device the user has never synced to. */
@@ -295,7 +302,7 @@ export function profileSyncDeviceSummary(input: {
     return deviceOfflineSummary(input.keepInSync || waiting);
   }
   if (reach === "update-required") {
-    return [{ text: `Update Traycer on ${input.deviceName}`, tone: "warning" }];
+    return updateRequiredSummary(input.deviceName);
   }
   if (device === null) return [{ text: "Not synced yet", tone: "muted" }];
   const items = device.items;
@@ -312,6 +319,10 @@ export function profileSyncDeviceSummary(input: {
   // The source could reach none of it, and every row is waiting for it.
   if (count("device-offline") === items.length) {
     return deviceOfflineSummary(true);
+  }
+  // The device is on an old build: one line, the one the directory gives.
+  if (count("update-needed") === items.length) {
+    return updateRequiredSummary(input.deviceName);
   }
   const needsUser = items.filter(profileSyncItemNeedsUser).length;
   const cannotSync = items.filter(

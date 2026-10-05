@@ -39,6 +39,8 @@ const SYNCED_PROFILE_ID = "33333333-3333-4333-8333-333333333333";
 const REMOVED_PROFILE_ID = "44444444-4444-4444-8444-444444444444";
 const MISMATCH_PROFILE_ID = "55555555-5555-4555-8555-555555555555";
 const MISSING_PROFILE_ID = "66666666-6666-4666-8666-666666666666";
+const UPDATE_PROFILE_A_ID = "77777777-7777-4777-8777-777777777777";
+const UPDATE_PROFILE_B_ID = "88888888-8888-4888-8888-888888888888";
 
 const testState = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
@@ -384,6 +386,61 @@ describe("<ProfileSyncModalHost />", () => {
     expect(
       within(office).queryByRole("button", { name: /Show all/ }),
     ).toBeNull();
+  });
+
+  it("reads Update Traycer on the device when every row is update-needed, and lists those rows only after Show all", async () => {
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 2,
+        devices: [
+          {
+            hostId: OFFICE_HOST_ID,
+            keepInSync: false,
+            items: [
+              item({
+                providerId: "claude",
+                sourceProfileId: UPDATE_PROFILE_A_ID,
+                name: "Work",
+                status: "update-needed",
+                reason: null,
+              }),
+              item({
+                providerId: "codex",
+                sourceProfileId: UPDATE_PROFILE_B_ID,
+                name: "Personal",
+                status: "update-needed",
+                reason: null,
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+    const user = userEvent.setup();
+
+    const office = await screen.findByRole("region", { name: "Office Linux" });
+    expect(
+      within(office).getByText("Update Traycer on Office Linux"),
+    ).toBeTruthy();
+    expect(within(office).queryByRole("listitem")).toBeNull();
+
+    const showAll = within(office).getByRole<HTMLButtonElement>("button", {
+      name: "Show all 2",
+    });
+    expect(showAll.getAttribute("aria-expanded")).toBe("false");
+    await user.click(showAll);
+
+    const rows = within(office).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(collapsedText(nthListItem(office, 0))).toContain("Update needed");
+    expect(collapsedText(nthListItem(office, 1))).toContain("Update needed");
+    expect(collapsedText(nthListItem(office, 0))).toContain(
+      "Claude Code · Work",
+    );
+    expect(collapsedText(nthListItem(office, 1))).toContain("Codex · Personal");
   });
 
   it("renders Sync now when Keep in sync is off, and not for a kept-in-sync device with nothing to retry", async () => {

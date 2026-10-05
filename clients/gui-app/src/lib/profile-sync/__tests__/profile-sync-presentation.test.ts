@@ -276,13 +276,13 @@ describe("profileSyncItemAction", () => {
     expect(profileSyncItemShownByDefault(synced)).toBe(false);
     expect(profileSyncItemShownByDefault(syncing)).toBe(false);
     expect(profileSyncItemShownByDefault(deviceOffline)).toBe(false);
-    expect(profileSyncItemShownByDefault(updateNeeded)).toBe(true);
+    expect(profileSyncItemShownByDefault(updateNeeded)).toBe(false);
     expect(profileSyncItemShownByDefault(cannotSync)).toBe(true);
   });
 });
 
 describe("groupProfileSyncItems", () => {
-  it("lists action rows first in host order, then other cannot-sync, then update-needed; rest is offline → syncing → synced", () => {
+  it("lists action rows first in host order, then other cannot-sync; rest is update-needed, then offline → syncing → synced", () => {
     const signInFirst = item({
       providerId: "claude",
       sourceProfileId: "11111111-1111-4111-8111-111111111111",
@@ -365,9 +365,8 @@ describe("groupProfileSyncItems", () => {
       signInSecond,
       removed,
       accountMismatch,
-      updateNeeded,
     ]);
-    expect(grouped.rest).toEqual([offline, syncing, synced]);
+    expect(grouped.rest).toEqual([updateNeeded, offline, syncing, synced]);
   });
 });
 
@@ -653,6 +652,97 @@ describe("profileSyncDeviceSummary", () => {
         }),
       ),
     ).toBe("Device offline · syncs when it connects");
+  });
+
+  it("uses the Update Traycer line when every row is update-needed", () => {
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: device([
+            item({
+              providerId: "claude",
+              sourceProfileId: "ambient",
+              name: "A",
+              status: "update-needed",
+              reason: null,
+            }),
+            item({
+              providerId: "codex",
+              sourceProfileId: "11111111-1111-4111-8111-111111111111",
+              name: "B",
+              status: "update-needed",
+              reason: null,
+            }),
+          ]),
+          reach: "reachable",
+          keepInSync: false,
+          deviceName: "Office Linux",
+          profileCount: 2,
+        }),
+      ),
+    ).toBe("Update Traycer on Office Linux");
+  });
+
+  it("still counts mixed update-needed rows as needs an update", () => {
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: device([
+            item({
+              providerId: "claude",
+              sourceProfileId: "ambient",
+              name: "A",
+              status: "synced",
+              reason: null,
+            }),
+            item({
+              providerId: "codex",
+              sourceProfileId: "11111111-1111-4111-8111-111111111111",
+              name: "B",
+              status: "update-needed",
+              reason: null,
+            }),
+            item({
+              providerId: "grok",
+              sourceProfileId: "22222222-2222-4222-8222-222222222222",
+              name: "C",
+              status: "update-needed",
+              reason: null,
+            }),
+          ]),
+          reach: "reachable",
+          keepInSync: false,
+          deviceName: "Office Linux",
+          profileCount: 3,
+        }),
+      ),
+    ).toBe("1 synced · 2 need an update");
+    expect(
+      summaryText(
+        profileSyncDeviceSummary({
+          device: device([
+            item({
+              providerId: "claude",
+              sourceProfileId: "ambient",
+              name: "A",
+              status: "synced",
+              reason: null,
+            }),
+            item({
+              providerId: "codex",
+              sourceProfileId: "11111111-1111-4111-8111-111111111111",
+              name: "B",
+              status: "update-needed",
+              reason: null,
+            }),
+          ]),
+          reach: "reachable",
+          keepInSync: false,
+          deviceName: "Office Linux",
+          profileCount: 2,
+        }),
+      ),
+    ).toBe("1 synced · 1 needs an update");
   });
 
   it("tells the user to update Traycer when reach is update-required", () => {
