@@ -166,9 +166,7 @@ const DETAILED_VALUES: LayoutValues = {
     memory: true,
     processes: true,
     ramShare: true,
-    // Off: per-row readings are clutter for most people; the status bar's
-    // total still reads, and Detailed turns them on.
-    agentRows: false,
+    agentRows: true,
     density: "auto",
   },
   contextUsage: {
