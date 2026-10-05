@@ -375,7 +375,11 @@ function ProfileCopyDraftCancelDialog(props: {
       cascadeSummary={null}
       actionLabel="Cancel copy"
       isPending={controller.cancelPending}
-      blockedReason={null}
+      blockedReason={
+        controller.anyPending && !controller.cancelPending
+          ? "Wait for the current action to finish."
+          : null
+      }
       onConfirm={controller.confirmCancel}
     />
   );
@@ -476,6 +480,7 @@ export function ProfileCopyDraftPanel(props: {
           login={login}
           names={names}
           destinationIsLocal={props.destinationIsLocal}
+          disabled={controller.anyPending}
           onCancel={() => controller.requestCancel("cancel-sign-in")}
         />
       ) : (

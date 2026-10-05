@@ -12,7 +12,15 @@ import {
   unstackRailPanel,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
-import { leftPanelIdForRailRegion, railStackMembers } from "@/lib/layout/rail";
+import {
+  isRailStackDrawn,
+  leftPanelIdForRailRegion,
+  railStackMembers,
+} from "@/lib/layout/rail";
+import {
+  LIVE,
+  type ShownRowAvailability,
+} from "@/components/layout-editor/regions/row-availability";
 import { expandJoinedPanelSections } from "@/stores/epics/left-panel-store";
 import {
   regionValuesHidden,
@@ -51,6 +59,11 @@ export interface SortableRowDecoration {
   readonly detail: ReactNode;
   readonly open: boolean;
   readonly onToggleOpen: (() => void) | null;
+  /**
+   * What the row depends on (P1), drawn by the same row shell a form row
+   * uses: the reason or note under its name, the control disabled with it.
+   */
+  readonly availability: ShownRowAvailability;
 }
 
 export type SortableRowDecorator = (id: string) => SortableRowDecoration;
@@ -71,6 +84,7 @@ export const BARE_ROW: SortableRowDecoration = {
   detail: null,
   open: false,
   onToggleOpen: null,
+  availability: LIVE,
 };
 
 /** What every builder below sets unless it has a reason not to. */
@@ -103,13 +117,18 @@ export function regionRowItem<Id extends RegionId>(
   decorate: SortableRowDecorator | null,
 ): SortableListItem<Id> {
   const facts = regionFacts(regionId);
+  const decoration = decorate === null ? BARE_ROW : decorate(regionId);
   return {
-    ...(decorate === null ? BARE_ROW : decorate(regionId)),
+    ...decoration,
     ...PLAIN_ROW,
     id: regionId,
     label: facts.name,
     icon: facts.icon,
-    dimmed: regionValuesHidden(values[regionId]),
+    // A row something else switches off reads as off, as a hidden one does:
+    // the microphone while Voice input is off (C4).
+    dimmed:
+      regionValuesHidden(values[regionId]) ||
+      decoration.availability.kind === "disabled",
   };
 }
 
@@ -158,10 +177,15 @@ export function railPanelOrderItem(
  * Not draggable, which is the one way it differs from a divider row: the
  * stack is not a member the user places, so it moves when its panels do and
  * the row offers no gesture that would write nothing.
+ *
+ * Dimmed while fewer than two of its members are shown: the rail then draws
+ * the lone one standing alone, so the stack is in the model and not on
+ * screen (T3) - read by the same rule the rail draws by.
  */
 export function stackOrderItem(
   entryId: string,
   arrangement: LayoutArrangement,
+  values: LayoutValues,
 ): SortableListItem<string> {
   return {
     ...BARE_ROW,
@@ -170,7 +194,10 @@ export function stackOrderItem(
     label: "Stack",
     icon: Rows2,
     movable: false,
-    dimmed: false,
+    dimmed: !isRailStackDrawn(
+      entryId,
+      (regionId) => values[regionId].shown !== "hidden",
+    ),
     onRemove: () => {
       writeArrangement(unstackRail(arrangement, entryId));
     },

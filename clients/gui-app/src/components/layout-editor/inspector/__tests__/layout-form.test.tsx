@@ -440,14 +440,21 @@ describe("layoutAreaChanged (L-91)", () => {
   it("reads Presets off the whole-layout modified flag, not a surface diff", () => {
     expect(layoutAreaChanged("presets", DEFAULT_LAYOUT_SNAPSHOT)).toBe(false);
 
-    // Applying a preset alone is not a modification (it clears the delta
-    // rather than creating one - `layoutModified` reads the delta), so this
-    // needs an actual arrangement change to light the Presets area's dot.
+    // A placement change is not one a preset puts back (T5): it lights its
+    // own area's dot and leaves the Presets dot dark.
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
         tabStripPlacement: "left",
       });
+    });
+    expect(layoutAreaChanged("presets", useLayoutStore.getState())).toBe(false);
+    expect(layoutAreaChanged("topBar", useLayoutStore.getState())).toBe(true);
+
+    // Applying a preset alone is not a modification either (it clears the
+    // delta rather than creating one); a value moved off it is.
+    act(() => {
+      useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
     });
     expect(layoutAreaChanged("presets", useLayoutStore.getState())).toBe(true);
   });

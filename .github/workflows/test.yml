@@ -9,17 +9,30 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Test a branch before merging it: the Actions tab, or
+  # `gh workflow run test.yml --ref <branch>`.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run.
+  group: tests-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   test:
     name: ${{ matrix.name }}
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     # Every leg runs on the standard runner. This repository is public, and
     # standard runners are free and unmetered on public repositories; larger
     # runners (`ubuntu-latest-8-cores`) are billed even here. The GUI shards
@@ -263,6 +276,34 @@ jobs:
           df -h 2>/dev/null | head -10 || true
           echo "::endgroup::"
 
+  # The one required check for the whole matrix above. The `main` ruleset used to
+  # require four matrix names (`test (@traycer/protocol)`,
+  # `test (traycer-clients-gui-app)`, `test (@traycer-clients/desktop)` and
+  # `test (@traycer-clients/traycer-cli)`), but a matrix job skipped by a job-level
+  # `if` is never expanded, so on a team PR those names would never report and
+  # would block the merge. This job is skipped as a whole there, and a skipped job
+  # satisfies a required check. When it runs it fails unless every leg passed;
+  # `always()` makes it report even when a leg failed or was cancelled.
+  tests:
+    name: tests
+    needs: [test]
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      always() && (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every test leg passed
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = success
+
   # Windows job: the ONLY Windows execution of CLI code in PR CI. Until this
   # existed, `smoke:sea` ran solely inside the release workflows, so every
   # Windows claim in the CLI was unexecuted until a release — which is how the
@@ -281,6 +322,13 @@ jobs:
   # touching no CLI file. A gate that skips on the riskiest diffs is not a gate.
   test-windows-cli-exit:
     name: test (cli win32 SEA exit code)
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -338,6 +386,13 @@ jobs:
   # covers.
   macos-packaging-changes:
     name: test (desktop darwin + packaging) changes
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -414,7 +469,16 @@ jobs:
   test-macos-packaging:
     name: test (desktop darwin + packaging)
     needs: macos-packaging-changes
-    if: needs.macos-packaging-changes.outputs.run == 'true'
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+      && needs.macos-packaging-changes.outputs.run == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

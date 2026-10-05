@@ -162,7 +162,6 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   );
   const headerAction = useOpenAsChatHeaderAction(
     cardId,
-    nested,
     variant === "row" ? "bare" : "cell",
   );
 
@@ -351,7 +350,7 @@ function PromotedSubagentSegment(
   const displayAgentType = cleanSubagentNotificationText(agentType);
   const displayTask = cleanSubagentNotificationText(task);
   const dedupedProgress = useSubagentProgressItems(progressUpdates, nested);
-  const headerAction = useOpenAsChatHeaderAction(cardId, nested, "cell");
+  const headerAction = useOpenAsChatHeaderAction(cardId, "cell");
   const lastProgress = dedupedProgress.at(-1)?.text ?? null;
   // Collapsed line shows live progress only. Finished cards omit it because
   // the final result is visible in the expanded body and duplicates the title.
@@ -633,19 +632,20 @@ function SubagentResultSection(props: {
 const OPEN_AS_CHAT_LABEL = "Open as chat";
 
 /**
- * The card header's open-as-chat control, or `null` when there is nothing to
- * open (no conversation yet) or nowhere to open it (no transcript in context).
+ * The card header's open-as-chat control, or `null` when there is nowhere to
+ * open it (no transcript in context). Offered on every subagent card, one
+ * with no nested activity included: a subagent that only replied still has a
+ * task and a result to read, and its view is where it is continued as a chat.
  * Returned as a node rather than rendered as a component so the card shells
  * can tell a real action from an empty one - they round the header's corner
  * on `headerAction === null`.
  */
 function useOpenAsChatHeaderAction(
   id: string,
-  nested: ReadonlyArray<SubagentChildSegment>,
   placement: "cell" | "bare",
 ): ReactNode | null {
   const openAsChat = useOpenSubagentAsChat();
-  if (openAsChat === null || nested.length === 0) return null;
+  if (openAsChat === null) return null;
   const button = (
     <TooltipWrapper
       label={OPEN_AS_CHAT_LABEL}
@@ -673,6 +673,21 @@ function useOpenAsChatHeaderAction(
   ) : (
     button
   );
+}
+
+/**
+ * {@link useOpenAsChatHeaderAction} for a workflow card, which still needs
+ * nested activity: a workflow run is a fleet, not one conversation, so its
+ * view has no task, no result and nothing to continue, and with no activity
+ * yet it would open on an empty page.
+ */
+function useWorkflowOpenAsChatHeaderAction(
+  id: string,
+  nested: ReadonlyArray<SubagentChildSegment>,
+  placement: "cell" | "bare",
+): ReactNode | null {
+  const action = useOpenAsChatHeaderAction(id, placement);
+  return nested.length === 0 ? null : action;
 }
 
 export function SubagentResultPanel(props: {
@@ -816,7 +831,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
     [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
 
-  const headerAction = useOpenAsChatHeaderAction(
+  const headerAction = useWorkflowOpenAsChatHeaderAction(
     cardId,
     nested,
     variant === "row" ? "bare" : "cell",

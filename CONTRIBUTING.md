@@ -69,17 +69,30 @@ pipx install pre-commit   # or: brew install pre-commit
 pre-commit install
 ```
 
+If you installed the hooks before October 2026, run `pre-commit install` once
+more: it now also installs the `commit-msg` hook that checks the DCO sign-off,
+and for a maintainer pull request into `main` that hook is the only check of
+it.
+
 The hooks then run on every commit; run them on demand with
 `pre-commit run --all-files`. Tests are intentionally excluded from the hook
 and run as separate CI checks. Run a targeted test locally when it helps your
 development loop; the full suite does not need to run before each commit.
+
+## When CI runs
+
+A pull request from a fork runs every CI check, and so does a pull request
+from a bot or into any branch other than `main`. A pull request into `main`
+from a branch in this repository (maintainers') runs none, the protocol
+governance tripwire included: the full suite runs on the merged commit instead. Maintainers can test a branch before merging by
+running a workflow on it (`gh workflow run test.yml --ref <branch>`).
 
 ## Pull requests
 
 1. Fork and branch from `main`.
 2. Keep changes focused; add or update tests where it makes sense.
 3. Commit normally; pre-commit runs the affected static checks, and CI runs the
-   test suites separately.
+   test suites separately on your pull request.
 4. Open a PR with the template and link any related issue.
 
 ## Developer Certificate of Origin (DCO)

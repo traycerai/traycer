@@ -35,7 +35,11 @@
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
-import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import {
+  EPIC_STATUS_SUBSCRIBE_METHOD,
+  EpicStatusStreamClient,
+  type EpicStatusSnapshotFrame,
+} from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type {
   ArtifactStreamClientFactory,
@@ -44,6 +48,14 @@ import type {
 } from "@traycer-clients/shared/epic-lanes";
 import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import {
+  LogicalStream,
+  type LogicalStreamPort,
+} from "@traycer-clients/shared/host-transport/remote/logical-stream";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { QosClass } from "@traycer/protocol/host-transport/mux";
 import type { EarlyMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
@@ -79,12 +91,21 @@ interface LaneRigOptions {
    * value (e.g. `"owner"`) rather than this default.
    */
   readonly statusRole?: PermissionRole;
+  /**
+   * Replaces the rig's callback-capturing status lane with a caller-built one.
+   * Optional, like `statusRole`, so every existing call site is unaffected. A
+   * suite that passes it drives the status lane through its own transport and
+   * opens only the records lane here, with `openStateLane`.
+   */
+  readonly statusStreamClientFactory?: EpicStatusStreamClientFactory;
 }
 
 interface LaneRig {
   readonly handle: OpenedStoreForTest;
   readonly received: { commandId: string; intent: EpicWriteCommandIntent }[];
   readonly openLanes: () => void;
+  /** The records lane's half of `openLanes`, for a suite that owns the status lane. */
+  readonly openStateLane: () => void;
   /**
    * A transport drop and return on the CONTROL lane - the policy's named
    * `reconnect` trigger. Only a return to `open` after the transport had left
@@ -171,10 +192,12 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
   // Keep revocation and regrant epochs ahead of the initial snapshot.
   let currentSecurityEpoch = 1;
 
-  const statusFactory: EpicStatusStreamClientFactory = (_epicId, callbacks) => {
-    statusCallbacks = callbacks;
-    return { close: () => undefined };
-  };
+  const statusFactory: EpicStatusStreamClientFactory =
+    options.statusStreamClientFactory ??
+    ((_epicId, callbacks) => {
+      statusCallbacks = callbacks;
+      return { close: () => undefined };
+    });
   const stateFactory: EpicStateStreamClientFactory = (_epicId, callbacks) => {
     stateCallbacks = callbacks;
     return { close: () => undefined };
@@ -240,6 +263,14 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
       ),
       true,
     );
+    stateCallbacks.onSnapshot(stateSnapshot());
+  }
+
+  function openStateLane(): void {
+    if (stateCallbacks === null) {
+      throw new Error("the state lane factory was not invoked");
+    }
+    stateCallbacks.onConnectionStatus("open", null);
     stateCallbacks.onSnapshot(stateSnapshot());
   }
 
@@ -323,6 +354,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     handle,
     received,
     openLanes,
+    openStateLane,
     reconnectControlLane,
     reconnectStateLane,
     emitMigrationProgress,
@@ -384,6 +416,97 @@ describe("a lane-selected session completes an open cycle", () => {
     expect(rig.received[0].intent).toEqual({
       kind: "update-epic-title",
       title: "Renamed on the lane arm",
+      updatedAt: 2000,
+    });
+
+    rig.handle.dispose();
+  });
+});
+
+const STATUS_LANE_VERSION: SchemaVersion = { major: 1, minor: 1 };
+
+/**
+ * The status lane as a REMOTE host serves it: the production
+ * `EpicStatusStreamClient` over the production `LogicalStream`.
+ *
+ * Every other block here reports `open` by hand, before the snapshot - the
+ * order `openLanes` documents as the one that does not wipe the snapshot's
+ * freshness. That is the local session's order, and nothing drove the remote
+ * one. A `LogicalStream` has no subscribe ack: its first frame is what opens
+ * it, so the stream itself decides which of `open` and that frame its consumer
+ * hears first.
+ */
+function relayStatusLane(): {
+  readonly factory: EpicStatusStreamClientFactory;
+  readonly stream: LogicalStream;
+} {
+  const port: LogicalStreamPort = {
+    sendStreamFrame: () => undefined,
+    closeStream: () => undefined,
+    requestSessionReconnect: () => undefined,
+    streamOutboundDebtBytes: () => 0,
+  };
+  const stream = new LogicalStream({
+    streamId: 1,
+    method: EPIC_STATUS_SUBSCRIBE_METHOD,
+    paramsProvider: () => ({ epicId: EPIC_ID }),
+    schemaVersion: STATUS_LANE_VERSION,
+    requiredSchemaVersion: null,
+    qos: QosClass.INTERACTIVE,
+    port,
+  });
+  // What `RemoteSession.openSubscription` does as it sends the SUBSCRIBE.
+  stream.updateSchemaVersion(STATUS_LANE_VERSION);
+  const streamClient: IStreamClient<HostStreamRpcRegistry> = {
+    subscribe: () => stream,
+    subscribeWithParamsProvider: () => stream,
+    getMethodSchemaVersion: () => STATUS_LANE_VERSION,
+  };
+  return {
+    stream,
+    factory: (epicId, callbacks) =>
+      new EpicStatusStreamClient({
+        epicId,
+        callbacks,
+        wsStreamClient: streamClient,
+      }),
+  };
+}
+
+describe("a lane-selected session completes an open cycle over the remote transport's stream", () => {
+  it("DELIVERS a write command when the status snapshot is the frame that opens the stream", async () => {
+    const relay = relayStatusLane();
+    const rig = openLaneRig({
+      unaries: absentLaneUnaries(),
+      migration: null,
+      statusStreamClientFactory: relay.factory,
+    });
+    // The host's answer to the subscribe: ONE frame, which both opens the
+    // stream and carries the control snapshot.
+    expect(
+      relay.stream.deliverServerFrame(statusSnapshot(null, "editor", 1), null),
+    ).toBe(true);
+    rig.openStateLane();
+    await settle(rig.handle);
+
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "Renamed on a remote host",
+      updatedAt: 2000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+
+    // While the stream reported `open` AFTER handing that frame on, the
+    // control replica cleared `hasFreshRootSnapshotForOpenCycle` one step
+    // after the snapshot set it, and an open stream owes no second snapshot:
+    // this list stayed empty, the rename sat queued behind the tab's
+    // optimistic title, and a restart dropped it.
+    expect(rig.received).toHaveLength(1);
+    expect(rig.received[0].commandId).toBe(commandId);
+    expect(rig.received[0].intent).toEqual({
+      kind: "update-epic-title",
+      title: "Renamed on a remote host",
       updatedAt: 2000,
     });
 

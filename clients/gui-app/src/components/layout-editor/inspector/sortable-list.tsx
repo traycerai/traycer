@@ -15,6 +15,11 @@ import {
 } from "lucide-react";
 import { armLayoutDrag } from "@/components/layout-editor/canvas/drag-engine";
 import { useLayoutFormHost } from "@/components/layout-editor/inspector/layout-form-host";
+import { RowAvailabilityLine } from "@/components/layout-editor/inspector/rows/row-availability-line";
+import {
+  rowAvailabilityText,
+  type ShownRowAvailability,
+} from "@/components/layout-editor/regions/row-availability";
 import {
   sortableRowPadding,
   type SortableRowPadding,
@@ -97,6 +102,12 @@ export interface SortableListItem<Id extends string> {
    * `null` on every other row.
    */
   readonly stackMembers: ReadonlyArray<SortableStackMember> | null;
+  /**
+   * What the row depends on (P1): a reason or note drawn under its name by
+   * the same line a form row draws, and, while disabled, its control group
+   * disabled and described by it.
+   */
+  readonly availability: ShownRowAvailability;
 }
 
 /** One member listed on a stack row, and taking it out of the stack. */
@@ -210,9 +221,13 @@ export function SortableList<Id extends string>(
       // A control in the row is a control, not the row - and everything the
       // row's disclosure opened is the DETAIL's, not the row's. Without the
       // second test a space pressed on a checkbox label inside an expanded
-      // card would pick the whole row up (L-95's in-place levels).
+      // card would pick the whole row up (L-95's in-place levels). Only a
+      // detail of THIS list's rows counts: a list drawn inside another
+      // list's disclosure (Breakdown rows, C2) sits in that detail, and
+      // must still answer for its own rows.
       if (target.closest(ROW_CONTROL_SELECTOR) !== null) return null;
-      if (target.closest(DETAIL_SELECTOR) !== null) return null;
+      const detail = target.closest(DETAIL_SELECTOR);
+      if (detail !== null && list?.contains(detail) === true) return null;
       const id = target
         .closest("[data-sortable-id]")
         ?.getAttribute("data-sortable-id");
@@ -578,9 +593,15 @@ function SortableRowLine<Id extends string>(props: {
     pressed,
     onPointerDown,
   } = props;
-  const onRemove = item.onRemove;
-  const onStack = item.onStack;
-  const described = [instructionsId, hintId]
+  const availabilityId = useId();
+  const availabilityShown = rowAvailabilityText(item.availability) !== null;
+  // The grab names the row's availability too: a disabled control leaves the
+  // tab order, and the grab is how a keyboard still reaches the reason.
+  const described = [
+    instructionsId,
+    hintId,
+    availabilityShown ? availabilityId : null,
+  ]
     .filter((id): id is string => id !== null)
     .join(" ");
   return (
@@ -655,48 +676,19 @@ function SortableRowLine<Id extends string>(props: {
           <span className="-my-1 flex shrink-0">{item.revert}</span>
         )}
         <SortableStackMembers members={item.stackMembers} />
+        {/* Under the name, in the name's column, as a form row's
+          description is. */}
+        <RowAvailabilityLine
+          id={availabilityId}
+          availability={item.availability}
+          layoutClassName="basis-full pl-11"
+        />
       </div>
-      <div
-        className={cn(
-          "flex shrink-0 items-center gap-1",
-          page && "max-md:ml-auto",
-        )}
-      >
-        {/* The Stack verb (L-168), on the panel ABOVE where the link would
-          go, offered only where it can be taken. */}
-        {onStack === null ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Stack ${item.label.toLowerCase()} with the panel below`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onStack();
-            }}
-          >
-            <Rows2 />
-          </Button>
-        )}
-        {item.control}
-        {/* A divider's or a stack link's one verb, in the control column. */}
-        {onRemove === null ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={
-              item.removeLabel ?? `Remove ${item.label.toLowerCase()}`
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              onRemove();
-            }}
-          >
-            <X />
-          </Button>
-        )}
-      </div>
+      <SortableRowControls
+        item={item}
+        page={page}
+        availabilityId={availabilityShown ? availabilityId : null}
+      />
       {/* The chevron's slot is reserved on every row, so controls share one
         right edge from row to row. */}
       {item.detail === null ? (
@@ -711,6 +703,66 @@ function SortableRowLine<Id extends string>(props: {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The row's control column: the Stack verb, the host's control and a
+ * divider's or a stack link's Remove. Its group is disabled with the row and
+ * described by the row's reason, exactly as `LayoutFormRow`'s is.
+ */
+function SortableRowControls<Id extends string>(props: {
+  readonly item: SortableListItem<Id>;
+  readonly page: boolean;
+  /** The row's availability line, while it has one. */
+  readonly availabilityId: string | null;
+}): ReactNode {
+  const { item, page, availabilityId } = props;
+  const onRemove = item.onRemove;
+  const onStack = item.onStack;
+  return (
+    <fieldset
+      disabled={item.availability.kind === "disabled"}
+      aria-label={availabilityId === null ? undefined : item.label}
+      aria-describedby={availabilityId ?? undefined}
+      className={cn(
+        "m-0 flex min-w-0 shrink-0 items-center gap-1 border-0 p-0",
+        page && "max-md:ml-auto",
+      )}
+    >
+      {/* The Stack verb (L-168), on the panel ABOVE where the link would
+        go, offered only where it can be taken. */}
+      {onStack === null ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Stack ${item.label.toLowerCase()} with the panel below`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onStack();
+          }}
+        >
+          <Rows2 />
+        </Button>
+      )}
+      {item.control}
+      {/* A divider's or a stack link's one verb, in the control column. */}
+      {onRemove === null ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={item.removeLabel ?? `Remove ${item.label.toLowerCase()}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
+        >
+          <X />
+        </Button>
+      )}
+    </fieldset>
   );
 }
 
@@ -786,7 +838,20 @@ function rowNameBlockClass<Id extends string>(
   return cn(
     "flex min-w-0 flex-1 items-center gap-1",
     item.stackMembers !== null && "flex-wrap gap-y-1.5",
-    page && "max-md:basis-full",
+    // The availability line wraps under the name, as the stack's chips do.
+    rowAvailabilityText(item.availability) !== null && "flex-wrap",
+    // Only a row with a control to drop under its name takes the whole line:
+    // a row with none (Model) would leave its chevron alone on a second one.
+    page && rowHasControls(item) && "max-md:basis-full",
+  );
+}
+
+/** Whether the row's control column holds anything at all. */
+function rowHasControls<Id extends string>(
+  item: SortableListItem<Id>,
+): boolean {
+  return (
+    item.control !== null || item.onStack !== null || item.onRemove !== null
   );
 }
 

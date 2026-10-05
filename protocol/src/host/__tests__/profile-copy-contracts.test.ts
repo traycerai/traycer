@@ -20,6 +20,8 @@ import {
   PROFILE_COPY_RPC_METHODS,
   profileCopyMethodSupport,
 } from "../profile-copy-contracts";
+import * as frozenV1 from "../profile-copy-schemas-v1";
+import * as currentSchemas from "../profile-copy-schemas";
 import { hostRpcRegistry } from "../index";
 import type { ConnectionManifest } from "../../framework/ws-protocol";
 import type { VersionedRpcRegistry } from "../../framework/index";
@@ -360,8 +362,11 @@ describe("profile-copy protocol contracts", () => {
     ).toBe(true);
   });
 
-  it("requires both peers to advertise major one without changing the floor", () => {
+  it("accepts copy majors one and two, refuses others, and keeps applySync at major one", () => {
     const method = "providers.profileCopy.preview" as const;
+    const at = (major: number): ConnectionManifest => ({
+      [method]: { major, minor: 0, supportedMajors: [major] },
+    });
     const current = manifestFor(method);
     expect(profileCopyMethodSupport(current, current, [method], [method])).toBe(
       "supported",
@@ -372,12 +377,35 @@ describe("profile-copy protocol contracts", () => {
     expect(profileCopyMethodSupport(current, {}, [method], [method])).toBe(
       "update-required",
     );
+    // Either peer may be on major two.
+    expect(profileCopyMethodSupport(at(2), current, [method], [method])).toBe(
+      "supported",
+    );
+    expect(profileCopyMethodSupport(current, at(2), [method], [method])).toBe(
+      "supported",
+    );
+    // A peer that only speaks an unknown major must update.
+    expect(profileCopyMethodSupport(at(3), current, [method], [method])).toBe(
+      "update-required",
+    );
+    expect(profileCopyMethodSupport(current, at(3), [method], [method])).toBe(
+      "update-required",
+    );
+    const apply = "host.profileCopy.applySync" as const;
     expect(
       profileCopyMethodSupport(
-        { [method]: { major: 2, minor: 0, supportedMajors: [2] } },
-        current,
-        [method],
-        [method],
+        manifestFor(apply),
+        manifestFor(apply),
+        [apply],
+        [apply],
+      ),
+    ).toBe("supported");
+    expect(
+      profileCopyMethodSupport(
+        { [apply]: { major: 2, minor: 0, supportedMajors: [2] } },
+        manifestFor(apply),
+        [apply],
+        [apply],
       ),
     ).toBe("update-required");
     expect(RELEASED_FLOOR_METHOD_NAMES).toContain("host.status");
@@ -475,5 +503,167 @@ describe("profile-copy protocol contracts", () => {
         retryOfAttemptId: null,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("profile-copy opaque host id versions", () => {
+  const OPAQUE_SOURCE = "host:source/1.local";
+  const OPAQUE_DESTINATION = "host:dest+2@lan";
+  const preview = PROFILE_COPY_RPC_METHODS["providers.profileCopy.preview"];
+  const draftStatus =
+    PROFILE_COPY_RPC_METHODS["providers.profileCopy.draftStatus"];
+
+  const readiness = {
+    preparation: "incomplete" as const,
+    verification: "not-checked" as const,
+    verificationRevision: null,
+    acceptedVerificationRevision: null,
+    identity: "not-checked" as const,
+    identityRevision: null,
+    acceptedIdentityRevision: null,
+    writer: "none" as const,
+    writerGeneration: 0,
+    quarantined: false,
+  };
+
+  function attemptFor(sourceHostId: string, destinationHostId: string) {
+    return {
+      ...source,
+      sourceHostId,
+      operationId: OPERATION_ID,
+      attemptId: ATTEMPT_ID,
+      destinationHostId,
+    };
+  }
+
+  function draftResponse(sourceHostId: string, destinationHostId: string) {
+    return {
+      result: "current" as const,
+      outcome: {
+        attempt: attemptFor(sourceHostId, destinationHostId),
+        revision: 1,
+        state: "preparing" as const,
+        reason: null,
+        targetProfileId: null,
+        targetEnabled: null,
+        targetAuthStatus: null,
+        replacementAttemptId: null,
+        desiredEnabled: true,
+        destinationProviderEnabled: true,
+        readiness,
+      },
+    };
+  }
+
+  const opaquePreviewRequest = {
+    ...source,
+    sourceHostId: OPAQUE_SOURCE,
+    destinationHostIds: [OPAQUE_DESTINATION],
+  };
+  const ordinaryPreviewRequest = {
+    ...source,
+    destinationHostIds: [DESTINATION_HOST],
+  };
+
+  it("lets the frozen 1.0 contract refuse opaque ids and 2.0 accept them, in requests and nested receipts", () => {
+    expect(
+      frozenV1.profileCopyPreviewRequestSchema.safeParse(opaquePreviewRequest)
+        .success,
+    ).toBe(false);
+    expect(
+      currentSchemas.profileCopyPreviewRequestSchema.safeParse(
+        opaquePreviewRequest,
+      ).success,
+    ).toBe(true);
+    const opaqueReceipt = draftResponse(OPAQUE_SOURCE, OPAQUE_DESTINATION);
+    expect(
+      frozenV1.profileCopyDraftResponseSchema.safeParse(opaqueReceipt).success,
+    ).toBe(false);
+    expect(
+      currentSchemas.profileCopyDraftResponseSchema.safeParse(opaqueReceipt)
+        .success,
+    ).toBe(true);
+    // Ordinary ids are valid in both.
+    const ordinaryReceipt = draftResponse(SOURCE_HOST, DESTINATION_HOST);
+    expect(
+      frozenV1.profileCopyDraftResponseSchema.safeParse(ordinaryReceipt)
+        .success,
+    ).toBe(true);
+    expect(
+      frozenV1.profileCopyPreviewRequestSchema.safeParse(ordinaryPreviewRequest)
+        .success,
+    ).toBe(true);
+  });
+
+  it("downgrades and upgrades ordinary ids unchanged", () => {
+    const down = preview[2].downgradePathsFromLatest[1];
+    const up = preview[2].versions[0].upgradeFromPreviousVersion;
+    expect(down.downgradeRequest(ordinaryPreviewRequest)).toEqual({
+      ok: true,
+      value: ordinaryPreviewRequest,
+    });
+    expect(up.upgradeRequest(ordinaryPreviewRequest)).toEqual(
+      ordinaryPreviewRequest,
+    );
+    const draftDown = draftStatus[2].downgradePathsFromLatest[1];
+    const draftUp = draftStatus[2].versions[0].upgradeFromPreviousVersion;
+    const request = { attempt: attemptFor(SOURCE_HOST, DESTINATION_HOST) };
+    const response = draftResponse(SOURCE_HOST, DESTINATION_HOST);
+    expect(draftDown.downgradeRequest(request)).toEqual({
+      ok: true,
+      value: request,
+    });
+    expect(draftDown.downgradeResponse(response)).toEqual({
+      ok: true,
+      value: response,
+    });
+    expect(draftUp.upgradeRequest(request)).toEqual(request);
+    expect(draftUp.upgradeResponse(response)).toEqual(response);
+  });
+
+  it("refuses to downgrade an opaque request or response with DOWNGRADE_UNSUPPORTED, never rewriting an id", () => {
+    const down = preview[2].downgradePathsFromLatest[1];
+    expect(down.downgradeRequest(opaquePreviewRequest)).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+    const draftDown = draftStatus[2].downgradePathsFromLatest[1];
+    expect(
+      draftDown.downgradeRequest({
+        attempt: attemptFor(OPAQUE_SOURCE, DESTINATION_HOST),
+      }),
+    ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
+    expect(
+      draftDown.downgradeResponse(
+        draftResponse(SOURCE_HOST, OPAQUE_DESTINATION),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
+  });
+
+  it("registers all twenty-one copy methods with frozen 1.0, canonical 2.0, an identity upgrade and a downgrade", () => {
+    const registry: VersionedRpcRegistry = hostRpcRegistry;
+    const entries = Object.entries(PROFILE_COPY_RPC_METHODS);
+    expect(entries).toHaveLength(21);
+    for (const [method, line] of entries) {
+      expect(line[1].versions[0].contract.schemaVersion).toEqual({
+        major: 1,
+        minor: 0,
+      });
+      expect(line[2].versions[0].contract.schemaVersion).toEqual({
+        major: 2,
+        minor: 0,
+      });
+      expect(line[2].versions[0].upgradeFromPreviousVersion).toMatchObject({
+        from: { major: 1, minor: 0 },
+        to: { major: 2, minor: 0 },
+      });
+      expect(line[2].downgradePathsFromLatest[1]).toMatchObject({
+        from: { major: 2, minor: 0 },
+        to: { major: 1, minor: 0 },
+      });
+      // The registry serves the same lines, with the unsupported degrade.
+      expect(registry[method]).toEqual(line);
+      expect(line.degrade).toEqual({ kind: "unsupported" });
+    }
   });
 });

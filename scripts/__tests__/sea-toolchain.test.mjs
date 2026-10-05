@@ -112,12 +112,22 @@ describe("this project is actually called by CI", () => {
     // trailing comment on either (`if: false # temporarily disabled`) is
     // invisible to a raw-line check while YAML honours the boolean.
     //
-    // `if` is required to be ABSENT rather than merely not-false: a dynamic
-    // `${{ ... }}` cannot be evaluated here, so a guard that allowed one would
-    // be asserting something it cannot see. If a condition is ever added
-    // deliberately, this reds and the decision gets made explicitly.
+    // The STEP's `if` is required to be ABSENT rather than merely not-false: a
+    // dynamic `${{ ... }}` cannot be evaluated here, so a guard that allowed
+    // one would be asserting something it cannot see. Both `continue-on-error`
+    // keys stay required-absent too.
+    //
+    // The JOB carries the pull-request gate (a team PR into `main` runs no CI;
+    // the merge to `main` runs it once), so its `if` cannot be absent. It must
+    // equal exactly that gate text, whitespace-normalised: `if: false`, or any
+    // other condition, still reds this, and the row cannot be switched off
+    // unnoticed. The same string is pinned for every job in
+    // ci-pull-request-gate.test.mjs.
+    const PULL_REQUEST_GATE =
+      "github.event_name != 'pull_request' || github.base_ref != 'main' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot'";
+    expect(testSteps[0].if).toBeUndefined();
+    expect(String(job.if).replace(/\s+/g, " ").trim()).toBe(PULL_REQUEST_GATE);
     for (const scope of [testSteps[0], job]) {
-      expect(scope.if).toBeUndefined();
       expect(scope["continue-on-error"]).toBeUndefined();
     }
 

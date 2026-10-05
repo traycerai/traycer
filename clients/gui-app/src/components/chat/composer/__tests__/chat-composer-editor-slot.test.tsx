@@ -11,7 +11,6 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { modLabel } from "@/lib/keybindings/platform";
 import { ChatComposerEditorSlot } from "@/components/chat/composer/chat-composer-editor-slot";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
-import { PROMPT_SUGGESTION_TAP_SLOP_PX } from "@/components/chat/composer/prompt-suggestion";
 
 const narrowState = vi.hoisted(() => ({ value: false }));
 
@@ -21,6 +20,7 @@ vi.mock("@/components/home/composer/composer-narrow-hooks", () => ({
 
 interface MockComposerPromptEditorProps {
   readonly placeholder: string;
+  readonly editorClassName: string | undefined;
   readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
 }
 
@@ -30,6 +30,7 @@ vi.mock("@/components/chat/composer/composer-prompt-editor", () => ({
       data-testid="composer-placeholder"
       role="textbox"
       tabIndex={0}
+      className={props.editorClassName}
       onKeyDown={props.onKeyDown}
     >
       {props.placeholder}
@@ -208,108 +209,134 @@ describe("ChatComposerEditorSlot", () => {
     );
   });
 
-  describe("touch tap acceptance", () => {
-    it("accepts a touch tap that stays within the slop radius", () => {
+  describe("touch swipe acceptance", () => {
+    const SUGGESTION = "Add a test for the new endpoint";
+
+    // A tap on a phone is how the user starts typing. Filling on it handed
+    // them a prompt to delete before they could write their own.
+    it("leaves a touch tap alone, so tapping the composer only focuses it", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerUp", target, TOUCH, { x: 100, y: 20, at: 1080 });
 
-      const target = screen.getByTestId("composer-placeholder");
-      fireEvent.pointerDown(target, {
-        pointerType: "touch",
-        clientX: 5,
-        clientY: 5,
-      });
-      fireEvent.pointerUp(target, {
-        pointerType: "touch",
-        clientX: 5,
-        clientY: 5,
-      });
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+    });
+
+    it("leaves a tap that wobbles alone", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 108, y: 23, at: 1400 });
+      firePointer("pointerUp", target, TOUCH, { x: 108, y: 23, at: 1480 });
+
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+    });
+
+    it("accepts a slow rightward swipe once it has travelled far enough, and only once", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      // Declared rightward, but neither far nor fast enough yet.
+      firePointer("pointerMove", target, TOUCH, { x: 130, y: 22, at: 1400 });
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+
+      firePointer("pointerMove", target, TOUCH, { x: 141, y: 22, at: 1800 });
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(onAcceptSuggestion).toHaveBeenCalledWith(SUGGESTION);
+
+      firePointer("pointerMove", target, TOUCH, { x: 220, y: 22, at: 1900 });
+      firePointer("pointerUp", target, TOUCH, { x: 220, y: 22, at: 1950 });
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+    });
+
+    it("accepts a short rightward flick on its speed", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 120, y: 20, at: 1020 });
 
       expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
-      expect(onAcceptSuggestion).toHaveBeenCalledWith(
-        "Add a test for the new endpoint",
-      );
+      expect(onAcceptSuggestion).toHaveBeenCalledWith(SUGGESTION);
     });
 
-    it("does not accept a touch that travels past the slop radius", () => {
+    it("keeps a swipe that curves downward once it has declared itself rightward", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 120, y: 22, at: 1400 });
+      firePointer("pointerMove", target, TOUCH, { x: 145, y: 80, at: 1800 });
 
-      const target = screen.getByTestId("composer-placeholder");
-      fireEvent.pointerDown(target, {
-        pointerType: "touch",
-        clientX: 0,
-        clientY: 0,
-      });
-      fireEvent.pointerUp(target, {
-        pointerType: "touch",
-        clientX: PROMPT_SUGGESTION_TAP_SLOP_PX + 1,
-        clientY: 0,
-      });
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not accept a leftward swipe", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 40, y: 20, at: 1100 });
+      firePointer("pointerUp", target, TOUCH, { x: 40, y: 20, at: 1150 });
 
       expect(onAcceptSuggestion).not.toHaveBeenCalled();
     });
 
-    it("does not accept a mouse pointer tap", () => {
+    it("does not accept a vertical drag, even one that turns rightward afterwards", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
-
-      const target = screen.getByTestId("composer-placeholder");
-      fireEvent.pointerDown(target, {
-        pointerType: "mouse",
-        clientX: 5,
-        clientY: 5,
-      });
-      fireEvent.pointerUp(target, {
-        pointerType: "mouse",
-        clientX: 5,
-        clientY: 5,
-      });
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 104, y: 60, at: 1100 });
+      firePointer("pointerMove", target, TOUCH, { x: 200, y: 60, at: 1200 });
+      firePointer("pointerUp", target, TOUCH, { x: 200, y: 60, at: 1250 });
 
       expect(onAcceptSuggestion).not.toHaveBeenCalled();
     });
 
-    it("does not accept a tap cancelled between down and up", () => {
+    it("does not accept a mouse drag, which is a text selection", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
-
-      const target = screen.getByTestId("composer-placeholder");
-      fireEvent.pointerDown(target, {
-        pointerType: "touch",
-        clientX: 5,
-        clientY: 5,
-      });
-      fireEvent.pointerCancel(target);
-      fireEvent.pointerUp(target, {
-        pointerType: "touch",
-        clientX: 5,
-        clientY: 5,
-      });
+      firePointer("pointerDown", target, MOUSE, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, MOUSE, { x: 200, y: 20, at: 1100 });
+      firePointer("pointerUp", target, MOUSE, { x: 200, y: 20, at: 1150 });
 
       expect(onAcceptSuggestion).not.toHaveBeenCalled();
     });
 
-    it("does not accept a tap when there is no suggestion", () => {
+    it("does not accept a swipe the system cancelled before it committed", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 120, y: 20, at: 1400 });
+      firePointer("pointerCancel", target, TOUCH, { x: 120, y: 20, at: 1450 });
+      firePointer("pointerMove", target, TOUCH, { x: 200, y: 20, at: 1500 });
+
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+    });
+
+    it("drops the swipe when a second finger lands", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerDown", target, SECOND_TOUCH, {
+        x: 160,
+        y: 24,
+        at: 1050,
+      });
+      firePointer("pointerMove", target, TOUCH, { x: 200, y: 20, at: 1100 });
+
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+    });
+
+    it("does not accept a swipe when there is no suggestion", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
@@ -319,21 +346,86 @@ describe("ChatComposerEditorSlot", () => {
       });
 
       const target = screen.getByTestId("composer-placeholder");
-      fireEvent.pointerDown(target, {
-        pointerType: "touch",
-        clientX: 5,
-        clientY: 5,
-      });
-      fireEvent.pointerUp(target, {
-        pointerType: "touch",
-        clientX: 5,
-        clientY: 5,
-      });
+      firePointer("pointerDown", target, TOUCH, { x: 100, y: 20, at: 1000 });
+      firePointer("pointerMove", target, TOUCH, { x: 200, y: 20, at: 1100 });
 
       expect(onAcceptSuggestion).not.toHaveBeenCalled();
     });
+
+    // What delivers the sideways moves on a real touch screen; the browser
+    // spec (`browser-tests/prompt-suggestion-swipe.spec.ts`) proves it does.
+    it("reserves the editor's horizontal axis only while a suggestion is offered", () => {
+      const offered = renderOfferedSlot(SUGGESTION, NOOP_ACCEPT);
+      expect(offered.classList.contains("touch-pan-y")).toBe(true);
+      cleanup();
+
+      renderEditorSlot({
+        suggestedPrompt: null,
+        onAcceptSuggestion: NOOP_ACCEPT,
+        steerHintActive: false,
+      });
+      expect(
+        screen
+          .getByTestId("composer-placeholder")
+          .classList.contains("touch-pan-y"),
+      ).toBe(false);
+    });
   });
 });
+
+interface PointerIdentity {
+  readonly pointerType: "touch" | "mouse";
+  readonly pointerId: number;
+  readonly isPrimary: boolean;
+}
+
+const TOUCH: PointerIdentity = {
+  pointerType: "touch",
+  pointerId: 1,
+  isPrimary: true,
+};
+const SECOND_TOUCH: PointerIdentity = {
+  pointerType: "touch",
+  pointerId: 2,
+  isPrimary: false,
+};
+const MOUSE: PointerIdentity = {
+  pointerType: "mouse",
+  pointerId: 1,
+  isPrimary: true,
+};
+
+/**
+ * Dispatches one pointer event with an explicit `timeStamp`, which the swipe's
+ * speed arm reads. Never 0: React substitutes the wall clock for a falsy
+ * native timestamp.
+ */
+function firePointer(
+  type: "pointerDown" | "pointerMove" | "pointerUp" | "pointerCancel",
+  target: HTMLElement,
+  pointer: PointerIdentity,
+  sample: { readonly x: number; readonly y: number; readonly at: number },
+): void {
+  const event = createEvent[type](target, {
+    ...pointer,
+    clientX: sample.x,
+    clientY: sample.y,
+  });
+  Object.defineProperty(event, "timeStamp", { value: sample.at });
+  fireEvent(target, event);
+}
+
+function renderOfferedSlot(
+  suggestedPrompt: string,
+  onAcceptSuggestion: AcceptSuggestion,
+): HTMLElement {
+  renderEditorSlot({
+    suggestedPrompt,
+    onAcceptSuggestion,
+    steerHintActive: false,
+  });
+  return screen.getByTestId("composer-placeholder");
+}
 
 interface RenderEditorSlotOptions {
   readonly suggestedPrompt: string | null;

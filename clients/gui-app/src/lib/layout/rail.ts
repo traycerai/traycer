@@ -137,6 +137,42 @@ export function railVisibilityFor(override: boolean): Visibility {
   return override ? "shown" : "hidden";
 }
 
+/**
+ * Whether this panel is the last one the rail draws, so it cannot be hidden
+ * (T3): the sidebar body always draws some panel, and an empty rail would
+ * leave the two disagreeing with no icon to click back.
+ *
+ * ONE rule for every surface that offers Hidden - the layout form and the
+ * rail's menu - and both pass {@link railPanelShownByValue}: the saved layout
+ * has to hold in a task with no pull requests or comments, so the menu does
+ * not count what this task happens to draw.
+ */
+export function isLastShownRailPanel(
+  regionId: RailRegionId,
+  isShown: (candidate: RailRegionId) => boolean,
+): boolean {
+  return (
+    isShown(regionId) &&
+    RAIL_REGION_IDS.every(
+      (candidate) => candidate === regionId || !isShown(candidate),
+    )
+  );
+}
+
+/**
+ * Whether a panel is drawn whatever the task holds, read off the values: an
+ * `auto` panel may draw nothing (L-47), so the form counts on `shown` alone.
+ */
+export function railPanelShownByValue(
+  values: Pick<LayoutValues, RailRegionId>,
+  regionId: RailRegionId,
+): boolean {
+  return values[regionId].shown === "shown";
+}
+
+/** Why the last shown panel's Hidden is off, wherever it is offered. */
+export const LAST_RAIL_PANEL_REASON = "One panel always stays shown.";
+
 /** A divider id is always this shape, so it can never collide with a panel id. */
 const DIVIDER_ID_PREFIX = "divider:";
 
@@ -254,6 +290,12 @@ export function visibleRailPanelIds(
  * visible partner stands alone" one rule instead of three (L-166). The member
  * itself stays in the model: hiding a panel is not unstacking it, and showing
  * it again puts it back.
+ *
+ * Dividers follow the same rule (T3). At rest a divider is space BETWEEN two
+ * drawn icons (L-140), so `"spacing"` drops one at either end and one right
+ * after another: with the panels around it hidden it would only pad an edge or
+ * widen a gap nothing marks. While customizing every divider is a handle the
+ * user grabs, so `"handles"` draws each one wherever it sits.
  */
 export type RailDisplayEntry =
   | { readonly kind: "panel"; readonly id: RailRegionId }
@@ -266,6 +308,39 @@ export type RailDisplayEntry =
     };
 
 export function railDisplayEntries(
+  rail: ReadonlyArray<RailEntry>,
+  isVisible: (regionId: RailRegionId) => boolean,
+  dividers: "spacing" | "handles",
+): ReadonlyArray<RailDisplayEntry> {
+  const entries = railDisplayEntriesWithEveryDivider(rail, isVisible);
+  if (dividers === "handles") return entries;
+  const spaced: RailDisplayEntry[] = [];
+  for (const entry of entries) {
+    const previous = spaced.at(-1);
+    if (
+      entry.kind === "divider" &&
+      (previous === undefined || previous.kind === "divider")
+    )
+      continue;
+    spaced.push(entry);
+  }
+  while (spaced.at(-1)?.kind === "divider") spaced.pop();
+  return spaced;
+}
+
+/**
+ * Whether a stack draws as a stack: two or more of its members are shown.
+ * Fewer and its lone shown member stands alone, or nothing does, so the
+ * stack's own row has nothing to act on (T3).
+ */
+export function isRailStackDrawn(
+  stackId: string,
+  isVisible: (regionId: RailRegionId) => boolean,
+): boolean {
+  return (railStackMembers(stackId) ?? []).filter(isVisible).length >= 2;
+}
+
+function railDisplayEntriesWithEveryDivider(
   rail: ReadonlyArray<RailEntry>,
   isVisible: (regionId: RailRegionId) => boolean,
 ): ReadonlyArray<RailDisplayEntry> {
@@ -306,7 +381,7 @@ export function railStackMembersFor(
   regionId: RailRegionId,
   isVisible: (candidate: RailRegionId) => boolean,
 ): ReadonlyArray<RailRegionId> {
-  for (const entry of railDisplayEntries(rail, isVisible)) {
+  for (const entry of railDisplayEntriesWithEveryDivider(rail, isVisible)) {
     if (entry.kind === "stack" && entry.members.includes(regionId))
       return entry.members;
   }

@@ -250,14 +250,24 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     });
     render(<PresetsBlock reveal={vi.fn()} />);
 
+    // T5: a placement change is not one a preset puts back, so the applied
+    // preset is not Modified; the note says presets keep it, and the applied
+    // card is described by that note.
     expect(screen.getByTestId("preset-status-line").textContent).toBe(
-      "Default · Modified",
+      "Default",
     );
-    // The applied card carries the same label; the others do not.
+    expect(screen.queryAllByTestId("preset-card-modified")).toHaveLength(0);
+    expect(screen.queryByTestId("changed-dot")).toBeNull();
+    const note = screen.getByTestId("preset-kept-note");
+    expect(note.textContent).toBe(
+      "Presets keep your arrangement: 1 change under Arrangement.",
+    );
     expect(
-      within(cardOf("Default")).getByTestId("preset-card-modified"),
-    ).not.toBeNull();
-    expect(screen.getAllByTestId("preset-card-modified")).toHaveLength(1);
+      screen
+        .getByRole("button", { name: "Apply Default" })
+        .getAttribute("aria-describedby")
+        ?.split(" "),
+    ).toContain(note.id);
     const toggle = screen.getByRole("button", { name: "View changes" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 

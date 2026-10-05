@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ProfileSyncSelection } from "@traycer/protocol/host/profile-sync-schemas";
 import type {
   ProfileCopyAttempt,
   ProfileCopyWireProvider,
@@ -22,6 +23,11 @@ import type {
  * sign-out and on a user switch.
  */
 export type ProfileCopyFlowView =
+  | {
+      readonly kind: "sync";
+      readonly sourceHostId: string;
+      readonly providerId: ProfileCopyWireProvider | null;
+    }
   | {
       /** Pick devices, preview, start - from a profile on `sourceHostId`. */
       readonly kind: "new";
@@ -59,6 +65,40 @@ interface ProfileCopyFlowState {
   /** Bumped on every open so re-opening the same view remounts it fresh. */
   readonly session: number;
   readonly activeLogin: ProfileCopyActiveLogin | null;
+  /** Start IDs survive closing/reopening an uncertain run in this account. */
+  readonly syncStartBatchIds: ReadonlyMap<string, string>;
+  readonly getSyncStartBatchId: (
+    selection: ProfileSyncSelection,
+    revision: string,
+  ) => string;
+  /** A confirmed start releases its ID for a fresh attempt. */
+  readonly forgetSyncStartBatchId: (
+    selection: ProfileSyncSelection,
+    revision: string,
+    batchId: string,
+  ) => void;
+  /** Uncertain retries retain their identity across result/dialog remounts. */
+  readonly profileCopyRetryRequestIds: ReadonlyMap<string, string>;
+  readonly getProfileCopyRetryRequestId: (
+    attempt: ProfileCopyAttempt,
+    revision: number,
+  ) => string;
+  /** Uncertain creates retain their identity until Save or a list confirms it. */
+  readonly syncRuleIds: ReadonlyMap<string, string>;
+  readonly getSyncRuleId: (
+    sourceHostId: string,
+    destinationHostId: string,
+  ) => string;
+  readonly forgetSyncRuleId: (
+    sourceHostId: string,
+    destinationHostId: string,
+    ruleId: string,
+  ) => void;
+  /** A confirmed Stop retires only that rule's remembered create identity. */
+  readonly forgetStoppedSyncRuleId: (
+    sourceHostId: string,
+    ruleId: string,
+  ) => void;
   /**
    * attemptId → the last direct answer that refused Sign in or Verify, keyed
    * by the verb and the draft revision it answered at (Q4 ruling). The host
@@ -111,6 +151,72 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
     view: null,
     session: 0,
     activeLogin: null,
+    syncStartBatchIds: new Map(),
+    getSyncStartBatchId: (selection, revision) => {
+      const key = JSON.stringify([selection, revision]);
+      const previous = get().syncStartBatchIds;
+      const existing = previous.get(key);
+      if (existing !== undefined) return existing;
+      const batchId = crypto.randomUUID();
+      set({ syncStartBatchIds: new Map(previous).set(key, batchId) });
+      return batchId;
+    },
+    forgetSyncStartBatchId: (selection, revision, batchId) => {
+      const key = JSON.stringify([selection, revision]);
+      const previous = get().syncStartBatchIds;
+      if (previous.get(key) !== batchId) return;
+      const next = new Map(previous);
+      next.delete(key);
+      set({ syncStartBatchIds: next });
+    },
+    profileCopyRetryRequestIds: new Map(),
+    getProfileCopyRetryRequestId: (attempt, revision) => {
+      const key = JSON.stringify([
+        attempt.sourceHostId,
+        attempt.operationId,
+        attempt.destinationHostId,
+        attempt.providerId,
+        attempt.sourceProfileId,
+        attempt.attemptId,
+        revision,
+      ]);
+      const previous = get().profileCopyRetryRequestIds;
+      const existing = previous.get(key);
+      if (existing !== undefined) return existing;
+      const requestId = crypto.randomUUID();
+      set({
+        profileCopyRetryRequestIds: new Map(previous).set(key, requestId),
+      });
+      return requestId;
+    },
+    syncRuleIds: new Map(),
+    getSyncRuleId: (sourceHostId, destinationHostId) => {
+      const key = JSON.stringify([sourceHostId, destinationHostId]);
+      const previous = get().syncRuleIds;
+      const existing = previous.get(key);
+      if (existing !== undefined) return existing;
+      const ruleId = crypto.randomUUID();
+      set({ syncRuleIds: new Map(previous).set(key, ruleId) });
+      return ruleId;
+    },
+    forgetSyncRuleId: (sourceHostId, destinationHostId, ruleId) => {
+      const key = JSON.stringify([sourceHostId, destinationHostId]);
+      const previous = get().syncRuleIds;
+      if (previous.get(key) !== ruleId) return;
+      const next = new Map(previous);
+      next.delete(key);
+      set({ syncRuleIds: next });
+    },
+    forgetStoppedSyncRuleId: (sourceHostId, ruleId) => {
+      const previous = get().syncRuleIds;
+      const next = new Map(previous);
+      for (const [key, remembered] of previous) {
+        if (remembered !== ruleId) continue;
+        const pair: unknown = JSON.parse(key);
+        if (Array.isArray(pair) && pair[0] === sourceHostId) next.delete(key);
+      }
+      if (next.size !== previous.size) set({ syncRuleIds: next });
+    },
     directBlocks: {},
     open: (view) => set({ view, session: get().session + 1 }),
     close: () => set({ view: null }),
@@ -142,6 +248,14 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
         ),
       });
     },
-    reset: () => set({ view: null, activeLogin: null, directBlocks: {} }),
+    reset: () =>
+      set({
+        view: null,
+        activeLogin: null,
+        directBlocks: {},
+        syncStartBatchIds: new Map(),
+        profileCopyRetryRequestIds: new Map(),
+        syncRuleIds: new Map(),
+      }),
   }),
 );

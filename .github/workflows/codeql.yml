@@ -15,12 +15,22 @@ permissions:
   contents: read
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run.
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   analyze:
     name: Analyze (javascript-typescript)
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     permissions:
       security-events: write # upload results to code scanning

@@ -446,6 +446,9 @@ function hostErrorToastForSimpleCode(
   if (code === "TERMINAL_DELETING") {
     return "This terminal is being deleted. Try again in a moment.";
   }
+  if (code === "E_HOST_STORAGE_FULL") {
+    return "The host machine is out of disk space. Free some space on it, then try again.";
+  }
   return null;
 }
 

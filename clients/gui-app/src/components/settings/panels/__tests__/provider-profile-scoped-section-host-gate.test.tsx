@@ -290,4 +290,15 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
   });
+
+  it("keeps the Profiles header and the Sync profiles entry when a syncable provider has no profiles, so saved rules stay manageable", () => {
+    renderSection({
+      state: opencodeState({ providerId: "claude-code", profiles: [] }),
+    });
+
+    expect(screen.getByText("Profiles")).toBeDefined();
+    expect(screen.getByRole("button", { name: /Sync profiles/ })).toBeDefined();
+    // Nothing to add a sign-in to from here: the profile controls stay absent.
+    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+  });
 });

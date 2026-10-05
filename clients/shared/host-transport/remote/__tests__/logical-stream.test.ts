@@ -48,7 +48,13 @@ function createStream(
 }
 
 describe("LogicalStream", () => {
-  it("opens only after delivering the first inbound frame", () => {
+  // This transport has no subscribe ack, so the first inbound frame is what
+  // opens the stream. The ORDER is the contract the local session already
+  // keeps: `open` is reported before the frame is handed on. A consumer that
+  // starts a cycle on `open` (the epic control replica clears its
+  // fresh-snapshot latch there) would otherwise wipe what that same frame had
+  // just established, and nothing re-sends it.
+  it("opens on the first inbound frame, before handing it to the consumer", () => {
     const sent: SentFrame[] = [];
     const events: string[] = [];
     const stream = createStream(sent, []);
@@ -68,12 +74,69 @@ describe("LogicalStream", () => {
     expect(sent).toEqual([]);
 
     expect(stream.deliverServerFrame(serverFrame, null)).toBe(true);
-    expect(events).toEqual(["frame:snapshot", "status:open"]);
+    expect(events).toEqual(["status:open", "frame:snapshot"]);
 
     stream.sendClientFrame(clientFrame, null);
     expect(sent).toEqual([
       { streamId: 17, envelope: clientFrame, binaryPayload: null },
     ]);
+
+    // Every connection cycle, not only the first: a resume re-opens the same
+    // way, and its first frame is the one a consumer re-seeds from.
+    stream.notifyStatus("reconnecting", null, null);
+    expect(stream.deliverServerFrame(serverFrame, null)).toBe(true);
+    expect(events).toEqual([
+      "status:open",
+      "frame:snapshot",
+      "status:reconnecting",
+      "status:open",
+      "frame:snapshot",
+    ]);
+  });
+
+  // The stream drops client frames until it is open, so a consumer answering
+  // its first frame inline needs the stream open by then.
+  it("sends a client frame written from inside the first frame's handler", () => {
+    const sent: SentFrame[] = [];
+    const stream = createStream(sent, []);
+    const reply = { kind: "ack", hasBinaryPayload: false };
+
+    stream.onServerFrame(() => {
+      stream.sendClientFrame(reply, null);
+    });
+
+    expect(
+      stream.deliverServerFrame(
+        { kind: "snapshot", hasBinaryPayload: false },
+        null,
+      ),
+    ).toBe(true);
+    expect(sent).toEqual([
+      { streamId: 17, envelope: reply, binaryPayload: null },
+    ]);
+  });
+
+  it("drops the frame when the open handler closes the stream", () => {
+    const events: string[] = [];
+    const stream = createStream([], []);
+
+    stream.onServerFrame((envelope) => {
+      events.push(`frame:${envelope.kind}`);
+    });
+    stream.onStatusChange((status: StreamConnectionStatus) => {
+      events.push(`status:${status}`);
+      if (status === "open") {
+        stream.close();
+      }
+    });
+
+    expect(
+      stream.deliverServerFrame(
+        { kind: "snapshot", hasBinaryPayload: false },
+        null,
+      ),
+    ).toBe(false);
+    expect(events).toEqual(["status:open", "status:closed"]);
   });
 
   // A logical stream owns no socket - `requestReconnect` (the post-sleep/wake

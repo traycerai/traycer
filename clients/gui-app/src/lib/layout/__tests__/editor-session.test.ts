@@ -482,6 +482,19 @@ describe("the single-window lease (L-32, 5.3)", () => {
     expect(useLayoutEditorStore.getState().lockedBy).toBe("other-window");
   });
 
+  it("says why it refused, in the words every other door uses (T6)", () => {
+    window.localStorage.setItem(
+      LAYOUT_EDITOR_LEASE_KEY,
+      JSON.stringify({ token: "another-window", expiresAt: Date.now() + 5000 }),
+    );
+
+    expect(open(null)).toBe(false);
+
+    expect(toasts.info).toHaveBeenCalledExactlyOnceWith(
+      "Open in another window. Your layout is saved there.",
+    );
+  });
+
   it("releases the lease on the way out", () => {
     open(null);
     expect(window.localStorage.getItem(LAYOUT_EDITOR_LEASE_KEY)).not.toBeNull();
