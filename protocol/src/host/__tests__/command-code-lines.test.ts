@@ -16,6 +16,7 @@ import {
   guiHarnessIdSchemaV90,
   listAgentsResponseSchema,
   listAgentsResponseSchemaV91,
+  listAgentsResponseSchemaV92,
 } from "@traycer/protocol/host/agent/shared";
 import {
   listGuiHarnessesResponseSchema,
@@ -174,6 +175,8 @@ function agentRow(id: string, harnessId: string | null) {
     runConfig: null,
     sessionState: null,
     lastExit: null,
+    // `agent.list@9.2` put `archived` on the row; 10.0 carries it live.
+    archived: null,
   };
 }
 
@@ -824,6 +827,17 @@ describe("every new frozen response schema rejects commandcode while its live co
       label: "agent.list 9.1",
       oldId: "claude",
       frozen: listAgentsResponseSchemaV91,
+      live: listAgentsResponseSchema,
+      withId: (id) => ({
+        caller: { agentId: "self", canSendMessages: true },
+        scope: "all",
+        agents: [agentRow("a1", id)],
+      }),
+    },
+    {
+      label: "agent.list 9.2",
+      oldId: "claude",
+      frozen: listAgentsResponseSchemaV92,
       live: listAgentsResponseSchema,
       withId: (id) => ({
         caller: { agentId: "self", canSendMessages: true },
