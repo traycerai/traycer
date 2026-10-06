@@ -146,9 +146,9 @@ export function VersionPicker(
             role="status"
             className="border-t border-border/40 px-4 py-3 text-ui-sm text-muted-foreground"
           >
-            Older versions that can't open this device's chat stores can still
-            be installed with Install anyway, at the cost of access to those
-            chats until the host is updated again.
+            Older versions that can't open this device's chats or local tasks
+            can still be installed with Install anyway, at the cost of access to
+            them until the host is updated again.
           </p>
         ) : null}
         <VersionPickerList
@@ -161,7 +161,10 @@ export function VersionPicker(
         onOpenChange={(open) => {
           if (!open) setConfirmingVersion(null);
         }}
-        title={`Install v${confirmingVersion ?? ""} and lose access to newer chats?`}
+        // Names the data, not which store: a row can be here for its chat
+        // stores, for the task store, or for both, and the description says
+        // which and what it costs.
+        title={`Install v${confirmingVersion ?? ""} over newer data?`}
         description={confirmationBody ?? ""}
         cascadeSummary={null}
         actionLabel="Install anyway"

@@ -169,3 +169,37 @@ export function isStrictlyNewerHostVersion(
 export function isValidHostVersion(value: string): boolean {
   return compareHostVersions(value, value).comparable;
 }
+
+/**
+ * The two shapes a PUBLISHED release takes: stable `X.Y.Z` and the release
+ * candidate `X.Y.Z-rc.N` that leads to it.
+ *
+ * Shape only. Leading zeros are legal digit strings here and illegal SemVer,
+ * so a caller pairs either pattern with {@link isValidHostVersion}, as
+ * {@link isCanonicalReleaseVersion} does. They live in the protocol package
+ * because the host needs the same answer as the clients and cannot import
+ * `@traycer-clients/shared`; `clients/shared/host-version/release-line.ts`
+ * builds its release-line rules on these two rather than on a second copy.
+ */
+export const CANONICAL_RC_VERSION_PATTERN = /^(\d+\.\d+\.\d+)-rc\.(\d+)$/;
+export const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
+/**
+ * Whether `version` is a canonical stable or release-candidate version: one
+ * of the two patterns above, and valid SemVer.
+ *
+ * Everything else is false - a staging-train build (`1.4.3-staging.92.g8b2f6ce`),
+ * `0.0.0-dev`, a `<target>.<epochMs>.<sha>` local stamp, `beta`, build
+ * metadata. Those sort somewhere in SemVer order, but the order says nothing
+ * about what they were built from, so a table keyed by release cannot place
+ * them.
+ */
+export function isCanonicalReleaseVersion(version: string): boolean {
+  if (
+    !STABLE_VERSION_PATTERN.test(version) &&
+    !CANONICAL_RC_VERSION_PATTERN.test(version)
+  ) {
+    return false;
+  }
+  return isValidHostVersion(version);
+}

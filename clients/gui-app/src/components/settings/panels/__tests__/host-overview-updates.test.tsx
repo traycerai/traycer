@@ -862,7 +862,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     );
     expect(
       (await screen.findByTestId("confirm-destructive-dialog")).textContent,
-    ).toContain("Install v1.3.0 and lose access to newer chats?");
+    ).toContain("Install v1.3.0 over newer data?");
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(installRequests).toEqual([

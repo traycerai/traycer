@@ -3,6 +3,8 @@ import {
   resolveHostStoreFormats,
   storeFloorApplicability,
   storeFloorClearedByFormats,
+  taskStoreFloorBlock,
+  taskStoreFormatReadBy,
   type HostStoreFormats,
   type HostStoreFormatsKnowledge,
 } from "@traycer/protocol/host/store-formats";
@@ -65,6 +67,188 @@ export interface HostStoreFormatRestriction {
   readonly confirmation: string | null;
 }
 
+/**
+ * What a version row says about this device's stores, from everything the
+ * page holds: the cached status, a retained host refusal for this version,
+ * and the task store.
+ *
+ * The CHAT restriction is decided first and keeps its place. `pending` and
+ * `floor-unsupported` cannot be displaced by retained RPC evidence: the first
+ * is transient, and the second says this peer cannot honour consent at all,
+ * so a refusal it once sent cannot turn the row back into an offer. Past
+ * those, a fresh typed refusal outranks the cached answer that offered the
+ * action.
+ *
+ * The TASK STORE comes second, and only ever adds. One "Install anyway"
+ * consents to both losses, so a row the chat stores already restrict keeps
+ * that restriction and gains the task sentence in its confirmation; a row the
+ * chat stores leave alone is restricted by the task store on its own. A row
+ * with no confirmation to add to - a pending survey, a withheld downgrade -
+ * is returned as it is.
+ */
+export function hostVersionRowRestriction(input: {
+  readonly offer: HostStoreFormatOffer;
+  /** The host's typed chat-store refusal retained for THIS version, or `null`. */
+  readonly chatRefusal: HostUpdateStoreFloorRefusal | null;
+  /**
+   * Whether the host answered a dispatch of THIS version with
+   * `TASK_STORE_FORMAT_FLOOR_REASON`. That refusal carries no version and no
+   * formats of its own, so the caller keys it by the version it dispatched.
+   */
+  readonly taskStoreRefused: boolean;
+}): HostStoreFormatRestriction | null {
+  const { offer } = input;
+  const cached = hostStoreFormatRestriction(offer);
+  if (cached?.kind === "pending" || cached?.kind === "floor-unsupported") {
+    return cached;
+  }
+  const chat =
+    input.chatRefusal === null
+      ? cached
+      : hostStoreFormatRestrictionFromRpc(input.chatRefusal);
+  const task =
+    hostTaskStoreFloorFacts(offer.version, offer.runningVersion) ??
+    (input.taskStoreRefused
+      ? refusedTaskStoreFloorFacts(offer.version, offer.runningVersion)
+      : null);
+  if (task === null) return chat;
+  if (chat === null) return taskStoreRestriction(offer.version, task);
+  if (chat.confirmation === null) return chat;
+  return {
+    ...chat,
+    confirmation: `${chat.confirmation} ${taskStoreAlsoSentence(offer.version, task)}`,
+  };
+}
+
+/**
+ * The formats behind a task-store restriction. Either side is `null` when
+ * this app cannot name it, which happens only for a refusal the HOST made:
+ * its table can be newer than this app's, and a host on a staging or
+ * development build has a version no table places.
+ */
+export interface TaskStoreFloorFacts {
+  readonly targetReads: number | null;
+  readonly onDisk: number | null;
+}
+
+/**
+ * Whether `version` cannot open the task store the RUNNING host has stamped,
+ * through the predicate the CLI and the host use (`taskStoreFloorBlock`).
+ *
+ * The running host's version is this page's evidence for what is on disk:
+ * every start stamps the format that build writes, on a device with no local
+ * tasks as well. Deliberately not the install record's version. Under
+ * activation debt the record names bytes that have not started and so have
+ * stamped nothing, and a pre-label from it would warn about a format the disk
+ * does not have yet.
+ *
+ * `null` - the row is not pre-labelled - when that version is unknown or is
+ * one the table does not judge (a staging or development host). The host's
+ * own refusal still arrives for such a row, and maps to the same restriction
+ * through `taskStoreRefused` above.
+ */
+export function hostTaskStoreFloorFacts(
+  version: string,
+  runningVersion: string | null,
+): TaskStoreFloorFacts | null {
+  if (runningVersion === null) return null;
+  const onDisk = taskStoreFormatReadBy(runningVersion);
+  if (onDisk === null) return null;
+  const block = taskStoreFloorBlock(version, onDisk);
+  if (block === null) return null;
+  return { targetReads: block.targetReads, onDisk: block.onDisk };
+}
+
+/**
+ * The facts for a row the HOST refused and this page could not pre-label:
+ * whatever each version lets this app's table name, and `null` for the rest.
+ */
+function refusedTaskStoreFloorFacts(
+  version: string,
+  runningVersion: string | null,
+): TaskStoreFloorFacts {
+  return {
+    targetReads: taskStoreFormatReadBy(version),
+    onDisk:
+      runningVersion === null ? null : taskStoreFormatReadBy(runningVersion),
+  };
+}
+
+/**
+ * A row the task store restricts on its own.
+ *
+ * `blocked`, like a chat store written in a newer format, so the row carries
+ * the same "newer data" marker and the same Install anyway. What it costs is
+ * milder and the copy says so: the host keeps running, local tasks stay
+ * unopened and none can be created, and nothing is deleted.
+ */
+function taskStoreRestriction(
+  version: string,
+  task: TaskStoreFloorFacts,
+): HostStoreFormatRestriction {
+  const remedy = taskStoreRestoringBuild(task.onDisk);
+  return {
+    kind: "blocked",
+    reason:
+      task.targetReads === null || task.onDisk === null
+        ? "Reads an older task store format than this device has"
+        : `Reads task store format ${task.targetReads}; this device has ${task.onDisk}`,
+    detail: `Can't open this device's task store; installing anyway leaves local tasks unopened until ${remedy} is installed.`,
+    confirmation: `${taskStoreFormatsSentence(version, task)}, so local tasks won't open and new ones can't be created until ${remedy} is installed again. Nothing is deleted.`,
+  };
+}
+
+/** The task sentence a chat restriction's confirmation gains. */
+function taskStoreAlsoSentence(
+  version: string,
+  task: TaskStoreFloorFacts,
+): string {
+  const remedy = taskStoreRestoringBuild(task.onDisk);
+  const formats =
+    task.targetReads === null || task.onDisk === null
+      ? `v${version} also reads an older task store format than this device has`
+      : `v${version} also reads task store format ${task.targetReads} where this device has ${task.onDisk}`;
+  return `${formats}, so local tasks won't open and new ones can't be created until ${remedy} is installed again; nothing in the task store is deleted.`;
+}
+
+function taskStoreFormatsSentence(
+  version: string,
+  task: TaskStoreFloorFacts,
+): string {
+  if (task.targetReads === null || task.onDisk === null) {
+    return `This device's task store is in a newer format than v${version} reads`;
+  }
+  return `This device's task store is in format ${task.onDisk}. v${version} reads format ${task.targetReads}`;
+}
+
+function taskStoreRestoringBuild(onDisk: number | null): string {
+  return onDisk === null
+    ? "a host that can read it"
+    : `a host that reads format ${onDisk}`;
+}
+
+/**
+ * The failure line for the host's task-store refusal of a dispatched
+ * version, in the shape `describeHostStoreFloorRpcRefusal` gives a chat one.
+ */
+export function describeHostTaskStoreFloorRefusal(
+  version: string,
+  runningVersion: string | null,
+): string {
+  const task = refusedTaskStoreFloorFacts(version, runningVersion);
+  const remedy = taskStoreRestoringBuild(task.onDisk);
+  const formats =
+    task.targetReads === null || task.onDisk === null
+      ? "it reads an older task store format than this device has"
+      : `it reads task store format ${task.targetReads} and this device has ${task.onDisk}`;
+  return `Can't install ${version}: ${formats}, so local tasks won't open and new ones can't be created until ${remedy} is installed again. Nothing is deleted. Install a version that can open it instead, or choose Install anyway for v${version} to proceed.`;
+}
+
+/**
+ * The CHAT-store half of a row's restriction, from the cached status alone.
+ * {@link hostVersionRowRestriction} is what a row is rendered from; this is
+ * the part of it that reads `host.status`.
+ */
 export function hostStoreFormatRestriction(
   input: HostStoreFormatOffer,
 ): HostStoreFormatRestriction | null {

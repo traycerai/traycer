@@ -47,7 +47,11 @@
  * never covers anything a user can install from the registry. See
  * {@link storeFloorApplicability}.
  */
-import { compareHostVersions, isValidHostVersion } from "./version-order";
+import {
+  compareHostVersions,
+  isCanonicalReleaseVersion,
+  isValidHostVersion,
+} from "./version-order";
 
 /**
  * The version a host reports when built straight from source, before the
@@ -507,6 +511,155 @@ export function decideStoreFormatFloor(
   }
   return { kind: "clear" };
 }
+
+/**
+ * ## The task store
+ *
+ * The second forward-only store under a host's data directory:
+ * `<data root>/epic-homes/epic-homes.db`, the local task store, stamped in
+ * SQLite's `PRAGMA user_version`. A build refuses a file stamped newer than it
+ * speaks, exactly as it does for a chat store, and the consequence is milder:
+ * the host keeps running, every local task stays unopened and none can be
+ * created until a build that reads the stamp is installed again. Nothing is
+ * deleted.
+ *
+ * Unlike the chat store, no release PUBLISHES what it reads here, and one
+ * that has shipped never will. So this is a table keyed by release, read by
+ * the same three actors, and deliberately narrower than the chat floor in
+ * three ways - each of which exists so the check can never refuse an ordinary
+ * install:
+ *
+ * 1. Only a canonical stable or release-candidate target is judged
+ *    ({@link taskStoreFormatReadBy}). A staging-train build is numbered
+ *    `1.4.3-staging.N` until 1.5.0 is out: it sorts below `1.5.0-rc.1` and
+ *    writes format 4, and a staging desktop installs its bundled host through
+ *    a path that always evaluates the floor and never passes consent.
+ * 2. The chat floor speaks first and keeps its verdict. One consent covers
+ *    both stores, so the task store refuses on its own only where the chat
+ *    floor cleared, and adds a sentence where the chat floor refused.
+ * 3. The on-disk stamp is capped at the newest format this table knows
+ *    ({@link taskStoreFloorBlock}) before it is compared. A CLI can be older
+ *    than the host that wrote the disk, and would otherwise call every newer
+ *    release "reads 4" and refuse rollbacks it knows nothing about.
+ *
+ * An unreadable or absent task store is not a refusal either - see the CLI's
+ * reader. A wrong pass costs tasks that do not open until the next update; a
+ * wrong refusal blocks installs, repair installs included.
+ */
+interface TaskStoreFormatEra {
+  /** First canonical release, inclusive, that reads `taskStore`. */
+  readonly from: string;
+  readonly taskStore: number;
+}
+
+/**
+ * Read off `EPIC_HOMES_FORMAT_VERSION` at each tag. Ascending; a release
+ * belongs to the last era whose `from` it is not below.
+ *
+ * | tag(s)                      | reads |
+ * | --------------------------- | ----- |
+ * | 1.4.0 ... 1.4.2             | 2     |
+ * | 1.5.0-rc.1 and later        | 4     |
+ *
+ * The first row starts at `0.0.0` on purpose: 1.3.x and older have no task
+ * store at all, so "2 at most" is true of them and is the answer that warns.
+ *
+ * Add a row whenever the host's format moves. The host's constant is typed by
+ * {@link NewestTaskStoreFormat}, so a bump without a row here fails its
+ * compile.
+ */
+const TASK_STORE_FORMAT_ERAS = [
+  { from: "0.0.0", taskStore: 2 },
+  { from: "1.5.0-rc.1", taskStore: 4 },
+] as const satisfies readonly TaskStoreFormatEra[];
+
+type LastTaskStoreFormatEra<Eras extends readonly TaskStoreFormatEra[]> =
+  Eras extends readonly [...TaskStoreFormatEra[], infer Last extends TaskStoreFormatEra]
+    ? Last
+    : never;
+
+/**
+ * The newest task store format the table knows, as a literal type taken from
+ * the table's LAST row - so it moves when a row is added and at no other
+ * time.
+ */
+export type NewestTaskStoreFormat = LastTaskStoreFormatEra<
+  typeof TASK_STORE_FORMAT_ERAS
+>["taskStore"];
+
+/** {@link NewestTaskStoreFormat}, as a value. */
+export const NEWEST_TASK_STORE_FORMAT: NewestTaskStoreFormat = 4;
+
+/**
+ * The newest task store format a released host reads, or `null` when the
+ * version is not one this table judges.
+ *
+ * `null` is "not judged", never "reads nothing": every caller treats it as
+ * standing aside. Only a canonical stable (`X.Y.Z`) or release-candidate
+ * (`X.Y.Z-rc.N`) version is judged; see rule 1 above.
+ */
+export function taskStoreFormatReadBy(hostVersion: string): number | null {
+  if (!isCanonicalReleaseVersion(hostVersion)) return null;
+  let taskStore: number | null = null;
+  for (const era of TASK_STORE_FORMAT_ERAS) {
+    const relation = compareHostVersions(hostVersion, era.from);
+    // Both sides are valid SemVer here, so this is always comparable; the
+    // guard only keeps the type honest.
+    if (!relation.comparable || relation.ordering === "less") break;
+    taskStore = era.taskStore;
+  }
+  return taskStore;
+}
+
+/** Why a target cannot open this machine's task store. */
+export interface TaskStoreFloorBlock {
+  /** The newest task store format the target reads. */
+  readonly targetReads: number;
+  /**
+   * The stamp the caller found, UNCAPPED: it is what the machine has, and
+   * what a message should say. The comparison that produced this block used
+   * the capped value.
+   */
+  readonly onDisk: number;
+}
+
+/**
+ * The one task-store predicate, used by the CLI, the host and the app: the
+ * block when `targetVersion` is judged and reads less than `onDiskFormat`,
+ * else `null`.
+ *
+ * `onDiskFormat` is capped at {@link NEWEST_TASK_STORE_FORMAT} before the
+ * comparison (rule 3 above). The cap keeps the refusal for a target the table
+ * PROVES too old - `1.4.2` reads 2, and 2 is below 4 whatever the disk holds -
+ * and withdraws it for a target the table merely has not heard is newer.
+ *
+ * Each caller supplies the most direct evidence it has for `onDiskFormat`:
+ * the CLI reads the file, the host passes the format it writes, and the app
+ * passes what the RUNNING host's version reads (the build that stamped the
+ * disk).
+ */
+export function taskStoreFloorBlock(
+  targetVersion: string,
+  onDiskFormat: number,
+): TaskStoreFloorBlock | null {
+  const targetReads = taskStoreFormatReadBy(targetVersion);
+  if (targetReads === null) return null;
+  if (targetReads >= Math.min(onDiskFormat, NEWEST_TASK_STORE_FORMAT)) {
+    return null;
+  }
+  return { targetReads, onDisk: onDiskFormat };
+}
+
+/**
+ * The free-text `reason` the host's `host.update.install` answers with when
+ * it refuses a target for the task store alone (`outcome: "cli-failed"`,
+ * `storeFloor: null`).
+ *
+ * A new VALUE of a reason that was already open vocabulary, not a new field:
+ * a released app decodes it and prints its generic failure line, and an app
+ * that knows this value maps it to the same restriction its picker pre-labels.
+ */
+export const TASK_STORE_FORMAT_FLOOR_REASON = "task-store-format-floor";
 
 /**
  * Fatal close code for a stream whose backing store was written by a NEWER

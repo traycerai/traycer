@@ -4,11 +4,12 @@ import type {
   HostStatusStoreFormats,
 } from "@traycer/protocol/host/status/index";
 import {
-  hostStoreFormatRestriction,
-  hostStoreFormatRestrictionFromRpc,
+  hostVersionRowRestriction,
   type HostStoreFormatRestriction,
   describeHostStoreFloorRpcRefusal,
+  describeHostTaskStoreFloorRefusal,
 } from "./host-overview-store-formats";
+import { TASK_STORE_FORMAT_FLOOR_REASON } from "@traycer/protocol/host/store-formats";
 import { useQueryClient } from "@tanstack/react-query";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { toast } from "sonner";
@@ -335,7 +336,7 @@ export function useHostOverviewUpdates(input: {
         // Everything left here only touches state that is
         // meaningless without this component.
         onSuccess: (response) => {
-          if (storeFloor.recordRefusal(response)) {
+          if (storeFloor.recordRefusal(response, version)) {
             setInstallFailure(null);
             return;
           }
@@ -661,6 +662,13 @@ interface RetainedHostInstallRefusal {
   readonly hostVersion: string | null;
   readonly message: string;
   readonly storeFloor: HostUpdateStoreFloorRefusal | null;
+  /**
+   * The version whose dispatch the host refused for the TASK store, or
+   * `null`. The typed chat refusal beside it names its own target; this
+   * refusal is a bare reason code, so the version that was dispatched is
+   * recorded here and is the only thing that says which row it belongs to.
+   */
+  readonly taskStoreFloorVersion: string | null;
 }
 
 interface HostInstallStoreFloor {
@@ -683,7 +691,11 @@ interface HostInstallStoreFloor {
     version: string,
     acceptStoreFormatLoss: boolean,
   ) => boolean;
-  readonly recordRefusal: (response: HostUpdateInstallResponseV13) => boolean;
+  readonly recordRefusal: (
+    response: HostUpdateInstallResponseV13,
+    /** The version this response answers a dispatch of. */
+    version: string,
+  ) => boolean;
 }
 
 /**
@@ -718,34 +730,27 @@ function useHostInstallStoreFloor(input: {
     const storeFloor = activeRefusal?.storeFloor ?? null;
     return storeFloor?.targetVersion === version ? storeFloor : null;
   };
+  const taskStoreFloorVersionFor = (version: string): string | null =>
+    activeRefusal?.taskStoreFloorVersion === version ? version : null;
+  // The precedence between the cached status, a retained refusal and the task
+  // store is `hostVersionRowRestriction`'s; this only gathers its evidence.
   const restrictionForVersion = (
     version: string,
-  ): HostStoreFormatRestriction | null => {
-    const restriction = hostStoreFormatRestriction({
-      version,
-      publishedFormats:
-        input.manifest?.versions.find((entry) => entry.version === version)
-          ?.storeFormats ?? null,
-      runningVersion: input.runningVersion,
-      storeFormats: input.storeFormats,
-      install: input.install,
-      installSupportsStoreFloor: input.installSupportsStoreFloor,
+  ): HostStoreFormatRestriction | null =>
+    hostVersionRowRestriction({
+      offer: {
+        version,
+        publishedFormats:
+          input.manifest?.versions.find((entry) => entry.version === version)
+            ?.storeFormats ?? null,
+        runningVersion: input.runningVersion,
+        storeFormats: input.storeFormats,
+        install: input.install,
+        installSupportsStoreFloor: input.installSupportsStoreFloor,
+      },
+      chatRefusal: storeFloorForVersion(version),
+      taskStoreRefused: taskStoreFloorVersionFor(version) !== null,
     });
-    // Neither of these may be displaced by retained RPC evidence. `pending` is
-    // transient; `unsupported` says this peer cannot honour consent at all, so
-    // a refusal it once sent cannot turn the row back into an offer.
-    if (
-      restriction?.kind === "pending" ||
-      restriction?.kind === "floor-unsupported"
-    ) {
-      return restriction;
-    }
-    const storeFloor = storeFloorForVersion(version);
-    if (storeFloor !== null) {
-      return hostStoreFormatRestrictionFromRpc(storeFloor);
-    }
-    return restriction;
-  };
   return {
     failureDescription: activeRefusal?.message ?? input.fallbackFailure,
     clear: () => setRetained(null),
@@ -818,25 +823,34 @@ function useHostInstallStoreFloor(input: {
           // Local rejection obtains no fresher evidence. Preserve the typed
           // answer so a cached safe catalog cannot erase Install anyway.
           storeFloor: storeFloorForVersion(version),
+          taskStoreFloorVersion: taskStoreFloorVersionFor(version),
         });
         return false;
       }
       setRetained(null);
       return true;
     },
-    recordRefusal: (response) => {
+    recordRefusal: (response, version) => {
       if (response.outcome !== "cli-failed") return false;
-      const message = describeInstallRefusal(
-        response.reason,
-        response.storeFloor,
-        input.hostName,
-      );
+      // The chat floor's typed refusal wins when both are somehow present:
+      // the host sends this reason only where the chat floor produced none.
+      const taskStoreRefused =
+        response.storeFloor === null &&
+        response.reason === TASK_STORE_FORMAT_FLOOR_REASON;
+      const message = taskStoreRefused
+        ? describeHostTaskStoreFloorRefusal(version, input.runningVersion)
+        : describeInstallRefusal(
+            response.reason,
+            response.storeFloor,
+            input.hostName,
+          );
       if (message === null) return false;
       setRetained({
         hostId: input.hostId,
         hostVersion: input.runningVersion,
         message,
         storeFloor: response.storeFloor,
+        taskStoreFloorVersion: taskStoreRefused ? version : null,
       });
       return true;
     },

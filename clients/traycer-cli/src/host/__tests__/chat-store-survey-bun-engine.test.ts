@@ -1,5 +1,5 @@
 /**
- * Pins {@link openBunReadOnly}'s macOS retry (`../chat-store-survey.ts`):
+ * Pins {@link readBunFirstRow}'s macOS retry (`../chat-store-survey.ts`):
  * Apple's system libsqlite3, which Bun links on macOS, throws
  * `SQLITE_CANTOPEN` opening a WAL database read-only while its `-wal`/`-shm`
  * sidecars are absent - the state a clean close leaves - and the fix creates

@@ -32,7 +32,22 @@
 // staged-artifact revalidation disagree about which rows the default listing
 // returns — which purges a perfectly good staged `2.0.0-beta.1`.
 
+import {
+  CANONICAL_RC_VERSION_PATTERN,
+  STABLE_VERSION_PATTERN,
+} from "@traycer/protocol/host/version-order";
 import { isValidHostVersion } from "./compare-host-versions";
+
+// The two release shapes live in `@traycer/protocol/host/version-order`, for
+// the reason the comparator does (`compare-host-versions.ts`): the host and
+// the store-format floor read them too, and cannot import this package.
+// Re-exported so client code keeps one import path for the release-line
+// vocabulary.
+export {
+  CANONICAL_RC_VERSION_PATTERN,
+  STABLE_VERSION_PATTERN,
+  isCanonicalReleaseVersion,
+} from "@traycer/protocol/host/version-order";
 
 /**
  * A version's `X.Y.Z` core — the identity an implicit follow is scoped to.
@@ -44,8 +59,6 @@ import { isValidHostVersion } from "./compare-host-versions";
  */
 type HostReleaseLine = string;
 
-const CANONICAL_RC_PATTERN = /^(\d+\.\d+\.\d+)-rc\.(\d+)$/;
-const STABLE_PATTERN = /^\d+\.\d+\.\d+$/;
 // The staging release train's version grammar: the next patch above the
 // latest stable, then the train's run number and the short build commit.
 // Numeric identifiers carry no leading zeros and the commit is lowercase hex,
@@ -86,7 +99,7 @@ export function isCanonicalStagingVersion(version: string): boolean {
 function canonicalReleaseCandidateLine(
   version: string,
 ): HostReleaseLine | null {
-  const match = CANONICAL_RC_PATTERN.exec(version);
+  const match = CANONICAL_RC_VERSION_PATTERN.exec(version);
   if (match === null) return null;
   if (!isValidHostVersion(version)) return null;
   return match[1];
@@ -174,7 +187,7 @@ export function isHiddenFromDefaultCatalog(version: string): boolean {
 function hostReleaseLine(version: string): HostReleaseLine | null {
   const canonical = canonicalReleaseCandidateLine(version);
   if (canonical !== null) return canonical;
-  if (!STABLE_PATTERN.test(version)) return null;
+  if (!STABLE_VERSION_PATTERN.test(version)) return null;
   if (!isValidHostVersion(version)) return null;
   return version;
 }
@@ -217,5 +230,5 @@ export function isMatchingStableRelease(
 ): boolean {
   const line = canonicalReleaseCandidateLine(installedRc);
   if (line === null) return false;
-  return STABLE_PATTERN.test(candidate) && candidate === line;
+  return STABLE_VERSION_PATTERN.test(candidate) && candidate === line;
 }

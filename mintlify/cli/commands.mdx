@@ -130,7 +130,7 @@ Options for these commands:
 | `--no-service-register` | `install`, `ensure` | Install the files only, without registering or starting the OS service. `host install` does not support it on Windows. |
 | `--keep-installed` | `ensure` | Keep whichever host version is installed instead of moving to this CLI's default. |
 | `--no-linger` | `install`, `ensure`, `host service install` | Linux only: skip `loginctl enable-linger`. |
-| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats on this machine were saved in a newer format than it can read. Those chats are unavailable while that host is installed. |
+| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats or local tasks on this machine were saved in a newer format than it can read. Those chats and local tasks are unavailable while that host is installed. |
 
 The CLI reads the host's connection details from `~/.traycer/host/`.
 

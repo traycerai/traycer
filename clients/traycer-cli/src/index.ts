@@ -316,7 +316,7 @@ function assertLifecycleOriginCommands(program: Command): void {
  * deliberately leave the floor standing.
  */
 const ACCEPT_STORE_FORMAT_LOSS_HELP =
-  "Install the selected host even when a chat store on this machine was written in a newer format than it reads. Those chats are unavailable for as long as that host is installed, and a host that meets a store it cannot open may crash-loop rather than report it. Never implied by --force or --allow-downgrade.";
+  "Install the selected host even when a chat store or the task store on this machine was written in a newer format than it reads. Those chats, and all local tasks, are unavailable for as long as that host is installed, and a host that meets a chat store it cannot open may crash-loop rather than report it. Never implied by --force or --allow-downgrade.";
 
 function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   const value = opts.attemptAdoption;
