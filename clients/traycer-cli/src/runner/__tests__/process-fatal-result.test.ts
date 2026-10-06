@@ -20,6 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stdoutChunks: string[] = [];
 const stderrChunks: string[] = [];
+// Both streams in the order they were written, for assertions about order.
+const writes: { stream: "stdout" | "stderr"; text: string }[] = [];
 
 describe("terminal result after a process-fatal failure", () => {
   let priorExitCode: number | string | null | undefined;
@@ -29,11 +31,13 @@ describe("terminal result after a process-fatal failure", () => {
     process.exitCode = undefined;
     stdoutChunks.length = 0;
     stderrChunks.length = 0;
+    writes.length = 0;
     vi.spyOn(process.stdout, "write").mockImplementation(((
       chunk: string | Uint8Array,
       callback: (() => void) | undefined,
     ) => {
       stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      writes.push({ stream: "stdout", text: stdoutChunks.at(-1) ?? "" });
       if (callback !== undefined) callback();
       return true;
     }) as never);
@@ -42,6 +46,7 @@ describe("terminal result after a process-fatal failure", () => {
       callback: (() => void) | undefined,
     ) => {
       stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      writes.push({ stream: "stderr", text: stderrChunks.at(-1) ?? "" });
       if (callback !== undefined) callback();
       return true;
     }) as never);
@@ -184,6 +189,16 @@ describe("terminal result after a process-fatal failure", () => {
     expect(stdoutChunks.join("")).toContain("host restarted");
     expect(stdoutChunks.join("")).not.toContain('"status":"ok"');
     expect(stderrChunks.join("")).toContain("E_UNEXPECTED");
+    // The separate buffers above cannot tell which came first.
+    const humanAt = writes.findIndex(
+      (w) => w.stream === "stdout" && w.text.includes("host restarted"),
+    );
+    const errorAt = writes.findIndex(
+      (w) => w.stream === "stderr" && w.text.includes("E_UNEXPECTED"),
+    );
+    expect(humanAt).toBeGreaterThanOrEqual(0);
+    expect(errorAt).toBeGreaterThanOrEqual(0);
+    expect(humanAt).toBeLessThan(errorAt);
     expect(process.exitCode).toBe(1);
   });
 
