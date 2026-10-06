@@ -668,7 +668,7 @@ describe("session state token", () => {
   });
 });
 
-describe("turn state token", () => {
+describe("activity token", () => {
   it("renders working or idle on a local row from `active`", () => {
     const output = formatAgentListResponse(
       response(
@@ -681,8 +681,8 @@ describe("turn state token", () => {
       ),
     );
 
-    expect(agentLine(output, "busy ")).toContain("turn: working");
-    expect(agentLine(output, "quiet ")).toContain("turn: idle");
+    expect(agentLine(output, "busy ")).toContain("activity: working");
+    expect(agentLine(output, "quiet ")).toContain("activity: idle");
   });
 
   it("renders no token on a non-local row, whatever `active` says", () => {
@@ -696,17 +696,20 @@ describe("turn state token", () => {
       ),
     );
 
-    expect(agentLine(output, "remote ")).not.toContain("turn:");
+    expect(agentLine(output, "remote ")).not.toContain("activity:");
   });
 
-  it("explains the token only when a row renders it, and pins the two load-bearing phrases", () => {
+  it("explains the token only when a row renders it, and pins the load-bearing phrases", () => {
     const withToken = formatAgentListResponse(
       response(
         [agent({ id: "caller", isSelf: true }), agent({ id: "peer" })],
         "caller",
       ),
     );
-    expect(withToken).toContain("turn: <state>:");
+    expect(withToken).toContain("activity: <state>:");
+    expect(withToken).toContain(
+      "a working row may already have ended its turn",
+    );
     expect(withToken).toContain("Your own row carries none");
     expect(withToken).toContain("it has NOT necessarily replied to you");
     expect(withToken).toContain("that is not the same as idle");
@@ -720,10 +723,10 @@ describe("turn state token", () => {
         "caller",
       ),
     );
-    expect(allRemote).not.toContain("turn:");
+    expect(allRemote).not.toContain("activity:");
 
     expect(formatAgentListResponse(response([], "caller"))).not.toContain(
-      "turn:",
+      "activity:",
     );
   });
 
@@ -738,8 +741,8 @@ describe("turn state token", () => {
       ),
     );
 
-    expect(agentLine(output, "caller ")).not.toContain("turn:");
-    expect(output).not.toContain("turn: <state>:");
+    expect(agentLine(output, "caller ")).not.toContain("activity:");
+    expect(output).not.toContain("activity: <state>:");
   });
 
   it("places the token after the location and before the session token", () => {
@@ -761,15 +764,15 @@ describe("turn state token", () => {
     const line = agentLine(output, "full ");
 
     expect(line.indexOf("worktree:")).toBeGreaterThan(-1);
-    expect(line.indexOf("turn: working")).toBeGreaterThan(
+    expect(line.indexOf("activity: working")).toBeGreaterThan(
       line.indexOf("worktree:"),
     );
     expect(line.indexOf("session: running")).toBeGreaterThan(
-      line.indexOf("turn: working"),
+      line.indexOf("activity: working"),
     );
   });
 
-  it("carries the turn legend line when sending is unavailable", () => {
+  it("carries the activity legend line when sending is unavailable", () => {
     const output = formatAgentListResponse({
       ...response(
         [agent({ id: "caller", isSelf: true }), agent({ id: "peer" })],
@@ -779,7 +782,7 @@ describe("turn state token", () => {
     });
 
     expect(output).toContain("Sending is unavailable in this session");
-    expect(output).toContain("turn: <state>:");
+    expect(output).toContain("activity: <state>:");
     expect(output).toContain("that is not the same as idle");
   });
 });
