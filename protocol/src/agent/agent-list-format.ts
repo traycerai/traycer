@@ -330,16 +330,18 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
 }
 
 /**
- * Whether anything the agent started is running right now, so an orchestrator
- * waiting on a silent peer can tell one that is still busy from one that has
- * stopped (traycerai/traycer#2009).
+ * The host's busy signal for the agent, so an orchestrator waiting on a silent
+ * peer has something better than the silence to go on
+ * (traycerai/traycer#2009).
  *
  * `active` is a released schema field the host fills from its activity
- * tracker, and the name of the token follows what that tracker measures: it
- * stays true after a turn ends for as long as a shell, a subagent or a
- * background task the agent started is alive. So this is `activity:`, never
- * `turn:` - a row would otherwise claim a turn the listing cannot see. `idle`
- * is the strong word: no turn and nothing in the background.
+ * tracker, and the token is named for what that tracker measures, which is
+ * not "a turn is running". For a GUI chat it stays true after a turn ends
+ * while queued or scheduled work, a shell, a subagent or a background task is
+ * outstanding; for a terminal agent without provider hooks it follows recent
+ * output, so a long silent tool call reads false. So this is `activity:`,
+ * never `turn:`, and the legend claims neither a live turn for `working` nor
+ * finished work for `idle`.
  *
  * `active` is also `false` for every cross-host row, because the serving host
  * cannot see another machine's work. So the token renders on LOCAL rows only:
@@ -546,20 +548,20 @@ function formatAgentListLegend(
   //
   // "running does NOT mean mid-turn": `running` reports that a session exists
   // on the binding host, which is equally true of an agent sitting idle at a
-  // prompt for an hour. Whether anything is executing is the `activity:`
-  // token's word, and that token is absent on every row this host cannot
-  // observe.
+  // prompt for an hour. The host's busy signal is the `activity:` token, which
+  // is absent on every row this host cannot observe.
   const sessionState = showSessionState
     ? "\nsession: <state>: the agent's own session as its binding host sees it - running (a live session exists on that host - the agent's process is up; it does NOT say the agent is mid-turn), sleeping (no live session; it RESUMES on your next message or when the agent is opened, so a sleeping peer is still addressable and is not dead), or stopped (the agent was archived, or deleted; a stopped row you can still see is almost always the archived case, because a deleted record drops out of the listing. An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone). 'last exit' says how the last session ended - reaped (idle), user-stop, restart, or process-exit - and is display detail only: all four resume identically. A row with no session token is one this host cannot observe (another machine's agent, a GUI chat, or a record older than the field), which is not the same as stopped"
     : "";
-  // Two sentences carry the weight. "a working row may already have ended its
-  // turn": `active` outlives the turn while background work the agent started
-  // is alive, so working alone does not mean a reply is still coming. "it has
-  // NOT necessarily replied": an orchestrator's question is "do I keep
-  // waiting", and idle answers only half of it - a turn that ended without the
-  // reply it owed reads idle too.
+  // Three sentences carry the weight, one per way the signal is weaker than
+  // it looks. "a working row may already have ended its turn": `active`
+  // outlives the turn while queued, scheduled or background work is
+  // outstanding. "reads idle even while it is still working": a terminal
+  // agent's signal follows its output, not its process. "it has NOT
+  // necessarily replied": a turn that ended without the reply it owed reads
+  // idle too.
   const activity = showActivity
-    ? "\nactivity: <state>: whether anything the agent started is running right now, as this host sees it - working (a turn is running, a terminal agent's CLI is producing output, or work it started is still running in the background - a shell, a subagent or a background task - so a working row may already have ended its turn: read its transcript to tell) or idle (nothing is running; it acts again only when it gets a message, and it has NOT necessarily replied to you). Your own row carries none. Any other row with no activity token runs on another machine, whose activity this host cannot observe - that is not the same as idle"
+    ? "\nactivity: <state>: the host's busy signal for the agent, as this host tracks it - working (the host counts live or pending work for it: a turn, queued or scheduled work, or something it started in the background such as a shell, a subagent or a background task - so a working row may already have ended its turn: read its transcript to tell) or idle (the host currently reports no activity for it; it has NOT necessarily replied to you, and a terminal agent that has printed nothing for a while reads idle even while it is still working). Your own row carries none. Any other row with no activity token runs on another machine, whose activity this host cannot observe - that is not the same as idle"
     : "";
   if (!showSend) {
     return `Legend:

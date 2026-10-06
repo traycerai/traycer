@@ -710,6 +710,7 @@ describe("activity token", () => {
     expect(withToken).toContain(
       "a working row may already have ended its turn",
     );
+    expect(withToken).toContain("reads idle even while it is still working");
     expect(withToken).toContain("Your own row carries none");
     expect(withToken).toContain("it has NOT necessarily replied to you");
     expect(withToken).toContain("that is not the same as idle");
