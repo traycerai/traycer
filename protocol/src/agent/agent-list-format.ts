@@ -64,9 +64,15 @@ export function formatAgentListPage(
   // Every legend gate below reads the rows this call actually prints. A legend
   // line for a marker that is on another page, or that `compact` leaves off the
   // row, explains something the reader cannot see.
-  const rendered = pageSections.flatMap((section) =>
-    section.rows.map((row) => row.agent),
-  );
+  //
+  // A listing that is NOT cut reads every agent the response holds instead,
+  // which is what this formatter did before pages existed. The two sets
+  // differ only when a row is in the response and printed nowhere - agents
+  // whose parents form a cycle no root reaches - and a listing with nothing
+  // cut must keep the bytes it has always had for that input too.
+  const rendered = window.cut
+    ? pageSections.flatMap((section) => section.rows.map((row) => row.agent))
+    : response.agents;
   const full = options.detail === "full";
   // Gated on the flag being REPORTED rather than on any row being archived -
   // see `hasArchiveEnrichment`.
@@ -117,18 +123,22 @@ type AgentListSection = {
 type AgentListPageWindow = {
   readonly start: number;
   readonly end: number;
-  /** False for an unpaged render, which never prints a footer. */
-  readonly paged: boolean;
+  /**
+   * Whether the window leaves any row out. False for an unpaged render and
+   * for a page that holds every row, and those two print the same text: a
+   * page only changes a listing it cuts.
+   */
+  readonly cut: boolean;
 };
 
 function resolvePageWindow(
   page: AgentListRenderOptions["page"],
   total: number,
 ): AgentListPageWindow {
-  if (page === null) return { start: 0, end: total, paged: false };
+  if (page === null) return { start: 0, end: total, cut: false };
   const start = Math.min(wholeNumberAtLeast(page.offset, 0), total);
   const end = Math.min(start + wholeNumberAtLeast(page.limit, 1), total);
-  return { start, end, paged: true };
+  return { start, end, cut: start > 0 || end < total };
 }
 
 /**
@@ -148,7 +158,10 @@ function wholeNumberAtLeast(value: number, floor: number): number {
 function slicePageSections(
   sections: readonly AgentListSection[],
   window: AgentListPageWindow,
-): AgentListSection[] {
+): readonly AgentListSection[] {
+  // With nothing cut every section stays, including one whose members print
+  // no row (the cycle case above): its heading has always been printed.
+  if (!window.cut) return sections;
   const sliced: AgentListSection[] = [];
   let sectionStart = 0;
   for (const section of sections) {
@@ -175,7 +188,7 @@ function formatAgentListBody(
   if (response.agents.length === 0) {
     return `No agents found for scope '${response.scope}'.`;
   }
-  if (window.paged && total > 0 && window.start >= total) {
+  if (window.cut && window.start >= total) {
     return `No agents on this page: the offset is past the end of the listing, which has ${total} agents. Pass offset=0 for the first page.`;
   }
   return pageSections
@@ -206,8 +219,7 @@ function formatAgentListFooter(
   window: AgentListPageWindow,
   total: number,
 ): string | null {
-  if (!window.paged) return null;
-  if (window.start === 0 && window.end === total) return null;
+  if (!window.cut) return null;
   if (window.start >= total) return null;
   const shown = `Showing ${window.start + 1}-${window.end} of ${total} agents`;
   const shrink = "archived='exclude' / detail='compact' to shrink the listing.";

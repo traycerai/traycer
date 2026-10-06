@@ -1127,6 +1127,90 @@ describe("formatAgentListPage", () => {
     }
     expect(collected).toEqual(expected);
   });
+  it("keeps the bytes a listing with unreachable rows has always had when nothing is cut", () => {
+    // `a` and `b` name each other as parent, so no root reaches either and
+    // neither is printed. Before pages existed the formatter still printed
+    // their section heading and lit the legend from every agent in the
+    // response; the expected text below is that output, byte for byte. A
+    // page that holds every printable row must print the same thing, because
+    // the host tool always passes one.
+    const listing = response(
+      [
+        agent({ id: "me", isSelf: true }),
+        agent({
+          id: "a",
+          parentId: "b",
+          archived: true,
+          sessionState: "sleeping",
+        }),
+        agent({ id: "b", parentId: "a" }),
+      ],
+      "me",
+    );
+    const expected = [
+      "Agents in epic (relative to you):",
+      "You:",
+      "me [self] gui/claude",
+      "",
+      "Other agents (user-triggered):",
+      "",
+      "",
+      "Legend:",
+      "[self]: this agent, i.e. the caller of agent.list",
+      "[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message",
+      '"<title>": the agent\'s chat/session title (omitted when untitled)',
+      "R: the agent has a readable transcript",
+      "S: the agent can be sent messages to",
+      "R/S: the agent has a readable transcript and can be sent messages to",
+      "-: no available action",
+      "dir: <path>: the working directory the agent runs in",
+      "worktree: <path>: the agent runs in a dedicated git worktree",
+    ].join("\n");
+
+    const unpaged = formatAgentListResponse(listing);
+    const sessionLegendStart = unpaged.indexOf("\nsession: <state>:");
+
+    expect(sessionLegendStart).toBeGreaterThan(0);
+    expect(unpaged.slice(0, sessionLegendStart)).toBe(expected);
+    expect(
+      formatAgentListPage(listing, {
+        detail: "full",
+        page: { offset: 0, limit: 200 },
+      }),
+    ).toBe(unpaged);
+  });
+
+  it("drops a rowless section and its legend entries once the page cuts the listing", () => {
+    // The same unreachable pair, but now the page leaves a row out, so the
+    // text is a page: no heading without a row under it, and no legend entry
+    // for a marker no printed row carries.
+    const listing = response(
+      [
+        agent({ id: "me", isSelf: true }),
+        agent({ id: "kid", parentId: "me" }),
+        agent({
+          id: "a",
+          parentId: "b",
+          archived: true,
+          sessionState: "sleeping",
+        }),
+        agent({ id: "b", parentId: "a" }),
+      ],
+      "me",
+    );
+
+    const page = formatAgentListPage(listing, {
+      detail: "full",
+      page: { offset: 0, limit: 1 },
+    });
+
+    expect(page).not.toContain("Other agents (user-triggered):");
+    expect(page).not.toContain("[archived]:");
+    expect(page).not.toContain("session: <state>:");
+    expect(page.split("\n").at(-1)).toBe(
+      "Showing 1-1 of 2 agents; pass offset=1 for the next page, or archived='exclude' / detail='compact' to shrink the listing.",
+    );
+  });
 });
 
 describe("formatAgentSelf", () => {
