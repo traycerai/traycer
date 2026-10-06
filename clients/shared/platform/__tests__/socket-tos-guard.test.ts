@@ -1,7 +1,10 @@
 import * as net from "node:net";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
-import { installSocketTosGuard, type SocketTosTarget } from "../socket-tos-guard";
+import {
+  installSocketTosGuard,
+  type SocketTosTarget,
+} from "../socket-tos-guard";
 
 // traycerai/traycer#2093: undici calls `setTypeOfService(0)` unguarded, and on
 // macOS the system call fails with EINVAL on a connection the peer already
@@ -32,20 +35,24 @@ function targetThat(behave: (tos: number) => unknown): Recorder {
   return { target, calls };
 }
 
-const hasNativeTos = typeof net.Socket.prototype.setTypeOfService === "function";
+const hasNativeTos =
+  typeof net.Socket.prototype.setTypeOfService === "function";
 
 describe("installSocketTosGuard", () => {
   it.each([
     ["EINVAL", -22],
     ["ENOTCONN", -57],
-  ])("swallows a failed system call (%s) and returns the receiver", (code, errno) => {
-    const { target } = targetThat(() => {
-      throw systemCallError(code, errno);
-    });
-    installSocketTosGuard(target);
+  ])(
+    "swallows a failed system call (%s) and returns the receiver",
+    (code, errno) => {
+      const { target } = targetThat(() => {
+        throw systemCallError(code, errno);
+      });
+      installSocketTosGuard(target);
 
-    expect(target.setTypeOfService?.(0)).toBe(target);
-  });
+      expect(target.setTypeOfService?.(0)).toBe(target);
+    },
+  );
 
   it("passes a working call through untouched", () => {
     const { target, calls } = targetThat(() => "original-result");
@@ -186,9 +193,9 @@ describe("installSocketTosGuard on net.Socket.prototype", () => {
 
       const control = await attempt();
       expect(control).toBeInstanceOf(Error);
-      expect(control instanceof Error && "code" in control && control.code).toBe(
-        "EINVAL",
-      );
+      expect(
+        control instanceof Error && "code" in control && control.code,
+      ).toBe("EINVAL");
       expect(
         control instanceof Error && "syscall" in control && control.syscall,
       ).toBe("setTypeOfService");
