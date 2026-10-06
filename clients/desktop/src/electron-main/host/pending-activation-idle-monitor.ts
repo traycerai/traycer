@@ -107,10 +107,20 @@ export function createPendingActivationIdleMonitor(
     timer = null;
   };
 
-  const attempt = async (): Promise<MutationOutcome<ActivateInstalledOk>> => {
+  // `null` = superseded: a disarm, a re-arm or a dispose landed while this
+  // attempt was reading. Checked after every read and BEFORE the activation is
+  // submitted, because the activation restarts the host without asking again
+  // whether one is still owed: an attempt that outlived a Force restart would
+  // otherwise restart the freshly activated host a second time.
+  const attempt = async (
+    armed: number,
+  ): Promise<MutationOutcome<ActivateInstalledOk> | null> => {
     const status = await deps.hostController.getStatus();
+    if (armed !== generation) return null;
     if (!activationPending(status)) return NOTHING_PENDING;
-    if ((await deps.probeHostBusy()) === "busy") return STILL_BUSY;
+    const verdict = await deps.probeHostBusy();
+    if (armed !== generation) return null;
+    if (verdict === "busy") return STILL_BUSY;
     return deps.hostController.activateInstalled(false, false);
   };
 
@@ -120,8 +130,8 @@ export function createPendingActivationIdleMonitor(
     ticking = true;
     const armed = generation;
     try {
-      const outcome = await attempt();
-      if (armed !== generation) return;
+      const outcome = await attempt(armed);
+      if (outcome === null || armed !== generation) return;
       if (outcome.kind === "busy") return;
       if (outcome.kind !== "ok") {
         throw new Error(outcome.message);
@@ -156,7 +166,10 @@ export function createPendingActivationIdleMonitor(
       stop();
       failedAttempts = 0;
       const armed = generation;
-      const outcome = await attempt();
+      const outcome = await attempt(armed);
+      // Superseded before it could act: whatever replaced it (a newer arm, a
+      // Force restart) owns the restart now, so this one reports the wait.
+      if (outcome === null) return STILL_BUSY;
       if (outcome.kind !== "busy" || disposed || armed !== generation) {
         return outcome;
       }

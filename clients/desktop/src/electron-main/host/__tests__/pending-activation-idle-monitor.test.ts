@@ -195,4 +195,77 @@ describe("createPendingActivationIdleMonitor", () => {
     expect(activateInstalled).toHaveBeenCalledTimes(1);
     monitor.dispose();
   });
+  describe("an attempt superseded while it reads", () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it("a tick suspended in the probe does not activate after disarm()", async () => {
+      const monitor = build();
+      await monitor.arm();
+      const gate = deferred<HostBusyVerdict>();
+      probe.mockImplementationOnce(() => gate.promise);
+      await ticks(1);
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      monitor.disarm();
+      gate.resolve("idle");
+      await ticks(3);
+      expect(activateInstalled).not.toHaveBeenCalled();
+      monitor.dispose();
+    });
+
+    it("a tick suspended in getStatus() does not activate after disarm()", async () => {
+      const gate = deferred<HostControllerStatus>();
+      let statusCalls = 0;
+      const hostController: PendingActivationIdleMonitorHostController = {
+        getStatus: () => {
+          statusCalls += 1;
+          return statusCalls === 2
+            ? gate.promise
+            : Promise.resolve(statusWith("pendingActivation"));
+        },
+        activateInstalled,
+      };
+      const monitor = createPendingActivationIdleMonitor({
+        hostController,
+        probeHostBusy: probe,
+        intervalMs: INTERVAL_MS,
+      });
+      await monitor.arm();
+      await ticks(1);
+      expect(statusCalls).toBe(2);
+
+      verdict = "idle";
+      monitor.disarm();
+      gate.resolve(statusWith("pendingActivation"));
+      await ticks(3);
+      expect(activateInstalled).not.toHaveBeenCalled();
+      monitor.dispose();
+    });
+
+    it("an arm() suspended in the probe resolves busy after disarm(), activates nothing and starts no timer", async () => {
+      const gate = deferred<HostBusyVerdict>();
+      probe.mockImplementationOnce(() => gate.promise);
+      const monitor = build();
+      const arming = monitor.arm();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      monitor.disarm();
+      gate.resolve("idle");
+      const outcome = await arming;
+      expect(outcome.kind).toBe("busy");
+      verdict = "idle";
+      probe.mockClear();
+      await ticks(3);
+      expect(activateInstalled).not.toHaveBeenCalled();
+      expect(probe).not.toHaveBeenCalled();
+      monitor.dispose();
+    });
+  });
 });
