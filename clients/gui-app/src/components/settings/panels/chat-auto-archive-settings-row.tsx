@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useChatAutoArchivePolicyQuery } from "@/hooks/chat-auto-archive/use-chat-auto-archive-policy-query";
 import { useChatAutoArchiveSetMutation } from "@/hooks/chat-auto-archive/use-chat-auto-archive-set-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
@@ -49,6 +50,7 @@ export function ChatAutoArchiveSettingsRow(): ReactNode {
 function ChatAutoArchiveSettingsRowBody(): ReactNode {
   const query = useChatAutoArchivePolicyQuery();
   const setPolicy = useChatAutoArchiveSetMutation();
+  const viewerUserId = useCloudChatViewerId();
   const includeUserCreatedId = useId();
 
   // `undefined` until the read lands, which covers the unresolved viewer (the
@@ -63,9 +65,17 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   };
   const disabled = data === undefined || setPolicy.isPending;
 
-  const save = (next: ChatAutoArchiveSetRequest): void => {
+  // `onRejected` runs after the hook's own error toast, for the one write
+  // whose control holds local state: the threshold field.
+  const save = (
+    next: ChatAutoArchiveSetRequest,
+    onRejected: (() => void) | null,
+  ): void => {
     trackSettingChanged("general", "chatAutoArchive");
-    setPolicy.mutate(next);
+    setPolicy.mutate(
+      next,
+      onRejected === null ? undefined : { onError: onRejected },
+    );
   };
 
   return (
@@ -87,7 +97,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
                 checked={current.includeUserCreated}
                 disabled={disabled}
                 onCheckedChange={(includeUserCreated) => {
-                  save({ ...current, includeUserCreated });
+                  save({ ...current, includeUserCreated }, null);
                 }}
               />
               <Label htmlFor={includeUserCreatedId}>
@@ -109,20 +119,37 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
               variant={undefined}
             />
           ) : null}
-          <IdleSecondsInput
-            idleSeconds={current.idleSeconds}
-            bounds={data?.bounds ?? null}
-            disabled={disabled}
-            onCommit={(idleSeconds) => {
-              save({ ...current, idleSeconds });
-            }}
-          />
+          {/* Keyed by the viewer: the draft and its error belong to the
+              person typing, and an account switch with Settings open must
+              neither show nor commit the outgoing account's edit. The query
+              partition cannot reach component state. While the viewer is
+              unresolved the read is disabled, so there is no draft to keep. */}
+          {viewerUserId.length > 0 ? (
+            <IdleSecondsInput
+              key={viewerUserId}
+              idleSeconds={current.idleSeconds}
+              bounds={data?.bounds ?? null}
+              disabled={disabled}
+              onCommit={(idleSeconds, onRejected) => {
+                save({ ...current, idleSeconds }, onRejected);
+              }}
+            />
+          ) : (
+            <IdleSecondsField
+              value={String(current.idleSeconds)}
+              error={null}
+              errorId={undefined}
+              disabled
+              onChange={null}
+              onCommit={null}
+            />
+          )}
           <Switch
             checked={current.enabled}
             disabled={disabled}
             aria-label="Archive idle agents automatically"
             onCheckedChange={(enabled) => {
-              save({ ...current, enabled });
+              save({ ...current, enabled }, null);
             }}
           />
         </div>
@@ -141,7 +168,8 @@ function IdleSecondsInput(props: {
   readonly idleSeconds: number;
   readonly bounds: ChatAutoArchiveBounds | null;
   readonly disabled: boolean;
-  readonly onCommit: (idleSeconds: number) => void;
+  /** `onRejected` restores the field when the save fails. */
+  readonly onCommit: (idleSeconds: number, onRejected: () => void) => void;
 }): ReactNode {
   const { idleSeconds, bounds, disabled, onCommit } = props;
   const errorId = useId();
@@ -165,14 +193,47 @@ function IdleSecondsInput(props: {
     if (validationError !== null) return;
     const next = Number(value.trim());
     if (next === idleSeconds) return;
-    onCommit(next);
+    // A rejected save restores the SAVED threshold rather than leaving the
+    // refused draft on screen: the switches write the saved value, so a kept
+    // draft would show one threshold while the host applies another. The
+    // toast says why; the field says what is in force.
+    onCommit(next, () => {
+      setDraft(String(idleSeconds));
+      setError(null);
+    });
   };
 
+  return (
+    <IdleSecondsField
+      value={draft}
+      error={error}
+      errorId={errorId}
+      disabled={disabled}
+      onChange={(value) => {
+        setDraft(value);
+        setError(null);
+      }}
+      onCommit={commitDraft}
+    />
+  );
+}
+
+/** The threshold field's markup, shared by the live field and the placeholder. */
+function IdleSecondsField(props: {
+  readonly value: string;
+  readonly error: string | null;
+  readonly errorId: string | undefined;
+  readonly disabled: boolean;
+  readonly onChange: ((value: string) => void) | null;
+  readonly onCommit: ((value: string) => void) | null;
+}): ReactNode {
+  const { value, error, errorId, disabled, onChange, onCommit } = props;
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-1.5">
         <Input
-          value={draft}
+          value={value}
+          readOnly={onChange === null}
           inputMode="numeric"
           aria-label="Idle seconds before archiving"
           aria-invalid={error !== null}
@@ -180,11 +241,8 @@ function IdleSecondsInput(props: {
           disabled={disabled}
           className="w-[min(30vw,6rem)] text-right"
           size="sm"
-          onChange={(event) => {
-            setDraft(event.target.value);
-            setError(null);
-          }}
-          onBlur={(event) => commitDraft(event.target.value)}
+          onChange={(event) => onChange?.(event.target.value)}
+          onBlur={(event) => onCommit?.(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
           }}

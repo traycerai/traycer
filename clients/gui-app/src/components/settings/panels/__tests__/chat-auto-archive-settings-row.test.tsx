@@ -19,16 +19,27 @@ interface QueryState {
   isPending: boolean;
 }
 
+interface MutateCallOptions {
+  onError?: (error: Error) => void;
+}
+
+type MutateFn = (
+  request: ChatAutoArchiveSetRequest,
+  options: MutateCallOptions | undefined,
+) => void;
+
 interface Harness {
+  viewerUserId: string;
   getSupport: boolean | null;
   setSupport: boolean | null;
   query: QueryState;
-  mutate: Mock<(request: ChatAutoArchiveSetRequest) => void>;
+  mutate: Mock<MutateFn>;
   mutationPending: boolean;
   trackSettingChanged: Mock<(section: string, setting: string) => void>;
 }
 
 const harness = vi.hoisted((): Harness => ({
+  viewerUserId: "user-a",
   getSupport: true,
   setSupport: true,
   query: {
@@ -36,13 +47,17 @@ const harness = vi.hoisted((): Harness => ({
     isError: false,
     isPending: false,
   },
-  mutate: vi.fn<(request: ChatAutoArchiveSetRequest) => void>(),
+  mutate: vi.fn<MutateFn>(),
   mutationPending: false,
   trackSettingChanged: vi.fn(),
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => harness.viewerUserId,
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -88,6 +103,28 @@ const NEVER_SAVED_WRITE: ChatAutoArchiveSetRequest = {
   idleSeconds: 3600,
 };
 
+const SAVED_DISABLED: ChatAutoArchiveGetResponse = {
+  policy: {
+    enabled: false,
+    includeUserCreated: false,
+    idleSeconds: 3600,
+    updatedAt: 1,
+  },
+  bounds: { minSeconds: 1, maxSeconds: 31_536_000 },
+};
+
+function viewerBData(): ChatAutoArchiveGetResponse {
+  return {
+    policy: {
+      enabled: false,
+      includeUserCreated: false,
+      idleSeconds: 3600,
+      updatedAt: 1,
+    },
+    bounds: { minSeconds: 1, maxSeconds: 31_536_000 },
+  };
+}
+
 function renderRow(): void {
   render(<ChatAutoArchiveSettingsRow />);
 }
@@ -112,7 +149,7 @@ function idleInput(): HTMLInputElement {
 
 function expectWrite(request: ChatAutoArchiveSetRequest): void {
   expect(harness.mutate).toHaveBeenCalledTimes(1);
-  expect(harness.mutate).toHaveBeenCalledWith(request);
+  expect(harness.mutate.mock.calls[0]?.[0]).toEqual(request);
   expect(harness.trackSettingChanged).toHaveBeenCalledTimes(1);
   expect(harness.trackSettingChanged).toHaveBeenCalledWith(
     "general",
@@ -122,6 +159,7 @@ function expectWrite(request: ChatAutoArchiveSetRequest): void {
 
 describe("<ChatAutoArchiveSettingsRow />", () => {
   beforeEach(() => {
+    harness.viewerUserId = "user-a";
     harness.getSupport = true;
     harness.setSupport = true;
     harness.query = {
@@ -261,6 +299,69 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
     expect(includeSwitch().disabled).toBe(true);
     expect(idleInput().disabled).toBe(true);
     expect(screen.getByTestId("chat-auto-archive-spinner")).toBeTruthy();
+  });
+
+  it("discards an outgoing draft when the viewer changes", () => {
+    harness.query.data = SAVED_DISABLED;
+    const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+    fireEvent.change(idleInput(), { target: { value: "90" } });
+    expect(idleInput().value).toBe("90");
+
+    harness.viewerUserId = "user-b";
+    harness.query.data = viewerBData();
+    rerender(<ChatAutoArchiveSettingsRow />);
+
+    expect(idleInput().value).toBe("3600");
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.blur(idleInput());
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  it("discards a validation error when the viewer changes", () => {
+    harness.query.data = SAVED_DISABLED;
+    const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+    fireEvent.change(idleInput(), { target: { value: "0" } });
+    fireEvent.blur(idleInput());
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    harness.viewerUserId = "user-b";
+    harness.query.data = viewerBData();
+    rerender(<ChatAutoArchiveSettingsRow />);
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("restores the saved threshold after a rejected save", () => {
+    harness.query.data = SAVED_DISABLED;
+    harness.mutate.mockImplementation(
+      (
+        _request: ChatAutoArchiveSetRequest,
+        options: MutateCallOptions | undefined,
+      ) => {
+        options?.onError?.(new Error("rejected"));
+      },
+    );
+    renderRow();
+    fireEvent.change(idleInput(), { target: { value: "90" } });
+    fireEvent.blur(idleInput());
+
+    expect(harness.mutate).toHaveBeenCalledTimes(1);
+    expect(harness.mutate.mock.calls[0]?.[0]).toEqual({
+      enabled: false,
+      includeUserCreated: false,
+      idleSeconds: 90,
+    });
+    expect(idleInput().value).toBe("3600");
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    harness.mutate.mockReset();
+    fireEvent.click(mainSwitch());
+    expect(harness.mutate.mock.calls[0]?.[0]).toEqual({
+      enabled: true,
+      includeUserCreated: false,
+      idleSeconds: 3600,
+    });
+    expect(idleInput().value).toBe("3600");
   });
 });
 
