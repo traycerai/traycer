@@ -416,6 +416,12 @@ function readLoginItemStatusEvidence(
  */
 const REGISTER_STATUS_POLL_DEADLINE_MS = 1500;
 const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
+// How long launchd may take to show the agent's job after SMAppService
+// reports `enabled`. A healthy register has bootstrapped the job before it
+// returns, so the first probe answers and nothing waits; the window only
+// runs out on a register that never reached launchd.
+const REGISTER_JOB_POLL_DEADLINE_MS = 2000;
+const REGISTER_JOB_POLL_INTERVAL_MS = 200;
 
 /**
  * Register the in-bundle LaunchAgent as a login item via SMAppService,
@@ -433,8 +439,9 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  *      shared label pre-split)
  *   4. `launchctl bootout gui/<uid>/<agent-label>` (LWCR flush, macOS 26+)
  *   5. SMAppService unregister → register of the agent plist
- *   6. poll status until settled; clear the pending-revision marker on
- *      `enabled`
+ *   6. poll status until settled; on `enabled`, confirm launchd holds the
+ *      agent's job (`not-registered` when it does not), then clear the
+ *      pending-revision marker
  *
  * Steps 1–3 exist to prevent a competing host at login (an intact legacy
  * registration would `RunAtLoad` the old CLI's host alongside the new
@@ -654,6 +661,24 @@ async function registerHostLoginItemUnserialized(
     status,
   });
   if (status === "enabled") {
+    // `enabled` is BTM's record of the login item, not launchd's job. On
+    // 2026-10-06 (macOS 27.0.1) smd refused both halves of step 5 with
+    // "rejected by BTM: invalid record generation" while the status kept
+    // reading `enabled` and neither Electron call threw. Step 4 had already
+    // booted the job out, so nothing was left to start a host: the caller
+    // waited a full readiness timeout, ran the same cycle again, waited
+    // again, and reported the host as not starting. A register that left no
+    // job in launchd did not register anything, and saying so hands the
+    // caller to the CLI takeover like every other register that fails after
+    // its own bootout. Only launchd's own not-found counts: an unanswerable
+    // probe keeps `enabled`, which is what this cycle returned before.
+    if ((await pollAgentJobAfterRegister()) === "absent") {
+      log.warn(
+        "[host-login-item] SMAppService reports the agent enabled but launchd holds no job under its label - treating the register as failed",
+        { serviceName: HOST_SERVICE_NAME, label: HOST_AGENT_LABEL },
+      );
+      return "not-registered";
+    }
     // Whatever prompted this cycle (a normal ensure, or the already-ready
     // fast path applying a deferred install), the on-disk plist is now the
     // one active in launchd - any pending-revision marker the installer
@@ -1469,6 +1494,23 @@ async function pollRegisterStatusUntilSettled(): Promise<HostLoginItemStatus> {
   while (last === "not-registered" && Date.now() < deadline) {
     await sleep(REGISTER_STATUS_POLL_INTERVAL_MS);
     last = readHostLoginItemStatus();
+  }
+  return last;
+}
+
+/**
+ * Whether launchd holds the agent's job once SMAppService reports `enabled`.
+ * `absent` only when launchd answered not-found for the whole window;
+ * `indeterminate` means launchd could not be asked, which is not absence.
+ */
+async function pollAgentJobAfterRegister(): Promise<
+  "absent" | "loaded" | "indeterminate"
+> {
+  const deadline = Date.now() + REGISTER_JOB_POLL_DEADLINE_MS;
+  let last = await probeLaunchdJobLoaded(HOST_AGENT_LABEL);
+  while (last === "absent" && Date.now() < deadline) {
+    await sleep(REGISTER_JOB_POLL_INTERVAL_MS);
+    last = await probeLaunchdJobLoaded(HOST_AGENT_LABEL);
   }
   return last;
 }

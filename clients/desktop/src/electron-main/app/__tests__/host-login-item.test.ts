@@ -366,6 +366,31 @@ function writePendingRevisionMarker(): void {
   );
 }
 
+// What `launchctl print gui/<uid>/<agent-label>` answers when launchd holds
+// the agent's job: any exit-0 print is a job launchd found, which the shared
+// classifier reads as `observed`. This is the healthy-machine default every
+// test starts from (see the global `beforeEach`).
+function agentJobLoadedPrintResult(): ProbeCommandResult {
+  return {
+    exitCode: 0,
+    stdout: [
+      "gui/501/ai.traycer.host.agent = {",
+      "\tactive count = 1",
+      "\tpath = (submitted by smd.516)",
+      "\ttype = Submitted",
+      "\tmanaged_by = com.apple.xpc.ServiceManagement",
+      "\tstate = running",
+      "\tpid = 4242",
+      "}",
+      "",
+    ].join("\n"),
+    stderr: "",
+    timedOut: false,
+    spawnFailed: false,
+    signal: null,
+  };
+}
+
 beforeEach(() => {
   // `mockReset` (not `mockClear`) so persistent implementations set
   // via `mockReturnValue` / `mockImplementation` in one test don't
@@ -376,6 +401,15 @@ beforeEach(() => {
   setLoginItemSettings.mockReset();
   getLoginItemSettings.mockReset();
   isHostRemovedByUserMock.mockReset().mockResolvedValue(false);
+  // A register cycle that settles `enabled` ends by asking launchd whether
+  // the agent's job exists, through `runAgentPrint`. Left unstubbed that is
+  // the real `/bin/launchctl` against the developer's own launchd domain,
+  // which the suite must never read - and on a machine with no such job it
+  // would flip every `enabled` expectation below to `not-registered`. So
+  // every test starts from a healthy, loaded agent; suites that exercise the
+  // probe install their own runner in a nested `beforeEach`, which runs
+  // after this one and wins.
+  overrideAgentPrintRunnerForTests(async () => agentJobLoadedPrintResult());
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-login-item-"));
   // Throwing backstop, re-armed for every test: reaching the bootout spawn
   // without an explicit stub is a test bug, and the ONLY acceptable failure
@@ -392,6 +426,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  overrideAgentPrintRunnerForTests(null);
   rmHook.afterRemoveRecreate = null;
   rmSync(workHome, { recursive: true, force: true });
 });
@@ -1944,6 +1979,200 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     expect(status).toBe("enabled");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
   });
+});
+
+// `enabled` is BTM's record of the login item, not launchd's job. On macOS 27
+// smd refused a register ("rejected by BTM: invalid record generation") while
+// the status kept reading `enabled` and neither Electron call threw, so
+// launchd held nothing under the agent label and no host ever started. The
+// cycle's tail therefore asks launchd (`launchctl print gui/<uid>/<label>`)
+// once the status settles `enabled`: a not-found that outlasts the 2 s window
+// is a failed register (and leaves the pending-revision marker for a later
+// cycle), while a print that cannot answer is not absence and keeps `enabled`.
+describe("registerHostLoginItem - launchd job check after an enabled register", () => {
+  const HOST_AGENT_LABEL = "ai.traycer.host.agent";
+  // The uid is pinned below so the target is the same on every machine.
+  const agentTarget = `gui/501/${HOST_AGENT_LABEL}`;
+  const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
+
+  // launchctl's own not-found answer: non-zero exit plus a not-found
+  // signature, which the shared classifier reads as `absent`.
+  const notFound: ProbeCommandResult = {
+    exitCode: 113,
+    stdout: "",
+    stderr: `Could not find service "${HOST_AGENT_LABEL}" in domain for user gui: 501\n`,
+    timedOut: false,
+    spawnFailed: false,
+    signal: null,
+  };
+
+  // Every way a print can fail to be an ANSWER; none may read as "absent".
+  const spawnFailed: ProbeCommandResult = {
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    spawnFailed: true,
+    signal: null,
+  };
+  const timedOut: ProbeCommandResult = {
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: true,
+    spawnFailed: false,
+    signal: null,
+  };
+
+  let printRunner: Mock<(target: string) => Promise<ProbeCommandResult>>;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "getuid", {
+      value: () => 501,
+      writable: true,
+      configurable: true,
+    });
+    // Starts loaded, like the global default; each test scripts its own
+    // answers on top. Records every target, so a test can assert which label
+    // was asked about and how often.
+    printRunner = vi.fn<(target: string) => Promise<ProbeCommandResult>>(
+      async () => agentJobLoadedPrintResult(),
+    );
+    overrideAgentPrintRunnerForTests(printRunner);
+    // `electron-log` is mocked once for the file and its call history
+    // persists across tests, so the warning assertions below start clean.
+    vi.mocked(electronLog.warn).mockClear();
+  });
+
+  afterEach(() => {
+    if (originalGetuid === undefined) {
+      delete (process as { getuid?: () => number }).getuid;
+    } else {
+      Object.defineProperty(process, "getuid", originalGetuid);
+    }
+  });
+
+  // The post-register read is the 4th `getLoginItemSettings` call: snapshot
+  // primary, snapshot legacy, post-clear, then the settled status.
+  function stageRegisterSettlingAs(status: string): void {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }) // post-clear
+      .mockReturnValueOnce({ status }); // post-register
+  }
+
+  // This is the only test that waits out the whole 2 s window, in real time
+  // (the cycle's fs work is real I/O, so fake timers would not be advanced in
+  // step with it). The explicit timeout keeps a loaded worker from tripping
+  // the 5 s default.
+  it("returns `not-registered` and keeps the pending-revision marker when launchd answers not-found for the whole window - an `enabled` status with no job is a register that never reached launchd", async () => {
+    writePendingRevisionMarker();
+    stageRegisterSettlingAs("enabled");
+    printRunner.mockImplementation(async () => notFound);
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "not-registered",
+    );
+
+    // Polled, not asked once: every print was for the agent label, and
+    // more than one of them ran before the cycle gave up.
+    expect(printRunner.mock.calls.length).toBeGreaterThan(1);
+    expect(
+      printRunner.mock.calls.every(([target]) => target === agentTarget),
+    ).toBe(true);
+    // The on-disk plist is NOT the one active in launchd, so the marker
+    // that asks for another apply must survive.
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
+    expect(electronLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("launchd holds no job under its label"),
+      { serviceName: "ai.traycer.host.agent.plist", label: HOST_AGENT_LABEL },
+    );
+  }, 10_000);
+
+  it("rides out launchd's lag: not-found on the first print and loaded on the second resolves `enabled` and clears the marker", async () => {
+    writePendingRevisionMarker();
+    stageRegisterSettlingAs("enabled");
+    printRunner
+      .mockResolvedValueOnce(notFound)
+      .mockResolvedValueOnce(agentJobLoadedPrintResult());
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+
+    // Exactly two prints: the poll stops at the first loaded answer.
+    expect(printRunner).toHaveBeenCalledTimes(2);
+    expect(printRunner).toHaveBeenNthCalledWith(1, agentTarget);
+    expect(printRunner).toHaveBeenNthCalledWith(2, agentTarget);
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
+    expect(electronLog.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("launchd holds no job under its label"),
+      expect.anything(),
+    );
+  });
+
+  it("asks launchd once and resolves `enabled` when the agent's job is loaded on the first print", async () => {
+    writePendingRevisionMarker();
+    stageRegisterSettlingAs("enabled");
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+
+    expect(printRunner).toHaveBeenCalledTimes(1);
+    expect(printRunner).toHaveBeenCalledWith(agentTarget);
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
+  });
+
+  it.each([
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "resolves `enabled` and clears the marker when the print runner reports %s - launchd could not be asked, which is not absence",
+    async (_name, answer) => {
+      writePendingRevisionMarker();
+      stageRegisterSettlingAs("enabled");
+      printRunner.mockImplementation(async () => answer);
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+
+      // An unanswerable print ends the poll at once: no waiting out a window
+      // for an answer that is not coming.
+      expect(printRunner).toHaveBeenCalledTimes(1);
+      expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
+      expect(electronLog.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("launchd holds no job under its label"),
+        expect.anything(),
+      );
+    },
+  );
+
+  it("resolves `enabled` when the print runner itself rejects", async () => {
+    stageRegisterSettlingAs("enabled");
+    printRunner.mockRejectedValue(new Error("spawn EAGAIN"));
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    expect(printRunner).toHaveBeenCalledTimes(1);
+  });
+
+  // The check belongs to the `enabled` branch alone: any other settled
+  // status already fails or defers on its own terms, and asking launchd
+  // there would only add a probe (and a window) where nothing depends on it.
+  it.each(["requires-approval", "not-found"] as const)(
+    "never asks launchd when the register settles %s",
+    async (status) => {
+      writePendingRevisionMarker();
+      stageRegisterSettlingAs(status);
+      // Would flip the result to `not-registered` if it were ever consulted.
+      printRunner.mockImplementation(async () => notFound);
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe(status);
+
+      expect(printRunner).not.toHaveBeenCalled();
+      expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
+      expect(electronLog.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("launchd holds no job under its label"),
+        expect.anything(),
+      );
+    },
+  );
 });
 
 describe("hasPendingLoginItemRevision", () => {
