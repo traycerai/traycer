@@ -27,9 +27,11 @@ On Desktop, **General › Agents › When you quit Traycer** controls the host o
 | --- | --- |
 | **Keep the host running in the background** (default) | Starts the host at login and keeps work running after you quit Traycer. Other devices can still connect to it. |
 | **Ask me each time** | Starts the host with Traycer and asks whether to keep work running or stop it when you quit. |
-| **Stop the host if nothing is running, otherwise ask** | Starts the host with Traycer. On quit, stops an idle host automatically and asks if work is running. |
+| **Stop the host if nothing is running, otherwise ask** | Starts the host with Traycer. On quit, stops an idle host automatically and asks if work is running or the host reports terminals still in use. |
 | **Stop the host with the app** | Starts the host with Traycer and stops it when you quit, ending work running on it. |
 | **Don't run a host on this computer** | Uses remote hosts instead of starting a local host. Choosing this while Traycer manages a local host asks you to confirm stopping it. |
+
+If a terminal is still in use, you can keep the host running so it carries on, stop the host and quit, or cancel quitting. Stopping the host ends that terminal.
 
 A host you started manually in a terminal keeps running when you quit Desktop. If Settings says a restart is needed to apply your choice, follow that notice.
 
