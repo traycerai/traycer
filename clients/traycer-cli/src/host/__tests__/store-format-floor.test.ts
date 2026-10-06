@@ -1,10 +1,17 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ILogger, LogFields } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
-import { EPIC_STATE_DIRNAME } from "../chat-store-survey";
+import { EPIC_STATE_DIRNAME, taskStoreDbPathFor } from "../chat-store-survey";
 import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
 import { SOURCE_TREE_HOST_VERSION } from "@traycer/protocol/host/store-formats";
 
@@ -22,6 +29,7 @@ import {
   STORE_FORMAT_FLOOR_LISTED_EPICS,
   ungatedStoreFormatFloorEvidence,
 } from "../store-format-floor";
+import type { StoreFormatFloorInput } from "../store-format-floor";
 import type { SwapQuiescence } from "../swap-quiescence";
 
 interface RecordedCall {
@@ -1583,5 +1591,327 @@ describe("storeFormatFloorTargetVersion", () => {
         "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z",
       ),
     ).toBe("local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z");
+  });
+});
+
+describe("the task store floor", () => {
+  const TASK_FLOOR_STOPPED_ASIDE =
+    "Host task store could not be read; the task-store floor stood aside";
+
+  async function writeTaskStoreDb(
+    userVersion: number,
+    wal: boolean,
+  ): Promise<void> {
+    const dbPath = taskStoreDbPathFor(hostHome);
+    await mkdir(dirname(dbPath), { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      if (wal) db.exec("PRAGMA journal_mode = WAL");
+      db.exec("CREATE TABLE epic_homes (id TEXT PRIMARY KEY)");
+      db.exec(`PRAGMA user_version = ${userVersion}`);
+    } finally {
+      db.close();
+    }
+  }
+
+  /** 1.5.0 rolled back to `targetVersion`, both reading chat format 20. */
+  function rollbackInput(
+    logger: ILogger,
+    overrides: Partial<StoreFormatFloorInput>,
+  ): StoreFormatFloorInput {
+    return {
+      environment: "production",
+      targetIdentity: "registry-artifact",
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
+      targetVersion: "1.4.2",
+      publishedStoreFormats: { chatDb: 20 },
+      declaredStoreFormats: null,
+      installedVersion: "1.5.0",
+      installedStoreFormats: { chatDb: 20 },
+      acceptStoreFormatLoss: false,
+      site: "host update",
+      logger,
+      ...overrides,
+    };
+  }
+
+  async function refusalOf(input: StoreFormatFloorInput): Promise<CliError> {
+    try {
+      await assertHostStoreFormatFloor(input);
+    } catch (err) {
+      if (err instanceof CliError) return err;
+      throw err;
+    }
+    throw new Error("expected the floor to refuse");
+  }
+
+  it("refuses a 1.4.2 target over a format-4 store where the chat formats clear without a disk walk", async () => {
+    await writeTaskStoreDb(4, false);
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    const err = await refusalOf(rollbackInput(logger, {}));
+
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(2);
+    expect(err.details?.onDiskTaskStore).toBe(4);
+    expect(err.message).toContain("task store format 2");
+    expect(err.message).toContain("format 4");
+    expect(err.message).toContain("--accept-store-format-loss");
+    expect(err.message).toContain("nothing in the task store is deleted");
+  });
+
+  it("refuses at the survey-clear return too, when the formats cannot settle it", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, { installedStoreFormats: null }),
+    );
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.onDiskTaskStore).toBe(4);
+  });
+
+  it("refuses from a real WAL-mode database through the real engine, nothing mocked", async () => {
+    await writeTaskStoreDb(4, true);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(rollbackInput(logger, {}));
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(2);
+    expect(err.details?.onDiskTaskStore).toBe(4);
+    expect(
+      logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
+    ).toBe(false);
+  });
+
+  it("gives the chat refusal the task sentence and names local tasks in the remedy", async () => {
+    await writeStampedChatDb("epic-newer-store", 20);
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, {
+        targetVersion: "1.3.1",
+        publishedStoreFormats: { chatDb: 9 },
+        site: "host install",
+      }),
+    );
+
+    expect(err.details?.verdict).not.toBe("task-store-blocked");
+    expect(err.message).toContain("epic-newer-store");
+    expect(err.message).toContain(
+      "It also reads task store format 2, and this machine's task store is at format 4.",
+    );
+    expect(err.message).toContain(
+      "lose access to those chats and to local tasks.",
+    );
+    expect(err.details?.targetTaskStore).toBe(2);
+    expect(err.details?.onDiskTaskStore).toBe(4);
+    const errorCall = logger.calls.find((call) => call.level === "error");
+    expect(errorCall?.fields.targetTaskStore).toBe(2);
+  });
+
+  it("leaves the chat refusal untouched when the task store has nothing to say", async () => {
+    await writeStampedChatDb("epic-newer-store", 20);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, {
+        targetVersion: "1.3.1",
+        publishedStoreFormats: { chatDb: 9 },
+      }),
+    );
+
+    expect(err.message).not.toContain("task store");
+    expect(err.message).toContain("anyway and lose access to those chats.");
+    expect(err.details).not.toHaveProperty("targetTaskStore");
+  });
+
+  it("does not judge a staging-train target", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, { targetVersion: "1.4.3-staging.92.g8b2f6ce" }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not refuse a forward install of a staging build from a local archive", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetIdentity: "local-archive",
+          targetVersion: "1.4.3-staging.92.g8b2f6ce",
+          publishedStoreFormats: null,
+          declaredStoreFormats: { chatDb: 20 },
+          installedVersion: "1.4.2",
+          installedStoreFormats: { chatDb: 20 },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("never refuses an upgrade, whatever the store holds", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetVersion: "1.4.2",
+          installedVersion: "1.4.0",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not refuse a rollback inside 1.5.0 and opens no task store", async () => {
+    const dbPath = taskStoreDbPathFor(hostHome);
+    await mkdir(dirname(dbPath), { recursive: true });
+    await writeFile(dbPath, "not a sqlite file", "utf8");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
+    ).toBe(false);
+  });
+
+  it("consent passes the task-only refusal and logs it at WARN", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, { acceptStoreFormatLoss: true }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall?.message).toBe(
+      "Host task-store floor overridden by --accept-store-format-loss",
+    );
+    expect(warnCall?.fields.targetTaskStore).toBe(2);
+    expect(warnCall?.fields.onDiskTaskStore).toBe(4);
+    expect(String(warnCall?.fields.message)).toContain("task store format 2");
+  });
+
+  it("consent passes a chat refusal that carries the task sentence and logs the same facts", async () => {
+    await writeStampedChatDb("epic-newer-store", 20);
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetVersion: "1.3.1",
+          publishedStoreFormats: { chatDb: 9 },
+          acceptStoreFormatLoss: true,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall?.fields.targetTaskStore).toBe(2);
+    expect(warnCall?.fields.onDiskTaskStore).toBe(4);
+    expect(String(warnCall?.fields.message)).toContain(
+      "It also reads task store format 2",
+    );
+  });
+
+  it("passes and logs INFO when the task store is not a database", async () => {
+    const dbPath = taskStoreDbPathFor(hostHome);
+    await mkdir(dirname(dbPath), { recursive: true });
+    await writeFile(dbPath, "not a sqlite file", "utf8");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(rollbackInput(logger, {})),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some(
+        (call) =>
+          call.level === "info" && call.message === TASK_FLOOR_STOPPED_ASIDE,
+      ),
+    ).toBe(true);
+  });
+
+  it("passes and logs INFO when a directory sits at the task store path", async () => {
+    await mkdir(taskStoreDbPathFor(hostHome), { recursive: true });
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(rollbackInput(logger, {})),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some(
+        (call) =>
+          call.level === "info" && call.message === TASK_FLOOR_STOPPED_ASIDE,
+      ),
+    ).toBe(true);
+  });
+
+  // `symlink()` is EPERM for a Windows developer without the create-
+  // symbolic-link privilege.
+  it.skipIf(process.platform === "win32")(
+    "passes and logs INFO when the task store is a symlink, even to a real format-4 database",
+    async () => {
+      await writeTaskStoreDb(4, false);
+      const dbPath = taskStoreDbPathFor(hostHome);
+      const elsewhere = join(hostHome, "elsewhere.db");
+      await rename(dbPath, elsewhere);
+      await symlink(elsewhere, dbPath);
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor(rollbackInput(logger, {})),
+      ).resolves.toBeUndefined();
+      expect(
+        logger.calls.some(
+          (call) =>
+            call.level === "info" && call.message === TASK_FLOOR_STOPPED_ASIDE,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("passes silently when there is no task store", async () => {
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(rollbackInput(logger, {})),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
+    ).toBe(false);
+  });
+
+  it("caps an on-disk 5: 1.5.0-rc.1 passes, 1.4.2 still refuses naming 5", async () => {
+    await writeTaskStoreDb(5, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const err = await refusalOf(rollbackInput(logger, {}));
+    expect(err.details?.onDiskTaskStore).toBe(5);
+    expect(err.details?.targetTaskStore).toBe(2);
   });
 });

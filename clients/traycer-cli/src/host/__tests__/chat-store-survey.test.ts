@@ -14,8 +14,13 @@ import {
   chatDbPathFor,
   EPIC_STATE_DIRNAME,
   surveyChatDbStamps,
+  surveyTaskStoreFormats,
+  taskStoreDbPathFor,
 } from "../chat-store-survey";
-import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
+import {
+  singleChatStoreSurveyRoot,
+  type ChatStoreSurveyRoots,
+} from "../chat-store-survey-roots";
 
 // `node:sqlite` is available under this package's vitest runner (Node 26
 // workers) but not under bare `bun` - the survey itself imports it
@@ -659,4 +664,101 @@ describe("surveyChatDbStamps", () => {
       ]);
     });
   });
+});
+
+describe("surveyTaskStoreFormats", () => {
+  async function writeTaskStore(
+    home: string,
+    userVersion: number,
+  ): Promise<void> {
+    await mkdir(join(home, "epic-homes"), { recursive: true });
+    await writeChatDb(taskStoreDbPathFor(home), (db) => {
+      db.exec("CREATE TABLE epic_homes (id TEXT PRIMARY KEY)");
+      db.exec(`PRAGMA user_version = ${userVersion}`);
+    });
+  }
+
+  function rootsOf(...paths: readonly string[]): ChatStoreSurveyRoots {
+    return {
+      roots: paths.map((path, index) => ({ path, label: `root-${index}` })),
+      enumerationFailed: false,
+    };
+  }
+
+  it("reads the stamp of one root", async () => {
+    await writeTaskStore(hostHome, 4);
+
+    expect(
+      await surveyTaskStoreFormats(singleChatStoreSurveyRoot(hostHome)),
+    ).toEqual({ onDiskMax: 4, unreadableRoots: 0 });
+  });
+
+  it("takes the maximum across two roots", async () => {
+    const other = await mkdtemp(join(tmpdir(), "chat-store-survey-test-"));
+    try {
+      await writeTaskStore(hostHome, 2);
+      await writeTaskStore(other, 4);
+
+      expect(await surveyTaskStoreFormats(rootsOf(hostHome, other))).toEqual({
+        onDiskMax: 4,
+        unreadableRoots: 0,
+      });
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an absent store as neither a reading nor unreadable", async () => {
+    expect(
+      await surveyTaskStoreFormats(singleChatStoreSurveyRoot(hostHome)),
+    ).toEqual({ onDiskMax: null, unreadableRoots: 0 });
+  });
+
+  it("treats user_version 0 as a reading", async () => {
+    await writeTaskStore(hostHome, 0);
+
+    expect(
+      await surveyTaskStoreFormats(singleChatStoreSurveyRoot(hostHome)),
+    ).toEqual({ onDiskMax: 0, unreadableRoots: 0 });
+  });
+
+  it("counts an unreadable root and still reports the other root's stamp", async () => {
+    const other = await mkdtemp(join(tmpdir(), "chat-store-survey-test-"));
+    try {
+      await mkdir(join(hostHome, "epic-homes"), { recursive: true });
+      await writeFile(taskStoreDbPathFor(hostHome), "not a sqlite file");
+      await writeTaskStore(other, 4);
+
+      expect(await surveyTaskStoreFormats(rootsOf(hostHome, other))).toEqual({
+        onDiskMax: 4,
+        unreadableRoots: 1,
+      });
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a directory at the store path as unreadable", async () => {
+    await mkdir(taskStoreDbPathFor(hostHome), { recursive: true });
+
+    expect(
+      await surveyTaskStoreFormats(singleChatStoreSurveyRoot(hostHome)),
+    ).toEqual({ onDiskMax: null, unreadableRoots: 1 });
+  });
+
+  it.skipIf(platform === "win32")(
+    "counts a symlinked store as unreadable without following it",
+    async () => {
+      const elsewhere = join(hostHome, "elsewhere.db");
+      await writeChatDb(elsewhere, (db) => {
+        db.exec("PRAGMA user_version = 4");
+      });
+      await mkdir(join(hostHome, "epic-homes"), { recursive: true });
+      await symlink(elsewhere, taskStoreDbPathFor(hostHome));
+
+      expect(
+        await surveyTaskStoreFormats(singleChatStoreSurveyRoot(hostHome)),
+      ).toEqual({ onDiskMax: null, unreadableRoots: 1 });
+    },
+  );
 });

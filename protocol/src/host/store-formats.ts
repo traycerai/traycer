@@ -574,7 +574,10 @@ const TASK_STORE_FORMAT_ERAS = [
 ] as const satisfies readonly TaskStoreFormatEra[];
 
 type LastTaskStoreFormatEra<Eras extends readonly TaskStoreFormatEra[]> =
-  Eras extends readonly [...TaskStoreFormatEra[], infer Last extends TaskStoreFormatEra]
+  Eras extends readonly [
+    ...TaskStoreFormatEra[],
+    infer Last extends TaskStoreFormatEra,
+  ]
     ? Last
     : never;
 

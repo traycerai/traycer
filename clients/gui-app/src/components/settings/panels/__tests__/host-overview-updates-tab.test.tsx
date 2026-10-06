@@ -410,14 +410,14 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: false,
-      hostVersion: "1.6.0",
+      hostVersion: "1.7.0",
       overrideHandlers: {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
             effectiveIncludePreReleases: false,
             includePreReleasesSource: "stable-default" as const,
-            manifest: multiVersionManifest(["1.6.0", "1.5.0", "1.4.0"]),
+            manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
           }),
         "host.update.install": async (req) => {
           await gate;
@@ -451,14 +451,14 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
-    const targetRow = rows.find((row) => row.textContent.includes("v1.5.0"));
-    const otherRow = rows.find((row) => row.textContent.includes("v1.4.0"));
+    const targetRow = rows.find((row) => row.textContent.includes("v1.6.0"));
+    const otherRow = rows.find((row) => row.textContent.includes("v1.5.0"));
     if (targetRow === undefined || otherRow === undefined) {
       throw new Error("expected both version rows to render");
     }
 
     fireEvent.click(
-      within(targetRow).getByRole("button", { name: "Install 1.5.0" }),
+      within(targetRow).getByRole("button", { name: "Install 1.6.0" }),
     );
 
     // While the dispatch is in flight every row freezes — the one pressed
@@ -466,7 +466,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => {
       expect(
         within(otherRow)
-          .getByRole("button", { name: "Install 1.4.0" })
+          .getByRole("button", { name: "Install 1.5.0" })
           .hasAttribute("disabled"),
       ).toBe(true);
     });
@@ -478,10 +478,10 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-version-install-refused").textContent,
-      ).toContain("host-a's CLI can't downgrade to v1.5.0");
+      ).toContain("host-a's CLI can't downgrade to v1.6.0");
     });
     // … and once above it, from the SAME failure. This host is current
-    // (1.6.0 is the latest), so the answer is quiet and there is no answer
+    // (1.7.0 is the latest), so the answer is quiet and there is no answer
     // for the failure to sit under: it is drawn as a card of its own, the
     // `failed-attempt` kind, and its title carries the reason.
     const failedCard = screen.getByTestId("host-overview-answer-card");
@@ -489,13 +489,13 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(
       within(failedCard).getByTestId("host-overview-update-attempt-failed")
         .textContent,
-    ).toContain("host-a's CLI can't downgrade to v1.5.0");
+    ).toContain("host-a's CLI can't downgrade to v1.6.0");
 
     // The rows unfreeze; nothing switched tabs.
     await waitFor(() => {
       expect(
         within(otherRow)
-          .getByRole("button", { name: "Install 1.4.0" })
+          .getByRole("button", { name: "Install 1.5.0" })
           .hasAttribute("disabled"),
       ).toBe(false);
     });

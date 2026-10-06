@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { HostUpdateStoreFloorRefusal } from "@traycer/protocol/host/maintenance/index";
 import {
   describeHostStoreFloorRpcRefusal,
+  describeHostTaskStoreFloorRefusal,
   hostStoreFormatRestriction,
   hostStoreFormatRestrictionFromRpc,
+  hostTaskStoreFloorFacts,
+  hostVersionRowRestriction,
   type HostStoreFormatOffer,
 } from "../host-overview-store-formats";
 
@@ -902,5 +905,207 @@ describe("hostStoreFormatRestriction confirmation (cached host.status path)", ()
     // group to `newerStoresRestriction` - the cached `host.status` path can
     // only say whether the survey failed, never which epics.
     expect(restriction?.confirmation).not.toContain("couldn't be read, so");
+  });
+});
+
+describe("the task store half of a row's restriction", () => {
+  const RC1 = "1.5.0-rc.1";
+
+  /** A 1.5.0-era host whose chat stores a 1.4.2 target reads without loss. */
+  function chatClearOffer(overrides: Partial<HostStoreFormatOffer>) {
+    return offer({
+      version: "1.4.2",
+      publishedFormats: { chatDb: 20 },
+      runningVersion: RC1,
+      storeFormats: {
+        chatDb: {
+          current: 20,
+          onDiskMax: 20,
+          epicCount: 1,
+          survey: "complete",
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  /** The same host with a target that reads an older chat format: a chat restriction. */
+  function chatBlockedOffer(overrides: Partial<HostStoreFormatOffer>) {
+    return offer({
+      version: "1.3.1",
+      publishedFormats: { chatDb: 9 },
+      runningVersion: RC1,
+      storeFormats: {
+        chatDb: {
+          current: 20,
+          onDiskMax: 20,
+          epicCount: 1,
+          survey: "complete",
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  describe("hostTaskStoreFloorFacts", () => {
+    it("names both formats for a row the running host's disk outruns", () => {
+      expect(hostTaskStoreFloorFacts("1.4.2", RC1)).toEqual({
+        targetReads: 2,
+        onDisk: 4,
+      });
+    });
+
+    it("is null for a row inside 1.5.0, an unknown host and a staging host", () => {
+      expect(hostTaskStoreFloorFacts("1.5.0", RC1)).toBeNull();
+      expect(hostTaskStoreFloorFacts("1.4.2", null)).toBeNull();
+      expect(
+        hostTaskStoreFloorFacts("1.4.2", "1.5.1-staging.3.gabcdef0"),
+      ).toBeNull();
+      expect(
+        hostTaskStoreFloorFacts("1.4.2", "1.4.3-staging.92.g8b2f6ce"),
+      ).toBeNull();
+    });
+  });
+
+  describe("hostVersionRowRestriction", () => {
+    it("restricts a 1.4.2 row on a 1.5.0-rc.1 host on its own when the chat stores clear", () => {
+      const restriction = hostVersionRowRestriction({
+        offer: chatClearOffer({}),
+        chatRefusal: null,
+        taskStoreRefused: false,
+      });
+
+      expect(restriction).toMatchObject({
+        kind: "blocked",
+        reason: "Reads task store format 2; this device has 4",
+      });
+      expect(restriction?.confirmation).toContain("local tasks");
+      expect(restriction?.confirmation).toContain("Nothing is deleted");
+    });
+
+    it("keeps the chat restriction's reason and appends the task sentence to its confirmation", () => {
+      const chatOnly = hostStoreFormatRestriction(chatBlockedOffer({}));
+      expect(chatOnly?.kind).toBe("blocked");
+
+      const restriction = hostVersionRowRestriction({
+        offer: chatBlockedOffer({}),
+        chatRefusal: null,
+        taskStoreRefused: false,
+      });
+
+      expect(restriction?.reason).toBe(chatOnly?.reason);
+      expect(restriction?.confirmation).toContain(
+        chatOnly?.confirmation ?? "unreachable",
+      );
+      expect(restriction?.confirmation).toContain(
+        "v1.3.1 also reads task store format 2 where this device has 4",
+      );
+    });
+
+    it("returns pending and floor-unsupported chat restrictions untouched", () => {
+      const pendingOffer = chatBlockedOffer({
+        storeFormats: {
+          chatDb: {
+            current: 20,
+            onDiskMax: null,
+            epicCount: 0,
+            survey: "pending",
+          },
+        },
+      });
+      const pending = hostStoreFormatRestriction(pendingOffer);
+      expect(pending?.kind).toBe("pending");
+      expect(
+        hostVersionRowRestriction({
+          offer: pendingOffer,
+          chatRefusal: null,
+          taskStoreRefused: false,
+        }),
+      ).toEqual(pending);
+
+      const unsupportedOffer = chatBlockedOffer({
+        installSupportsStoreFloor: false,
+      });
+      const unsupported = hostStoreFormatRestriction(unsupportedOffer);
+      expect(unsupported?.kind).toBe("floor-unsupported");
+      expect(
+        hostVersionRowRestriction({
+          offer: unsupportedOffer,
+          chatRefusal: null,
+          taskStoreRefused: false,
+        }),
+      ).toEqual(unsupported);
+    });
+
+    it("does not pre-label a row when the running version is unknown or a staging build", () => {
+      for (const runningVersion of [null, "1.4.3-staging.92.g8b2f6ce"]) {
+        expect(
+          hostVersionRowRestriction({
+            offer: chatClearOffer({ runningVersion }),
+            chatRefusal: null,
+            taskStoreRefused: false,
+          }),
+        ).toBeNull();
+      }
+    });
+
+    it("restricts a staging host's row in the vaguer wording once the host refused it", () => {
+      const restriction = hostVersionRowRestriction({
+        offer: chatClearOffer({ runningVersion: "1.4.3-staging.92.g8b2f6ce" }),
+        chatRefusal: null,
+        taskStoreRefused: true,
+      });
+
+      expect(restriction).toMatchObject({
+        kind: "blocked",
+        reason: "Reads an older task store format than this device has",
+      });
+      expect(restriction?.confirmation).toContain(
+        "task store is in a newer format than v1.4.2 reads",
+      );
+    });
+
+    it("lets a retained typed chat refusal win and gain the task sentence", () => {
+      const restriction = hostVersionRowRestriction({
+        offer: chatClearOffer({ version: "1.3.1" }),
+        chatRefusal: blockedRefusal({ targetVersion: "1.3.1" }),
+        taskStoreRefused: false,
+      });
+
+      expect(restriction?.reason).toBe(
+        hostStoreFormatRestrictionFromRpc(
+          blockedRefusal({ targetVersion: "1.3.1" }),
+        ).reason,
+      );
+      expect(restriction?.confirmation).toContain(
+        "v1.3.1 also reads task store format 2 where this device has 4",
+      );
+    });
+
+    it("leaves rows inside 1.5.0 unrestricted", () => {
+      for (const version of ["1.5.0-rc.1", "1.5.0", "1.6.0"]) {
+        expect(
+          hostVersionRowRestriction({
+            offer: chatClearOffer({ version }),
+            chatRefusal: null,
+            taskStoreRefused: false,
+          }),
+        ).toBeNull();
+      }
+    });
+  });
+
+  describe("describeHostTaskStoreFloorRefusal", () => {
+    it("names both formats and the way through", () => {
+      expect(describeHostTaskStoreFloorRefusal("1.4.2", RC1)).toBe(
+        "Can't install 1.4.2: it reads task store format 2 and this device has 4, so local tasks won't open and new ones can't be created until a host that reads format 4 is installed again. Nothing is deleted. Install a version that can open it instead, or choose Install anyway for v1.4.2 to proceed.",
+      );
+    });
+
+    it("falls back to the vague wording when a format cannot be named", () => {
+      expect(
+        describeHostTaskStoreFloorRefusal("1.4.2", "1.4.3-staging.92.g8b2f6ce"),
+      ).toContain("it reads an older task store format than this device has");
+    });
   });
 });

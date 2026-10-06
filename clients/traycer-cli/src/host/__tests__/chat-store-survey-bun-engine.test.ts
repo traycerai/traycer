@@ -119,6 +119,25 @@ class FakeDatabase {
   }
 
   query(sql: string): { get: (...params: readonly unknown[]) => unknown } {
+    // Apple's build prepares `PRAGMA user_version` without touching the file
+    // (measured: prepare succeeds, the first step throws SQLITE_CANTOPEN), so
+    // the whole rule moves from `query()` into `get()` for that statement.
+    if (sql === "PRAGMA user_version") {
+      return {
+        get: (...params: readonly unknown[]): unknown =>
+          this.firstStep(sql, params),
+      };
+    }
+    return this.prepareOnReal(sql);
+  }
+
+  private firstStep(sql: string, params: readonly unknown[]): unknown {
+    return this.prepareOnReal(sql).get(...params);
+  }
+
+  private prepareOnReal(sql: string): {
+    get: (...params: readonly unknown[]) => unknown;
+  } {
     openSnapshots.push({
       wal: sidecarState(`${this.filename}-wal`),
       shm: sidecarState(`${this.filename}-shm`),
@@ -192,6 +211,24 @@ async function epicDbPath(epicId: string): Promise<string> {
     join(hostHome, chatStoreSurvey.EPIC_STATE_DIRNAME, epicId, "chat"),
     { recursive: true },
   );
+  return dbPath;
+}
+
+/** A real WAL-mode task store: `user_version` is its stamp. */
+async function writeWalTaskStoreDb(
+  hostHomePath: string,
+  userVersion: number,
+): Promise<string> {
+  const dbPath = chatStoreSurvey.taskStoreDbPathFor(hostHomePath);
+  await mkdir(join(hostHomePath, "epic-homes"), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("CREATE TABLE epic_homes (id TEXT PRIMARY KEY)");
+    db.exec(`PRAGMA user_version = ${userVersion}`);
+  } finally {
+    db.close();
+  }
   return dbPath;
 }
 
@@ -341,5 +378,48 @@ describe("Bun engine read-only open (macOS CANTOPEN retry)", () => {
     expect(fakeDatabaseCalls).toBe(1);
     expect(existsSync(`${dbPath}-wal`)).toBe(false);
     expect(existsSync(`${dbPath}-shm`)).toBe(false);
+  });
+});
+
+describe("Bun engine task store read (first read inside the retried unit)", () => {
+  it("PRAGMA user_version throws CANTOPEN at get() with -shm absent: the retry creates the sidecars and the survey reads the stamp", async () => {
+    const dbPath = await writeWalTaskStoreDb(hostHome, 4);
+    await removeSidecarsIfPresent(dbPath);
+
+    const survey = await chatStoreSurvey.surveyTaskStoreFormats(
+      singleChatStoreSurveyRoot(hostHome),
+    );
+
+    expect(survey).toEqual({ onDiskMax: 4, unreadableRoots: 0 });
+    expect(fakeDatabaseCalls).toBe(2);
+    expect(openSnapshots[0]).toEqual({ wal: null, shm: null });
+    expect(openSnapshots[1].wal?.size).toBe(0);
+    expect(openSnapshots[1].shm?.size).toBe(0);
+  });
+
+  it("sidecars present: one open, no retry", async () => {
+    const dbPath = await writeWalTaskStoreDb(hostHome, 4);
+    await removeSidecarsIfPresent(dbPath);
+    await writeFile(`${dbPath}-shm`, Buffer.alloc(0));
+
+    const survey = await chatStoreSurvey.surveyTaskStoreFormats(
+      singleChatStoreSurveyRoot(hostHome),
+    );
+
+    expect(survey).toEqual({ onDiskMax: 4, unreadableRoots: 0 });
+    expect(fakeDatabaseCalls).toBe(1);
+  });
+
+  it("CANTOPEN on every open counts the root unreadable after exactly 2 opens", async () => {
+    const dbPath = await writeWalTaskStoreDb(hostHome, 4);
+    await removeSidecarsIfPresent(dbPath);
+    fakeDatabaseMode = { kind: "always-cantopen" };
+
+    const survey = await chatStoreSurvey.surveyTaskStoreFormats(
+      singleChatStoreSurveyRoot(hostHome),
+    );
+
+    expect(survey).toEqual({ onDiskMax: null, unreadableRoots: 1 });
+    expect(fakeDatabaseCalls).toBe(2);
   });
 });
