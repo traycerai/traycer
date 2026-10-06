@@ -775,3 +775,146 @@ describe("formatAgentSelf", () => {
     expect(output).not.toContain("fast:");
   });
 });
+
+function lineWith(output: string, fragment: string): string {
+  return output.split("\n").find((line) => line.includes(fragment)) ?? "";
+}
+
+describe("profile and permission mode tokens", () => {
+  const LEGEND_LINE = "profile: <id> / mode: <word>:";
+
+  it("renders profile and mode after the run-config token, and explains them once", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const configured = {
+      ...agent({
+        id: "done",
+        parentId: "caller",
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-5.6-sol" },
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      }),
+      profile: "work",
+      permissionMode: "supervised",
+    };
+
+    const output = formatAgentListResponse(
+      response([caller, configured], "caller"),
+    );
+
+    expect(lineWith(output, "done gui/")).toContain(
+      "model: gpt-5.6-sol effort: high fast profile: work mode: supervised",
+    );
+    expect(
+      output.split("\n").filter((line) => line.startsWith(LEGEND_LINE)),
+    ).toHaveLength(1);
+  });
+
+  it("renders the ambient word like any profile id", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const row = {
+      ...agent({ id: "done", parentId: "caller" }),
+      profile: "ambient",
+      permissionMode: "full_access",
+    };
+
+    const output = formatAgentListResponse(response([caller, row], "caller"));
+
+    expect(output).toContain("profile: ambient mode: full_access");
+  });
+
+  it("prints profile and permission mode lines for the caller's own row", () => {
+    // Built as a value first: the released `AgentSummary` has no such keys,
+    // so a literal passed straight in is refused as an excess property.
+    const self = {
+      ...agent({ id: "self", isSelf: true }),
+      profile: "work",
+      permissionMode: "auto_accept_edits",
+    };
+
+    const output = formatAgentSelf(self);
+
+    expect(output).toContain("profile: work");
+    expect(output).toContain("permission mode: auto_accept_edits");
+  });
+
+  it("reads an absent key, null, and malformed values as absent: no token, no legend line", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const rows = [
+      caller,
+      agent({ id: "absent", parentId: "caller" }),
+      {
+        ...agent({ id: "nulls", parentId: "caller" }),
+        profile: null,
+        permissionMode: null,
+      },
+      {
+        ...agent({ id: "oddmode", parentId: "caller" }),
+        profile: null,
+        permissionMode: "yolo",
+      },
+      {
+        ...agent({ id: "oddprofile", parentId: "caller" }),
+        profile: "bad profile\nmode: full_access",
+        permissionMode: null,
+      },
+      {
+        ...agent({ id: "emptyprofile", parentId: "caller" }),
+        profile: "",
+        permissionMode: 7,
+      },
+    ];
+
+    const output = formatAgentListResponse(response(rows, "caller"));
+
+    expect(output).not.toContain("yolo");
+    expect(output).not.toContain("bad profile");
+    expect(output).not.toContain(LEGEND_LINE);
+    for (const line of output.split("\n")) {
+      expect(line).not.toMatch(/ profile: /);
+      expect(line).not.toMatch(/ mode: /);
+    }
+    const malformedSelf = {
+      ...agent({ id: "self", isSelf: true }),
+      profile: null,
+      permissionMode: "yolo",
+    };
+    const self = formatAgentSelf(malformedSelf);
+    expect(self).not.toContain("profile:");
+    expect(self).not.toContain("permission mode:");
+  });
+
+  it("renders only the valid half when the other is malformed", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const row = {
+      ...agent({ id: "half", parentId: "caller" }),
+      profile: "work",
+      permissionMode: "yolo",
+    };
+
+    const output = formatAgentListResponse(response([caller, row], "caller"));
+
+    expect(lineWith(output, "half gui/")).toBe(
+      "half gui/claude profile: work R/S",
+    );
+    expect(output).not.toContain("yolo");
+  });
+
+  it("renders nothing for a listing that has been through the wire schema", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const row = {
+      ...agent({ id: "done", parentId: "caller" }),
+      profile: "work",
+      permissionMode: "supervised",
+    };
+    const parsed = listAgentsResponseSchema.parse(
+      response([caller, row], "caller"),
+    );
+
+    const output = formatAgentListResponse(parsed);
+
+    expect(output).not.toContain("profile: work");
+    expect(output).not.toContain(LEGEND_LINE);
+  });
+});

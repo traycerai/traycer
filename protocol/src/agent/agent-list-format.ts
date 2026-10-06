@@ -3,6 +3,10 @@ import type {
   AgentSummary,
   ListAgentsResponse,
 } from "@traycer/protocol/host";
+import {
+  ALL_PERMISSION_MODES,
+  type PermissionMode,
+} from "@traycer/protocol/persistence/epic/foundation";
 
 export function formatAgentListResponse(response: ListAgentsResponse): string {
   const agents = response.agents;
@@ -13,6 +17,10 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
   const showArchived = agents.some(hasArchiveEnrichment);
   const showRunConfig = agents.some(hasRunConfigEnrichment);
   const showOwnerHostConnectivity = agents.some(hasConnectivityEnrichment);
+  // Gated on a row actually rendering one of the two tokens, like the session
+  // gate below: the host sends the keys as `null` on every row it cannot
+  // answer for, and a legend line for a token that appears nowhere is noise.
+  const showRunTuple = agents.some(hasRunTupleEnrichment);
   // Gated on a row actually RENDERING the token rather than on the key being
   // present, which is the difference from the three gates above: `@9.1` makes
   // `sessionState` a real schema field, so it is present and `null` on every
@@ -39,6 +47,7 @@ ${formatAgentListLegend(
   showRunConfig,
   showOwnerHostConnectivity,
   showSessionState,
+  showRunTuple,
 )}`;
 }
 
@@ -75,6 +84,7 @@ export function formatAgentSelf(agent: AgentSummary | null): string {
     `surface: ${agent.surface}`,
     `harness: ${agent.harnessId ?? "-"}`,
     ...formatRunConfigSelfLines(agent),
+    ...formatRunTupleSelfLines(agent),
     `host: ${agent.hostId}`,
     formatSelfLocationLine(agent),
   ].join("\n");
@@ -306,6 +316,8 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   ];
   const runConfig = formatRunConfigToken(agent);
   if (runConfig.length > 0) parts.push(runConfig);
+  const runTuple = formatRunTupleToken(agent);
+  if (runTuple.length > 0) parts.push(runTuple);
   // The capability token describes what *the caller* can do to a row, so it is
   // meaningless on the caller's own [self] row (you don't read your own
   // transcript or message yourself). Showing "R/S" there is just misleading -
@@ -478,12 +490,16 @@ function formatAgentListLegend(
   showRunConfig: boolean,
   showOwnerHostConnectivity: boolean,
   showSessionState: boolean,
+  showRunTuple: boolean,
 ): string {
   const archived = showArchived
     ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
     : "";
   const runConfig = showRunConfig
     ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nfast: fast mode is enabled"
+    : "";
+  const runTuple = showRunTuple
+    ? "\nprofile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. Shown only for your own GUI agents on the host that answered; a row without them is one that host cannot answer for"
     : "";
   // The caveat is not optional politeness: without it `unknown` reads as
   // "probably down", and it is the value EVERY row belonging to another user
@@ -524,7 +540,7 @@ function formatAgentListLegend(
 R: the agent has a readable transcript
 -: the agent has no readable transcript
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${runTuple}${sessionState}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
@@ -535,7 +551,7 @@ S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}`;
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${runTuple}${sessionState}${ownerHost}`;
 }
 
 function hasRunConfigEnrichment(agent: AgentSummary): boolean {
@@ -565,6 +581,74 @@ function formatRunConfigSelfLines(agent: AgentSummary): string[] {
   if (agent.runConfig.fastMode !== null) {
     lines.push(`fast: ${agent.runConfig.fastMode ? "yes" : "no"}`);
   }
+  return lines;
+}
+
+/**
+ * A profile word the host may attach to a row: the literal `ambient`, or a
+ * managed profile id. Checked against the id alphabet rather than printed as
+ * received, so nothing but an id can reach the line.
+ */
+const RUN_TUPLE_PROFILE_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * `profile` off a row, or `null` when the row does not carry a usable one.
+ *
+ * Narrowed at RUNTIME rather than typed, for the same reason
+ * `ownerHostConnectivity` is: the released `AgentSummary` has no such
+ * property, so a listing that has been through the wire schema has had it
+ * stripped, and this formatter renders both shapes. The direct host-side A2A
+ * listing sends it for the caller's own GUI agents on that host and `null` for
+ * every row it cannot answer for.
+ */
+function readRunTupleProfile(agent: AgentSummary): string | null {
+  if (!("profile" in agent)) return null;
+  const value = agent.profile;
+  return typeof value === "string" && RUN_TUPLE_PROFILE_PATTERN.test(value)
+    ? value
+    : null;
+}
+
+/**
+ * `permissionMode` off a row, narrowed to a mode this build knows. A word
+ * outside the list reads as absent rather than being printed: it would be a
+ * value the caller cannot hand back to `traycer_configure_agent` from here.
+ */
+function readRunTuplePermissionMode(
+  agent: AgentSummary,
+): PermissionMode | null {
+  if (!("permissionMode" in agent)) return null;
+  const value = agent.permissionMode;
+  return ALL_PERMISSION_MODES.find((mode) => mode === value) ?? null;
+}
+
+function hasRunTupleEnrichment(agent: AgentSummary): boolean {
+  return (
+    readRunTupleProfile(agent) !== null ||
+    readRunTuplePermissionMode(agent) !== null
+  );
+}
+
+/**
+ * The two halves of the run tuple the run-config token does not carry. They
+ * exist on the row so an agent can restate them: `traycer_configure_agent`
+ * takes a complete tuple, and changing one part means naming the rest.
+ */
+function formatRunTupleToken(agent: AgentSummary): string {
+  const parts: string[] = [];
+  const profile = readRunTupleProfile(agent);
+  if (profile !== null) parts.push(`profile: ${profile}`);
+  const permissionMode = readRunTuplePermissionMode(agent);
+  if (permissionMode !== null) parts.push(`mode: ${permissionMode}`);
+  return parts.join(" ");
+}
+
+function formatRunTupleSelfLines(agent: AgentSummary): string[] {
+  const lines: string[] = [];
+  const profile = readRunTupleProfile(agent);
+  if (profile !== null) lines.push(`profile: ${profile}`);
+  const permissionMode = readRunTuplePermissionMode(agent);
+  if (permissionMode !== null) lines.push(`permission mode: ${permissionMode}`);
   return lines;
 }
 
