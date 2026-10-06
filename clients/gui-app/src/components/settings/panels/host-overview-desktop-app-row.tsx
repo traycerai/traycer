@@ -93,11 +93,16 @@ export function HostOverviewDesktopAppRow(
           <span className="inline-flex items-center gap-1.5">
             <span>{view.action.label}</span>
             {view.action.pending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
+              // The button only goes `disabled`, and the dots hide
+              // themselves from assistive technology: the live region is
+              // what says the restart is under way, as on the header button.
+              <span role="status" aria-label="Restarting to install the update">
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              </span>
             ) : null}
           </span>
         </Button>

@@ -387,6 +387,7 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
           answer: answerWithUpdatable(),
           inFlight,
         }}
+        desktopApp={null}
         autoUpdate={null}
         versions={pickerProps()}
         inFlight={inFlight}

@@ -153,6 +153,18 @@ describe("<HostOverviewDesktopAppRow />", () => {
     );
     const action = screen.getByTestId("host-overview-desktop-app-action");
     expect(action.hasAttribute("disabled")).toBe(true);
+    // The label does not change, so the restart is announced by a live
+    // region inside the button.
+    expect(action.textContent).toContain("Restart");
+    screen.getByRole("status", { name: "Restarting to install the update" });
+  });
+
+  it("announces no restart while a ready update is only waiting", () => {
+    renderRow(
+      snapshotWith({ status: "ready", latestVersion: "1.5.0" }),
+      new StubBridge(),
+    );
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("offers Finish update when guidance is set and opens the guidance dialog", () => {
