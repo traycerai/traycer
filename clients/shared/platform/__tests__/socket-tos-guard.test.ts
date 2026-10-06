@@ -110,22 +110,30 @@ describe("installSocketTosGuard on net.Socket.prototype", () => {
   const pristine = net.Socket.prototype.setTypeOfService;
   const cleanups: (() => Promise<unknown>)[] = [];
 
+  // Newest first: a server's `close` waits for its connections, so the client
+  // socket registered after it has to go before it.
   afterEach(async () => {
     net.Socket.prototype.setTypeOfService = pristine;
-    for (const cleanup of cleanups.splice(0)) await cleanup();
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   });
 
   it.skipIf(!hasNativeTos)(
     "returns the socket on a healthy connection and still rejects a bad argument",
     async () => {
+      const accepted: net.Socket[] = [];
       const server = net.createServer((socket) => {
+        accepted.push(socket);
         socket.on("error", () => undefined);
       });
       await new Promise<void>((resolve) =>
         server.listen(0, "127.0.0.1", resolve),
       );
       cleanups.push(
-        () => new Promise<void>((resolve) => server.close(() => resolve())),
+        () =>
+          new Promise<void>((resolve) => {
+            for (const socket of accepted) socket.destroy();
+            server.close(() => resolve());
+          }),
       );
       const address = server.address();
       if (address === null || typeof address === "string") {
