@@ -93,7 +93,8 @@ import {
   agentListUpgradeV7ToV8,
   agentListUpgradeV8ToV9,
   agentListUpgradeV90ToV91,
-  agentListUpgradeV91ToV100,
+  agentListUpgradeV91ToV92,
+  agentListUpgradeV92ToV100,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -104,6 +105,7 @@ import {
   agentListV80,
   agentListV90,
   agentListV91,
+  agentListV92,
   agentListV100,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
@@ -11624,8 +11626,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
     // downgrade bridges below now start at 9.1 because they must originate at
     // the line's LATEST minor. Each still parses through its frozen summary,
     // which drops the keys on the way out.
+    //
+    // @9.2 adds `archived` to the row, the flag the host already marked on the
+    // direct A2A tool listing and the wire had no key for. One more plain
+    // added key: a @9.1 or @9.0 peer's schema strips it, an older host is
+    // upgraded to `null` ("never asked", not "not archived"), and the eight
+    // bridges move their origin to 9.2 for the same LATEST-minor reason.
     9: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentListV90,
@@ -11634,6 +11642,10 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
         1: {
           contract: agentListV91,
           upgradeFromPreviousVersion: agentListUpgradeV90ToV91,
+        },
+        2: {
+          contract: agentListV92,
+          upgradeFromPreviousVersion: agentListUpgradeV91ToV92,
         },
       },
       downgradePathsFromLatest: {
@@ -11648,13 +11660,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
       },
     },
     // Major 10 carries agents on the harness ids added since `1.5.0` shipped
-    // major 9, whose two minors are frozen at the set that release negotiated.
+    // major 9, whose three minors are frozen at the set that release
+    // negotiated.
     10: {
       latestMinor: 0,
       versions: {
         0: {
           contract: agentListV100,
-          upgradeFromPreviousVersion: agentListUpgradeV91ToV100,
+          upgradeFromPreviousVersion: agentListUpgradeV92ToV100,
         },
       },
       downgradePathsFromLatest: {

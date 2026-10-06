@@ -126,6 +126,7 @@ function Body({
       manualRungAnchorId={null}
       elapsedStartedAt={0}
       turnHasOnlyAutonomousResumeSegments={false}
+      autonomousResumeOwed={false}
       showCompletionFooter={false}
       pausedDurationMs={0}
       pausedSinceMs={null}

@@ -863,7 +863,7 @@ describe("<MenuCommandListener />", () => {
     });
 
     await waitFor(() => {
-      expect(management.activateInstalled).toHaveBeenCalledWith(false);
+      expect(management.activateInstalled).toHaveBeenCalledWith(false, false);
     });
     expect(management.applyStaged).not.toHaveBeenCalled();
   });

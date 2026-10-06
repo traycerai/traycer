@@ -37,6 +37,7 @@ import {
   listAgentsResponseSchema,
   listAgentsResponseSchemaV80,
   listAgentsResponseSchemaV91,
+  listAgentsResponseSchemaV92,
 } from "@traycer/protocol/host/agent/shared";
 import {
   agentGuiListHarnessesDowngradeV2ToV1,
@@ -179,6 +180,9 @@ function agentSummary(id: string, harnessId: string | null) {
     // below reparses through a frozen summary that drops both keys.
     sessionState: null,
     lastExit: null,
+    // The `@9.2` archive flag; the bridges reparse through a frozen summary
+    // that drops it as well.
+    archived: false,
   };
 }
 
@@ -817,7 +821,9 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
   });
 
   it("drops Hugging Face/Reasonix/Antigravity agents from agent.list for every released caller down to v1.0", () => {
-    const v9Response = listAgentsResponseSchemaV91.parse({
+    // Parsed through the 9.2 shape the bridges originate at, so `archived`
+    // reaches each bridge and every hop below is seen to drop it.
+    const v9Response = listAgentsResponseSchemaV92.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [

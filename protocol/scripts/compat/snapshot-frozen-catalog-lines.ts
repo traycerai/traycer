@@ -23,6 +23,7 @@ import {
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV90,
   listAgentsResponseSchemaV91,
+  listAgentsResponseSchemaV92,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -129,9 +130,14 @@ const FIXTURES = {
   // which this row stopped being when major 9 opened against live under a
   // major-8 name. `@9.0` holds the pre-session-facet bytes it used to dump.
   "agent.list@9.0": dump(listAgentsResponseSchemaV90),
-  // 9.1 froze when 10.0 opened for the first harness id after 1.5.0; its dump
-  // did not change by the freeze. 10.0 is the head line and dumps LIVE.
+  // 9.1 froze when 9.2 opened to put `archived` on the row. It is RELEASED
+  // (`host-v1.4.2` registers `agent.list@9.1`), so it names its own frozen
+  // schema and must not regenerate. 9.2 froze when 10.0 opened for the first
+  // harness id after 1.5.0; its dump did not change by the freeze. 10.0 is the
+  // head line and dumps LIVE, so the next attempt to grow the row goes red on
+  // that line.
   "agent.list@9.1": dump(listAgentsResponseSchemaV91),
+  "agent.list@9.2": dump(listAgentsResponseSchemaV92),
   "agent.list@10.0": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),

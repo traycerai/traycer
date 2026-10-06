@@ -15,6 +15,9 @@ export interface ActivateInstalledVariables {
   // outcome carrying `continuation: "activate"` (post-commit, packaged
   // macOS), or a direct re-submit after this intent's own busy outcome.
   readonly force: boolean;
+  // `true` = the busy dialog's "Restart when idle": a `busy` outcome then
+  // means the restart is scheduled for when the host goes idle, not refused.
+  readonly retryWhenIdle: boolean;
 }
 
 /**
@@ -37,11 +40,11 @@ export function useRunnerActivateInstalled(): UseMutationResult<
     ActivateInstalledVariables
   >({
     mutationKey: runnerMutationKeys.hostActivateInstalled(),
-    mutationFn: ({ force }) => {
+    mutationFn: ({ force, retryWhenIdle }) => {
       if (management === null) {
         return Promise.reject(new Error("Host management unavailable"));
       }
-      return management.activateInstalled(force);
+      return management.activateInstalled(force, retryWhenIdle);
     },
     onSuccess: (outcome) => {
       if (outcome.kind !== "ok" || management === null) return;

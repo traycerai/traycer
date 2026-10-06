@@ -991,7 +991,9 @@ export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
 
 /**
  * The `agent.list@9.1` row: `@9.0`'s plus the terminal-agent session facet,
- * frozen at the same harness id set. Released in `1.5.0`; major 10 is the head.
+ * frozen at the same harness id set (`agentSummarySchemaV90` pins the ids
+ * `1.5.0` shipped, so this extension does too). Released in `1.5.0`; `@9.2`
+ * took the canonical alias next, and major 10 is the head.
  */
 export const agentSummarySchemaV91 = lazySchema(() =>
   agentSummarySchemaV90.extend({
@@ -1011,18 +1013,45 @@ export type AgentSummaryV91 = z.infer<typeof agentSummarySchemaV91>;
 // `agent-session-state.ts` exists to fix. A reaped agent resumes on the next
 // message; the caller just had no way to know that.
 //
+//
+// Two plain added keys, so a `@9.0` caller's schema strips them and the
+// downgrade bridges keep working unchanged - each reparses through a frozen
+// summary that drops the pair on the way out. The field docs live on the head
+// row below, which carries both keys live.
+
+// ── `agent.list@9.2`: is this agent archived? ──────────────────────────────
+//
+// The host has always known. It marked archived rows on the direct A2A tool
+// listing and nowhere else, because the flag was a tool-side extension the
+// wire row had no key for: an `agent.list` RPC answer was parsed through this
+// schema and lost it. So `traycer agent list --json` could not tell an
+// archived agent from an idle live one, and `sessionState` is no substitute -
+// it is `null` on every GUI chat by design.
+//
+//
+// One plain added key on a non-strict row, so a `@9.1` or `@9.0` caller's
+// schema strips it, and the eight major-9 downgrade bridges keep working
+// unchanged - each reparses through a frozen summary that drops it.
+//
+// Frozen when `commandcode` opened major 10: like `@9.1` it extends
+// `agentSummarySchemaV90`, so it stays at the harness id set `1.5.0` shipped.
+export const agentSummarySchemaV92 = lazySchema(() =>
+  agentSummarySchemaV91.extend({
+    archived: z.boolean().nullable(),
+  }),
+);
+export type AgentSummaryV92 = z.infer<typeof agentSummarySchemaV92>;
+
 // THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
 // `head-names-canonical-alias.test.ts` enforces: writing the new row under a
 // suffix would leave `agentSummarySchema` exported, structurally plausible and
 // backing nothing, while every import site still read like the live line.
 //
-// Two plain added keys, so a `@9.0` caller's schema strips them and the
-// downgrade bridges keep working unchanged - each reparses through a frozen
-// summary that drops the pair on the way out.
-//
 // Built off the live base rather than `agentSummarySchemaV90`, which pins the
 // harness id major 9 shipped: this row is the head (major 10) and is the only
-// one that tracks the live enum.
+// one that tracks the live enum. It carries every key the frozen major-9
+// minors carry (`runConfig`, the session facet, `archived`), so a 10.0 answer
+// downgrades to 9.2 by dropping rows alone.
 export const agentSummarySchema = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     runConfig: agentRunConfigSchema.nullable().default(null),
@@ -1038,6 +1067,15 @@ export const agentSummarySchema = lazySchema(() =>
      * decide whether the agent can be addressed.
      */
     lastExit: agentSessionLastExitSchema.nullable(),
+    /**
+     * Whether the agent is archived, or `null` when the answering host
+     * predates the field and was never asked.
+     *
+     * `null` is NEVER "not archived". It is the same vocabulary `sessionState`
+     * uses for "this answer cannot say", and a reader that folds it into
+     * `false` reports an archived agent on an older host as live.
+     */
+    archived: z.boolean().nullable(),
   }),
 );
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
@@ -1240,13 +1278,28 @@ export const listAgentsResponseSchemaV90 = lazySchema(() =>
 );
 export type ListAgentsResponseV90 = z.infer<typeof listAgentsResponseSchemaV90>;
 
-/** The `agent.list@9.1` response. See {@link agentSummarySchemaV91}. */
+/**
+ * The `agent.list@9.1` response, frozen off the canonical one when `@9.2` put
+ * `archived` on the row. Released (`host-v1.4.2` registers `@9.1`), so this
+ * line never grows a key again. See {@link agentSummarySchemaV91}.
+ */
 export const listAgentsResponseSchemaV91 = lazySchema(() =>
   listAgentsResponseSchema.extend({
     agents: z.array(agentSummarySchemaV91),
   }),
 );
 export type ListAgentsResponseV91 = z.infer<typeof listAgentsResponseSchemaV91>;
+
+/**
+ * The `agent.list@9.2` response, frozen off the canonical one when
+ * `commandcode` opened major 10. See {@link agentSummarySchemaV92}.
+ */
+export const listAgentsResponseSchemaV92 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV92),
+  }),
+);
+export type ListAgentsResponseV92 = z.infer<typeof listAgentsResponseSchemaV92>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

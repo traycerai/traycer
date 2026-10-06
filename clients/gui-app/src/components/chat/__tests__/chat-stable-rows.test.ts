@@ -44,6 +44,23 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterRebuild.result[1]).not.toBe(rebuilt[1]);
   });
 
+  it("produces a new object when only the owed-autonomous-resume mark changed", () => {
+    const original: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      turnHasOnlyAutonomousResumeSegments: true,
+    };
+    const state = computeStableChatTimelineRows(
+      [original],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    const owed: ChatMessage = {
+      ...cloneMessage(original),
+      autonomousResumeOwed: true,
+    };
+    expect(computeStableChatTimelineRows([owed], state).result[0]).toBe(owed);
+  });
+
   it("compares a folded turn's record ids by content, since every pass rebuilds them", () => {
     const original: ChatMessage = {
       ...makeMessage(0, "assistant"),

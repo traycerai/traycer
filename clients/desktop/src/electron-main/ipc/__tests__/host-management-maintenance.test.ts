@@ -231,6 +231,8 @@ interface HandlerBridge {
     string,
     (event: unknown, raw: unknown) => Promise<unknown>
   >;
+  // Registration parks the idle-restart monitor's teardown here.
+  readonly disposeFns: Array<() => void>;
   handleInvoke(
     channel: string,
     handler: (event: unknown, raw: unknown) => unknown | Promise<unknown>,
@@ -285,6 +287,7 @@ function makeBridge(): HandlerBridge {
   >();
   return {
     handlers,
+    disposeFns: [],
     options: {
       host: {
         reloadSnapshotFromDisk: () => Promise.resolve(null),

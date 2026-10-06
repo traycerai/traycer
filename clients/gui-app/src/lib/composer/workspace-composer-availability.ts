@@ -222,10 +222,20 @@ export function deriveFolderlessAllowedWorkspaceAvailability(
   );
 }
 
+/**
+ * What the chat tile knows of the epic's folder listing. `count` is `null`
+ * until the listing has answered; `didResolutionFail` tells a `null` that is a
+ * failed fetch from one that is still pending.
+ */
+export interface EpicWorkspaceListing {
+  readonly count: number | null;
+  readonly didResolutionFail: boolean;
+}
+
 export function deriveWorktreeBindingWorkspaceAvailability(
   binding: WorktreeBinding | null,
   bindingResolved: boolean,
-  epicWorkspaceCount: number | null,
+  epicWorkspaces: EpicWorkspaceListing,
   missingWorktreePaths: ReadonlyArray<string>,
 ): WorkspaceComposerAvailability {
   if (!bindingResolved) return WORKSPACE_COMPOSER_CHECKING;
@@ -258,7 +268,14 @@ export function deriveWorktreeBindingWorkspaceAvailability(
   // as long as the epic has at least one folder linked. Gating only on the
   // per-owner binding would block freshly-created chats that never carried a
   // `worktreeIntent` (e.g. created from the epic sidebar).
-  if (epicWorkspaceCount === null) return WORKSPACE_COMPOSER_CHECKING;
-  if (epicWorkspaceCount === 0) return WORKSPACE_COMPOSER_UNBOUND;
+  // A null count is a listing that has not answered OR one that failed. Only
+  // the first is still checking: a failed fetch settles, so reporting it as
+  // "checking" would leave the hint on a wait that has already ended.
+  if (epicWorkspaces.count === null) {
+    return epicWorkspaces.didResolutionFail
+      ? WORKSPACE_COMPOSER_RESOLUTION_ERROR
+      : WORKSPACE_COMPOSER_CHECKING;
+  }
+  if (epicWorkspaces.count === 0) return WORKSPACE_COMPOSER_UNBOUND;
   return WORKSPACE_COMPOSER_READY;
 }

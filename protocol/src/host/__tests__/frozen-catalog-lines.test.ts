@@ -10,6 +10,7 @@ import {
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV90,
   listAgentsResponseSchemaV91,
+  listAgentsResponseSchemaV92,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -126,10 +127,14 @@ const LIVE_FROZEN_EXPORTS = {
   // rule forced out when `@9.1` took the canonical alias. Nothing leaves the
   // fixture; the rows are simply named what they are.
   "agent.list@9.0": listAgentsResponseSchemaV90,
-  // 9.1 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.1); its dump
-  // did not change by the freeze.
+  // 9.1 froze when 9.2 opened to put `archived` on the row. It is RELEASED
+  // (`host-v1.4.2` registers `agent.list@9.1`), so it names its own frozen
+  // schema and must not regenerate.
   "agent.list@9.1": listAgentsResponseSchemaV91,
-  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
+  // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.1); its dump
+  // did not change by the freeze.
+  "agent.list@9.2": listAgentsResponseSchemaV92,
+  // The head line, holding 9.2's old job: it names the LIVE schema, so the next
   // attempt to grow the agent summary fails here first.
   "agent.list@10.0": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,

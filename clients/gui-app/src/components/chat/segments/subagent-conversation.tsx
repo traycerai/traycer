@@ -98,6 +98,7 @@ export function SubagentConversation(props: SubagentConversationProps) {
                 turnId={null}
                 settledNotice={null}
                 settledNoticeFindUnitId={null}
+                autonomousResumeVariant="card"
               />
             </ChatBlockNavigationAnchor>
           );

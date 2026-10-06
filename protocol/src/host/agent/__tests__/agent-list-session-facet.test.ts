@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentListDowngradeV9ToV8,
   agentListUpgradeV90ToV91,
+  agentListUpgradeV91ToV92,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentSummarySchemaV90,
@@ -54,8 +55,17 @@ describe("agent.list v9.0 -> v9.1 upgrade path", () => {
       { ...V90_AGENT, sessionState: null, lastExit: null },
     ]);
 
-    const parsed = listAgentsResponseSchema.parse(upgraded);
-    expect(parsed.agents).toEqual(upgraded.agents);
+    // The upgrade is typed `@9.1`, so the row carries no archive flag yet.
+    expect(Object.hasOwn(upgraded.agents[0], "archived")).toBe(false);
+
+    // The next hop in the chain supplies it, and only then is the row a
+    // canonical one.
+    const chained = agentListUpgradeV91ToV92.upgradeResponse(upgraded);
+    expect(chained.agents).toEqual([
+      { ...V90_AGENT, sessionState: null, lastExit: null, archived: null },
+    ]);
+    const parsed = listAgentsResponseSchema.parse(chained);
+    expect(parsed.agents).toEqual(chained.agents);
   });
 });
 
@@ -80,11 +90,17 @@ describe("agent.list v9.1 -> v8.0 downgrade path", () => {
       caller: { agentId: "agent-1", canSendMessages: true },
       scope: "user" as const,
       agents: [
-        { ...V90_AGENT, sessionState: "running" as const, lastExit: null },
+        {
+          ...V90_AGENT,
+          sessionState: "running" as const,
+          lastExit: null,
+          archived: false,
+        },
         {
           ...ANTIGRAVITY_AGENT,
           sessionState: null,
           lastExit: "reaped" as const,
+          archived: false,
         },
       ],
     };

@@ -330,6 +330,7 @@ export interface DesktopHostManagementBridge {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    retryWhenIdle: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,
@@ -1209,7 +1210,8 @@ function buildDesktopHostManagement(
     convergeReady: (force) => managementBridge.convergeReady(force),
     applyStaged: (trigger, force) =>
       managementBridge.applyStaged(trigger, force),
-    activateInstalled: (force) => managementBridge.activateInstalled(force),
+    activateInstalled: (force, retryWhenIdle) =>
+      managementBridge.activateInstalled(force, retryWhenIdle),
     installVersion: (pin, force) => managementBridge.installVersion(pin, force),
     uninstallHost: (input) => managementBridge.uninstallHost(input),
     uninstallTraycer: () => managementBridge.uninstallTraycer(),

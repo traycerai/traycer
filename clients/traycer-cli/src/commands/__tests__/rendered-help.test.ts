@@ -898,7 +898,9 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "agent list",
     options: [
+      { flags: "--compact", mandatory: false },
       { flags: "--json", mandatory: false },
+      { flags: "--live", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "-a, --all", mandatory: false },
