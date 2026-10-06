@@ -8,6 +8,7 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useRetryFailedQueryOnWindowFocus } from "@/hooks/host/use-retry-failed-query-on-window-focus";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import {
   selectWorkspaceFoldersBucket,
@@ -127,6 +128,14 @@ export function useResolvedWorkspaceFolders(
       refetchOnWindowFocus: "always",
       refetchOnReconnect: "always",
     },
+  });
+  // The focus option follows page visibility, which a plain return to a
+  // window that stayed visible never changes; a failed resolution is the case
+  // whose hint promises that return retries.
+  useRetryFailedQueryOnWindowFocus({
+    enabled: repoIdentifiers.length > 0,
+    isError: query.isError,
+    refetch: query.refetch,
   });
 
   // One repo can resolve to multiple paths on the same host (two

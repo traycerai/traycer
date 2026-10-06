@@ -21,7 +21,15 @@ import {
 
 const RETRY_SETTLE_TIMEOUT_MS = 5_000;
 
-function createFixture() {
+interface BindingsFixture {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+  readonly callCount: () => number;
+  readonly setFail: (next: boolean) => void;
+}
+
+function createFixture(): BindingsFixture {
   const queryClient = createAppQueryClient();
   let fail = true;
   let calls = 0;
@@ -80,6 +88,13 @@ function blurThenFocus(): void {
   act(() => {
     focusManager.setFocused(false);
     focusManager.setFocused(true);
+  });
+}
+
+function focusWindowWithoutVisibilityChange(): void {
+  expect(document.visibilityState).toBe("visible");
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
   });
 }
 
@@ -171,6 +186,80 @@ describe("useChatSendGateWorkspaceBindingsForClient", () => {
   });
 });
 
+describe("useChatSendGateWorkspaceBindingsForClient on a plain window focus", () => {
+  afterEach(() => {
+    cleanup();
+    focusManager.setFocused(undefined);
+  });
+
+  function renderGate(fixture: BindingsFixture) {
+    return renderHook(
+      () =>
+        useChatSendGateWorkspaceBindingsForClient({
+          client: fixture.client,
+          epicId: "epic-1",
+          enabled: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+  }
+
+  it("refetches a failed listing and recovers", async () => {
+    const fixture = createFixture();
+    const { result } = renderGate(fixture);
+    await waitFor(() => expect(result.current.isError).toBe(true), {
+      timeout: RETRY_SETTLE_TIMEOUT_MS,
+    });
+    const settledCalls = fixture.callCount();
+    fixture.setFail(false);
+
+    focusWindowWithoutVisibilityChange();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fixture.callCount()).toBeGreaterThan(settledCalls);
+    expect(result.current.data?.rows).toEqual([]);
+  });
+
+  it("does not refetch after a success", async () => {
+    const fixture = createFixture();
+    fixture.setFail(false);
+    const { result } = renderGate(fixture);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const settledCalls = fixture.callCount();
+
+    focusWindowWithoutVisibilityChange();
+    await flush();
+
+    expect(fixture.callCount()).toBe(settledCalls);
+    expect(result.current.isSuccess).toBe(true);
+  });
+
+  it("sends one request for several observers of the same failed entry", async () => {
+    const fixture = createFixture();
+    const first = renderGate(fixture);
+    const second = renderGate(fixture);
+    await waitFor(
+      () => {
+        expect(first.result.current.isError).toBe(true);
+        expect(second.result.current.isError).toBe(true);
+      },
+      { timeout: RETRY_SETTLE_TIMEOUT_MS },
+    );
+    await flush();
+    const settledCalls = fixture.callCount();
+    fixture.setFail(false);
+
+    focusWindowWithoutVisibilityChange();
+
+    await waitFor(() => {
+      expect(first.result.current.isSuccess).toBe(true);
+      expect(second.result.current.isSuccess).toBe(true);
+    });
+    await flush();
+    expect(fixture.callCount()).toBe(settledCalls + 1);
+  });
+});
+
 describe("useWorktreeListBindingsForEpicForClient on a failed listing", () => {
   afterEach(() => {
     cleanup();
@@ -196,6 +285,30 @@ describe("useWorktreeListBindingsForEpicForClient on a failed listing", () => {
     fixture.setFail(false);
 
     blurThenFocus();
+    await flush();
+
+    expect(fixture.callCount()).toBe(settledCalls);
+    expect(queryStatus(fixture.queryClient)).toBe("error");
+  });
+
+  it("does not refetch on a plain window focus either", async () => {
+    const fixture = createFixture();
+    const { result } = renderHook(
+      () =>
+        useWorktreeListBindingsForEpicForClient({
+          client: fixture.client,
+          epicId: "epic-1",
+          enabled: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true), {
+      timeout: RETRY_SETTLE_TIMEOUT_MS,
+    });
+    const settledCalls = fixture.callCount();
+    fixture.setFail(false);
+
+    focusWindowWithoutVisibilityChange();
     await flush();
 
     expect(fixture.callCount()).toBe(settledCalls);

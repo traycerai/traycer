@@ -12,6 +12,7 @@ import {
   useHostQuery,
   useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
+import { useRetryFailedQueryOnWindowFocus } from "@/hooks/host/use-retry-failed-query-on-window-focus";
 
 export function useWorktreeListBindingsForEpic(args: {
   readonly epicId: string;
@@ -46,8 +47,9 @@ export function useWorktreeListBindingsForEpicForClient(args: {
  * listing, so a failed fetch disables Send with a hint that says returning to
  * the app retries. App-wide queries opt out of focus/reconnect refetches, so
  * this observer opts back in, and only while the query is in error: a settled
- * listing keeps the app default and the other observers of the same cache slot
- * (the pickers, the sidebar) are unchanged.
+ * listing keeps the app default. The other observers of the same cache entry
+ * (the pickers, the sidebar) keep their own options and never start a retry;
+ * they do see the result of one, as they see any refetch of a shared entry.
  */
 export function useChatSendGateWorkspaceBindingsForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -57,19 +59,27 @@ export function useChatSendGateWorkspaceBindingsForClient(args: {
   ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic">,
   HostRpcError
 > {
-  return useHostQuery<HostRpcRegistry, "worktree.listBindingsForEpic">({
+  const query = useHostQuery<HostRpcRegistry, "worktree.listBindingsForEpic">({
     cacheKeyIdentity: undefined,
     client: args.client,
     method: "worktree.listBindingsForEpic",
     params: { epicId: args.epicId },
     options: {
       enabled: args.enabled,
-      refetchOnWindowFocus: (query) =>
-        query.state.status === "error" ? "always" : false,
-      refetchOnReconnect: (query) =>
-        query.state.status === "error" ? "always" : false,
+      refetchOnWindowFocus: (observed) =>
+        observed.state.status === "error" ? "always" : false,
+      refetchOnReconnect: (observed) =>
+        observed.state.status === "error" ? "always" : false,
     },
   });
+  // The option above covers a page that was hidden and shown again; a plain
+  // return to a window that stayed visible needs the window's own event.
+  useRetryFailedQueryOnWindowFocus({
+    enabled: args.enabled,
+    isError: query.isError,
+    refetch: query.refetch,
+  });
+  return query;
 }
 
 /**
