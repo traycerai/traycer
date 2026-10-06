@@ -42,6 +42,37 @@ export function useWorktreeListBindingsForEpicForClient(args: {
 }
 
 /**
+ * The chat composer's send gate reads the epic's folder count from this
+ * listing, so a failed fetch disables Send with a hint that says returning to
+ * the app retries. App-wide queries opt out of focus/reconnect refetches, so
+ * this observer opts back in, and only while the query is in error: a settled
+ * listing keeps the app default and the other observers of the same cache slot
+ * (the pickers, the sidebar) are unchanged.
+ */
+export function useChatSendGateWorkspaceBindingsForClient(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string;
+  readonly enabled: boolean;
+}): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic">,
+  HostRpcError
+> {
+  return useHostQuery<HostRpcRegistry, "worktree.listBindingsForEpic">({
+    cacheKeyIdentity: undefined,
+    client: args.client,
+    method: "worktree.listBindingsForEpic",
+    params: { epicId: args.epicId },
+    options: {
+      enabled: args.enabled,
+      refetchOnWindowFocus: (query) =>
+        query.state.status === "error" ? "always" : false,
+      refetchOnReconnect: (query) =>
+        query.state.status === "error" ? "always" : false,
+    },
+  });
+}
+
+/**
  * Terminal selection needs a directory, not a Git repository. Keep this
  * request in its own cache slot (purpose is part of the query key), so a Git
  * picker can never consume the deliberately unverified Git fields.

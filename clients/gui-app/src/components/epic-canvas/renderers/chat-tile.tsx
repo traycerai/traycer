@@ -256,7 +256,7 @@ import {
   effectiveMissingWorktreePaths,
   type WorkspaceComposerAvailability,
 } from "@/lib/composer/workspace-composer-availability";
-import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useChatSendGateWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -4077,7 +4077,7 @@ function useChatWorkspaceAvailability(
   missingWorktreePaths: ReadonlyArray<string>,
 ): WorkspaceComposerAvailability {
   const client = useTabHostClient();
-  const epicWorkspaces = useWorktreeListBindingsForEpicForClient({
+  const epicWorkspaces = useChatSendGateWorkspaceBindingsForClient({
     client,
     epicId: currentEpicId,
     enabled: client !== null,
@@ -4088,7 +4088,7 @@ function useChatWorkspaceAvailability(
   return deriveWorktreeBindingWorkspaceAvailability(
     worktreeBinding,
     snapshotLoaded,
-    epicWorkspaceCount,
+    { count: epicWorkspaceCount, didResolutionFail: epicWorkspaces.isError },
     missingWorktreePaths,
   );
 }
