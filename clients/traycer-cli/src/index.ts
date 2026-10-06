@@ -1,6 +1,10 @@
 #!/usr/bin/env -S bun
-// Must stay the first import: it installs the proxy dispatcher every later
-// module's outbound request depends on, Sentry's transport included.
+// Must stay the first two imports, in this order. The socket guard comes ahead
+// of anything that can open a connection: without it a reset loopback
+// connection throws out of Node's HTTP client as an uncaught exception
+// (traycerai/traycer#2093). The second installs the proxy dispatcher every
+// later module's outbound request depends on, Sentry's transport included.
+import "@traycer-clients/shared/platform/install-socket-tos-guard";
 import "./net/install-env-proxy";
 import "./sentry";
 import * as Sentry from "@sentry/node";
