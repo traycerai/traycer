@@ -17,6 +17,8 @@ import {
   HOST_QUIT_TITLE_IDLE,
   HOST_QUIT_TITLE_UNKNOWN,
   hostQuitCountsLine,
+  hostQuitTerminalsInUseDescription,
+  hostQuitTerminalsInUseTitle,
   hostQuitUnknownDescription,
 } from "@/lib/host/host-lifecycle-copy";
 
@@ -53,19 +55,27 @@ export interface HostQuitPromptModel {
  * | unknown       | Can't tell what's running on the host | "Stop host anyway and quit", force |
  * | busy (round)  | The host is still working           | "Stop host and quit", force       |
  * | busy-retry    | The host is still working           | "Stop host and quit", force       |
+ * | terminals-in-use (round) | N terminal(s) … still in use | "Stop host and quit", if-idle     |
  *
  * Both busy rounds are busy whatever the fresh list says: the host has just
- * refused an idle-only stop, and its refusal is the disclosure. They differ
- * only in why: a `busy` round is Stop-if-idle's FIRST ask (its silent stop
- * was refused, nothing was shown before it), so it reads as the plain busy
- * state; only `busy-retry` - the person had chosen Stop over an idle list -
- * says something started meanwhile.
+ * answered busy - by refusing an idle-only stop, or to the quit's own probe -
+ * and that answer is the disclosure. They differ only in why: a `busy` round
+ * is Stop-if-idle's FIRST ask (nothing was shown before it), so it reads as
+ * the plain busy state; only `busy-retry` - the person had chosen Stop and
+ * the host refused it - says something started meanwhile.
+ *
+ * The `terminals-in-use` round is its own row, not a busy round and not a
+ * verdict's: main asks it when the host answered NOT busy with terminals in
+ * use, and the row reads the same whatever the status query says.
  */
 export function describeHostQuitPrompt(
   request: HostQuitDecisionRequest,
   verdict: HostQuitVerdict,
   localHostId: string | null,
 ): HostQuitPromptModel {
+  if (request.round === "terminals-in-use") {
+    return describeTerminalsInUseRound(request.terminalsInUse);
+  }
   const facts =
     verdict.kind === "busy" || verdict.kind === "idle" ? verdict : null;
   // A busy round is busy whatever the fresh list says (the table below), so
@@ -154,8 +164,40 @@ export function describeHostQuitPrompt(
 }
 
 /**
+ * The `terminals-in-use` round: the count main was given, and nothing else.
+ *
+ * - No counts line: the host answered idle, so the line would print "Nothing
+ *   is running" beside a title that says terminals are in use.
+ * - No session list and no breakdown: the window's list is its own open
+ *   terminals, dead and never-used ones included, and would contradict the
+ *   count.
+ * - Stop is the idle-only stop: nothing shown here discloses a working
+ *   agent, and a forced stop only follows a list that did. If something did
+ *   start, main's `busy-retry` round asks again over the real list.
+ * - Stop is always enabled: the row does not wait on the status query.
+ */
+function describeTerminalsInUseRound(
+  terminalsInUse: number,
+): HostQuitPromptModel {
+  return {
+    stateKind: "terminals-in-use",
+    title: hostQuitTerminalsInUseTitle(terminalsInUse),
+    description: hostQuitTerminalsInUseDescription(terminalsInUse),
+    detail: null,
+    countsLine: null,
+    sessionsHostId: null,
+    stopLabel: HOST_QUIT_STOP_LABEL,
+    stopDisabled: false,
+    stopForce: false,
+    analyticsVerdict: "idle",
+    breakdown: null,
+  };
+}
+
+/**
  * A `busy` or `busy-retry` round: busy whatever the fresh list says, since the
- * host has just refused an idle-only stop (see `describeHostQuitPrompt`).
+ * host has just answered busy - by refusing an idle-only stop, or to the
+ * quit's own probe (see `describeHostQuitPrompt`).
  */
 function describeBusyRound(input: {
   readonly retry: boolean;
@@ -198,10 +240,12 @@ function describeBusyRound(input: {
  *   instant quit when nothing is running, so it answers Stop (if-idle) and
  *   never shows the list. A busy race comes back as a busy-retry round.
  *
- * Never on a busy or busy-retry round: the host has just refused an
- * idle-only stop, so an automatic answer there is either a second idle-only
- * stop main would refuse again, or a force nobody chose. That round is always
- * the person's.
+ * Never on a busy or busy-retry round: the host has just answered busy (a
+ * refused idle-only stop, or the quit's own probe), so an automatic answer
+ * there is either an idle-only stop main would see refused, or a force nobody
+ * chose. Never on the terminals-in-use round either: main asked it precisely
+ * because an idle host must not be stopped without a word. Those rounds are
+ * always the person's.
  */
 export function automaticHostQuitDecision(
   request: HostQuitDecisionRequest,
@@ -223,7 +267,9 @@ export function automaticHostQuitDecision(
  * Stop-if-idle's first round stays hidden while the host is being asked: a
  * mode that promises an instant quit when idle must not flash a dialog on the
  * way to that quit. It shows once the list is busy or unreadable. A busy
- * round always shows: the host's refusal already said it is working.
+ * round always shows: the host has already said it is working, by refusing a
+ * stop or to the quit's own probe. So does the terminals-in-use round, which
+ * main only asks to be shown.
  */
 export function hostQuitPromptVisible(
   request: HostQuitDecisionRequest,

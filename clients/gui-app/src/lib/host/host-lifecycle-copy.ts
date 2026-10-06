@@ -257,6 +257,26 @@ export const HOST_QUIT_DESCRIPTION_BUSY_RETRY =
 export const HOST_QUIT_DESCRIPTION_IDLE =
   "Quitting Traycer can keep the host running so your phone can still reach it, or stop it now.";
 /**
+ * Stop-if-idle's "terminals in use" round: the host answered idle while
+ * `count` terminals with a live shell have had a line entered in them. A
+ * command running inside the shell with no output is one of those, and the
+ * host cannot tell it from a prompt, so the quit asks before it stops. The
+ * title carries the count; the terminals are not listed (the window's own
+ * list holds dead and never-used ones, which the count leaves out).
+ */
+export function hostQuitTerminalsInUseTitle(count: number): string {
+  return count === 1
+    ? "1 terminal is still in use"
+    : `${count} terminals are still in use`;
+}
+
+export function hostQuitTerminalsInUseDescription(count: number): string {
+  return count === 1
+    ? "Stopping the host ends it. Quitting Traycer can keep the host running so it carries on, or stop it now."
+    : "Stopping the host ends them. Quitting Traycer can keep the host running so they carry on, or stop it now.";
+}
+
+/**
  * Says only what Traycer does. Whether the host ends, and when, depends on how
  * it was started: a service-run host is stopped here, but a terminal-started
  * one is not the service's to stop (`not-service-run`), so this line promises

@@ -375,10 +375,36 @@ const HOST_QUIT_DECISION_MESSAGES: RendererDecisionMessages = {
   disposed: "Runner IPC bridge disposed before the host quit decision resolved",
 };
 
-/** A host quit request before main mints its `requestId`. */
-export interface HostQuitPrompt {
-  readonly mode: HostQuitDecisionMode;
-  readonly round: HostQuitDecisionRequest["round"];
+/**
+ * A host quit request before main mints its `requestId`: one arm per arm of
+ * `HostQuitDecisionRequest`, so the `terminals-in-use` round cannot be asked
+ * without its count.
+ */
+export type HostQuitPrompt =
+  | {
+      readonly mode: HostQuitDecisionMode;
+      readonly round: "initial" | "busy" | "busy-retry";
+    }
+  | {
+      readonly mode: "stop-if-idle";
+      readonly round: "terminals-in-use";
+      readonly terminalsInUse: number;
+    };
+
+/** The request the renderer receives for `prompt`, field by field. */
+function hostQuitDecisionRequestFor(
+  requestId: string,
+  prompt: HostQuitPrompt,
+): HostQuitDecisionRequest {
+  if (prompt.round === "terminals-in-use") {
+    return {
+      requestId,
+      mode: prompt.mode,
+      round: prompt.round,
+      terminalsInUse: prompt.terminalsInUse,
+    };
+  }
+  return { requestId, mode: prompt.mode, round: prompt.round };
 }
 
 /**
@@ -1065,11 +1091,11 @@ export class RunnerIpcBridge {
     return this.hostQuitDecisions.request(
       this.windowRegistry.getMruRecord(),
       (windowId, requestId) =>
-        this.safeSendToWindow(windowId, RunnerHostEvent.hostQuitRequest, {
-          requestId,
-          mode: prompt.mode,
-          round: prompt.round,
-        } satisfies HostQuitDecisionRequest),
+        this.safeSendToWindow(
+          windowId,
+          RunnerHostEvent.hostQuitRequest,
+          hostQuitDecisionRequestFor(requestId, prompt),
+        ),
     );
   }
 

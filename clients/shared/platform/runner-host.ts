@@ -834,19 +834,36 @@ export type HostQuitDecisionMode = "ask" | "stop-if-idle";
  *
  * `round: "initial"` is the first ask of this quit, over a list the renderer
  * has not been shown yet. `round: "busy"` is Stop-if-idle's first ask after
- * its silent idle-only stop was refused: nothing was shown before it, so it
- * is a first ask too, over a list the host has just called busy. `round:
- * "busy-retry"` follows an idle-only stop the person had ALREADY chosen, over
- * an idle list, that the host refused because something started in the
- * meantime. On both busy rounds the renderer shows the fresh list and its
- * Stop is a force. The host's refusal text never crosses: it is the CLI's
- * instruction to its own caller, and main logs its code.
+ * the host has just answered busy - either by refusing the quit's silent
+ * idle-only stop, or to the quit's own activity probe, read before any stop
+ * is tried: nothing was shown before it, so it is a first ask too, over a
+ * list the host has just called busy. `round: "busy-retry"` follows an
+ * idle-only stop the person had ALREADY chosen, that the host refused because
+ * something started in the meantime. On both busy rounds the renderer shows
+ * the fresh list and its Stop is a force. The host's refusal text never
+ * crosses: it is the CLI's instruction to its own caller, and main logs its
+ * code.
+ *
+ * `round: "terminals-in-use"` is Stop-if-idle's first ask over a host that
+ * answered NOT busy while `terminalsInUse` plain terminals are in use: their
+ * shell is alive and a person has entered a line in them, which the host's
+ * busy rule cannot see once output stops. It is not a busy round: the
+ * renderer shows the count and no list, and its Stop is the idle-only stop,
+ * because nothing it displays discloses working agents.
  */
-export interface HostQuitDecisionRequest {
-  readonly requestId: string;
-  readonly mode: HostQuitDecisionMode;
-  readonly round: "initial" | "busy" | "busy-retry";
-}
+export type HostQuitDecisionRequest =
+  | {
+      readonly requestId: string;
+      readonly mode: HostQuitDecisionMode;
+      readonly round: "initial" | "busy" | "busy-retry";
+    }
+  | {
+      readonly requestId: string;
+      readonly mode: "stop-if-idle";
+      readonly round: "terminals-in-use";
+      /** How many terminals are in use, as the host reported. Above zero. */
+      readonly terminalsInUse: number;
+    };
 
 /**
  * The person's answer. `remember` is the "Remember my choice" checkbox; main
@@ -878,7 +895,8 @@ export interface HostQuitDecisionResponse {
  *
  * `stopping` carries `idleOnly`, whether the stop running can end work:
  * `true` for an idle-only stop, which the host refuses rather than end
- * anything (Stop-if-idle's silent attempt, a Stop chosen over an idle list);
+ * anything (Stop-if-idle's silent attempt, a Stop chosen over an idle list
+ * or on the `terminals-in-use` round);
  * `false` for Linked and for a forced stop. A surface names the work being
  * ended only when it is `false`.
  *

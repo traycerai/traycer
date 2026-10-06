@@ -4,7 +4,11 @@ import {
   isStrictlyNewerHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
-import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
+import {
+  probeHostActivity,
+  probeHostActivityBusy,
+  type HostActivityProbe,
+} from "@traycer-clients/shared/host-client/host-activity-probe";
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
@@ -422,6 +426,24 @@ export async function probeHostBusyVerdict(
   const websocketUrl = await readWebsocketUrl(layout);
   if (websocketUrl === null) return "no-host";
   return (await probeHostActivityBusy(websocketUrl)) ? "busy" : "idle";
+}
+
+/**
+ * The local host's `GET /activity` answer for a quit under "Stop if idle":
+ * busy, and how many terminals are in use. `unreachable` when there is no
+ * host endpoint on disk to ask, as when nothing answers - either way the quit
+ * has no count to ask on and takes the path it took before the count existed.
+ *
+ * Not {@link probeHostBusyVerdict}: that one answers "may this host be torn
+ * down" with the busy boolean alone, and nothing that gates a teardown may
+ * read the terminals-in-use count.
+ */
+export async function probeLocalHostActivity(
+  layout: HostFsLayout,
+): Promise<HostActivityProbe> {
+  const websocketUrl = await readWebsocketUrl(layout);
+  if (websocketUrl === null) return { kind: "unreachable" };
+  return await probeHostActivity(websocketUrl);
 }
 
 async function readWebsocketUrl(layout: HostFsLayout): Promise<string | null> {

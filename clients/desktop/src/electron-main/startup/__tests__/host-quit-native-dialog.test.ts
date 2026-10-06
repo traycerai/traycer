@@ -19,6 +19,14 @@ const BUSY_RETRY: HostQuitPrompt = {
   round: "busy-retry",
 };
 
+function terminalsInUse(count: number): HostQuitPrompt {
+  return {
+    mode: "stop-if-idle",
+    round: "terminals-in-use",
+    terminalsInUse: count,
+  };
+}
+
 function boxReturning(
   response: number,
   checkboxChecked: boolean,
@@ -116,6 +124,91 @@ describe("askHostQuitNatively", () => {
     const [seen] = keep.seen;
     expect(seen.message).toBe("The host is still working");
     expect(seen.detail).toContain("Something started");
+  });
+});
+
+describe("askHostQuitNatively: the terminals-in-use round", () => {
+  const SINGULAR_DETAIL =
+    "Stopping the host ends it. Quitting Traycer can keep the host running so it carries on, or stop it now.";
+  const PLURAL_DETAIL =
+    "Stopping the host ends them. Quitting Traycer can keep the host running so they carry on, or stop it now.";
+
+  it("says what the host counted: singular for one terminal", async () => {
+    const box = boxReturning(0, false);
+    await askHostQuitNatively(
+      terminalsInUse(1),
+      new AbortController().signal,
+      box.show,
+    );
+    const [seen] = box.seen;
+    expect(seen.message).toBe("1 terminal is still in use");
+    expect(seen.detail).toBe(SINGULAR_DETAIL);
+    expect(seen.buttons).toEqual([
+      "Keep Running and Quit",
+      "Stop Host and Quit",
+      "Cancel",
+    ]);
+  });
+
+  it("says what the host counted: plural for three terminals", async () => {
+    const box = boxReturning(0, false);
+    await askHostQuitNatively(
+      terminalsInUse(3),
+      new AbortController().signal,
+      box.show,
+    );
+    const [seen] = box.seen;
+    expect(seen.message).toBe("3 terminals are still in use");
+    expect(seen.detail).toBe(PLURAL_DETAIL);
+    expect(seen.buttons).toEqual([
+      "Keep Running and Quit",
+      "Stop Host and Quit",
+      "Cancel",
+    ]);
+  });
+
+  it("keeps Keep as the default and Cancel as the escape, like every round", async () => {
+    const signal = new AbortController().signal;
+    const box = boxReturning(0, false);
+    await askHostQuitNatively(terminalsInUse(2), signal, box.show);
+    const [seen] = box.seen;
+    expect(seen.defaultId).toBe(0);
+    expect(seen.cancelId).toBe(2);
+    expect(seen.signal).toBe(signal);
+  });
+
+  for (const count of [1, 3]) {
+    it(`${String(count)} in use: Keep keeps, Cancel cancels, and Stop is an idle-only stop (force:false), not a force`, async () => {
+      const signal = new AbortController().signal;
+      const prompt = terminalsInUse(count);
+      expect(
+        await askHostQuitNatively(prompt, signal, boxReturning(0, false).show),
+      ).toEqual({ kind: "keep", remember: false });
+      expect(
+        await askHostQuitNatively(prompt, signal, boxReturning(1, false).show),
+      ).toEqual({ kind: "stop", force: false, remember: false });
+      expect(
+        await askHostQuitNatively(prompt, signal, boxReturning(2, false).show),
+      ).toEqual({ kind: "cancel" });
+    });
+  }
+
+  it("a throwing showMessageBox still answers keep", async () => {
+    const decision = await askHostQuitNatively(
+      terminalsInUse(2),
+      new AbortController().signal,
+      () => Promise.reject(new Error("no display")),
+    );
+    expect(decision).toEqual({ kind: "keep", remember: false });
+  });
+
+  it("every other round's Stop is still a force", async () => {
+    const signal = new AbortController().signal;
+    for (const prompt of [INITIAL, BUSY, BUSY_RETRY]) {
+      expect(
+        await askHostQuitNatively(prompt, signal, boxReturning(1, false).show),
+      ).toEqual({ kind: "stop", force: true, remember: false });
+    }
   });
 });
 

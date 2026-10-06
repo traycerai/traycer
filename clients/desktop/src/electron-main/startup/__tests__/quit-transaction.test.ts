@@ -19,6 +19,7 @@ import type {
   StopHostRequest,
 } from "../../host/host-controller-types";
 import type { QuitVerdictWriteOutcome } from "../../host/host-lifecycle-transitions";
+import type { HostActivityProbe } from "@traycer-clients/shared/host-client/host-activity-probe";
 import type { HostQuitPrompt } from "../../ipc/runner-ipc-bridge";
 import {
   QuitTransactions,
@@ -91,6 +92,14 @@ type PromptScript =
  */
 type StopScript = StopHostOutcome | "hang" | "deferred" | "lane-hang";
 
+/**
+ * A scripted `GET /activity` read (stop-if-idle's first step): an answer, a
+ * read that stays pending until the test settles it via `resolveProbe`, or a
+ * dep that rejects (a bug the transaction must survive, as it resolves
+ * `unreachable` by contract).
+ */
+type ProbeScript = HostActivityProbe | "deferred" | "reject";
+
 /** The two lane job kinds the corner-case tests hold ahead of the quit. */
 type LaneHeldJobKind = "install" | "stopHost";
 
@@ -133,6 +142,13 @@ interface Scenario {
    * never reads it, so it has no effect there.
    */
   readonly foregroundRun: boolean;
+  /**
+   * What the host's activity probe says. The default is an answer that
+   * reports no terminal count - the honest default for every test that is not
+   * about terminals in use: stop-if-idle takes the path it took before the
+   * count existed.
+   */
+  readonly probe: ProbeScript;
 }
 
 const DEFAULT_SCENARIO: Scenario = {
@@ -147,6 +163,7 @@ const DEFAULT_SCENARIO: Scenario = {
   laneHeld: null,
   isLocalHostRunning: true,
   foregroundRun: false,
+  probe: { kind: "answered", busy: false, terminalsInUse: null },
 };
 
 interface Rig {
@@ -178,6 +195,10 @@ interface Rig {
   admissionBlock(): LifecycleAdmissionBlock | null;
   /** Settle the oldest `deferred` or `lane-hang` stop. */
   resolveStop(outcome: StopHostOutcome): void;
+  /** How many times the transaction read the host's activity probe. */
+  probeCalls(): number;
+  /** Settle the pending `deferred` activity probe. */
+  resolveProbe(answer: HostActivityProbe): void;
   /** Resolve the next held-back verdict write. */
   releaseVerdictWrites(): void;
   holdVerdictWrites(): void;
@@ -215,6 +236,8 @@ function buildRig(scenario: Scenario): Rig {
   let openVerdictGate: () => void = () => undefined;
   const updateSequenceWaiters: Array<() => void> = [];
   const deferredStops: Array<(outcome: StopHostOutcome) => void> = [];
+  let probeCallCount = 0;
+  let settleProbe: ((answer: HostActivityProbe) => void) | null = null;
 
   // A minimal FIFO lane. `enqueue` runs `job` only once every
   // job enqueued before it has settled, mirroring the exclusive mutation
@@ -280,6 +303,12 @@ function buildRig(scenario: Scenario): Rig {
       if (resolve === undefined) throw new Error("no deferred stop");
       resolve(outcome);
     },
+    probeCalls: () => probeCallCount,
+    resolveProbe: (answer) => {
+      if (settleProbe === null) throw new Error("no deferred probe");
+      settleProbe(answer);
+      settleProbe = null;
+    },
     hooks: () => {
       if (hooks === null) throw new Error("update sequence not started");
       return hooks;
@@ -307,6 +336,18 @@ function buildRig(scenario: Scenario): Rig {
       isRelaunchIntended: () => state.installing,
       isLocalHostRunning: () => Promise.resolve(scenario.isLocalHostRunning),
       isForegroundHostRun: () => Promise.resolve(scenario.foregroundRun),
+      probeHostActivity: (): Promise<HostActivityProbe> => {
+        probeCallCount += 1;
+        if (scenario.probe === "reject") {
+          return Promise.reject(new Error("probe dep rejected"));
+        }
+        if (scenario.probe === "deferred") {
+          return new Promise<HostActivityProbe>((resolve) => {
+            settleProbe = resolve;
+          });
+        }
+        return Promise.resolve(scenario.probe);
+      },
       lifecycle: {
         readQuitPolicy: () => {
           counts.readPolicy += 1;
@@ -2606,5 +2647,479 @@ describe("the force stop's withdrawal deadline is the remaining budget, not a fr
     await settle();
     expect(withdrawal?.aborted).toBe(true);
     expect(rig.counts.authorize).toBe(1);
+  });
+});
+
+// Stop-if-idle reads the host's activity probe before it stops anything: a
+// terminal in use (a person entered a line, the shell is alive) can be running
+// a command with no output, which the host's busy rule reads as idle. A count
+// above zero asks first; a count of zero, a host that reports none, and a host
+// that cannot be reached take the silent if-idle stop as before.
+describe("stop-if-idle with terminals in use", () => {
+  const IN_USE_IDLE: HostActivityProbe = {
+    kind: "answered",
+    busy: false,
+    terminalsInUse: 2,
+  };
+  const IN_USE_BUSY: HostActivityProbe = {
+    kind: "answered",
+    busy: true,
+    terminalsInUse: 2,
+  };
+  const TERMINALS_PROMPT: HostQuitPrompt = {
+    mode: "stop-if-idle",
+    round: "terminals-in-use",
+    terminalsInUse: 2,
+  };
+  const TERMINALS_PROMPT_EVENT = "prompt:stop-if-idle:terminals-in-use";
+  const STOP_IDLE_ONLY: PromptScript = {
+    via: "renderer",
+    decision: { kind: "stop", force: false, remember: false },
+  };
+
+  function lastVerdictBeforeAuthorize(
+    events: readonly string[],
+  ): string | undefined {
+    const authorizeIndex = events.indexOf("authorize");
+    const upTo =
+      authorizeIndex === -1 ? events : events.slice(0, authorizeIndex);
+    return upTo.filter((event) => event.startsWith("verdict:")).at(-1);
+  }
+
+  describe("terminals in use, host not busy", () => {
+    it("asks the terminals-in-use round with the count, before any stop or stopping phase", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          prompts: [{ via: "pending" }],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.prompts).toEqual([TERMINALS_PROMPT]);
+      expect(rig.stopRequests).toEqual([]);
+      // Nothing was announced as stopping before the question, and the tray
+      // indicator was never lit for it.
+      expect(rig.states).toEqual([]);
+      expect(rig.indicator).not.toContain(true);
+      expect(rig.counts.reveal).toBe(0);
+      expect(rig.events).toEqual([...USER_START, TERMINALS_PROMPT_EVENT]);
+    });
+
+    it("Stop (force:false): an if-idle stop, never a force; keep before it, stop once it stopped", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          stops: [IDLE_STOP],
+          prompts: [STOP_IDLE_ONLY],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+      expect(rig.events).toEqual([
+        ...USER_START,
+        TERMINALS_PROMPT_EVENT,
+        "verdict:keep",
+        "state:stopping:req-1:idleOnly=true",
+        "stop:if-idle:detached",
+        "verdict:stop",
+        ...QUITTING_TAIL,
+        "state:quitting:req-1",
+        "authorize",
+      ]);
+      expect(lastVerdictBeforeAuthorize(rig.events)).toBe("verdict:stop");
+      expect(rig.counts.authorize).toBe(1);
+      expect(rig.counts.stayOpen).toBe(0);
+    });
+
+    it("Stop, but the if-idle stop is refused host-busy: asks busy-retry, and the verdict stays keep until then", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          stops: [BUSY],
+          prompts: [STOP_IDLE_ONLY, { via: "pending" }],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.prompts).toEqual([
+        TERMINALS_PROMPT,
+        { mode: "stop-if-idle", round: "busy-retry" },
+      ]);
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+      const retryIndex = rig.events.indexOf("prompt:stop-if-idle:busy-retry");
+      expect(retryIndex).toBeGreaterThan(-1);
+      expect(rig.events.slice(0, retryIndex)).not.toContain("verdict:stop");
+      expect(
+        rig.events
+          .slice(0, retryIndex)
+          .filter((event) => event.startsWith("verdict:"))
+          .at(-1),
+      ).toBe("verdict:keep");
+      expect(rig.counts.authorize).toBe(0);
+    });
+
+    it("Stop, refused host-busy, then Stop on busy-retry: that round's Stop is the force", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          stops: [BUSY, FORCE_STOP],
+          prompts: [STOP_IDLE_ONLY, STOP_IDLE_ONLY],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.prompts.map((p) => p.round)).toEqual([
+        "terminals-in-use",
+        "busy-retry",
+      ]);
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle", "force"]);
+      expect(rig.counts.authorize).toBe(1);
+    });
+
+    it("Keep: verdict keep, no stop, the quit commits", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          prompts: [
+            { via: "renderer", decision: { kind: "keep", remember: false } },
+          ],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.events).toEqual([
+        ...USER_START,
+        TERMINALS_PROMPT_EVENT,
+        "verdict:keep",
+        ...QUITTING_TAIL,
+        "state:quitting:req-1",
+        "authorize",
+      ]);
+      expect(rig.stopRequests).toEqual([]);
+    });
+
+    it("Cancel: stays open, nothing stopped, the verdict released", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          prompts: [{ via: "renderer", decision: { kind: "cancel" } }],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.events).toEqual([
+        ...USER_START,
+        TERMINALS_PROMPT_EVENT,
+        "holdRelease",
+        "releaseVerdict",
+        "state:cancelled:req-1",
+        "stayOpen",
+      ]);
+      expect(rig.stopRequests).toEqual([]);
+      expect(rig.counts.stayOpen).toBe(1);
+      expect(rig.counts.authorize).toBe(0);
+    });
+
+    it("the native dialog's Stop (force:false) is idle-only too", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          stops: [IDLE_STOP],
+          prompts: [
+            {
+              via: "native",
+              decision: { kind: "stop", force: false, remember: false },
+            },
+          ],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.events).toContain("native:stop-if-idle:terminals-in-use");
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+      expect(rig.counts.authorize).toBe(1);
+    });
+  });
+
+  describe("terminals in use, host busy", () => {
+    it("asks the busy round directly, with no stop tried and no count in the prompt", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_BUSY,
+          prompts: [{ via: "pending" }],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.prompts).toEqual([{ mode: "stop-if-idle", round: "busy" }]);
+      expect(Object.keys(rig.prompts[0])).toEqual(["mode", "round"]);
+      expect(rig.stopRequests).toEqual([]);
+      expect(rig.states).toEqual([]);
+      expect(rig.events).toEqual([...USER_START, "prompt:stop-if-idle:busy"]);
+    });
+
+    it("a Stop answered on that round (even with force:false) runs a FORCE stop", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_BUSY,
+          stops: [FORCE_STOP],
+          prompts: [STOP_IDLE_ONLY],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.prompts).toEqual([{ mode: "stop-if-idle", round: "busy" }]);
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["force"]);
+      expect(rig.counts.authorize).toBe(1);
+    });
+  });
+
+  describe("the silent if-idle path, unchanged", () => {
+    const SILENT_PATH_STOPPED = [
+      ...USER_START,
+      "state:stopping:null:idleOnly=true",
+      "stop:if-idle:detached",
+      "verdict:stop",
+      ...QUITTING_TAIL,
+      "state:quitting:null",
+      "authorize",
+    ];
+
+    it("a count of zero: if-idle stop with no prompt, the quit commits on stopped", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: { kind: "answered", busy: false, terminalsInUse: 0 },
+          stops: [IDLE_STOP],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.events).toEqual(SILENT_PATH_STOPPED);
+      expect(rig.prompts).toEqual([]);
+    });
+
+    it("a count the host did not report (null), host not busy: if-idle stop first, no prompt before it", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: { kind: "answered", busy: false, terminalsInUse: null },
+          stops: [IDLE_STOP],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.events).toEqual(SILENT_PATH_STOPPED);
+      expect(rig.prompts).toEqual([]);
+    });
+
+    it("a count the host did not report (null), host busy: if-idle stop attempted first; its refusal asks busy", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: { kind: "answered", busy: true, terminalsInUse: null },
+          stops: [BUSY],
+          prompts: [{ via: "pending" }],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+      expect(rig.events).toEqual([
+        ...USER_START,
+        "state:stopping:null:idleOnly=true",
+        "stop:if-idle:detached",
+        "state:prompting:null",
+        "prompt:stop-if-idle:busy",
+      ]);
+      expect(rig.prompts).toEqual([{ mode: "stop-if-idle", round: "busy" }]);
+    });
+
+    it("a host that cannot be reached: the if-idle stop, no prompt", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: { kind: "unreachable" },
+          stops: [IDLE_STOP],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.events).toEqual(SILENT_PATH_STOPPED);
+      expect(rig.prompts).toEqual([]);
+    });
+
+    it("a probe dep that rejects: the if-idle stop, no prompt", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: "reject",
+          stops: [IDLE_STOP],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.probeCalls()).toBe(1);
+      expect(rig.events).toEqual(SILENT_PATH_STOPPED);
+      expect(rig.prompts).toEqual([]);
+    });
+  });
+
+  describe("the probe is read before the stopping phase", () => {
+    it("while the probe is pending nothing is published, lit or stopped; its answer then decides", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: "deferred",
+          prompts: [{ via: "pending" }],
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.probeCalls()).toBe(1);
+      expect(rig.events).toEqual(USER_START);
+      expect(rig.states).toEqual([]);
+      expect(rig.indicator).toEqual([]);
+      expect(rig.stopRequests).toEqual([]);
+      expect(rig.prompts).toEqual([]);
+
+      rig.resolveProbe(IN_USE_IDLE);
+      await flush();
+
+      expect(rig.prompts).toEqual([TERMINALS_PROMPT]);
+      expect(rig.stopRequests).toEqual([]);
+      expect(rig.events).toEqual([...USER_START, TERMINALS_PROMPT_EVENT]);
+    });
+
+    it("a pending probe answered with no count then starts the stopping phase and the stop", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: "deferred",
+          stops: [IDLE_STOP],
+        }),
+      );
+      await quit(rig);
+      expect(rig.stopRequests).toEqual([]);
+
+      rig.resolveProbe({ kind: "answered", busy: false, terminalsInUse: null });
+      await flush();
+
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+      expect(rig.counts.authorize).toBe(1);
+    });
+
+    // The answer that would ask, and the answers that would stop: the
+    // superseded quit must do neither.
+    const ANSWERS: ReadonlyArray<readonly [string, HostActivityProbe]> = [
+      ["terminals in use, idle", IN_USE_IDLE],
+      ["terminals in use, busy", IN_USE_BUSY],
+      [
+        "no count reported",
+        { kind: "answered", busy: false, terminalsInUse: null },
+      ],
+      ["unreachable", { kind: "unreachable" }],
+    ];
+    for (const [label, answer] of ANSWERS) {
+      it(`superseded by a relaunch while the probe is pending (${label}): the old quit asks nothing and stops nothing`, async () => {
+        const rig = buildRig(
+          scenario({ mode: "stop-if-idle", probe: "deferred" }),
+        );
+        await quit(rig);
+        expect(rig.probeCalls()).toBe(1);
+
+        rig.state.installing = true;
+        expect(rig.txs.onBeforeQuit()).toBe("prevent");
+        await flush();
+        rig.resolveProbe(answer);
+        await flush();
+
+        expect(rig.prompts).toEqual([]);
+        expect(rig.events).not.toContain(TERMINALS_PROMPT_EVENT);
+        expect(rig.stopRequests).toEqual([]);
+        expect(rig.states).toEqual([]);
+        // The relaunch transaction proceeded as in the existing supersede rows.
+        expect(rig.events).toContain("verdict:handoff");
+        expect(rig.events).toContain("updateSeq");
+        expect(rig.counts.authorize).toBe(0);
+        expect(rig.counts.stayOpen).toBe(0);
+        expect(rig.events.filter((event) => event === "verdict:keep")).toEqual(
+          [],
+        );
+      });
+    }
+  });
+
+  describe("only stop-if-idle reads the probe", () => {
+    const modes: readonly HostLifecycleMode[] = [
+      "ask",
+      "linked",
+      "background",
+      "none",
+    ];
+    for (const mode of modes) {
+      it(`${mode}: a quit never reads the activity probe`, async () => {
+        const rig = buildRig(
+          scenario({
+            mode,
+            probe: IN_USE_IDLE,
+            stops: [IDLE_STOP],
+            prompts: [
+              { via: "renderer", decision: { kind: "keep", remember: false } },
+            ],
+          }),
+        );
+        await quit(rig);
+
+        expect(rig.probeCalls()).toBe(0);
+        expect(rig.prompts.map((p) => p.round)).not.toContain(
+          "terminals-in-use",
+        );
+      });
+    }
+
+    it("the tray preset (Quit and Stop Host) under stop-if-idle does not read it either", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          probe: IN_USE_IDLE,
+          stops: [FORCE_STOP],
+        }),
+      );
+      rig.txs.quitAndStopHost(false, () => {
+        rig.events.push("requestQuit");
+        rig.txs.onBeforeQuit();
+      });
+      await flush();
+
+      expect(rig.probeCalls()).toBe(0);
+      expect(rig.prompts).toEqual([]);
+      expect(rig.stopRequests.map((r) => r.mode)).toEqual(["force"]);
+      expect(rig.counts.authorize).toBe(1);
+    });
+
+    it("an update-install quit does not read it", async () => {
+      const rig = buildRig(
+        scenario({
+          mode: "stop-if-idle",
+          installing: true,
+          probe: IN_USE_IDLE,
+        }),
+      );
+      await quit(rig);
+
+      expect(rig.probeCalls()).toBe(0);
+    });
   });
 });

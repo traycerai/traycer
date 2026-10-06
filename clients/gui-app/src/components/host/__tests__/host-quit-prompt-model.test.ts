@@ -17,6 +17,8 @@ import {
   HOST_QUIT_TITLE_CHECKING,
   HOST_QUIT_TITLE_IDLE,
   HOST_QUIT_TITLE_UNKNOWN,
+  hostQuitTerminalsInUseDescription,
+  hostQuitTerminalsInUseTitle,
   hostQuitUnknownDescription,
 } from "@/lib/host/host-lifecycle-copy";
 
@@ -575,7 +577,7 @@ describe("common invariants", () => {
   });
 
   it("no rendered detail across any round/verdict combination ever contains CLI text", () => {
-    const rounds: ReadonlyArray<HostQuitDecisionRequest["round"]> = [
+    const rounds: ReadonlyArray<"initial" | "busy" | "busy-retry"> = [
       "initial",
       "busy",
       "busy-retry",
@@ -598,5 +600,109 @@ describe("common invariants", () => {
         expect(model.detail ?? "").not.toContain("Re-run");
       }
     }
+  });
+});
+
+describe("the terminals-in-use round (Stop-if-idle's first ask over an idle host with terminals in use)", () => {
+  const NOT_RUNNING_VERDICT: HostQuitVerdict = { kind: "not-running" };
+  const VERDICTS: ReadonlyArray<readonly [string, HostQuitVerdict]> = [
+    ["busy", BUSY_VERDICT],
+    ["idle", IDLE_VERDICT],
+    ["unknown", UNKNOWN_VERDICT],
+    ["checking", CHECKING_VERDICT],
+    ["no-local-host", NO_LOCAL_HOST_VERDICT],
+    ["not-running", NOT_RUNNING_VERDICT],
+  ];
+
+  function terminalsRequest(count: number): HostQuitDecisionRequest {
+    return {
+      requestId: "req-1",
+      mode: "stop-if-idle",
+      round: "terminals-in-use",
+      terminalsInUse: count,
+    };
+  }
+
+  it("the copy: singular for one terminal, plural with the count otherwise", () => {
+    expect(hostQuitTerminalsInUseTitle(1)).toBe("1 terminal is still in use");
+    expect(hostQuitTerminalsInUseTitle(3)).toBe("3 terminals are still in use");
+    expect(hostQuitTerminalsInUseDescription(1)).toBe(
+      "Stopping the host ends it. Quitting Traycer can keep the host running so it carries on, or stop it now.",
+    );
+    expect(hostQuitTerminalsInUseDescription(3)).toBe(
+      "Stopping the host ends them. Quitting Traycer can keep the host running so they carry on, or stop it now.",
+    );
+  });
+
+  for (const count of [1, 3]) {
+    for (const [label, verdict] of VERDICTS) {
+      it(`${String(count)} in use, ${label} verdict: its own row, whatever the status query says - idle-only Stop, always enabled, no counts line`, () => {
+        const model = describeHostQuitPrompt(
+          terminalsRequest(count),
+          verdict,
+          LOCAL_HOST_ID,
+        );
+
+        expect(model).toEqual({
+          stateKind: "terminals-in-use",
+          title: hostQuitTerminalsInUseTitle(count),
+          description: hostQuitTerminalsInUseDescription(count),
+          detail: null,
+          countsLine: null,
+          sessionsHostId: null,
+          breakdown: null,
+          stopLabel: HOST_QUIT_STOP_LABEL,
+          stopDisabled: false,
+          stopForce: false,
+          analyticsVerdict: "idle",
+        });
+      });
+    }
+  }
+
+  it("names the count it was given in the title", () => {
+    expect(
+      describeHostQuitPrompt(terminalsRequest(1), IDLE_VERDICT, LOCAL_HOST_ID)
+        .title,
+    ).toBe("1 terminal is still in use");
+    expect(
+      describeHostQuitPrompt(terminalsRequest(3), IDLE_VERDICT, LOCAL_HOST_ID)
+        .title,
+    ).toBe("3 terminals are still in use");
+  });
+
+  it("is never answered automatically, under any verdict (an idle host here is exactly what must not be stopped without a word)", () => {
+    for (const [, verdict] of VERDICTS) {
+      expect(
+        automaticHostQuitDecision(terminalsRequest(2), verdict),
+      ).toBeNull();
+    }
+    // Controls: the same verdicts DO auto-answer an initial stop-if-idle
+    // round, so the null above is the round's doing.
+    expect(
+      automaticHostQuitDecision(
+        request("stop-if-idle", "initial"),
+        IDLE_VERDICT,
+      ),
+    ).toEqual({ kind: "stop", force: false, remember: false });
+    expect(
+      automaticHostQuitDecision(
+        request("stop-if-idle", "initial"),
+        NOT_RUNNING_VERDICT,
+      ),
+    ).toEqual({ kind: "stop", force: false, remember: false });
+  });
+
+  it("is always shown, under any verdict (the hidden first round of Stop-if-idle is not this one)", () => {
+    for (const [, verdict] of VERDICTS) {
+      expect(hostQuitPromptVisible(terminalsRequest(2), verdict)).toBe(true);
+    }
+    // Control: stop-if-idle's initial round is hidden while the host is asked.
+    expect(
+      hostQuitPromptVisible(
+        request("stop-if-idle", "initial"),
+        CHECKING_VERDICT,
+      ),
+    ).toBe(false);
   });
 });

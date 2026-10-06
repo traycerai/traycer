@@ -433,6 +433,13 @@ function transactionsOver(fixture: Fixture): {
     isRelaunchIntended: () => false,
     isLocalHostRunning: () => Promise.resolve(true),
     isForegroundHostRun: async () => false,
+    // Not reported: stop-if-idle takes its silent if-idle stop, as before the
+    // host reported a terminal count.
+    probeHostActivity: async () => ({
+      kind: "answered",
+      busy: false,
+      terminalsInUse: null,
+    }),
     lifecycle: {
       readQuitPolicy: async () => ({ mode: "ask", rev: 1 }),
       writeQuitVerdict: async () => "written",
@@ -578,6 +585,62 @@ describe("requestHostQuitDecision through the real bridge", () => {
       "requestId",
       "round",
     ]);
+  });
+
+  it("the request payload for a 'terminals-in-use' round carries its count: {requestId (the minted one), mode, round, terminalsInUse}", async () => {
+    const fixture = await newFixture(true);
+    fixture.listen(101);
+    const decision = fixture.bridge.requestHostQuitDecision({
+      mode: "stop-if-idle",
+      round: "terminals-in-use",
+      terminalsInUse: 2,
+    });
+    const requestId = fixture.requestIdOf(fixture.w1);
+    const [sent] = fixture.w1.sentOn(RunnerHostEvent.hostQuitRequest);
+    expect(sent?.payload).toEqual({
+      requestId,
+      mode: "stop-if-idle",
+      round: "terminals-in-use",
+      terminalsInUse: 2,
+    });
+    // The id in the payload is the one main minted: an answer to it settles
+    // this request.
+    fixture.ack(101, requestId);
+    const answer: HostQuitDecision = {
+      kind: "stop",
+      force: false,
+      remember: false,
+    };
+    fixture.invoke(RunnerHostInvoke.hostQuitRespond, 101, {
+      requestId,
+      decision: answer,
+    });
+    await expect(decision).resolves.toEqual({ requestId, decision: answer });
+  });
+
+  it("a request of the old shape carries no terminalsInUse key, whichever round", async () => {
+    const fixture = await newFixture(true);
+    fixture.listen(101);
+    for (const prompt of [
+      { mode: "ask", round: "initial" },
+      { mode: "stop-if-idle", round: "busy" },
+      { mode: "stop-if-idle", round: "busy-retry" },
+    ] as const) {
+      fixture.bridge.requestHostQuitDecision(prompt).catch(() => undefined);
+      const [sent] = fixture.w1
+        .sentOn(RunnerHostEvent.hostQuitRequest)
+        .slice(-1);
+      expect(sent?.payload).toEqual({
+        requestId: fixture.requestIdOf(fixture.w1),
+        mode: prompt.mode,
+        round: prompt.round,
+      });
+      expect(Object.keys(sent?.payload as object).sort()).toEqual([
+        "mode",
+        "requestId",
+        "round",
+      ]);
+    }
   });
 
   it("shows and focuses the target window BEFORE the request is sent", async () => {

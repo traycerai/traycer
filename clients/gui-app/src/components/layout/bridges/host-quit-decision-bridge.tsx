@@ -53,7 +53,7 @@ export function HostQuitDecisionBridge(): ReactNode {
     useState<UnpromptedStopping | null>(null);
   // "Remember my choice" belongs to one quit: kept across its busy-retry
   // round, cleared on a quit's first ask - `initial`, or Stop-if-idle's
-  // `busy` round, which nothing was shown before.
+  // `busy` or `terminals-in-use` round, which nothing was shown before.
   const [remember, setRemember] = useState(false);
 
   useEffect(() => {
