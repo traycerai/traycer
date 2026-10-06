@@ -97,9 +97,11 @@ const LIVE_FROZEN_EXPORTS = {
   // 9.1 froze at the pre-`judgeDefaultModel` row when 9.2 opened, exactly as
   // 9.0 froze when 9.1 opened - its dump did not change from its freeze.
   "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchemaV91,
-  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
-  // attempt to grow the row fails here first.
+  // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.2); its dump
+  // did not change by the freeze.
   "agent.gui.listHarnesses@9.2": listGuiHarnessesResponseSchemaV92,
+  // The head line, holding 9.2's old job: it names the LIVE schema, so the next
+  // attempt to grow the row fails here first.
   "agent.gui.listHarnesses@10.0": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
@@ -111,20 +113,24 @@ const LIVE_FROZEN_EXPORTS = {
   // live schema and `agent.list` had NO head-line row here at all, so nothing
   // local could have caught the growth - only the tag-based gate.
   "agent.list@7.0": listAgentsResponseSchemaV70,
-  // The head line, pinned so the next growth attempt fails here first - keyed
-  // at the head VERSION. It read `agent.list@8.0` while major 8 was head and
-  // was not re-keyed when major 9 opened against live, so it has been pinning
-  // the MAJOR-9 head under a major-8 name ever since.
+  // This row was the head line, pinned so the next growth attempt fails here
+  // first - keyed at the head VERSION. It read `agent.list@8.0` while major 8
+  // was head and was not re-keyed when major 9 opened against live, so it
+  // pinned the MAJOR-9 head under a major-8 name until the row was re-keyed.
   //
   // `@9.0` is the shape this row held until the session facet landed. Major 9
-  // is UNRELEASED (`host-v1.3.0` registers `agent.list` 1.0 through 8.0 and no
-  // 9), so by the release-status rule spelled out on `providers.list@8.0`
-  // below, growing it regenerates rather than freezes - and the pre-facet
+  // was UNRELEASED then (`host-v1.3.0` registers `agent.list` 1.0 through 8.0
+  // and no 9), so by the release-status rule spelled out on `providers.list@8.0`
+  // below, growing it regenerated rather than froze - and the pre-facet
   // bytes are kept anyway, under the reserved `V90` name the head-contract
   // rule forced out when `@9.1` took the canonical alias. Nothing leaves the
   // fixture; the rows are simply named what they are.
   "agent.list@9.0": listAgentsResponseSchemaV90,
+  // 9.1 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.1); its dump
+  // did not change by the freeze.
   "agent.list@9.1": listAgentsResponseSchemaV91,
+  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
+  // attempt to grow the agent summary fails here first.
   "agent.list@10.0": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
@@ -142,8 +148,9 @@ const LIVE_FROZEN_EXPORTS = {
   // records what a line served, so undoing the growth that triggered it does
   // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
-  // The head line now, holding v7.0's old job: it names the LIVE schema, so
-  // the next attempt to grow it fails here first.
+  // The head line holds v7.0's old job, and today that is `providers.list@10.0`
+  // below: it names the LIVE schema, so the next attempt to grow it fails there
+  // first.
   //
   // What that red means depends on whether the line has SHIPPED, and the two
   // answers are opposites - read this before reaching for either:
@@ -202,10 +209,10 @@ const LIVE_FROZEN_EXPORTS = {
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  // Three freezes here as well: 8.0 froze when 9.0 opened, 9.0 froze at the
-  // pre-`autoJudge` state when 9.1 opened, and 9.1 froze at the pre-marker
-  // login capability when 9.2 opened. None of those dumps was changed BY its
-  // freeze.
+  // Four freezes here as well: 8.0 froze when 9.0 opened, 9.0 froze at the
+  // pre-`autoJudge` state when 9.1 opened, 9.1 froze at the pre-marker login
+  // capability when 9.2 opened, and 9.2 froze when `commandcode` opened 10.0.
+  // None of those dumps was changed BY its freeze.
   //
   // 9.0 and 9.1 DID move once, wrongly, and that is worth keeping rather than
   // tidying away. An earlier revision of this comment licensed it: "Major 9 is
@@ -231,13 +238,15 @@ const LIVE_FROZEN_EXPORTS = {
   "providers.list@8.0": providersListResponseSchemaV80,
   "providers.list@9.0": providersListResponseSchemaV90,
   "providers.list@9.1": providersListResponseSchemaV91,
-  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
+  // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.2); its dump
+  // did not change by the freeze.
+  "providers.list@9.2": providersListResponseSchemaV92,
+  // The head line, holding 9.2's old job: it names the LIVE schema, so the next
   // attempt to grow the provider state fails here first. Note what that guard
-  // could NOT do while 9.1 held this row - it moves with the live schema by
+  // could NOT do while 9.1 held this job - it moves with the live schema by
   // design, so the two markers landing on the live capability regenerated it
   // without complaint. The rows above are the ones that refuse; a line earns
   // one the moment a host advertising it is published.
-  "providers.list@9.2": providersListResponseSchemaV92,
   "providers.list@10.0": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
@@ -248,16 +257,22 @@ const LIVE_FROZEN_EXPORTS = {
   // rather than widened in place: it names its own hand-copied
   // `chatRunSettingsSchemaV20`, whose `permissionMode` is pinned to
   // `permissionModeSchemaPreAuto` for the same half-freeze reason its harness
-  // id is. Major 3 is the head and the only line that may spell `auto`. What
+  // id is. Majors 3 and 4 are the only lines that may spell `auto`. What
   // protects the released 1.0 reader is the identical pin on
   // `chatRunSettingsSchemaV10` plus the V2->V1 bridge's existing
   // `DOWNGRADE_UNSUPPORTED` refusal, which covers the mode dimension for free.
   "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchemaV20,
+  // 3.0 froze when `commandcode` opened 4.0 (`1.5.0` shipped 3.0); its dump
+  // did not change by the freeze.
+  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchemaV30,
   // The head line: it names the LIVE response, so the next attempt to grow the
   // settings tuple fails here first.
-  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchemaV30,
   "epic.getChatRunSettings@4.0": getChatRunSettingsResponseSchema,
+  // 1.0 froze when `commandcode` opened 2.0 (`1.5.0` shipped 1.0); its dump did
+  // not change by the freeze.
   "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchemaV10,
+  // The head line: it names the LIVE response, so the next attempt to grow a
+  // batch entry fails here first.
   "epic.getChatRunSettingsBatch@2.0": getChatRunSettingsBatchResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
