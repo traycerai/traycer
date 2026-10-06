@@ -2116,6 +2116,10 @@ function useChatTileSessionViewModel(
       // indicator row during background-only phase (no active turn) even
       // after the real row has already settled to its "done" footer.
       runStatus: composerActiveTurnStatus ?? "idle",
+      // The raw value this time, and for the one reader that wants it: a
+      // background-outcome note holds back its ending while the host still
+      // counts the chat as working.
+      chatWorking: state.runStatus !== "idle",
       // Binding identity for the in-transcript setup card (replaces the old
       // strip's mount-time tuple): epic + chat owner route the retry mutation
       // and scope the terminal-liveness query; `viewTabId` rides the synthetic

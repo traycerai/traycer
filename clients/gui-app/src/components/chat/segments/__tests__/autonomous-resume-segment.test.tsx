@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
 
 const hostQueryMock = vi.hoisted(() => ({
@@ -124,7 +125,7 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.getByText("MCP tool completed")).toBeTruthy();
+    expect(screen.getByText("Background MCP tool completed")).toBeTruthy();
     expect(screen.getByText("probe · slow_op")).toBeTruthy();
     expect(screen.queryByText("Command completed")).toBeNull();
   });
@@ -523,5 +524,61 @@ describe("<AutonomousResumeSegment />", () => {
       screen.queryByRole("button", { name: /Woke on schedule/ }),
     ).toBeNull();
     expect(hostQueryMock.calls).toHaveLength(0);
+  });
+
+  const MCP_FAILED_TRIGGER: AutonomousResumeTrigger = {
+    kind: "command",
+    title: "probe/slow_op",
+    status: "failed",
+    summary: "Connection reset by peer",
+    blockId: "tool-10",
+    outputFile: null,
+    mcp: { serverName: "probe", toolName: "slow_op" },
+    managedCommand: null,
+    live: false,
+  };
+
+  const SUBAGENT_TRIGGER: AutonomousResumeTrigger = {
+    kind: "subagent",
+    title: "reviewer",
+    status: "completed",
+    summary: "Review finished with two findings.",
+    blockId: "tool-11",
+    outputFile: null,
+    mcp: null,
+    managedCommand: null,
+    live: false,
+  };
+
+  it("draws a failed background MCP trigger as a compact note with its summary inline and no disclosure", () => {
+    render(
+      <AutonomousResumeSegment triggers={[MCP_FAILED_TRIGGER]} variant="note" />,
+    );
+
+    expect(screen.getByText("Background MCP tool failed")).toBeTruthy();
+    expect(screen.getByText("Connection reset by peer")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the disclosure on a note whose trigger is a subagent", () => {
+    render(
+      <AutonomousResumeSegment triggers={[SUBAGENT_TRIGGER]} variant="note" />,
+    );
+
+    const toggle = screen.getByRole("button", { name: /Subagent completed/ });
+    fireEvent.click(toggle);
+
+    expect(
+      screen.getAllByText(/Review finished with two findings\./).length,
+    ).toBeGreaterThan(0);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps the row variant non-expandable for the same subagent trigger", () => {
+    render(
+      <AutonomousResumeSegment triggers={[SUBAGENT_TRIGGER]} variant="row" />,
+    );
+
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
