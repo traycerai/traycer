@@ -244,7 +244,7 @@ function desktopAppRowView(
     };
   }
 
-  if (updateIsDownloaded(snapshot)) {
+  if (updateIsFinishable(snapshot)) {
     // A Linux deb/rpm install that needs a manual step: the same guidance
     // dialog the header's tick and the update toast open. The blocked reason
     // wins if both are set.
@@ -253,10 +253,7 @@ function desktopAppRowView(
     const readyDetail = needsManualInstall
       ? `${runningLine} Finishing the update needs a manual step.`
       : `${runningLine} Restart it to install the update.`;
-    const readyState =
-      snapshot.latestVersion === null
-        ? "Update ready"
-        : `v${snapshot.latestVersion} ready`;
+    const readyState = finishableState(snapshot);
     return {
       state: readyState,
       detail: blockedReason ?? readyDetail,
@@ -310,22 +307,32 @@ function readyAnnouncement(
 }
 
 /**
- * The update is on disk and waiting to be installed: `ready`, and also an
- * `error` that carries manual-install guidance. That second one is how a
- * Linux deb/rpm install whose privilege prompt failed arrives: the updater
- * reports the failure AND the steps that finish the same downloaded file by
- * hand, so the update is still there to finish. Any other `error` has
+ * There is an update to finish: `ready`, and also an `error` that carries
+ * manual-install guidance. That second one is how a Linux deb/rpm install
+ * whose privilege prompt failed arrives: the updater reports the failure AND
+ * the steps that finish the downloaded file by hand. Any other `error` has
  * nothing to act on here; the update toast reports it.
- *
- * The updater keeps that guidance until the staged update is discarded, so
- * an `error` can also carry it from an EARLIER failed install (a newer
- * version found afterwards, whose download then failed). The snapshot does
- * not say which, and the update toast offers its View instructions on the
- * same pair, so the row reads it the same way rather than guess.
  */
-function updateIsDownloaded(snapshot: DesktopAppUpdateSnapshot): boolean {
+function updateIsFinishable(snapshot: DesktopAppUpdateSnapshot): boolean {
   if (snapshot.status === "ready") return true;
   return snapshot.status === "error" && snapshot.installGuidance !== null;
+}
+
+/**
+ * `ready` names its version: that candidate is the one on disk. An `error`
+ * with guidance names NONE. The updater keeps the guidance until the staged
+ * update is discarded, so it can outlive the install it came from: a newer
+ * version found afterwards replaces `latestVersion`, and if THAT download
+ * fails the snapshot is an `error` whose guidance is for the older file.
+ * Nothing in the snapshot says which case this is, so the row offers the
+ * steps and makes no claim about which version they finish, as the update
+ * toast does.
+ */
+function finishableState(snapshot: DesktopAppUpdateSnapshot): string {
+  if (snapshot.status !== "ready") return "Update not finished";
+  return snapshot.latestVersion === null
+    ? "Update ready"
+    : `v${snapshot.latestVersion} ready`;
 }
 
 /**

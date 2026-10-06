@@ -5791,30 +5791,33 @@ set-state-in-effect` forbids the effect form, and an effect would also
       (`bridge.downloadUpdate()`) and the same guarded restart
       (`requestAppUpdateInstall`), so the three cannot disagree.
 
-      | Updater state                                         | State line        | Control                             |
-      | ----------------------------------------------------- | ----------------- | ----------------------------------- |
-      | a finished check found nothing                        | `Up to date (vX)` | none                                |
-      | `available`                                           | `vY available`    | Download                            |
-      | `downloading`                                         | `Downloading N%`  | Download, waiting, with a spinner   |
-      | `ready`                                               | `vY ready`        | Restart                             |
-      | `ready`, or `error`, with `installGuidance`           | `vY ready`        | Finish update (the guidance dialog) |
-      | anything else (checking, a plain error, no check yet) | `vX`              | none                                |
+      | Updater state                                         | State line            | Control                             |
+      | ----------------------------------------------------- | --------------------- | ----------------------------------- |
+      | a finished check found nothing                        | `Up to date (vX)`     | none                                |
+      | `available`                                           | `vY available`        | Download                            |
+      | `downloading`                                         | `Downloading N%`      | Download, waiting, with a spinner   |
+      | `ready`                                               | `vY ready`            | Restart                             |
+      | `ready` with `installGuidance`                        | `vY ready`            | Finish update (the guidance dialog) |
+      | `error` with `installGuidance`                        | `Update not finished` | Finish update (the guidance dialog) |
+      | anything else (checking, a plain error, no check yet) | `vX`                  | none                                |
 
     - **"Up to date" is a claim about a check.** The updater publishes
       `up-to-date` only for a check the user asked for; an automatic check
       that finds nothing returns to `idle` with the check time and the feed's
       latest version set. Both read "Up to date". An `idle` without them, and
       every other state, shows the version and claims nothing.
-    - **An `error` carrying `installGuidance` reads as a downloaded
-      update.** A Linux deb/rpm install whose privilege prompt failed reports
-      the failure AND the steps that finish the same file by hand, so the row
-      keeps Finish update, as the update toast keeps View instructions. The
-      updater holds that guidance until the staged update is discarded, so
-      the pair can also outlive the install it came from (a newer version
-      found later, whose download failed); the snapshot does not tell the two
-      apart, and the row reads them as the toast does. A blocked install
-      (`installBlockedReason`) keeps its control disabled with the reason as
-      the row's line.
+    - **An `error` carrying `installGuidance` keeps Finish update, and
+      names no version.** A Linux deb/rpm install whose privilege prompt
+      failed reports the failure AND the steps that finish the downloaded
+      file by hand, so the row keeps Finish update, as the update toast keeps
+      View instructions. Its state line is "Update not finished", never
+      "vY ready": the updater holds that guidance until the staged update is
+      discarded, so it can outlive the install it came from (a newer version
+      found later replaces `latestVersion`, and if that download fails the
+      guidance is for the older file). The snapshot does not tell the two
+      apart, so the row claims neither. `ready` does name its version. A
+      blocked install (`installBlockedReason`) keeps its control disabled
+      with the reason as the row's line.
     - **One button, and one standing live region.** Download, Download
       waiting, and Restart are the same button, so the focus of whoever
       pressed it is not dropped when the download starts. While it waits

@@ -272,7 +272,35 @@ describe("<HostOverviewDesktopAppRow />", () => {
     expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
   });
 
-  it("keeps a finishable ready state when an install fails with manual guidance", () => {
+  it("never calls a version ready from an error, whose guidance can be for an older download", () => {
+    // What the updater emits when a v1.5.0 install's privilege prompt failed
+    // (guidance kept), v1.6.0 was found afterwards, and ITS download failed:
+    // `latestVersion` is the candidate that never landed, the guidance is
+    // for the v1.5.0 file.
+    renderRow(
+      snapshotWith({
+        status: "error",
+        latestVersion: "1.6.0",
+        errorMessage: "download failed",
+        installGuidance: {
+          summary: "Install Traycer 1.5.0",
+          steps: ["Run the command"],
+          command: "sudo dpkg -i traycer-1.5.0.deb",
+          releaseUrl: "https://example.invalid/release",
+        },
+      }),
+      new StubBridge(),
+    );
+    const row = screen.getByTestId("host-overview-desktop-app-row");
+    expect(row.textContent).not.toContain("1.6.0");
+    expect(row.textContent).not.toContain("ready");
+    expect(stateText()).toBe("Update not finished");
+    expect(
+      screen.getByTestId("host-overview-desktop-app-action").textContent,
+    ).toContain("Finish update");
+  });
+
+  it("keeps Finish update when an install fails with manual guidance", () => {
     const bridge = new StubBridge();
     renderRow(
       snapshotWith({
@@ -288,11 +316,13 @@ describe("<HostOverviewDesktopAppRow />", () => {
       }),
       bridge,
     );
-    expect(stateText()).toBe("v1.5.0 ready");
-    // Not the bare "ready" a restart was pressed from: the failed prompt has
-    // to be heard as a change.
+    // No version: the guidance can be for an older file than the candidate
+    // the snapshot names (see the next case), so the row claims neither.
+    expect(stateText()).toBe("Update not finished");
+    // Not the "ready" a restart was pressed from: the failed prompt has to
+    // be heard as a change.
     expect(announcement()).toBe(
-      "v1.5.0 ready. Finishing the update needs a manual step.",
+      "Update not finished. Finishing the update needs a manual step.",
     );
     const action = screen.getByTestId("host-overview-desktop-app-action");
     expect(action.textContent).toContain("Finish update");
