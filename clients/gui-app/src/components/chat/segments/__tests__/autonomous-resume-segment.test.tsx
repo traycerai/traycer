@@ -552,7 +552,10 @@ describe("<AutonomousResumeSegment />", () => {
 
   it("draws a failed background MCP trigger as a compact note with its summary inline and no disclosure", () => {
     render(
-      <AutonomousResumeSegment triggers={[MCP_FAILED_TRIGGER]} variant="note" />,
+      <AutonomousResumeSegment
+        triggers={[MCP_FAILED_TRIGGER]}
+        variant="note"
+      />,
     );
 
     expect(screen.getByText("Background MCP tool failed")).toBeTruthy();

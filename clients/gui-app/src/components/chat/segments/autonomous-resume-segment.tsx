@@ -107,8 +107,7 @@ function ResumeCompletionCard(props: {
   // The card shows a static trigger's summary as its two-line preview. A note
   // has no preview, so it carries the summary on its one line instead, the way
   // a shell delivery already does.
-  const inlineSummary =
-    compact || (props.variant === "note" && !expandable);
+  const inlineSummary = compact || (props.variant === "note" && !expandable);
   const header = (
     <>
       {resumeStatusIcon(trigger)}
@@ -212,7 +211,8 @@ function ResumeCompletionLine(props: {
       headerAction={
         <ResumeManagedCommandDoor trigger={props.trigger} variant="row" />
       }
-      open={discloses ? props.open : null}
+      // A static line never opens: nothing sets `open` without a trigger.
+      open={props.open}
       onOpenChange={props.onOpenChange}
       body={discloses ? props.body : null}
       tone="default"

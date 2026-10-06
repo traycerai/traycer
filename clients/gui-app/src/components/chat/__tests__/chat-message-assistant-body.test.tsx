@@ -276,7 +276,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(footer.textContent).not.toContain("Resumed · no response");
   });
 
-  it("draws a never-resumed notification as a compact note ending in \"Agent not resumed\"", () => {
+  it('draws a never-resumed notification as a compact note ending in "Agent not resumed"', () => {
     const { container } = render(
       <AssistantMessageBody
         turnId={null}
@@ -297,7 +297,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 
-  it("keeps the resumed-no-response footer under the compact note and omits \"Agent not resumed\"", () => {
+  it('keeps the resumed-no-response footer under the compact note and omits "Agent not resumed"', () => {
     const { container } = render(
       <AssistantMessageBody
         turnId={null}
@@ -357,7 +357,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 
-  it("never says \"Agent not resumed\" on a stopped notification row", () => {
+  it('never says "Agent not resumed" on a stopped notification row', () => {
     render(
       <AssistantMessageBody
         turnId={null}
