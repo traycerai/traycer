@@ -3,7 +3,7 @@ import { ArrowDownToLine, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import { HostUpdateBusyDialog } from "@/components/host/host-update-busy-dialog";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useHostBinding } from "@/lib/host/runtime";
@@ -288,7 +288,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       source: "direct_ui",
     });
     activateInstalledMutation.mutate(
-      { force },
+      { force, retryWhenIdle: false },
       { onSuccess: handleActivateOutcome },
     );
   };
@@ -362,7 +362,6 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     resolveForceAction(busy, runApply, runActivate);
   };
 
-  const forceDialogProps = deriveForceDialogProps(busy);
   const operationCopy = describeUpdateOperation({
     view: localUpdate.view,
     hostName: localHostName,
@@ -425,15 +424,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
           setForceRestartRequested(false);
         }}
       />
-      <HostBusyForceDeferDialog
-        purpose="update"
-        detail={null}
-        open={busy !== null}
-        title="Host is busy"
-        message={forceDialogProps.message}
+      <HostUpdateBusyDialog
+        busy={busy}
         isForcing={isPending}
-        forceLabel={forceDialogProps.forceLabel}
-        forceDestructive
+        onActivateOutcome={handleActivateOutcome}
         onForce={handleForce}
         onDefer={() => {
           setBusy(null);
@@ -1001,22 +995,6 @@ function deriveOfferedVersion(status: HostControllerStatus | undefined): {
     hostDown,
     offeredVersion,
     installedVersion: status.installedVersion,
-  };
-}
-
-interface ForceDialogProps {
-  readonly message: string;
-  readonly forceLabel: string;
-}
-
-function deriveForceDialogProps(busy: BusyState | null): ForceDialogProps {
-  if (busy === null) {
-    return { message: "", forceLabel: "Force update" };
-  }
-  return {
-    message: busy.message,
-    forceLabel:
-      busy.continuation === "activate" ? "Force restart" : "Force update",
   };
 }
 

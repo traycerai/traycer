@@ -62,6 +62,8 @@ import {
   type HostFsLayout,
 } from "../host/host-paths";
 import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
+import { createPendingActivationIdleMonitor } from "../host/pending-activation-idle-monitor";
+import { probeHostBusyVerdict } from "../host/host-state";
 import {
   readHostNameSettings,
   writeHostNameSettings,
@@ -1147,6 +1149,15 @@ async function clearHostRemovalIfSet(): Promise<void> {
 }
 
 export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
+  const activationIdleMonitor = createPendingActivationIdleMonitor({
+    hostController: bridge.options.hostController,
+    probeHostBusy: () => probeHostBusyVerdict(activeLayout()),
+    intervalMs: undefined,
+  });
+  bridge.disposeFns.push(() => {
+    activationIdleMonitor.dispose();
+  });
+
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostControllerStatusGet,
     async () => {
@@ -1215,6 +1226,14 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostActivateInstalled,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
+      // "Restart when idle": the busy dialog's answer for an update that is
+      // installed and waiting on a restart. The monitor makes the idle-gated
+      // attempt now and keeps making it while the host stays busy. `force`
+      // wins when both are set, since a Force restart supersedes the wait.
+      if (!force && optionalBoolean(raw, "retryWhenIdle")) {
+        return activationIdleMonitor.arm();
+      }
+      if (force) activationIdleMonitor.disarm();
       // Explicit user activate/Update: keep the "ready update supersedes
       // activation debt" promotion (`promoteReadyStage: true`). Only the
       // implicit launch reconcile suppresses promotion, and it does so for

@@ -16,7 +16,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
-import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import { HostUpdateBusyDialog } from "@/components/host/host-update-busy-dialog";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
@@ -164,7 +164,7 @@ export function HostTrayCommandListener() {
   const runActivate = (force: boolean): void => {
     hostUpdateAnalytics.onStarted();
     activateInstalledMutation.mutate(
-      { force },
+      { force, retryWhenIdle: false },
       { onSuccess: handleActivateOutcome },
     );
   };
@@ -276,21 +276,14 @@ export function HostTrayCommandListener() {
           }
         }}
       />
-      <HostBusyForceDeferDialog
+      <HostUpdateBusyDialog
         // The UPDATE commands' busy verdict (`runApply` / `runActivate`);
         // the restart command's lives in `LocalHostRestartFlow` above.
-        purpose="update"
-        detail={null}
-        open={busy !== null}
-        title="Host is busy"
-        message={busy?.message ?? ""}
+        busy={busy}
         isForcing={
           applyStagedMutation.isPending || activateInstalledMutation.isPending
         }
-        forceLabel={
-          busy?.continuation === "activate" ? "Force restart" : "Force update"
-        }
-        forceDestructive
+        onActivateOutcome={handleActivateOutcome}
         onForce={() => {
           if (busy === null) return;
           if (busy.continuation === "activate") {

@@ -384,7 +384,7 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
-      expect(management.activateInstalled).toHaveBeenCalledWith(false);
+      expect(management.activateInstalled).toHaveBeenCalledWith(false, false);
     });
     expect(management.applyStaged).not.toHaveBeenCalled();
   });

@@ -765,6 +765,53 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     ).resolves.toEqual(bridge.options.hostController.activateInstalledResult);
   });
 
+  it("activateInstalled with force still takes the plain forced path, even beside retryWhenIdle", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    const activate = vi.spyOn(
+      bridge.options.hostController,
+      "activateInstalled",
+    );
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostActivateInstalled,
+    )!;
+
+    await handler(null, { force: true });
+    await handler(null, { force: true, retryWhenIdle: true });
+
+    expect(activate.mock.calls).toEqual([
+      [true, true],
+      [true, true],
+    ]);
+  });
+
+  it("activateInstalled with retryWhenIdle arms the idle monitor instead of the plain activation", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    // The fake's status carries no activation debt, so the monitor answers
+    // "nothing pending" itself; the plain path would call the controller.
+    const activate = vi.spyOn(
+      bridge.options.hostController,
+      "activateInstalled",
+    );
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostActivateInstalled)!(
+        null,
+        { force: false, retryWhenIdle: true },
+      ),
+    ).resolves.toEqual({ kind: "ok", value: { activated: false } });
+    expect(activate).not.toHaveBeenCalled();
+  });
+
   it("passes installVersion's installed-not-converged outcome through unchanged", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
