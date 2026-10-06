@@ -124,6 +124,7 @@ import {
   chatRangeResponseSchema,
   chatRangeResponseSchemaPreMessageDelivery,
   chatRangeResponseSchemaPreBrowser,
+  chatRangeResponseSchemaPreCommandCode,
   chatRangeResponseSchemaPreFallback,
   chatRangeResponseSchemaPreReceipt,
   chatRangeResponseSchemaPreShellHost,
@@ -134,12 +135,15 @@ import {
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
   chatTranscriptWindowSchemaPreBrowser,
+  chatTranscriptWindowSchemaPreCommandCode,
   chatTranscriptWindowSchemaPreFallback,
   chatTranscriptWindowSchemaPreReceipt,
   chatTranscriptWindowSchemaPreShellHost,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
-import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import {
+  transcriptRowContextSchemaPreAntigravity,
+  transcriptRowContextSchemaPreCommandCode,
+} from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
@@ -5132,7 +5136,12 @@ const chatTranscriptWindowSchemaV18 = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaV18),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    // Overridden by the one line that binds this tail (`1.8`, with the
+    // pre-Antigravity copy); a frozen copy here so nothing released names the
+    // live row context.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
   }),
 );
 
@@ -5368,19 +5377,24 @@ const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
 // and a failed attempt that names when its wait would resume
 // (`waitResumesAt`). All three are existing keys, so `.extend` keeps their
 // positions.
+//
+// The tail is the copy `1.18`-`1.20` share: the live tail with the row
+// context's anchor union as the 1.5.0 tags shipped it.
 const chatWindowedSnapshotSchemaV118 = lazySchema(() =>
   chatWindowedSnapshotSchemaV117.extend({
     queue: chatQueueStateSchema,
-    tail: chatTranscriptWindowSchema,
+    tail: chatTranscriptWindowSchemaPreCommandCode,
     lastFailedAttempt: lastFailedAttemptSchema.optional(),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.20`): `1.18` with the approval
-// card's display facts, the cron background kind, and two live-only keys. Both
-// new keys are optional and stripped by name below `1.20`, like `1.10`'s
-// fallback DTOs: absent is "nothing to show", which is also what an older
-// host's silence means.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.20` ships it: `1.18` with the
+// approval card's display facts, the cron background kind, and two live-only
+// keys. Both new keys are optional and stripped by name below `1.20`, like
+// `1.10`'s fallback DTOs: absent is "nothing to show", which is also what an
+// older host's silence means.
+//
+// Frozen since `1.21` opened above it; its tail is `1.18`'s, inherited.
+const chatWindowedSnapshotSchemaV120 = lazySchema(() =>
   chatWindowedSnapshotSchemaV118.extend({
     pendingApprovals: z.array(chatApprovalStateSchema),
     // Both cards gain `cautious` and `displayFacts` on this line.
@@ -5391,6 +5405,14 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
     // The latest thinking-token estimate for the active turn, so a reconnect
     // mid-thought is not blank - see `thinkingTokens` for the live updates.
     thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.21`): `1.20` with the live
+// tail, whose row context may carry the session anchor of a harness added
+// after 1.5.0. An existing key, so `.extend` keeps its position.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV120.extend({
+    tail: chatTranscriptWindowSchema,
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -5507,6 +5529,18 @@ const chatSubscribeRangeServerFrameSchema = lazySchema(() =>
   }),
 );
 
+// The same frame as `1.18`-`1.20` ship it: the live range with the row
+// context's anchor union as the 1.5.0 tags shipped it, frozen for the reason
+// the snapshot's `tail` is.
+const chatSubscribeRangeServerFrameSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPreCommandCode,
+  }),
+);
+
 // The same frame as every line below `1.11` ships it. A `range` response
 // carries transcript rows, and a row can carry a resume trigger's
 // `managedCommand` - which `1.11` gave a `hostId`. Frozen for the same reason
@@ -5551,7 +5585,10 @@ const chatRangeResponseSchemaV18 = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaV18),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    // Overridden by `1.8`, like the tail's above.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -5670,7 +5707,7 @@ const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaV118,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -5693,12 +5730,37 @@ const chatSubscribeServerFrameSchemaV119 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaV118,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV118,
+  ]),
+);
+
+/**
+ * `chat.subscribe@1.20`'s server frames, frozen when `1.21` opened above it:
+ * the Claude-parity line as the 1.5.0 tags shipped it. Arm for arm the live
+ * union below, except that the snapshot's tail and the `range` response carry
+ * the row context those tags shipped
+ * (`transcriptRowContextSchemaPreCommandCode`).
+ */
+const chatSubscribeServerFrameSchemaV120 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV120,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreCommandCode,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
 
@@ -6487,6 +6549,32 @@ export const chatSubscribeV119 = defineStreamRpcContract({
 export const chatSubscribeV120 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 20 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV120,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The first line that may carry a harness added after 1.5.0 (Command Code is
+ * the first).
+ *
+ * `1.21` adds no key, no frame and no enum value of its own. Every shape is
+ * `1.20`'s; what differs is which harnesses those shapes may name, and one
+ * binding says so in the schema: a row's `rowContext.sessionAnchor`, on the
+ * snapshot's tail and on a `range` response, takes the live anchor union here
+ * and the 1.5.0 one on `1.9`-`1.20`.
+ *
+ * The rest of the harness axis is held by the host, as it was for Reasonix
+ * (`1.7`) and Antigravity (`1.9`): a chat whose harness a line cannot name is
+ * REFUSED to a subscriber below this minor rather than projected
+ * (`minimumChatSubscribeMinorForHarness`), and a row context naming such an
+ * anchor inside an otherwise servable chat has the anchor withheld.
+ *
+ * The open request and the client frames are `1.20`'s, unchanged.
+ */
+export const chatSubscribeV121 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 21 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

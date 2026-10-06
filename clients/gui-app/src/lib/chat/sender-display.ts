@@ -156,6 +156,7 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   omp: "Oh My Pi",
   reasonix: "Reasonix",
   antigravity: "Antigravity",
+  commandcode: "Command Code",
 };
 
 export function agentProviderLabel(provider: GuiHarnessId): string {

@@ -19,6 +19,7 @@ import {
 import {
   agentModeSchema,
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreCommandCode,
   guiHarnessIdSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -829,6 +830,48 @@ export const getChatRunSettingsResponseSchemaV20 = lazySchema(() =>
 );
 export type GetChatRunSettingsResponseV20 = z.infer<
   typeof getChatRunSettingsResponseSchemaV20
+>;
+
+/**
+ * Frozen `epic.getChatRunSettings@3.0` response, as the 1.5.0 tags shipped it:
+ * the settings tuple with `harnessId` pinned through Antigravity. 3.0 bound the
+ * live tuple on the reading that it was the unreleased head, the same trap the
+ * 1.0 and 2.0 notes above record. v4.0 is the head line.
+ *
+ * The tuple is `chatRunSettingsSchemaPreCommandCode`, shared with the other
+ * released reads of a stored tuple rather than copied a third time here. It is
+ * the first of these three lines able to spell `auto`.
+ */
+export const getChatRunSettingsResponseSchemaV30 = lazySchema(() =>
+  z.object({
+    settings: chatRunSettingsSchemaPreCommandCode.nullable(),
+  }),
+);
+export type GetChatRunSettingsResponseV30 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV30
+>;
+
+/**
+ * Frozen `epic.getChatRunSettingsBatch@1.0` entry and response, as the 1.5.0
+ * tags shipped them. v2.0 carries the live tuple.
+ */
+export const getChatRunSettingsBatchEntrySchemaV10 = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    settings: chatRunSettingsSchemaPreCommandCode.nullable(),
+  }),
+);
+export type GetChatRunSettingsBatchEntryV10 = z.infer<
+  typeof getChatRunSettingsBatchEntrySchemaV10
+>;
+
+export const getChatRunSettingsBatchResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    entries: z.array(getChatRunSettingsBatchEntrySchemaV10),
+  }),
+);
+export type GetChatRunSettingsBatchResponseV10 = z.infer<
+  typeof getChatRunSettingsBatchResponseSchemaV10
 >;
 
 /**

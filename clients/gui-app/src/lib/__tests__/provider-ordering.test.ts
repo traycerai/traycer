@@ -56,6 +56,23 @@ describe("ORDERED_PROVIDERS antigravity placement", () => {
   });
 });
 
+describe("ORDERED_PROVIDERS commandcode placement", () => {
+  it("places commandcode last, after every harness that shipped before it", () => {
+    const ids = ORDERED_PROVIDERS.map((p) => p.providerId);
+    expect(ids.at(-1)).toBe("commandcode");
+    expect(ids.filter((id) => id === "commandcode")).toHaveLength(1);
+    // Positive control: the previous last entry is still present, just earlier.
+    expect(ids).toContain("reasonix");
+    expect(ids.indexOf("reasonix")).toBeLessThan(ids.indexOf("commandcode"));
+  });
+
+  it("round-trips commandcode through guiHarnessIdToProviderId and providerIdToGuiHarnessId", () => {
+    expect(guiHarnessIdToProviderId("commandcode")).toBe("commandcode");
+    expect(providerIdToGuiHarnessId("commandcode")).toBe("commandcode");
+    expect(providerCliIdForHarness("commandcode")).toBe("commandcode");
+  });
+});
+
 describe("orderProvidersByEnablement", () => {
   const ALL_PROVIDER_IDS: ReadonlyArray<ProviderId> = ORDERED_PROVIDERS.map(
     (p) => p.providerId,

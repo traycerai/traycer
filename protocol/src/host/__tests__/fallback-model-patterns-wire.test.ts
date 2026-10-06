@@ -20,6 +20,7 @@ import {
   createDefaultFallbackPolicy,
   type TierCandidatePreviewV10,
   type TierGroup,
+  fallbackPolicySchemaV10,
 } from "@traycer/protocol/host/fallback-policy";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -111,7 +112,9 @@ describe("registry lines and contract identity", () => {
 });
 
 describe("get and set upgrade paths are identities", () => {
-  const policy = createDefaultFallbackPolicy();
+  // The 1.0 -> 1.1 upgrades take the FROZEN 1.0 policy, so the live default is
+  // parsed through the frozen schema (it is representable: no commandcode row).
+  const policy = fallbackPolicySchemaV10.parse(createDefaultFallbackPolicy());
 
   it("get: request and response pass through equal", () => {
     expect(

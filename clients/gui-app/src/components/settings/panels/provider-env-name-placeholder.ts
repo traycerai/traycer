@@ -42,6 +42,10 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   // the server itself reads when a user configures a Gemini key outside
   // Traycer, and is illustrative only - same as Hermes and omp above.
   antigravity: "GEMINI_API_KEY",
+  // Command Code is subscription class (a browser sign-in from `cmd login`),
+  // so Traycer offers it no API-key method. `COMMAND_CODE_API_KEY` is the one
+  // variable the CLI itself reads as an override of its stored sign-in.
+  commandcode: "COMMAND_CODE_API_KEY",
 };
 
 export function envNamePlaceholder(providerId: ProviderId): string {

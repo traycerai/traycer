@@ -1600,6 +1600,16 @@ export const antigravityUserMessageAnchorResolvedSchema = lazySchema(() =>
   }),
 );
 
+export const commandCodeUserMessageAnchorResolvedSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("commandcode"),
+    sessionId: z.string(),
+    // The ACP session id the `cmd acp` process assigned for this turn.
+    // Null until `session/new` resolves; used to resume the same ACP session.
+    commandcodeSessionId: z.string().nullable(),
+  }),
+);
+
 export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
@@ -1627,6 +1637,7 @@ export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
       huggingFaceUserMessageAnchorResolvedSchema,
       reasonixUserMessageAnchorResolvedSchema,
       antigravityUserMessageAnchorResolvedSchema,
+      commandCodeUserMessageAnchorResolvedSchema,
     ]),
   }),
 );

@@ -25,7 +25,10 @@ import {
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
-import { transcriptRowContextSchemaPreFallback } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import {
+  transcriptRowContextSchemaPreCommandCode,
+  transcriptRowContextSchemaPreFallback,
+} from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   interviewAnswerabilitySchema,
   judgeInterviewAnswerability,
@@ -731,7 +734,9 @@ export const chatTranscriptWindowSchemaPreMessageDelivery = lazySchema(() =>
      * asked for them and a wrong elapsed time or profile label persists until the
      * rows are evicted. Most tails have nothing to say and omit it.
      */
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
   }),
 );
 
@@ -812,8 +817,9 @@ export const chatTranscriptWindowSchemaPreFallback = lazySchema(() =>
  * Wire-freeze copy of the tail bound to `chat.subscribe@1.10`: the live tail
  * with `messages` swapped for `messageSchemaPreShellHost`, so a resume
  * trigger's shell host - which `1.11` added - reaches none of that line's
- * three body channels. `rowContext` stays live: `1.10` is the line that
- * introduced the live row context. Hand-frozen field-for-field.
+ * three body channels. `rowContext` is the copy `1.10` through `1.20` share
+ * (`transcriptRowContextSchemaPreCommandCode`): `1.10` is the line that
+ * introduced `profileWalkUnprovable`. Hand-frozen field-for-field.
  */
 export const chatTranscriptWindowSchemaPreShellHost = lazySchema(() =>
   z.object({
@@ -822,7 +828,9 @@ export const chatTranscriptWindowSchemaPreShellHost = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreShellHost),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
   }),
 );
 
@@ -837,7 +845,9 @@ export const chatTranscriptWindowSchemaPreBrowser = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreBrowser),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
   }),
 );
 
@@ -854,7 +864,29 @@ export const chatTranscriptWindowSchemaPreReceipt = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreReceipt),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
+  }),
+);
+
+/**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.18`-`@1.20`: the
+ * live tail with `rowContext` taking the anchor union the 1.5.0 tags shipped
+ * (`transcriptRowContextSchemaPreCommandCode`), so a session anchor of a
+ * harness added since reaches none of those lines through it. Hand-frozen
+ * field-for-field, in the live key order.
+ */
+export const chatTranscriptWindowSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchema),
+    events: z.array(chatEventSchema),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
   }),
 );
 
@@ -999,7 +1031,9 @@ export const chatRangeResponseSchemaPreMessageDelivery = lazySchema(() =>
      * a consumer falls back to its own derivation, which is what keeps a host
      * predating a field from silently asserting one.
      */
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1057,6 +1091,30 @@ export const chatRangeResponseSchema = lazySchema(() =>
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
 
 /**
+ * Wire-freeze copy of the range response bound to `chat.subscribe@1.18`-
+ * `@1.20`, for the reason {@link chatTranscriptWindowSchemaPreCommandCode}
+ * exists: a scrolled-back range is the second channel a row's context reaches
+ * those lines on. Hand-frozen field-for-field, in the live key order.
+ */
+export const chatRangeResponseSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchema),
+    events: z.array(chatEventSchema),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
+
+/**
  * Wire-freeze copy of the range response bound to `chat.subscribe@1.15`-
  * `@1.17`, for the reason {@link chatTranscriptWindowSchemaPreReceipt} exists:
  * a scrolled-back range is the second channel a message body reaches those
@@ -1071,7 +1129,9 @@ export const chatRangeResponseSchemaPreReceipt = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreReceipt),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1116,7 +1176,9 @@ export const chatRangeResponseSchemaPreShellHost = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreShellHost),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1133,7 +1195,9 @@ export const chatRangeResponseSchemaPreBrowser = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreBrowser),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),

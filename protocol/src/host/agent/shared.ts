@@ -76,6 +76,7 @@ export const guiHarnessIdSchema = lazySchema(() =>
     "huggingface",
     "reasonix",
     "antigravity",
+    "commandcode",
   ]),
 );
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
@@ -330,8 +331,8 @@ export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
  * and the live line disagreed with nothing in between to catch it until the
  * released-baseline gate resolved the new tag.
  *
- * v9.0 owns live growth now. Do NOT add new harnesses here - extend the latest
- * `guiHarnessIdSchema`; a v9.0 bridge drops post-v8.0 ids for older callers.
+ * Do NOT add new harnesses here - extend the latest `guiHarnessIdSchema`; the
+ * head line's bridge drops post-v8.0 ids for older callers.
  */
 export const guiHarnessIdSchemaV80 = lazySchema(() =>
   harnessIdSchema.extract([
@@ -358,6 +359,47 @@ export const guiHarnessIdSchemaV80 = lazySchema(() =>
   ]),
 );
 export type GuiHarnessIdV80 = z.infer<typeof guiHarnessIdSchemaV80>;
+
+/**
+ * Frozen harness id set as the `1.5.0` tags shipped major 9 - everything
+ * through Antigravity, before Command Code.
+ *
+ * Major 9 was opened to carry what v8.0 froze off and bound the live enum, on
+ * the reading that the head line is the unreleased one. `1.5.0` then shipped
+ * every minor of it, so the next id would have widened three released lines
+ * (`agent.gui.listHarnesses@9.0`-`@9.2`, `agent.list@9.0`/`@9.1`) and
+ * `agent.configure@6.0` in place. Pinned here the moment the next id arrives,
+ * which is one release later than the V80 note argues for.
+ *
+ * Do NOT add new harnesses here - extend the latest `guiHarnessIdSchema`; the
+ * head line's bridge drops post-v9 ids for older callers.
+ */
+export const guiHarnessIdSchemaV90 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+  ]),
+);
+export type GuiHarnessIdV90 = z.infer<typeof guiHarnessIdSchemaV90>;
 
 export const tuiHarnessIdSchema = lazySchema(() =>
   harnessIdSchema.extract(["claude", "codex", "opencode", "cursor"]),
@@ -475,6 +517,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "huggingface",
   "reasonix",
   "antigravity",
+  "commandcode",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -928,22 +971,35 @@ export const agentRunConfigSchema = lazySchema(() =>
 export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
 
 /**
- * The `agent.list@9.0` row: the released base plus `runConfig`.
+ * The `agent.list@9.0` row: the released base plus `runConfig`, with the
+ * harness id pinned to the set major 9 shipped.
  *
- * Suffixed because `@9.1` moved the head off it, and NOT because it is an id
- * freeze - it deliberately still extends the LIVE `releasedAgentSummarySchema`,
- * so a new harness id reaches a `@9.0` caller exactly as it did before. Major 9
- * is one line: both minors are served by the same host and a caller on either
- * must see the same vendors. The suffixed copies ABOVE this one are the other
- * kind - each pins a harness enum a released major shipped - so do not read
- * this as one of them and do not freeze its enum.
+ * It was suffixed when `@9.1` moved the head off it, and at that point it was
+ * NOT an id freeze: it extended the live `releasedAgentSummarySchema`, so a new
+ * harness id reached a `@9.0` caller. That stopped being correct when `1.5.0`
+ * shipped major 9. Both minors now pin `guiHarnessIdSchemaV90` and major 10
+ * carries what came after, exactly as the suffixed copies below do for the
+ * majors before it.
  */
 export const agentSummarySchemaV90 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV90.nullable(),
     runConfig: agentRunConfigSchema.nullable().default(null),
   }),
 );
 export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
+
+/**
+ * The `agent.list@9.1` row: `@9.0`'s plus the terminal-agent session facet,
+ * frozen at the same harness id set. Released in `1.5.0`; major 10 is the head.
+ */
+export const agentSummarySchemaV91 = lazySchema(() =>
+  agentSummarySchemaV90.extend({
+    sessionState: agentSessionStateSchema.nullable(),
+    lastExit: agentSessionLastExitSchema.nullable(),
+  }),
+);
+export type AgentSummaryV91 = z.infer<typeof agentSummarySchemaV91>;
 
 // ── `agent.list@9.1`: is a silent peer asleep, or over? ────────────────────
 //
@@ -960,11 +1016,16 @@ export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
 // suffix would leave `agentSummarySchema` exported, structurally plausible and
 // backing nothing, while every import site still read like the live line.
 //
-// Two plain added keys, so a `@9.0` caller's schema strips them and the eight
-// major-9 downgrade bridges keep working unchanged - each reparses through a
-// frozen summary that drops the pair on the way out.
+// Two plain added keys, so a `@9.0` caller's schema strips them and the
+// downgrade bridges keep working unchanged - each reparses through a frozen
+// summary that drops the pair on the way out.
+//
+// Built off the live base rather than `agentSummarySchemaV90`, which pins the
+// harness id major 9 shipped: this row is the head (major 10) and is the only
+// one that tracks the live enum.
 export const agentSummarySchema = lazySchema(() =>
-  agentSummarySchemaV90.extend({
+  releasedAgentSummarySchema.extend({
+    runConfig: agentRunConfigSchema.nullable().default(null),
     /**
      * The agent's session as its BINDING host knows it, or `null` when this
      * host cannot know - a cross-host row, a GUI chat (which has no PTY session
@@ -1170,8 +1231,7 @@ export type ListAgentsResponseV80 = z.infer<typeof listAgentsResponseSchemaV80>;
 
 /**
  * The `agent.list@9.0` response, frozen off the canonical one the head now
- * carries. See {@link agentSummarySchemaV90}: the suffix marks the MINOR that
- * moved past it, not a pinned harness enum.
+ * carries. See {@link agentSummarySchemaV90}.
  */
 export const listAgentsResponseSchemaV90 = lazySchema(() =>
   listAgentsResponseSchema.extend({
@@ -1179,6 +1239,14 @@ export const listAgentsResponseSchemaV90 = lazySchema(() =>
   }),
 );
 export type ListAgentsResponseV90 = z.infer<typeof listAgentsResponseSchemaV90>;
+
+/** The `agent.list@9.1` response. See {@link agentSummarySchemaV91}. */
+export const listAgentsResponseSchemaV91 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV91),
+  }),
+);
+export type ListAgentsResponseV91 = z.infer<typeof listAgentsResponseSchemaV91>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

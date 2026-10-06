@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   chatSessionAnchorSchema,
   chatSessionAnchorSchemaPreAntigravity,
+  chatSessionAnchorSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/senders";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -150,6 +151,34 @@ export const transcriptRowContextSchema = lazySchema(() =>
 export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
 
 /**
+ * Frozen copy bound to `chat.subscribe@1.10` through `@1.20`, as the 1.5.0
+ * tags shipped it: the live fields with `sessionAnchor` taking the anchor
+ * union those peers strict-decode, without the Command Code arm
+ * (`chatSessionAnchorSchemaPreCommandCode`). `@1.21` binds the live schema.
+ *
+ * Hand-copied field-for-field, not `.extend()`ed off the live schema: a field
+ * minted for a later line must not reach these. The two older copies below
+ * derive from THIS one for the same reason. See the live schema for what each
+ * field means.
+ *
+ * The host withholds a row's anchor this union rejects from a peer below
+ * `@1.21`, the way it already withholds an Antigravity one below `@1.9`: an
+ * absent `sessionAnchor` is the projection declining to speak, and the reader
+ * falls back to its own walk.
+ */
+export const transcriptRowContextSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    legacyRowAnchorAt: z.number().optional(),
+    sessionAnchor: chatSessionAnchorSchemaPreCommandCode.optional(),
+    profileWalkUnprovable: z.boolean().optional(),
+    hasLaterOverlappingChanges: z.boolean().optional(),
+    setupWindowIndex: z.number().int().nonnegative().optional(),
+    setupWindowIsActive: z.boolean().optional(),
+    completedSteer: z.boolean().optional(),
+  }),
+);
+
+/**
  * Frozen copy bound to the released pre-fallback lines (`chat.subscribe@1.8`
  * and `@1.9`), which bind their `rowContext` to THIS schema.
  *
@@ -166,7 +195,9 @@ export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
  * caught the field reaching them through the live schema.
  */
 export const transcriptRowContextSchemaPreFallback = lazySchema(() =>
-  transcriptRowContextSchema.omit({ profileWalkUnprovable: true }),
+  transcriptRowContextSchemaPreCommandCode.omit({
+    profileWalkUnprovable: true,
+  }),
 );
 
 /**

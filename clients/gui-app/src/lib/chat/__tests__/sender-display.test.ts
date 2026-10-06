@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSender } from "@traycer/protocol/persistence/epic/schemas";
 import {
   agentModelKey,
+  agentProviderLabel,
   resolveAgentReasoningLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
@@ -25,6 +26,14 @@ function displayContext(
     modelReasoningLabels,
   };
 }
+
+describe("agentProviderLabel", () => {
+  it("labels commandcode as Command Code and keeps the neighbours' labels", () => {
+    expect(agentProviderLabel("commandcode")).toBe("Command Code");
+    expect(agentProviderLabel("reasonix")).toBe("Reasonix");
+    expect(agentProviderLabel("antigravity")).toBe("Antigravity");
+  });
+});
 
 describe("resolveAgentReasoningLabel", () => {
   it("returns the selected model's reasoning option label", () => {

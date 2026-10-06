@@ -1,7 +1,7 @@
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { TimerHandle } from "@traycer-clients/shared/host-transport/timer-handle";
 import {
-  draftsSubscribeServerFrameSchemaV10,
+  draftsSubscribeServerFrameSchemaV11,
   type DraftDocument,
   type DraftHeldRevisionState,
   type DraftListTombstone,
@@ -9,7 +9,7 @@ import {
   type DraftsDeleteResponse,
   type DraftsRetractResponse,
   type DraftsListResponse,
-  type DraftsSubscribeServerFrameV10,
+  type DraftsSubscribeServerFrameV11,
   type DraftsUpsertResponse,
 } from "@traycer/protocol/host";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -511,7 +511,7 @@ export class DraftMirrorSession {
     readonly [key: string]: unknown;
   }): Promise<void> {
     if (this.closed || this.capabilityMissing) return;
-    const parsed = draftsSubscribeServerFrameSchemaV10.safeParse(envelope);
+    const parsed = draftsSubscribeServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) {
       // A shape this client version does not accept stops convergence with
       // no other signal at all - the drafts simply stop moving. Name it in
@@ -535,7 +535,7 @@ export class DraftMirrorSession {
   }
 
   private async applySubscribeFrame(
-    frame: DraftsSubscribeServerFrameV10,
+    frame: DraftsSubscribeServerFrameV11,
   ): Promise<void> {
     if (frame.kind !== "upsert" && frame.kind !== "delete") return;
     // Before anything is read OR written: this frame belongs to whoever this

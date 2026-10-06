@@ -2285,7 +2285,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 20 as chatSubscribeV120", () => {
+  it("registers chat.subscribe major 1 latestMinor 21 as chatSubscribeV121", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2335,7 +2335,9 @@ describe("chat.subscribe registry membership", () => {
     //
     // `20` adds the Claude-parity line: live-only host-authored surfaces the
     // host projects away for every `<=1.19` peer.
-    expect(entry[1].latestMinor).toBe(20);
+    // `21` is the Command Code line: no new key, only the harness ids the
+    // shapes may name (the released minors froze the row context without it).
+    expect(entry[1].latestMinor).toBe(21);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);

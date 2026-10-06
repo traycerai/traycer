@@ -5,6 +5,7 @@ import {
   sessionImportScanV10,
   sessionImportScanV11,
   sessionImportScanV12,
+  sessionImportScanV13,
 } from "@traycer/protocol/host/session-import/scan";
 import {
   sessionImportRunClientFrameSchema,
@@ -12,6 +13,7 @@ import {
   sessionImportRunV10,
   sessionImportRunV11,
   sessionImportRunV12,
+  sessionImportRunV13,
 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import { sessionImportFailureReasonSchema } from "@traycer/protocol/host/session-import/candidate";
@@ -618,13 +620,15 @@ describe("sessionImport.status@1.0", () => {
  * feature the wire cannot carry, and nothing else in the suite would notice.
  */
 describe("sessionImport.* registry membership", () => {
-  it("registers scan at minors 0-2 and run at 0-2, retaining the older contracts for older hosts", () => {
+  it("registers scan at minors 0-3 and run at 0-3, retaining the older contracts for older hosts", () => {
     const scan = hostStreamRpcRegistry["sessionImport.scan"];
     expect(scan).toBeDefined();
-    expect(scan[1].latestMinor).toBe(2);
+    expect(scan[1].latestMinor).toBe(3);
     expect(scan[1].versions[0].contract).toBe(sessionImportScanV10);
     expect(scan[1].versions[1].contract).toBe(sessionImportScanV11);
     expect(scan[1].versions[2].contract).toBe(sessionImportScanV12);
+    expect(scan[1].versions[3].contract).toBe(sessionImportScanV13);
+    expect(sessionImportScanV13.schemaVersion).toEqual({ major: 1, minor: 3 });
     expect(sessionImportScanV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(sessionImportScanV11.schemaVersion).toEqual({ major: 1, minor: 1 });
     expect(sessionImportScanV12.schemaVersion).toEqual({ major: 1, minor: 2 });
@@ -637,7 +641,7 @@ describe("sessionImport.* registry membership", () => {
     // rather than just the head.
     const run = hostStreamRpcRegistry["sessionImport.run"];
     expect(run).toBeDefined();
-    expect(run[1].latestMinor).toBe(2);
+    expect(run[1].latestMinor).toBe(3);
     expect(run[1].versions[0].contract).toBe(sessionImportRunV10);
     expect(run[1].versions[1].contract).toBe(sessionImportRunV11);
     expect(sessionImportRunV10.schemaVersion).toEqual({ major: 1, minor: 0 });
@@ -646,6 +650,9 @@ describe("sessionImport.* registry membership", () => {
     // the host understands `auto` in the open request's `permissionMode`.
     expect(run[1].versions[2].contract).toBe(sessionImportRunV12);
     expect(sessionImportRunV12.schemaVersion).toEqual({ major: 1, minor: 2 });
+    // 1.3 is Command Code: the first minor whose frames may name the id.
+    expect(run[1].versions[3].contract).toBe(sessionImportRunV13);
+    expect(sessionImportRunV13.schemaVersion).toEqual({ major: 1, minor: 3 });
   });
 
   // `@1.0`/`@1.1` are frozen at the twenty harness ids `cli-v1.3.0` shipped;

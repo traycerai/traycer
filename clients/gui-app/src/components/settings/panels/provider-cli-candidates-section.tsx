@@ -122,6 +122,8 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   // Antigravity ships its own server binary (`agy_acp_server`) plus a
   // companion, so it borrows nobody's either.
   antigravity: null,
+  // Command Code runs its own `cmd` binary (`cmdc` on Windows).
+  commandcode: null,
 };
 
 /**
@@ -173,6 +175,10 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   // That platform is the normal path for this empty state, not an edge, so it
   // gets the real page: installing the IDE is what puts the server on disk.
   antigravity: "https://antigravity.google/docs/ide/extensions",
+  // Command Code is never bundled: Traycer finds the user's own install on
+  // PATH, like Hermes. Not found is therefore this provider's normal first
+  // state, and the quickstart is the page that installs it.
+  commandcode: "https://commandcode.ai/docs/quickstart",
 };
 
 interface ProviderCandidateConfig {

@@ -1,9 +1,13 @@
 import { z } from "zod";
 import {
+  defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreCommandCode,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
@@ -848,9 +852,119 @@ export type ChatFallbackListTargetsResponse = z.infer<
   typeof chatFallbackListTargetsResponseSchema
 >;
 
+/**
+ * Frozen `chat.fallback.listTargets@1.0` model row, as the 1.5.0 tags shipped
+ * it. Hand-copied off `fallbackModelTargetSchema`, with `target` pinned to the
+ * settings tuple those peers strict-decode
+ * (`chatRunSettingsSchemaPreCommandCode`). The row's own `harnessId` is an
+ * open string and needs no pin. See the live row for what each field means.
+ */
+export const fallbackModelTargetSchemaV10 = lazySchema(() =>
+  z.object({
+    groupId: z.string(),
+    harnessId: z.string(),
+    modelFamily: z.string(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable(),
+    profileId: z.string().nullable(),
+    severity: z.string(),
+    usedPercent: z.number().nullable(),
+    target: chatRunSettingsSchemaPreCommandCode.nullable(),
+    warnings: z.array(z.string()),
+    selectable: z.boolean(),
+    skip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
+export type FallbackModelTargetV10 = z.infer<
+  typeof fallbackModelTargetSchemaV10
+>;
+
+/**
+ * Frozen `chat.fallback.listTargets@1.0` response, as the 1.5.0 tags shipped
+ * it. Both run-settings slots (`failedTuple` and each model row's `target`)
+ * bound the live tuple until the first harness id after 1.5.0; v2.0 carries
+ * it now. The profile rows and the skip record carry no harness id and are
+ * shared with the live response by reference.
+ */
+export const chatFallbackListTargetsResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    outcome: z.enum([
+      "listed",
+      "no_active_traversal",
+      "traversal_advanced",
+      "attempt_not_latest",
+      "state_unreadable",
+    ]),
+    failedTuple: chatRunSettingsSchemaPreCommandCode.nullable(),
+    profileTargets: z.array(fallbackProfileTargetSchema),
+    modelTargets: z.array(fallbackModelTargetSchemaV10),
+    modelTargetsSkip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
+export type ChatFallbackListTargetsResponseV10 = z.infer<
+  typeof chatFallbackListTargetsResponseSchemaV10
+>;
+
 export const chatFallbackListTargetsV10 = defineRpcContract({
   method: "chat.fallback.listTargets",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatFallbackListTargetsRequestSchema,
+  responseSchema: chatFallbackListTargetsResponseSchemaV10,
+});
+
+// The LIVE line. The moment a tag ships `2`, freeze it against a snapshot
+// tuple and open `3`.
+export const chatFallbackListTargetsV20 = defineRpcContract({
+  method: "chat.fallback.listTargets",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: chatFallbackListTargetsRequestSchema,
   responseSchema: chatFallbackListTargetsResponseSchema,
+});
+
+export const chatFallbackListTargetsUpgradeV10ToV20 = defineUpgradePath<
+  typeof chatFallbackListTargetsV10,
+  typeof chatFallbackListTargetsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // Only the two settings slots' harness enum grows, so a 1.0 answer is
+  // already a valid 2.0 one.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const chatFallbackListTargetsDowngradeV20ToV10 = defineDowngradePath<
+  typeof chatFallbackListTargetsV20,
+  typeof chatFallbackListTargetsV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Model rows are a list of offers, so one whose destination the 1.0 line
+    // cannot represent is omitted and the rest of the menu stands: the caller
+    // is offered every destination it can act on. Emptying `target` on such a
+    // row instead would need a `skip` reason the host never gave.
+    const modelTargets = response.modelTargets.flatMap((row) => {
+      const parsed = fallbackModelTargetSchemaV10.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    });
+    // `failedTuple` is the one tuple the listing was routed from. There is
+    // nothing to filter there, so it is pass-through or refuse.
+    const parsed = chatFallbackListTargetsResponseSchemaV10.safeParse({
+      ...response,
+      modelTargets,
+    });
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing fallback targets for this chat requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });

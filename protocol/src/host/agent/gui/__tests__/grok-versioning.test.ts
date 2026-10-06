@@ -36,6 +36,7 @@ import {
   listAgentsResponseSchemaV70,
   listAgentsResponseSchema,
   listAgentsResponseSchemaV80,
+  listAgentsResponseSchemaV91,
 } from "@traycer/protocol/host/agent/shared";
 import {
   agentGuiListHarnessesDowngradeV2ToV1,
@@ -83,6 +84,7 @@ import {
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
+  listGuiHarnessesResponseSchemaV92,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
@@ -97,6 +99,7 @@ import {
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
+  providersListResponseSchemaV92,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
 // Construction is structural-only. The full schema-compatibility pass is
@@ -479,7 +482,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 
   it("drops the Amp provider from providers.list for v3.0, v2.0, and v1.0 callers", () => {
-    const liveResponse = providersListResponseSchema.parse({
+    const liveResponse = providersListResponseSchemaV92.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
@@ -667,7 +670,7 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
   // there, one hop further out, and every older caller (v8.0 included) gets
   // the ids it predates filtered out.
   it("drops Hugging Face/Reasonix/Antigravity from agent.gui.listHarnesses for every released caller down to v1.0", () => {
-    const v9Response = listGuiHarnessesResponseSchema.parse({
+    const v9Response = listGuiHarnessesResponseSchemaV92.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("cursor"),
@@ -814,7 +817,7 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
   });
 
   it("drops Hugging Face/Reasonix/Antigravity agents from agent.list for every released caller down to v1.0", () => {
-    const v9Response = listAgentsResponseSchema.parse({
+    const v9Response = listAgentsResponseSchemaV91.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
@@ -966,7 +969,7 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
     // `reasonix` - but from a branch cut before Antigravity landed, so v8.0
     // is now frozen too. Driven from v9.0, the newest (still unreleased)
     // line, which is the only one that carries all three.
-    const v9Response = providersListResponseSchema.parse({
+    const v9Response = providersListResponseSchemaV92.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
@@ -1101,7 +1104,7 @@ describe("agent.gui.listHarnesses@9.1 auto-mode downgrades", () => {
     });
   }
 
-  const v91Response = listGuiHarnessesResponseSchema.parse({
+  const v91Response = listGuiHarnessesResponseSchemaV92.parse({
     harnesses: [autoHarnessOption("claude"), autoHarnessOption("reasonix")],
   });
 

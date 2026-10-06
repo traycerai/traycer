@@ -8,6 +8,7 @@ import {
 import {
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV91,
+  listGuiHarnessesResponseSchemaV92,
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
@@ -37,7 +38,7 @@ function liveRowWithJudgeDefaultModel(): GuiHarnessOption {
   };
 }
 
-describe("agent.gui.listHarnesses registry: 9.1 frozen, 9.2 the head", () => {
+describe("agent.gui.listHarnesses registry: 9.1 and 9.2 frozen, 10.0 the head", () => {
   it("binds the frozen 9.1 line and its response schema", () => {
     const entry = hostRpcRegistry["agent.gui.listHarnesses"][9];
     expect(entry.latestMinor).toBe(2);
@@ -48,15 +49,27 @@ describe("agent.gui.listHarnesses registry: 9.1 frozen, 9.2 the head", () => {
     expect(entry.versions[1].responseGrowthProjectionGated).toBe(true);
   });
 
-  it("binds the live 9.2 line, with no growth-projection annotation", () => {
+  it("binds the frozen 9.2 line, with no growth-projection annotation", () => {
     const entry = hostRpcRegistry["agent.gui.listHarnesses"][9];
     expect(entry.versions[2].contract).toBe(agentGuiListHarnessesV92);
+    // 9.2 is released (1.5.0) and froze when `commandcode` opened 10.0.
     expect(entry.versions[2].contract.responseSchema).toBe(
+      listGuiHarnessesResponseSchemaV92,
+    );
+    expect(entry.versions[2].contract.responseSchema).not.toBe(
       listGuiHarnessesResponseSchema,
     );
     expect(
       Object.hasOwn(entry.versions[2], "responseGrowthProjectionGated"),
     ).toBe(false);
+  });
+
+  it("binds the live schema on the 10.0 head", () => {
+    const head = hostRpcRegistry["agent.gui.listHarnesses"][10];
+    expect(head.latestMinor).toBe(0);
+    expect(head.versions[0].contract.responseSchema).toBe(
+      listGuiHarnessesResponseSchema,
+    );
   });
 });
 

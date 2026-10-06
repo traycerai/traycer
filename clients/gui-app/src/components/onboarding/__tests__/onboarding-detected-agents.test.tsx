@@ -420,6 +420,7 @@ describe("OnboardingDetectedAgents", () => {
       "Hermes Agent",
       "Oh My Pi",
       "Reasonix",
+      "Command Code",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
     // Longest match, not first match: display names overlap ("Pi" is a
@@ -439,6 +440,55 @@ describe("OnboardingDetectedAgents", () => {
         return longestMatch(text);
       }),
     ).toEqual(expectedNames);
+  });
+
+  it("matches the Command Code row exactly and never as another agent, nor another row as Command Code", () => {
+    render(<OnboardingDetectedAgents />);
+
+    const otherNames = [
+      "Codex",
+      "Claude Code",
+      "OpenCode",
+      "Traycer Inference",
+      "OpenRouter",
+      "Hugging Face",
+      "Droid",
+      "Cursor",
+      "Copilot",
+      "Grok",
+      "Kiro",
+      "Kilo Code",
+      "Kimi",
+      "Qwen Code",
+      "Antigravity",
+      "Amp",
+      "Devin",
+      "Pi",
+      "Hermes Agent",
+      "Oh My Pi",
+      "Reasonix",
+    ];
+    const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
+    const commandCodeRows = rows.filter((text) =>
+      text.includes("Command Code"),
+    );
+    // Exactly one row is the Command Code row ...
+    expect(commandCodeRows).toHaveLength(1);
+    // ... it carries none of the other display names ("Code" is shared with
+    // Claude Code, Qwen Code and Kilo Code, but no full name is) ...
+    const [commandCodeRow = ""] = commandCodeRows;
+    expect(otherNames.filter((name) => commandCodeRow.includes(name))).toEqual(
+      [],
+    );
+    // ... and no other row mentions it. Positive control: every other name
+    // still has a row of its own.
+    expect(rows).toHaveLength(otherNames.length + 1);
+    for (const name of otherNames) {
+      expect(
+        rows.some((text) => text.includes(name)),
+        name,
+      ).toBe(true);
+    }
   });
 
   it("puts enabled providers before disabled providers", () => {

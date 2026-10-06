@@ -42,6 +42,9 @@ export const HARNESS_ACCENT: Readonly<Record<GuiHarnessId, string>> = {
   reasonix: "#0891b2",
   // The dominant blue of Antigravity's own four-color mark, not a picked hue.
   antigravity: "#3186ff",
+  // Command Code's mark is black. Lightened to a warm neutral, so it reads on
+  // the dark floor and does not pass for Grok's cool gray.
+  commandcode: "#a8a29e",
 };
 
 /** A chat has no harness, so it carries the app's own accent instead. */

@@ -12,6 +12,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV91,
+  providersListResponseSchemaV92,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -441,7 +442,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      9,
+      10,
       8,
       providersListResponseSchema.parse({ providers: [state], native: null }),
     );
@@ -473,7 +474,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      9,
+      10,
       7,
       providersListResponseSchema.parse({ providers: [state], native: null }),
     );
@@ -561,12 +562,20 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
       "providers[].managedVersions.sharedWithProviders[]",
     ]);
 
-    // 9.1 shares every enum object with the head, so nothing on it is armed
-    // yet. The four pins it carries are byte-identical to live by design; they
-    // arm the day the live enum moves, and not before.
-    expect(strictlyNarrowerEnumPaths(providersListResponseSchemaV91)).toEqual(
-      [],
-    );
+    // 9.1 and 9.2 carried pins byte-identical to live by design, which armed
+    // nothing until the live enum moved. `commandcode` moved it, so both are
+    // now strictly narrower than the head on the same two leaves as 7.0: the
+    // mechanism is armed on the released 9.x lines, which is what the freeze
+    // exists to make possible.
+    for (const frozen of [
+      providersListResponseSchemaV91,
+      providersListResponseSchemaV92,
+    ]) {
+      expect(strictlyNarrowerEnumPaths(frozen)).toEqual([
+        "providers[].providerId",
+        "providers[].managedVersions.sharedWithProviders[]",
+      ]);
+    }
   });
 
   it("still drops a whole row when the row itself is unrepresentable", () => {
@@ -576,7 +585,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
     // providers off an already-shipped wire.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      9,
+      10,
       7,
       providersListResponseSchema.parse({
         providers: [providerState("claude-code"), providerState("antigravity")],

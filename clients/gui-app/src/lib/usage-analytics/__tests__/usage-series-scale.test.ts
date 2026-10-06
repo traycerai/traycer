@@ -133,6 +133,21 @@ describe("buildHarnessUsageSeriesScale", () => {
     expect(scale.colorVar("reasonix")).toBe("var(--usage-harness-reasonix)");
   });
 
+  it("gives commandcode its preferred slot 6, and the next free slot when droid already holds it", () => {
+    const alone = buildHarnessUsageSeriesScale(["commandcode"]);
+    expect(alone.colorVar("commandcode")).toBe("var(--usage-series-6)");
+
+    // Positive control: droid prefers slot 6 too, so on its own it gets it.
+    const droidAlone = buildHarnessUsageSeriesScale(["droid"]);
+    expect(droidAlone.colorVar("droid")).toBe("var(--usage-series-6)");
+
+    const both = buildHarnessUsageSeriesScale(["droid", "commandcode"]);
+    // Droid, first in the input, keeps 6; commandcode takes the first free
+    // validated slot instead of colliding.
+    expect(both.colorVar("droid")).toBe("var(--usage-series-6)");
+    expect(both.colorVar("commandcode")).toBe("var(--usage-series-1)");
+  });
+
   it("keeps all selected supported harnesses visually distinct", () => {
     const supportedHarnesses = [
       "amp",

@@ -112,6 +112,32 @@ describe("analytics", () => {
     ).toEqual({ provider: "antigravity", mode: "create" });
   });
 
+  it("accepts commandcode as a harness and as a provider value, and still drops an unknown id", async () => {
+    // The silent validators again: a missing runtime entry drops the property
+    // with no type error, so this goes through the public sanitize path.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "commandcode",
+      }),
+    ).toEqual({ harness: "commandcode" });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProviderProfileLinkSucceeded, {
+        provider: "commandcode",
+        mode: "create",
+      }),
+    ).toEqual({ provider: "commandcode", mode: "create" });
+    // Positive control for the drop: an id outside the allowlist is rejected,
+    // which is what a missing runtime entry for commandcode would have done.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "not-a-harness",
+      }),
+    ).toBeNull();
+  });
+
   it("accepts every settings section the type union declares", async () => {
     // The runtime allowlist is what `section` is validated against, and a
     // union member missing from it drops the event with no error anywhere -

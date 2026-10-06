@@ -9,6 +9,7 @@ import {
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV90,
+  listAgentsResponseSchemaV91,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -24,6 +25,7 @@ import {
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchemaV91,
+  listGuiHarnessesResponseSchemaV92,
   listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -33,6 +35,7 @@ import {
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
+  providersListResponseSchemaV92,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -45,7 +48,9 @@ import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
+  getChatRunSettingsResponseSchemaV30,
   getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsBatchResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -94,7 +99,8 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchemaV91,
   // The head line, holding 9.1's old job: it names the LIVE schema, so the next
   // attempt to grow the row fails here first.
-  "agent.gui.listHarnesses@9.2": listGuiHarnessesResponseSchema,
+  "agent.gui.listHarnesses@9.2": listGuiHarnessesResponseSchemaV92,
+  "agent.gui.listHarnesses@10.0": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
@@ -118,7 +124,8 @@ const LIVE_FROZEN_EXPORTS = {
   // rule forced out when `@9.1` took the canonical alias. Nothing leaves the
   // fixture; the rows are simply named what they are.
   "agent.list@9.0": listAgentsResponseSchemaV90,
-  "agent.list@9.1": listAgentsResponseSchema,
+  "agent.list@9.1": listAgentsResponseSchemaV91,
+  "agent.list@10.0": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,
@@ -230,7 +237,8 @@ const LIVE_FROZEN_EXPORTS = {
   // design, so the two markers landing on the live capability regenerated it
   // without complaint. The rows above are the ones that refuse; a line earns
   // one the moment a host advertising it is published.
-  "providers.list@9.2": providersListResponseSchema,
+  "providers.list@9.2": providersListResponseSchemaV92,
+  "providers.list@10.0": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
@@ -247,8 +255,10 @@ const LIVE_FROZEN_EXPORTS = {
   "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchemaV20,
   // The head line: it names the LIVE response, so the next attempt to grow the
   // settings tuple fails here first.
-  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchema,
-  "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchema,
+  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchemaV30,
+  "epic.getChatRunSettings@4.0": getChatRunSettingsResponseSchema,
+  "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchemaV10,
+  "epic.getChatRunSettingsBatch@2.0": getChatRunSettingsBatchResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;

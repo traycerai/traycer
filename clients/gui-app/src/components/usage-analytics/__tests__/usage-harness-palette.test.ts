@@ -99,6 +99,28 @@ describe("usage harness brand anchors", () => {
     }
   });
 
+  it("resolves commandcode, which has no brand anchor, to a distinct validated slot in both themes", () => {
+    // Sixteen supported harnesses already fill every slot, so commandcode is
+    // checked against the ones it can share a legend with in practice.
+    const scale = buildHarnessUsageSeriesScale([
+      "claude",
+      "codex",
+      "commandcode",
+      "droid",
+      "opencode",
+    ]);
+    for (const selector of [
+      ".usage-chart-root {",
+      ".dark .usage-chart-root {",
+    ]) {
+      const colors = scale.order.map((key) =>
+        resolveColor(selector, scale.colorVar(key)),
+      );
+      expect(new Set(colors).size).toBe(colors.length);
+      expect(colors).toHaveLength(5);
+    }
+  });
+
   it("resolves every supported harness to a distinct color in both themes", () => {
     const scale = buildHarnessUsageSeriesScale([
       "amp",
