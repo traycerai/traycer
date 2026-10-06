@@ -1,4 +1,8 @@
-import type { ReactNode } from "react";
+/**
+ * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Updates ▸ Traycer Desktop row).
+ * Update that file whenever this settings surface changes.
+ */
+import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -36,7 +40,11 @@ export interface HostOverviewDesktopAppRowProps {
 interface DesktopAppRowAction {
   readonly label: string;
   readonly disabled: boolean;
-  /** The restart is under way: the label stays, a spinner joins it. */
+  /**
+   * Waiting on the download or the restart this control started: the label
+   * stays, a spinner joins it, and a press does nothing. It is NOT natively
+   * `disabled` for that span (see `DesktopAppRowActionButton`).
+   */
   readonly pending: boolean;
   readonly onClick: () => void;
 }
@@ -46,6 +54,13 @@ interface DesktopAppRowView {
   readonly state: string;
   readonly detail: string;
   readonly action: DesktopAppRowAction | null;
+  /**
+   * What the row's live region says, or "" when it has nothing to say. Only
+   * the steps of an update someone started: the download beginning (never
+   * its percentage, which would be read out on every tick), the update
+   * landing, the restart beginning.
+   */
+  readonly announcement: string;
 }
 
 const UPDATES_SEPARATELY = "The app updates separately from the host.";
@@ -56,6 +71,12 @@ export function HostOverviewDesktopAppRow(
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Read when it is called, not when it is made: by the time the whole row is
+  // being removed its ref is already empty, and then nothing is moved.
+  const focusRow = useCallback(() => {
+    rowRef.current?.focus();
+  }, []);
   const { bridge, snapshot } = props;
   // The updater's first snapshot has not arrived: there is no version to
   // name yet, and a row that only says "Traycer Desktop" says nothing.
@@ -65,8 +86,14 @@ export function HostOverviewDesktopAppRow(
   const view = desktopAppRowView(bridge, snapshot, openInstallGuidance);
 
   return (
+    // Focusable from code only: where the focus goes when the control it was
+    // on is withdrawn (see `DesktopAppRowActionButton`).
     <div
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border/40 px-4 py-3"
+      ref={rowRef}
+      role="group"
+      aria-label="Traycer Desktop"
+      tabIndex={-1}
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border/40 px-4 py-3 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       data-testid="host-overview-desktop-app-row"
     >
       <div className="min-w-0 flex-1">
@@ -80,34 +107,89 @@ export function HostOverviewDesktopAppRow(
           {view.state}
         </p>
         <p className="text-ui-xs text-muted-foreground">{view.detail}</p>
+        {/* STANDING, and empty when quiet: a polite region is announced when
+            its content changes, not when it is inserted already filled, so
+            it has to be here before the download or the restart begins. The
+            button's own change (it goes `aria-disabled`, its dots hide
+            themselves) announces nothing. */}
+        <span
+          role="status"
+          className="sr-only"
+          data-testid="host-overview-desktop-app-status"
+        >
+          {view.announcement}
+        </span>
       </div>
       {view.action === null ? null : (
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          disabled={view.action.disabled}
-          data-testid="host-overview-desktop-app-action"
-          onClick={view.action.onClick}
-        >
-          <span className="inline-flex items-center gap-1.5">
-            <span>{view.action.label}</span>
-            {view.action.pending ? (
-              // The button only goes `disabled`, and the dots hide
-              // themselves from assistive technology: the live region is
-              // what says the restart is under way, as on the header button.
-              <span role="status" aria-label="Restarting to install the update">
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              </span>
-            ) : null}
-          </span>
-        </Button>
+        <DesktopAppRowActionButton
+          action={view.action}
+          onWithdrawnWithFocus={focusRow}
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * The row's one control. It is ONE button from the update being found to the
+ * restart: Download, the same button waiting while the download runs, then
+ * Restart. Taking it away for the download would drop the focus of whoever
+ * just pressed it out of the row, with nothing announcing that anything
+ * started.
+ *
+ * While it waits it is `aria-disabled`, not `disabled`. Chromium moves the
+ * focus to the document the moment a focused button becomes `disabled`, and
+ * does not give it back when the button is enabled again (measured in the
+ * app's engine, Chrome 148; jsdom keeps it, so a test cannot see this). An
+ * `aria-disabled` button keeps the focus, so whoever pressed Download is
+ * still on the button when it becomes Restart. Native `disabled` is kept for
+ * the blocked install, which nobody can have just pressed.
+ *
+ * It still goes away when the update does (a download or an install that
+ * fails, a candidate withdrawn). If it holds the focus at that moment the row
+ * takes it, so the keyboard position stays on the state that replaced it
+ * instead of falling back to the document.
+ */
+function DesktopAppRowActionButton(props: {
+  readonly action: DesktopAppRowAction;
+  readonly onWithdrawnWithFocus: () => void;
+}): ReactNode {
+  const { action, onWithdrawnWithFocus } = props;
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const button = buttonRef.current;
+    // A layout effect's cleanup runs before the button leaves the document,
+    // so it can still be asked whether it holds the focus.
+    return () => {
+      if (button !== null && document.activeElement === button) {
+        onWithdrawnWithFocus();
+      }
+    };
+  }, [onWithdrawnWithFocus]);
+
+  return (
+    <Button
+      ref={buttonRef}
+      type="button"
+      variant="default"
+      size="sm"
+      disabled={action.disabled}
+      aria-disabled={action.pending ? true : undefined}
+      className="aria-disabled:cursor-default aria-disabled:opacity-50"
+      data-testid="host-overview-desktop-app-action"
+      onClick={action.pending ? undefined : action.onClick}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <span>{action.label}</span>
+        {action.pending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+      </span>
+    </Button>
   );
 }
 
@@ -121,6 +203,10 @@ function desktopAppRowView(
   // Same rule as the header button: an install that cannot run from this
   // location keeps its control on screen, disabled, with the reason beside it.
   const blockedReason = snapshot.installBlockedReason;
+  const startDownload = (): void => {
+    trackUpdateDownloadStarted("direct_ui");
+    void bridge.downloadUpdate();
+  };
 
   if (snapshot.status === "available") {
     return {
@@ -134,11 +220,9 @@ function desktopAppRowView(
         label: "Download",
         disabled: blockedReason !== null,
         pending: false,
-        onClick: () => {
-          trackUpdateDownloadStarted("direct_ui");
-          void bridge.downloadUpdate();
-        },
+        onClick: startDownload,
       },
+      announcement: "",
     };
   }
 
@@ -149,27 +233,36 @@ function desktopAppRowView(
           ? "Downloading"
           : `Downloading ${snapshot.downloadProgress}%`,
       detail: `${runningLine} It updates separately from the host.`,
-      action: null,
+      // Download, waiting: the control the download was started from stays.
+      action: {
+        label: "Download",
+        disabled: false,
+        pending: true,
+        onClick: startDownload,
+      },
+      announcement: "Downloading the update",
     };
   }
 
-  if (snapshot.status === "ready") {
+  if (updateIsDownloaded(snapshot)) {
     // A Linux deb/rpm install that needs a manual step: the same guidance
-    // dialog the header's tick opens. The blocked reason wins if both are set.
+    // dialog the header's tick and the update toast open. The blocked reason
+    // wins if both are set.
     const needsManualInstall =
       blockedReason === null && snapshot.installGuidance !== null;
     const readyDetail = needsManualInstall
       ? `${runningLine} Finishing the update needs a manual step.`
       : `${runningLine} Restart it to install the update.`;
+    const readyState =
+      snapshot.latestVersion === null
+        ? "Update ready"
+        : `v${snapshot.latestVersion} ready`;
     return {
-      state:
-        snapshot.latestVersion === null
-          ? "Update ready"
-          : `v${snapshot.latestVersion} ready`,
+      state: readyState,
       detail: blockedReason ?? readyDetail,
       action: {
         label: needsManualInstall ? "Finish update" : "Restart",
-        disabled: blockedReason !== null || snapshot.installInFlight,
+        disabled: blockedReason !== null,
         pending: snapshot.installInFlight,
         onClick: () => {
           if (needsManualInstall) {
@@ -184,6 +277,11 @@ function desktopAppRowView(
           void requestAppUpdateInstall(bridge);
         },
       },
+      announcement: readyAnnouncement(
+        readyState,
+        needsManualInstall,
+        snapshot.installInFlight,
+      ),
     };
   }
 
@@ -193,7 +291,41 @@ function desktopAppRowView(
       : current,
     detail: UPDATES_SEPARATELY,
     action: null,
+    announcement: "",
   };
+}
+
+function readyAnnouncement(
+  readyState: string,
+  needsManualInstall: boolean,
+  installInFlight: boolean,
+): string {
+  if (installInFlight) return "Restarting to install the update";
+  // Not the bare state: a restart whose privilege prompt failed lands here
+  // from "ready", and repeating "ready" would say nothing had happened.
+  if (needsManualInstall) {
+    return `${readyState}. Finishing the update needs a manual step.`;
+  }
+  return readyState;
+}
+
+/**
+ * The update is on disk and waiting to be installed: `ready`, and also an
+ * `error` that carries manual-install guidance. That second one is how a
+ * Linux deb/rpm install whose privilege prompt failed arrives: the updater
+ * reports the failure AND the steps that finish the same downloaded file by
+ * hand, so the update is still there to finish. Any other `error` has
+ * nothing to act on here; the update toast reports it.
+ *
+ * The updater keeps that guidance until the staged update is discarded, so
+ * an `error` can also carry it from an EARLIER failed install (a newer
+ * version found afterwards, whose download then failed). The snapshot does
+ * not say which, and the update toast offers its View instructions on the
+ * same pair, so the row reads it the same way rather than guess.
+ */
+function updateIsDownloaded(snapshot: DesktopAppUpdateSnapshot): boolean {
+  if (snapshot.status === "ready") return true;
+  return snapshot.status === "error" && snapshot.installGuidance !== null;
 }
 
 /**

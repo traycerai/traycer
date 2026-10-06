@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostOverviewDesktopAppRow } from "@/components/settings/panels/host-overview-desktop-app-row";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -67,8 +73,14 @@ class StubBridge implements DesktopAppUpdatesBridge {
 function renderRow(
   snapshot: DesktopAppUpdateSnapshot,
   bridge: StubBridge,
-): void {
-  render(<HostOverviewDesktopAppRow bridge={bridge} snapshot={snapshot} />);
+): RenderResult {
+  return render(
+    <HostOverviewDesktopAppRow bridge={bridge} snapshot={snapshot} />,
+  );
+}
+
+function announcement(): string {
+  return screen.getByRole("status").textContent;
 }
 
 function stateText(): string {
@@ -106,17 +118,27 @@ describe("<HostOverviewDesktopAppRow />", () => {
     expect(bridge.downloadUpdate).not.toHaveBeenCalled();
   });
 
-  it("shows download progress with no action while downloading", () => {
+  it("keeps Download while downloading as an inert, still-focusable control, and says so in the live region", () => {
+    const bridge = new StubBridge();
     renderRow(
       snapshotWith({
         status: "downloading",
         latestVersion: "1.5.0",
         downloadProgress: 42,
       }),
-      new StubBridge(),
+      bridge,
     );
     expect(stateText()).toBe("Downloading 42%");
-    expect(screen.queryByTestId("host-overview-desktop-app-action")).toBeNull();
+    const action = screen.getByTestId("host-overview-desktop-app-action");
+    expect(action.textContent).toContain("Download");
+    // `aria-disabled`, never natively `disabled`: Chromium takes the focus
+    // off a button the moment it becomes `disabled` and does not return it.
+    expect(action.getAttribute("aria-disabled")).toBe("true");
+    expect(action.hasAttribute("disabled")).toBe(false);
+    // Never the percentage: it would be read out on every tick.
+    expect(announcement()).toBe("Downloading the update");
+    fireEvent.click(action);
+    expect(bridge.downloadUpdate).not.toHaveBeenCalled();
   });
 
   it("shows plain Downloading when progress is not known", () => {
@@ -142,29 +164,45 @@ describe("<HostOverviewDesktopAppRow />", () => {
     });
   });
 
-  it("disables Restart while the install is in flight", () => {
+  it("makes Restart inert, still focusable, while the install is in flight", async () => {
+    const bridge = new StubBridge();
     renderRow(
       snapshotWith({
         status: "ready",
         latestVersion: "1.5.0",
         installInFlight: true,
       }),
-      new StubBridge(),
+      bridge,
     );
     const action = screen.getByTestId("host-overview-desktop-app-action");
-    expect(action.hasAttribute("disabled")).toBe(true);
-    // The label does not change, so the restart is announced by a live
-    // region inside the button.
+    expect(action.getAttribute("aria-disabled")).toBe("true");
+    expect(action.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(action);
+    // The install goes through an awaited check before it reaches the
+    // bridge, so give a second install the time it would need to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(bridge.installUpdate).not.toHaveBeenCalled();
+    // The label does not change, so the row's live region says it.
     expect(action.textContent).toContain("Restart");
-    screen.getByRole("status", { name: "Restarting to install the update" });
+    expect(announcement()).toBe("Restarting to install the update");
   });
 
-  it("announces no restart while a ready update is only waiting", () => {
-    renderRow(
-      snapshotWith({ status: "ready", latestVersion: "1.5.0" }),
-      new StubBridge(),
-    );
-    expect(screen.queryByRole("status")).toBeNull();
+  it.each([
+    [
+      "available",
+      snapshotWith({ status: "available", latestVersion: "1.5.0" }),
+    ],
+    ["up to date", snapshotWith({ status: "up-to-date" })],
+    ["checking", snapshotWith({ status: "checking" })],
+    [
+      "a plain error",
+      snapshotWith({ status: "error", errorMessage: "offline" }),
+    ],
+  ])("keeps the live region mounted and empty when %s", (_name, snapshot) => {
+    // Standing, so that a later change of its content is announced: a region
+    // inserted already filled is not.
+    renderRow(snapshot, new StubBridge());
+    expect(announcement()).toBe("");
   });
 
   it("offers Finish update when guidance is set and opens the guidance dialog", () => {
@@ -232,5 +270,160 @@ describe("<HostOverviewDesktopAppRow />", () => {
   it("renders nothing before the first snapshot names a version", () => {
     renderRow(snapshotWith({ currentVersion: "" }), new StubBridge());
     expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
+  });
+
+  it("keeps a finishable ready state when an install fails with manual guidance", () => {
+    const bridge = new StubBridge();
+    renderRow(
+      snapshotWith({
+        status: "error",
+        latestVersion: "1.5.0",
+        errorMessage: "install failed",
+        installGuidance: {
+          summary: "Install the package",
+          steps: ["Run the command"],
+          command: "sudo dpkg -i traycer.deb",
+          releaseUrl: "https://example.invalid/release",
+        },
+      }),
+      bridge,
+    );
+    expect(stateText()).toBe("v1.5.0 ready");
+    // Not the bare "ready" a restart was pressed from: the failed prompt has
+    // to be heard as a change.
+    expect(announcement()).toBe(
+      "v1.5.0 ready. Finishing the update needs a manual step.",
+    );
+    const action = screen.getByTestId("host-overview-desktop-app-action");
+    expect(action.textContent).toContain("Finish update");
+    fireEvent.click(action);
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(
+      "install-guidance",
+    );
+    expect(bridge.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("is exposed as a group named Traycer Desktop", () => {
+    renderRow(snapshotWith({}), new StubBridge());
+    screen.getByRole("group", { name: "Traycer Desktop" });
+  });
+
+  it("keeps ONE button node from available through downloading to ready", () => {
+    const bridge = new StubBridge();
+    const view = renderRow(
+      snapshotWith({ status: "available", latestVersion: "1.5.0" }),
+      bridge,
+    );
+    const first = screen.getByTestId("host-overview-desktop-app-action");
+    first.focus();
+    expect(document.activeElement).toBe(first);
+
+    view.rerender(
+      <HostOverviewDesktopAppRow
+        bridge={bridge}
+        snapshot={snapshotWith({
+          status: "downloading",
+          latestVersion: "1.5.0",
+          downloadProgress: 10,
+        })}
+      />,
+    );
+    const second = screen.getByTestId("host-overview-desktop-app-action");
+    expect(second).toBe(first);
+    // Waiting, not natively `disabled`: that is what keeps the focus here in
+    // Chromium, which drops it from a button that becomes `disabled`. jsdom
+    // would keep it either way, so the attribute is the assertion that
+    // matters; the focus one only shows nothing else moved it.
+    expect(first.hasAttribute("disabled")).toBe(false);
+    expect(first.getAttribute("aria-disabled")).toBe("true");
+    expect(document.body.contains(first)).toBe(true);
+    expect(document.activeElement).toBe(first);
+    const region = screen.getByRole("status");
+    expect(region.textContent).toBe("Downloading the update");
+
+    view.rerender(
+      <HostOverviewDesktopAppRow
+        bridge={bridge}
+        snapshot={snapshotWith({ status: "ready", latestVersion: "1.5.0" })}
+      />,
+    );
+    const third = screen.getByTestId("host-overview-desktop-app-action");
+    expect(third).toBe(first);
+    expect(third.textContent).toContain("Restart");
+    expect(third.hasAttribute("aria-disabled")).toBe(false);
+    expect(document.activeElement).toBe(first);
+    expect(document.body.contains(first)).toBe(true);
+    // The SAME region node, its content changed: that is what gets the
+    // download landing announced.
+    expect(screen.getByRole("status")).toBe(region);
+    expect(region.textContent).toBe("v1.5.0 ready");
+  });
+
+  describe("focus hand-off when the action is withdrawn", () => {
+    const availableSnapshot = snapshotWith({
+      status: "available",
+      latestVersion: "1.5.0",
+    });
+    const errorSnapshot = snapshotWith({
+      status: "error",
+      latestVersion: "1.5.0",
+      errorMessage: "download failed",
+    });
+
+    it("moves focus to the row when the focused button goes away", () => {
+      const bridge = new StubBridge();
+      const view = renderRow(availableSnapshot, bridge);
+      const button = screen.getByTestId("host-overview-desktop-app-action");
+      button.focus();
+      expect(document.activeElement).toBe(button);
+
+      view.rerender(
+        <HostOverviewDesktopAppRow bridge={bridge} snapshot={errorSnapshot} />,
+      );
+      expect(
+        screen.queryByTestId("host-overview-desktop-app-action"),
+      ).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByTestId("host-overview-desktop-app-row"),
+      );
+    });
+
+    it("leaves focus alone when the button was not focused", () => {
+      const bridge = new StubBridge();
+      const view = render(
+        <>
+          <input data-testid="elsewhere" />
+          <HostOverviewDesktopAppRow
+            bridge={bridge}
+            snapshot={availableSnapshot}
+          />
+        </>,
+      );
+      const elsewhere = screen.getByTestId("elsewhere");
+      elsewhere.focus();
+      expect(document.activeElement).toBe(elsewhere);
+
+      view.rerender(
+        <>
+          <input data-testid="elsewhere" />
+          <HostOverviewDesktopAppRow bridge={bridge} snapshot={errorSnapshot} />
+        </>,
+      );
+      expect(
+        screen.queryByTestId("host-overview-desktop-app-action"),
+      ).toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
+      expect(document.activeElement).not.toBe(
+        screen.getByTestId("host-overview-desktop-app-row"),
+      );
+    });
+
+    it("does not throw when the whole row unmounts with the button focused", () => {
+      const view = renderRow(availableSnapshot, new StubBridge());
+      const button = screen.getByTestId("host-overview-desktop-app-action");
+      button.focus();
+      expect(document.activeElement).toBe(button);
+      expect(() => view.unmount()).not.toThrow();
+    });
   });
 });
