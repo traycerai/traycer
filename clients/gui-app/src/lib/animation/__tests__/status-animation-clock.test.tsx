@@ -920,15 +920,23 @@ describe("useStatusAnimation host element swap", () => {
     });
     expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK });
 
-    // The new node decides visibility: off screen stops it, back on resumes.
+    // The new node decides visibility. An untracked writer keeps the shared
+    // clock running while it is off screen, so the re-entry write is a
+    // CHANGED value, not a repeat of the last one.
+    subscribeStatusAnimation(() => undefined, TICK, null);
     io.report(newNode, false);
-    expect(vi.getTimerCount()).toBe(0);
-    io.report(newNode, true);
-    expect(vi.getTimerCount()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(TICK * 3);
+    });
+    const writesBefore = writes.length;
     expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK });
+
+    io.report(newNode, true);
+    expect(writes).toHaveLength(writesBefore + 1);
+    expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK * 4 });
     act(() => {
       vi.advanceTimersByTime(TICK);
     });
-    expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK * 2 });
+    expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK * 5 });
   });
 });

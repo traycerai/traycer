@@ -9,9 +9,10 @@ import type { IpcManagedWindow, RunnerIpcBridge } from "./runner-ipc-bridge";
  * minimised. The renderer ANDs it with its own Page Visibility API. Windows
  * are background-throttled (`windows/background-rendering.ts`), so Page
  * Visibility already reports a minimised or hidden window, and a covered one
- * on macOS and Windows, as `"hidden"` - except while a browser tile's WebRTC video plane has turned
- * throttling off, which keeps `document.visibilityState` at `"visible"`
- * (Electron's `disable_hidden` patch). This bit is what still tells such a
+ * on macOS and Windows, as `"hidden"` - except while a browser tile's WebRTC
+ * video plane has turned throttling off, which keeps
+ * `document.visibilityState` at `"visible"` (Electron's `disable_hidden`
+ * patch). This bit is what still tells such a
  * window that it was minimised or hidden: the BrowserWindow's own
  * `minimize` / `restore` / `show` / `hide` transitions, which the window
  * registry already relays as `geometry` and `change`. A covered window in

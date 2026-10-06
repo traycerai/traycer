@@ -425,7 +425,7 @@ describe("loadMainWindow", () => {
     ]);
   });
 
-  it("creates the window background-throttled and wires the reset to a committed navigation and a renderer crash", () => {
+  it("creates the window background-throttled and wires the reset to a committed navigation, a failed main-frame load and a renderer crash", () => {
     createMainWindowForTest({
       preloadPath: "/preload.js",
       windowId: "window-a",
@@ -446,10 +446,18 @@ describe("loadMainWindow", () => {
 
     // A demand a document made (throttling off) must not outlive that
     // document, whichever way it ends.
-    for (const channel of ["did-navigate", "render-process-gone"]) {
+    // `did-fail-load` carries (event, code, description, url, isMainFrame);
+    // the factory's own logging listener on it reads the first four too.
+    for (const channel of [
+      "did-navigate",
+      "did-fail-load",
+      "render-process-gone",
+    ]) {
       electronState.throttlingAllowed = false;
       for (const entry of electronState.webContentsListenerLog) {
-        if (entry.channel === channel) entry.listener({});
+        if (entry.channel === channel) {
+          entry.listener({}, -105, "ERR_NAME_NOT_RESOLVED", "app://x", true);
+        }
       }
       expect(electronState.throttlingAllowed, channel).toBe(true);
     }

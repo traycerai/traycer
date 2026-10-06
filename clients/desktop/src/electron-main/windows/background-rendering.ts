@@ -35,18 +35,21 @@ import type { RunnerIpcBridge } from "../ipc/runner-ipc-bridge";
  *   whatever the value. So a call that changes nothing is never made: a
  *   redundant `true` on a window launched or reloaded behind another one
  *   would make it paint unseen again.
- * - A release that lands while the window is hidden cannot hide it: Chromium
- *   hides a widget only on a visibility transition, and the one that happened
- *   while the demand was on was swallowed. The window keeps rendering until
- *   its next show, restore or occlusion change. That is a known ceiling of
- *   the exception, not of the default.
+ * - A release that lands while the window is hidden cannot hide its page:
+ *   Chromium hides a widget only on a visibility transition, and the one that
+ *   happened while the demand was on was swallowed. The window's display
+ *   re-throttles at once, but the page stays `"visible"` - timers, rAF and
+ *   frame production - until its next show, restore or occlusion change. That
+ *   is a known ceiling of the exception, not of the default.
  *
  * A demand belongs to the document that made it. Each new document re-asserts
  * its own demand when it installs (normally "not required"), and main also
- * restores throttling once a main-frame navigation has COMMITTED or the
- * renderer process is gone, because neither leaves anyone who would send the
- * release. Not on `did-start-navigation`: that also fires for a navigation the
- * navigation guard then cancels, and the live document would lose its demand.
+ * restores throttling once a main-frame navigation has COMMITTED (a document,
+ * or an error page via `did-fail-load`) or the renderer process is gone,
+ * because none of these leaves anyone who would send the release. Not on
+ * `did-start-navigation`: that also fires for a navigation the navigation
+ * guard then cancels, and the live document would lose its demand. Electron
+ * does not emit `did-fail-load` for such a cancel (`ERR_ABORTED`).
  */
 
 /** The slice of `WebContents` this module drives; narrow so tests can fake it. */
@@ -57,6 +60,16 @@ export interface BackgroundRenderingTarget {
 
 export interface BackgroundRenderingWindow extends BackgroundRenderingTarget {
   on(event: "did-navigate", listener: () => void): unknown;
+  on(
+    event: "did-fail-load",
+    listener: (
+      event: unknown,
+      errorCode: number,
+      errorDescription: string,
+      validatedURL: string,
+      isMainFrame: boolean,
+    ) => void,
+  ): unknown;
   on(event: "render-process-gone", listener: () => void): unknown;
 }
 
@@ -76,6 +89,12 @@ export function installBackgroundRenderingReset(
     setBackgroundRenderingRequired(target, false);
   };
   target.on("did-navigate", reset);
+  target.on(
+    "did-fail-load",
+    (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+      if (isMainFrame) reset();
+    },
+  );
   target.on("render-process-gone", reset);
 }
 
