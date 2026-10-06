@@ -114,10 +114,10 @@ These commands are mainly intended for Traycer-managed automation, but they are 
 
 `traycer agent list` takes two flags that shorten its output:
 
-| Flag | Effect |
-| --- | --- |
-| `--live` | Leave archived agents out. Against a host too old to report which agents are archived, the command exits 1 and says so. |
-| `--compact` | One short line per agent, without folders, model, or session detail. |
+| Flag        | Effect                                                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--live`    | Leave archived agents out. Against a host too old to report which agents are archived, the command exits 1 and says so. |
+| `--compact` | One short line per agent, without folders, model, or session detail.                                                    |
 
 With `--json`, each agent carries an `archived` field: `true`, `false`, or `null` when the host is too old to report it.
 
