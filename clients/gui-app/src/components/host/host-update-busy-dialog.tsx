@@ -10,10 +10,13 @@ import { useLocalHostQuitStatus } from "@/components/host/use-local-host-quit-st
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
 import { useHostBinding } from "@/lib/host";
 import { hostQuitCountsLine } from "@/lib/host/host-lifecycle-copy";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
 export const HOST_RESTART_WHEN_IDLE_LABEL = "Restart when idle";
 export const HOST_RESTART_WHEN_IDLE_SCHEDULED =
   "The host will restart to finish the update once its work is done.";
+export const HOST_RESTART_WHEN_IDLE_FAILED =
+  "Couldn't schedule the host restart";
 
 export interface HostUpdateBusyDialogProps {
   /** The busy outcome an update or activation settled with; `null` = closed. */
@@ -76,6 +79,15 @@ export function HostUpdateBusyDialog(props: HostUpdateBusyDialogProps) {
                       }
                       toast.info(HOST_RESTART_WHEN_IDLE_SCHEDULED);
                       onDefer();
+                    },
+                    // The request never reached a verdict, so nothing is
+                    // scheduled. The dialog stays open with the action
+                    // available again.
+                    onError: (error) => {
+                      toastFromRunnerError(
+                        error,
+                        HOST_RESTART_WHEN_IDLE_FAILED,
+                      );
                     },
                   },
                 );

@@ -21,6 +21,11 @@ vi.mock(
   },
 );
 
+const runnerErrorToast = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/runner-error-toast", () => ({
+  toastFromRunnerError: runnerErrorToast,
+}));
+
 const toastInfo = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({
   toast: {
@@ -65,6 +70,7 @@ import {
   type LocalHostQuitStatus,
 } from "@/components/host/use-local-host-quit-status";
 import {
+  HOST_RESTART_WHEN_IDLE_FAILED,
   HostUpdateBusyDialog,
   type HostUpdateBusyDialogProps,
 } from "@/components/host/host-update-busy-dialog";
@@ -153,6 +159,7 @@ function activateManagement(outcome: Outcome) {
 afterEach(() => {
   cleanup();
   toastInfo.mockClear();
+  runnerErrorToast.mockClear();
   hostBindingMock.current = { directory: { getLocalEntry: () => null } };
   statusMock.current = {
     localHostId: "host-a",
@@ -250,6 +257,37 @@ describe("<HostUpdateBusyDialog />", () => {
       expect(onActivateOutcome).toHaveBeenCalledWith(outcome);
     });
     expect(onDefer).not.toHaveBeenCalled();
+  });
+
+  it("Restart when idle that rejects is reported, leaves the dialog open and can be retried", async () => {
+    setHostStatus(BREAKDOWN, 6);
+    const failure = new Error("ipc down");
+    const activateInstalled = vi.fn(
+      (_force: boolean, _retryWhenIdle: boolean): Promise<Outcome> =>
+        Promise.reject(failure),
+    );
+    const onDefer = vi.fn();
+    const onActivateOutcome = vi.fn();
+    renderDialog(
+      { onDefer, onActivateOutcome },
+      buildOverviewManagement({ activateInstalled }),
+    );
+
+    await userEvent.click(await screen.findByTestId("host-busy-when-idle"));
+
+    await waitFor(() => {
+      expect(runnerErrorToast).toHaveBeenCalledWith(
+        failure,
+        HOST_RESTART_WHEN_IDLE_FAILED,
+      );
+    });
+    expect(onDefer).not.toHaveBeenCalled();
+    expect(onActivateOutcome).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-busy-when-idle").hasAttribute("disabled"),
+      ).toBe(false);
+    });
   });
 
   it("without a host binding it still shows the message and buttons, and no counts line", async () => {
