@@ -569,12 +569,40 @@ describe("<AutonomousResumeSegment />", () => {
     );
 
     const toggle = screen.getByRole("button", { name: /Subagent completed/ });
+    // Its disclosure opens the summary, so the closed line does not show it.
+    expect(
+      screen.queryByText(/Review finished with two findings\./),
+    ).toBeNull();
     fireEvent.click(toggle);
 
     expect(
       screen.getAllByText(/Review finished with two findings\./).length,
     ).toBeGreaterThan(0);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows a note's summary inline while closed when its disclosure opens an output file", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "command",
+            title: "bun test",
+            status: "failed",
+            summary: "Process exited with code 2",
+            blockId: "tool-12",
+            outputFile: { workspacePath: "/ws", filePath: "/ws/out.log" },
+            mcp: null,
+            managedCommand: null,
+            live: false,
+          },
+        ]}
+        variant="note"
+      />,
+    );
+
+    expect(screen.getByText("Process exited with code 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Command failed/ })).toBeTruthy();
   });
 
   it("keeps the row variant non-expandable for the same subagent trigger", () => {

@@ -104,10 +104,13 @@ function ResumeCompletionCard(props: {
   // markdown result to show.
   const expandable =
     !compact && (trigger.kind === "subagent" || trigger.outputFile !== null);
-  // The card shows a static trigger's summary as its two-line preview. A note
-  // has no preview, so it carries the summary on its one line instead, the way
-  // a shell delivery already does.
-  const inlineSummary = compact || (props.variant === "note" && !expandable);
+  // The card shows a trigger's summary as its two-line preview. A note has no
+  // preview, so it carries the summary on its one line instead, the way a
+  // shell delivery already does - an output-backed one included, whose
+  // disclosure opens the output file and not the summary. A subagent's summary
+  // is its whole result, which its disclosure does show.
+  const inlineSummary =
+    compact || (props.variant === "note" && trigger.kind !== "subagent");
   const header = (
     <>
       {resumeStatusIcon(trigger)}
