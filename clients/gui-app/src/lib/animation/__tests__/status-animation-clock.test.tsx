@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import {
   resetStatusAnimationClockForTests,
@@ -81,6 +81,61 @@ function stubReducedMotionWithListener(
   };
 }
 
+/**
+ * jsdom has no IntersectionObserver. This one records what the clock observes
+ * and lets a test report a node on or off screen, the way the browser would.
+ * The clock creates ONE shared observer for all its writers.
+ */
+interface IntersectionObserverHandle {
+  /** The nodes the clock currently observes. */
+  readonly observed: ReadonlySet<Element>;
+  /** Delivers one entry for `element`, as the browser does on a change. */
+  report(element: Element, isIntersecting: boolean): void;
+}
+
+function installFakeIntersectionObserver(): IntersectionObserverHandle {
+  const observed = new Set<Element>();
+  const callbacks: Array<(entries: IntersectionObserverEntry[]) => void> = [];
+  class FakeIntersectionObserver {
+    constructor(callback: (entries: IntersectionObserverEntry[]) => void) {
+      callbacks.push(callback);
+    }
+    observe(element: Element): void {
+      observed.add(element);
+    }
+    unobserve(element: Element): void {
+      observed.delete(element);
+    }
+    disconnect(): void {
+      observed.clear();
+    }
+  }
+  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  return {
+    observed,
+    report: (element, isIntersecting) => {
+      const callback = callbacks.at(-1);
+      if (callback === undefined) {
+        throw new Error("the clock never created an IntersectionObserver");
+      }
+      const rect = element.getBoundingClientRect();
+      act(() => {
+        callback([
+          {
+            target: element,
+            isIntersecting,
+            intersectionRatio: isIntersecting ? 1 : 0,
+            boundingClientRect: rect,
+            intersectionRect: rect,
+            rootBounds: null,
+            time: 0,
+          },
+        ]);
+      });
+    },
+  };
+}
+
 interface ProbeProps {
   readonly write: (element: HTMLDivElement, elapsedMs: number) => void;
   readonly clear: (element: HTMLDivElement) => void;
@@ -88,16 +143,42 @@ interface ProbeProps {
 
 /** Mounts a real element and drives it from the shared clock via the hook. */
 function Probe(props: ProbeProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useStatusAnimation(ref, props.write, props.clear, STATUS_ANIMATION_TICK_MS);
+  const ref = useStatusAnimation<HTMLDivElement>(
+    props.write,
+    props.clear,
+    STATUS_ANIMATION_TICK_MS,
+  );
   return <div ref={ref} data-testid="probe" />;
 }
 
-/** Never attaches its ref to an element - exercises the null-ref no-op path. */
+/** Never attaches the returned ref to an element - nothing to animate. */
 function ProbeWithoutElement(props: ProbeProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useStatusAnimation(ref, props.write, props.clear, STATUS_ANIMATION_TICK_MS);
+  useStatusAnimation<HTMLDivElement>(
+    props.write,
+    props.clear,
+    STATUS_ANIMATION_TICK_MS,
+  );
   return null;
+}
+
+interface SwapProbeProps {
+  readonly tag: "div" | "section";
+  readonly write: (element: HTMLElement, elapsedMs: number) => void;
+  readonly clear: (element: HTMLElement) => void;
+}
+
+/** Swaps its host element's tag (a polymorphic `as`), so React remounts the node. */
+function SwapProbe(props: SwapProbeProps) {
+  const ref = useStatusAnimation<HTMLElement>(
+    props.write,
+    props.clear,
+    STATUS_ANIMATION_TICK_MS,
+  );
+  return props.tag === "div" ? (
+    <div ref={ref} data-testid="host" />
+  ) : (
+    <section ref={ref} data-testid="host" />
+  );
 }
 
 function noopClear(_element: HTMLDivElement): void {}
@@ -124,10 +205,12 @@ describe("subscribeStatusAnimation", () => {
     const unsubscribe1 = subscribeStatusAnimation(
       (elapsed) => calls1.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
     const unsubscribe2 = subscribeStatusAnimation(
       (elapsed) => calls2.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
 
     // Two subscribers, ONE interval - not one each.
@@ -159,6 +242,7 @@ describe("subscribeStatusAnimation", () => {
     const unsubscribe = subscribeStatusAnimation(
       () => {},
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
 
     act(() => {
@@ -179,6 +263,7 @@ describe("subscribeStatusAnimation", () => {
     subscribeStatusAnimation(
       (elapsed) => calls.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
     expect(vi.getTimerCount()).toBe(1);
 
@@ -194,6 +279,7 @@ describe("subscribeStatusAnimation", () => {
     subscribeStatusAnimation(
       (elapsed) => calls.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
 
     act(() => {
@@ -227,6 +313,7 @@ describe("subscribeStatusAnimation", () => {
     subscribeStatusAnimation(
       (elapsed) => calls.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
 
     act(() => {
@@ -255,6 +342,7 @@ describe("subscribeStatusAnimation", () => {
     const unsubscribe = subscribeStatusAnimation(
       (elapsed) => calls.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
     expect(vi.getTimerCount()).toBe(0);
 
@@ -276,6 +364,7 @@ describe("subscribeStatusAnimation", () => {
     const unsubscribe = subscribeStatusAnimation(
       (elapsed) => calls.push(elapsed),
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
 
     // Registered, but the interval refuses to start while reduced motion matches.
@@ -310,10 +399,12 @@ describe("subscribeStatusAnimation", () => {
     const unsubscribeSmooth = subscribeStatusAnimation(
       (elapsed) => smoothCalls.push(elapsed),
       STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+      null,
     );
     const unsubscribePulse = subscribeStatusAnimation(
       (elapsed) => pulseCalls.push(elapsed),
       STATUS_ANIMATION_PULSE_CADENCE_MS,
+      null,
     );
 
     act(() => {
@@ -343,12 +434,14 @@ describe("subscribeStatusAnimation", () => {
     const unsubscribeSnapToSmooth = subscribeStatusAnimation(
       (elapsed) => snapToSmoothCalls.push(elapsed),
       50,
+      null,
     );
     // 90 / STATUS_ANIMATION_TICK_MS (40) = 2.25, rounds to 2 ticks -> snaps
     // to 80: called on every second tick, same as the pulse cadence.
     const unsubscribeSnapToPulse = subscribeStatusAnimation(
       (elapsed) => snapToPulseCalls.push(elapsed),
       90,
+      null,
     );
 
     act(() => {
@@ -377,6 +470,7 @@ describe("useStatusAnimation", () => {
     const primerUnsubscribe = subscribeStatusAnimation(
       () => {},
       STATUS_ANIMATION_TICK_MS,
+      null,
     );
     act(() => {
       vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS * 2);
@@ -589,5 +683,252 @@ describe("useStatusAnimation", () => {
       vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS * 3);
     });
     expect(writes).toEqual([0, STATUS_ANIMATION_TICK_MS]);
+  });
+});
+
+describe("status animation clock on-screen gating", () => {
+  const TICK = STATUS_ANIMATION_TICK_MS;
+
+  function advanceTicks(ticks: number): void {
+    act(() => {
+      vi.advanceTimersByTime(TICK * ticks);
+    });
+  }
+
+  it("does not tick a writer whose node is off screen and stops the interval when none is on screen", () => {
+    const io = installFakeIntersectionObserver();
+    const node = document.createElement("div");
+    const calls: number[] = [];
+    subscribeStatusAnimation((elapsed) => calls.push(elapsed), TICK, node);
+    expect(io.observed.has(node)).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+
+    advanceTicks(1);
+    expect(calls).toEqual([TICK]);
+
+    io.report(node, false);
+    expect(vi.getTimerCount()).toBe(0);
+    advanceTicks(5);
+    expect(calls).toEqual([TICK]);
+    // The logical clock froze with the interval.
+    expect(statusAnimationElapsedMs()).toBe(TICK);
+  });
+
+  it("writes a writer that comes back on screen at once with the SHARED elapsed time, then resumes ticking it", () => {
+    const io = installFakeIntersectionObserver();
+    const node = document.createElement("div");
+    const calls: number[] = [];
+    subscribeStatusAnimation((elapsed) => calls.push(elapsed), TICK, node);
+    // An untracked writer keeps the shared clock running while `node` is off
+    // screen, so the clock moves on without the first writer.
+    subscribeStatusAnimation(() => undefined, TICK, null);
+
+    advanceTicks(1);
+    io.report(node, false);
+    advanceTicks(4);
+    expect(calls).toEqual([TICK]);
+    expect(statusAnimationElapsedMs()).toBe(TICK * 5);
+
+    io.report(node, true);
+    // In phase with the shared clock immediately, not on the next tick.
+    expect(calls).toEqual([TICK, TICK * 5]);
+
+    advanceTicks(1);
+    expect(calls).toEqual([TICK, TICK * 5, TICK * 6]);
+  });
+
+  it("ticks only the on-screen writer when two are subscribed and one is off screen", () => {
+    const io = installFakeIntersectionObserver();
+    const visibleNode = document.createElement("div");
+    const hiddenNode = document.createElement("div");
+    const visibleCalls: number[] = [];
+    const hiddenCalls: number[] = [];
+    subscribeStatusAnimation(
+      (elapsed) => visibleCalls.push(elapsed),
+      TICK,
+      visibleNode,
+    );
+    subscribeStatusAnimation(
+      (elapsed) => hiddenCalls.push(elapsed),
+      TICK,
+      hiddenNode,
+    );
+
+    io.report(hiddenNode, false);
+    // One writer is still on screen: the interval stays.
+    expect(vi.getTimerCount()).toBe(1);
+    advanceTicks(2);
+
+    expect(visibleCalls).toEqual([TICK, TICK * 2]);
+    expect(hiddenCalls).toEqual([]);
+  });
+
+  it("restarts the interval for a new writer after an off-screen writer unsubscribed", () => {
+    const io = installFakeIntersectionObserver();
+    const offScreen = document.createElement("div");
+    const unsubscribeOffScreen = subscribeStatusAnimation(
+      () => undefined,
+      TICK,
+      offScreen,
+    );
+    io.report(offScreen, false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Removing a writer that was already off screen must not count against the
+    // on-screen writers, or the next subscribe would see zero and not start.
+    unsubscribeOffScreen();
+    const calls: number[] = [];
+    subscribeStatusAnimation((elapsed) => calls.push(elapsed), TICK, null);
+    expect(vi.getTimerCount()).toBe(1);
+
+    advanceTicks(1);
+    expect(calls).toEqual([TICK]);
+  });
+
+  it("stops observing a node when its writer unsubscribes", () => {
+    const io = installFakeIntersectionObserver();
+    const node = document.createElement("div");
+    const unsubscribe = subscribeStatusAnimation(() => undefined, TICK, node);
+    expect(io.observed.has(node)).toBe(true);
+
+    unsubscribe();
+    expect(io.observed.has(node)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never gates a writer when the platform has no IntersectionObserver", () => {
+    const node = document.createElement("div");
+    const calls: number[] = [];
+    subscribeStatusAnimation((elapsed) => calls.push(elapsed), TICK, node);
+
+    advanceTicks(2);
+    expect(calls).toEqual([TICK, TICK * 2]);
+  });
+});
+
+describe("useStatusAnimation on-screen gating", () => {
+  const TICK = STATUS_ANIMATION_TICK_MS;
+
+  function renderProbe(
+    selected: boolean,
+    write: (element: HTMLDivElement, elapsedMs: number) => void,
+    clear: (element: HTMLDivElement) => void,
+  ) {
+    return (
+      <TabBodySelectedContext.Provider value={selected}>
+        <Probe write={write} clear={clear} />
+      </TabBodySelectedContext.Provider>
+    );
+  }
+
+  it("does not subscribe in an unselected tab body, clears when it deselects, and writes the CURRENT shared phase when it is selected again", () => {
+    // A writer outside the tab keeps the shared clock moving meanwhile.
+    subscribeStatusAnimation(() => undefined, TICK, null);
+
+    const writes: number[] = [];
+    const cleared: HTMLDivElement[] = [];
+    const write = (_element: HTMLDivElement, elapsedMs: number): void => {
+      writes.push(elapsedMs);
+    };
+    const clear = (element: HTMLDivElement): void => {
+      cleared.push(element);
+    };
+
+    const { rerender } = render(renderProbe(false, write, clear));
+    // Unselected from the start: nothing written for it.
+    expect(writes).toEqual([]);
+
+    rerender(renderProbe(true, write, clear));
+    expect(writes).toEqual([0]);
+    act(() => {
+      vi.advanceTimersByTime(TICK);
+    });
+    expect(writes).toEqual([0, TICK]);
+
+    rerender(renderProbe(false, write, clear));
+    expect(cleared).toEqual([screen.getByTestId("probe")]);
+    act(() => {
+      vi.advanceTimersByTime(TICK * 4);
+    });
+    // No ticks reach the deselected body while the shared clock moves on.
+    expect(writes).toEqual([0, TICK]);
+    expect(statusAnimationElapsedMs()).toBe(TICK * 5);
+
+    rerender(renderProbe(true, write, clear));
+    expect(writes).toEqual([0, TICK, TICK * 5]);
+  });
+
+  it("stops ticking a hook's element the shared observer reports off screen, and resumes at the shared phase", () => {
+    const io = installFakeIntersectionObserver();
+    // Keeps the interval alive while the probe is off screen.
+    subscribeStatusAnimation(() => undefined, TICK, null);
+
+    const writes: number[] = [];
+    const write = (_element: HTMLDivElement, elapsedMs: number): void => {
+      writes.push(elapsedMs);
+    };
+    render(<Probe write={write} clear={noopClear} />);
+    const probeElement = screen.getByTestId("probe");
+    expect(io.observed.has(probeElement)).toBe(true);
+    expect(writes).toEqual([0]);
+
+    io.report(probeElement, false);
+    act(() => {
+      vi.advanceTimersByTime(TICK * 3);
+    });
+    expect(writes).toEqual([0]);
+
+    io.report(probeElement, true);
+    expect(writes).toEqual([0, TICK * 3]);
+  });
+});
+
+describe("useStatusAnimation host element swap", () => {
+  const TICK = STATUS_ANIMATION_TICK_MS;
+
+  it("moves the subscription to the new host node, clearing the old one, and follows the new node's visibility", () => {
+    const io = installFakeIntersectionObserver();
+    const writes: Array<{ readonly tag: string; readonly elapsedMs: number }> =
+      [];
+    const cleared: HTMLElement[] = [];
+    const write = (element: HTMLElement, elapsedMs: number): void => {
+      writes.push({ tag: element.tagName, elapsedMs });
+    };
+    const clear = (element: HTMLElement): void => {
+      cleared.push(element);
+    };
+
+    const { rerender } = render(
+      <SwapProbe tag="div" write={write} clear={clear} />,
+    );
+    const oldNode = screen.getByTestId("host");
+    expect(oldNode.tagName).toBe("DIV");
+    expect(io.observed.has(oldNode)).toBe(true);
+
+    rerender(<SwapProbe tag="section" write={write} clear={clear} />);
+    const newNode = screen.getByTestId("host");
+    expect(newNode.tagName).toBe("SECTION");
+    // The old node was cleared and let go; the new one is observed.
+    expect(cleared).toEqual([oldNode]);
+    expect(io.observed.has(oldNode)).toBe(false);
+    expect(io.observed.has(newNode)).toBe(true);
+    // One interval, not one per node.
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => {
+      vi.advanceTimersByTime(TICK);
+    });
+    expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK });
+
+    // The new node decides visibility: off screen stops it, back on resumes.
+    io.report(newNode, false);
+    expect(vi.getTimerCount()).toBe(0);
+    io.report(newNode, true);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK });
+    act(() => {
+      vi.advanceTimersByTime(TICK);
+    });
+    expect(writes.at(-1)).toEqual({ tag: "SECTION", elapsedMs: TICK * 2 });
   });
 });

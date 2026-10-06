@@ -154,9 +154,9 @@ function useDioramaPlayback(
   // One rAF loop per chapter, reading elapsed time off the clock rather than
   // counting frames, so a pause is exact and a resume loses nothing.
   //
-  // Desktop windows run with `backgroundThrottling: false`, so rAF keeps
-  // firing while minimised. Pause the clock AND cancel the pending frame on
-  // hide; restart on show. Hover and focus do not pause.
+  // A desktop window a WebRTC video plane keeps rendering unseen still fires
+  // rAF while minimised. Pause the clock AND cancel the pending frame on hide;
+  // restart on show. Hover and focus do not pause.
   useEffect(() => {
     beatRef.current = 0;
     if (reducedMotion) {

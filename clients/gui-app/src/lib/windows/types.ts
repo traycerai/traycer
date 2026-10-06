@@ -850,10 +850,10 @@ export interface DesktopWindowsBridge {
   };
   /**
    * Whether THIS window is on screen (shown and not minimised) as main sees
-   * it. Renderer parking's window-level input: the Page Visibility API is
-   * inert in the desktop app because every window runs with
-   * `backgroundThrottling: false`, so minimising changes nothing the renderer
-   * can observe on its own.
+   * it. Renderer parking's window-level input beside the Page Visibility
+   * API, which stays `"visible"` through minimise and hide while a WebRTC
+   * video plane has turned background throttling off (see
+   * `backgroundRendering`).
    *
    * Optional + capability-probed like `epicVisibility`, for the same skew
    * reason. Absent, the renderer keeps answering "visible" and parking waits
@@ -865,6 +865,22 @@ export interface DesktopWindowsBridge {
     onChange(handler: (onScreen: boolean) => void): {
       dispose(): void;
     };
+  };
+  /**
+   * Turns background throttling off for THIS window while a browser tile's
+   * WebRTC video plane needs its timers and `requestVideoFrameCallback` to
+   * keep running unseen, and back on afterwards. Each document re-asserts its
+   * demand at install, and main also restores throttling once a main-frame
+   * navigation commits or the renderer process is gone, so a reload never
+   * inherits a stale demand.
+   *
+   * Optional + capability-probed: a preload built before this channel has no
+   * `backgroundRendering`, and its main never throttles a GUI window at all,
+   * so there is nothing to ask for. Installed by
+   * `lib/browser-view/tiles/desktop-background-rendering.ts`.
+   */
+  backgroundRendering?: {
+    setRequired(required: boolean): Promise<void>;
   };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;

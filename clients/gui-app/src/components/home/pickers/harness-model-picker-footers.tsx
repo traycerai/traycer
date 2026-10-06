@@ -311,7 +311,6 @@ function reasoningSparkleOpacity(elapsedMs: number, phase: number): number {
  * writer rather than a branch.
  */
 function ReasoningMaxSparkles() {
-  const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
     const drift = Math.sin((elapsedMs / 6000) * Math.PI * 2);
     element.style.setProperty(
@@ -338,7 +337,11 @@ function ReasoningMaxSparkles() {
       element.style.removeProperty(reasoningSparkleProperty(index));
     }
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
+  const ref = useStatusAnimation(
+    write,
+    clear,
+    STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  );
 
   return (
     <span

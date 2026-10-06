@@ -3,7 +3,7 @@ import {
   useStatusAnimation,
 } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
-import { memo, useCallback, useRef, type CSSProperties } from "react";
+import { memo, useCallback, type CSSProperties } from "react";
 
 type ShimmerElement = "div" | "p" | "span";
 
@@ -35,7 +35,6 @@ const ShimmerComponent = (props: TextShimmerProps) => {
   const { children, className } = props;
   const duration = props.duration ?? 2;
   const spread = props.spread ?? 2;
-  const ref = useRef<HTMLElement | null>(null);
 
   const write = useCallback(
     (element: HTMLElement, elapsedMs: number) => {
@@ -48,16 +47,14 @@ const ShimmerComponent = (props: TextShimmerProps) => {
   const clear = useCallback((element: HTMLElement) => {
     element.style.backgroundPosition = SHIMMER_REST_POSITION;
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
-
-  // A callback ref rather than the ref object itself: the tag is a union of
-  // intrinsic elements, and a `RefObject<HTMLElement>` is not assignable to
-  // any one of their `ref` props while a callback taking `HTMLElement` is.
-  // When `as` swaps the element, the clock's next tick writes the new one -
-  // `useStatusAnimation` re-reads the ref on every tick.
-  const attachRef = useCallback((element: HTMLElement | null) => {
-    ref.current = element;
-  }, []);
+  // A callback ref, which a union of intrinsic tags accepts where a
+  // `RefObject<HTMLElement>` would not. When `as` swaps the element, React
+  // detaches the old node and attaches the new one, which resubscribes.
+  const attachRef = useStatusAnimation<HTMLElement>(
+    write,
+    clear,
+    STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  );
 
   const style: ShimmerStyle = {
     "--spread": `${children.length * spread}px`,

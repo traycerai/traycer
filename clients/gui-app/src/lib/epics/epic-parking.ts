@@ -193,10 +193,11 @@ function notify(epicId: string): void {
  * so a hidden window withdraws its claim here and there in one move.
  *
  * "Hidden" here is what `lib/dom/document-visibility.ts` answers: the Page
- * Visibility API in a browser, and on the desktop the shell's own
- * minimised/hidden answer pushed in through `desktop-window-visibility.ts`,
- * because `backgroundThrottling: false` keeps the Page Visibility API at
- * "visible" there. Neither detects occlusion.
+ * Visibility API (which the desktop also hides on, covered windows included
+ * on macOS and Windows),
+ * AND-ed with the shell's own minimised/hidden answer pushed in through
+ * `desktop-window-visibility.ts` for the window a WebRTC video plane keeps
+ * rendering unseen.
  */
 function isEpicVisibleAnywhere(epicId: string): boolean {
   return (

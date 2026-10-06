@@ -1,8 +1,9 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   STATUS_ANIMATION_PULSE_CADENCE_MS,
   STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  statusAnimationElapsedMs,
   subscribeStatusAnimation,
   useStatusAnimation,
 } from "@/lib/animation/status-animation-clock";
@@ -658,7 +659,6 @@ function WorkingDots(props: {
   readonly testId: string | undefined;
   readonly tone: "inherit" | "muted";
 }) {
-  const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
     const dots = element.children;
     for (let index = 0; index < dots.length; index++) {
@@ -678,7 +678,11 @@ function WorkingDots(props: {
       dot.style.transform = "";
     }
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
+  const ref = useStatusAnimation(
+    write,
+    clear,
+    STATUS_ANIMATION_PULSE_CADENCE_MS,
+  );
   return (
     <span
       ref={ref}
@@ -721,25 +725,35 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   //   spinners on screen are one timer task and one style/layout/paint pass
   //   per tick, not N. Presets keep their own cadence, quantized to the
   //   clock's 40 ms tick.
-  const paneVisible = usePaneVisible();
+  //
+  // A body that cannot paint (a hidden keep-alive pane, an unselected tab
+  // body) holds its glyph and takes no ticks, and an on-screen spinner
+  // scrolled out of view is skipped by the clock - see `useStatusAnimation`.
+  const bodyVisible = useTileBodyVisible();
   useLayoutEffect(() => {
     // The `typing` variant renders `WorkingDots` below, which has no frames.
     if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
     if (node === null) return;
-    const text = document.createTextNode(presetFrames[0] ?? "");
+    // Start on the shared clock's current frame, so a spinner shown again
+    // resumes in phase with every other one instead of restarting.
+    const frameAt = (elapsedMs: number): number =>
+      Math.floor(elapsedMs / presetIntervalMs) % presetFrames.length;
+    let shownIndex = frameAt(statusAnimationElapsedMs());
+    const text = document.createTextNode(presetFrames[shownIndex] ?? "");
     node.replaceChildren(text);
-    // A hidden keep-alive pane cannot paint: hold the first frame, no ticks.
-    if (presetFrames.length === 1 || !paneVisible) return;
-    let shownIndex = 0;
-    return subscribeStatusAnimation((elapsedMs) => {
-      const frameIndex =
-        Math.floor(elapsedMs / presetIntervalMs) % presetFrames.length;
-      if (frameIndex === shownIndex) return;
-      shownIndex = frameIndex;
-      text.data = presetFrames[frameIndex] ?? "";
-    }, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
-  }, [presetFrames, presetIntervalMs, paneVisible]);
+    if (presetFrames.length === 1 || !bodyVisible) return;
+    return subscribeStatusAnimation(
+      (elapsedMs) => {
+        const frameIndex = frameAt(elapsedMs);
+        if (frameIndex === shownIndex) return;
+        shownIndex = frameIndex;
+        text.data = presetFrames[frameIndex] ?? "";
+      },
+      STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+      node,
+    );
+  }, [presetFrames, presetIntervalMs, bodyVisible]);
 
   const tone = props.tone ?? "inherit";
 

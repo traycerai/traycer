@@ -133,6 +133,7 @@ export const RunnerHostInvoke = {
   epicVisibilitySnapshot: "runnerHost:windows:epicVisibility:snapshot",
   epicVisibilityReport: "runnerHost:windows:epicVisibility:report",
   windowVisibilitySnapshot: "runnerHost:windows:windowVisibility:snapshot",
+  backgroundRenderingSet: "runnerHost:windows:backgroundRendering:set",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
   perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
