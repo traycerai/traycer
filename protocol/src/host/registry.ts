@@ -881,6 +881,10 @@ import {
   providersSetAutoJudgeV10,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import {
+  chatAutoArchiveGetV10,
+  chatAutoArchiveSetV10,
+} from "@traycer/protocol/host/chat-auto-archive/contracts";
+import {
   sessionImportRunV10,
   sessionImportRunV11,
   sessionImportRunV12,
@@ -5277,6 +5281,35 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: autoPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The account-wide chat auto-archive setting, proxied like `autoPolicy.*`.
+  // Optional capabilities, never floor methods - see
+  // `chat-auto-archive/contracts.ts`.
+  "chatAutoArchive.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatAutoArchiveGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chatAutoArchive.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatAutoArchiveSetV10,
           upgradeFromPreviousVersion: null,
         },
       },

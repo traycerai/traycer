@@ -2238,6 +2238,18 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The account-wide chat auto-archive setting. Read on Settings mount, never
+  // polled: another device's save reaches this host's cache on its own
+  // 5-minute refresh, and a timer here would only wake the host for it.
+  "chatAutoArchive.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, ordered on the client by
+  // `chatAutoArchiveWriteScope` on `useChatAutoArchiveSetMutation`, exactly as
+  // `autoPolicy.set` above.
+  "chatAutoArchive.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
   // A bounded read over settled facts (Usage page + epic cost badge). The
