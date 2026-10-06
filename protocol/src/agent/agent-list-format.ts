@@ -4,42 +4,216 @@ import type {
   ListAgentsResponse,
 } from "@traycer/protocol/host";
 
+/**
+ * How much of each row a listing prints.
+ *
+ * `compact` is the row a caller needs to ADDRESS an agent and nothing else:
+ * id, `[self]` / `[archived]`, title, `surface/harness` and the capability
+ * token. It exists because a full row repeats every folder path the agent
+ * runs in, and on a task with thousands of agents those paths are most of the
+ * bytes.
+ */
+export type AgentListDetail = "full" | "compact";
+
+export type AgentListRenderOptions = {
+  readonly detail: AgentListDetail;
+  /**
+   * The window of agent rows to print: `offset` rows are skipped (an integer,
+   * 0 or more) and at most `limit` follow (an integer, 1 or more). `null`
+   * renders every row and never prints a footer.
+   */
+  readonly page: { readonly offset: number; readonly limit: number } | null;
+};
+
+/**
+ * The whole listing at full detail. Kept beside {@link formatAgentListPage} as
+ * the one-argument form every existing caller uses, and it is exactly that
+ * function with nothing cut.
+ */
 export function formatAgentListResponse(response: ListAgentsResponse): string {
-  const agents = response.agents;
+  return formatAgentListPage(response, { detail: "full", page: null });
+}
+
+/**
+ * One page of a listing.
+ *
+ * The page is cut HERE, over the rows already placed in their sections, and
+ * not by the caller slicing `response.agents`: which section a row belongs to
+ * and which tree connector it carries are both decided from the whole set, so
+ * a child on a later page is still printed under "Children" with its real
+ * connector. Slice the input instead and the second page has no caller row,
+ * and the rest of the listing falls back to one unlabelled forest.
+ *
+ * The order is the one a listing has always had, so a listing that fits on
+ * one page reads exactly as it did before pages existed.
+ */
+export function formatAgentListPage(
+  response: ListAgentsResponse,
+  options: AgentListRenderOptions,
+): string {
   const showSend = response.caller.canSendMessages;
-  // Only the direct host-enriched listing can ever render an [archived] row, so
-  // the legend entry is gated on the enrichment actually being present rather
-  // than on any row being archived - see `hasArchiveEnrichment`.
-  const showArchived = agents.some(hasArchiveEnrichment);
-  const showRunConfig = agents.some(hasRunConfigEnrichment);
-  const showOwnerHostConnectivity = agents.some(hasConnectivityEnrichment);
+  const sections = categorizeAgents(response.agents, response.caller.agentId);
+  // Counted over the rows the sections hold, which is what a page can show, so
+  // the footer's arithmetic always agrees with the rows a caller pages through.
+  const total = sections.reduce(
+    (count, section) => count + section.rows.length,
+    0,
+  );
+  const window = resolvePageWindow(options.page, total);
+  const pageSections = slicePageSections(sections, window);
+  // Every legend gate below reads the rows this call actually prints. A legend
+  // line for a marker that is on another page, or that `compact` leaves off the
+  // row, explains something the reader cannot see.
+  const rendered = pageSections.flatMap((section) =>
+    section.rows.map((row) => row.agent),
+  );
+  const full = options.detail === "full";
+  // Gated on the flag being REPORTED rather than on any row being archived -
+  // see `hasArchiveEnrichment`.
+  const showArchived = rendered.some(hasArchiveEnrichment);
+  const showRunConfig = full && rendered.some(hasRunConfigEnrichment);
+  const showOwnerHostConnectivity =
+    full && rendered.some(hasConnectivityEnrichment);
   // Gated on a row actually RENDERING the token rather than on the key being
-  // present, which is the difference from the three gates above: `@9.1` makes
-  // `sessionState` a real schema field, so it is present and `null` on every
-  // row a host with nothing to report serves - and a legend entry explaining a
-  // marker that appears nowhere is worse than no entry.
+  // present: `sessionState` is a schema field since `@9.1`, so it is present
+  // and `null` on every row a host with nothing to report serves - and a
+  // legend entry explaining a marker that appears nowhere is worse than no
+  // entry.
   //
   // Reads the same narrowing the token does, rather than testing
   // `sessionState !== null` directly: a state the allowlist rejects renders no
   // token, so testing the raw field would light a legend for a marker that
   // appears on no row - exactly the case above, one step removed.
-  const showSessionState = agents.some(
-    (agent) => readAgentSessionState(agent) !== null,
-  );
-  const body =
-    agents.length === 0
-      ? `No agents found for scope '${response.scope}'.`
-      : formatCategorizedAgents(agents, response.caller.agentId, showSend);
+  const showSessionState =
+    full && rendered.some((agent) => readAgentSessionState(agent) !== null);
+  const footer = formatAgentListFooter(window, total);
   return `${formatAgentListHeading(response)}
-${body}
+${formatAgentListBody(response, pageSections, window, total, showSend, options.detail)}
 
 ${formatAgentListLegend(
+  options.detail,
   showSend,
   showArchived,
   showRunConfig,
   showOwnerHostConnectivity,
   showSessionState,
-)}`;
+)}${footer === null ? "" : `\n\n${footer}`}`;
+}
+
+/** One printed agent row: the agent, its tree connector, and the cycle mark. */
+type AgentListRow = {
+  readonly agent: AgentSummary;
+  readonly prefix: string;
+  readonly cycle: boolean;
+};
+
+/** A labelled group of rows; `heading` is `null` for the unlabelled forest. */
+type AgentListSection = {
+  readonly heading: string | null;
+  readonly rows: readonly AgentListRow[];
+};
+
+/** Rows `start` (inclusive) to `end` (exclusive) of the listing's `total`. */
+type AgentListPageWindow = {
+  readonly start: number;
+  readonly end: number;
+  /** False for an unpaged render, which never prints a footer. */
+  readonly paged: boolean;
+};
+
+function resolvePageWindow(
+  page: AgentListRenderOptions["page"],
+  total: number,
+): AgentListPageWindow {
+  if (page === null) return { start: 0, end: total, paged: false };
+  const start = Math.min(wholeNumberAtLeast(page.offset, 0), total);
+  const end = Math.min(start + wholeNumberAtLeast(page.limit, 1), total);
+  return { start, end, paged: true };
+}
+
+/**
+ * The caller validates its own arguments; this only keeps a value that slipped
+ * past (a fraction, a negative, `NaN`) from producing a window that prints
+ * rows twice or a footer whose numbers do not add up.
+ */
+function wholeNumberAtLeast(value: number, floor: number): number {
+  return Number.isFinite(value) ? Math.max(floor, Math.trunc(value)) : floor;
+}
+
+/**
+ * The part of each section that falls inside the window. A section with no row
+ * on the page is dropped with its heading; one that is cut keeps its heading,
+ * so a row is never printed without the relationship it was listed under.
+ */
+function slicePageSections(
+  sections: readonly AgentListSection[],
+  window: AgentListPageWindow,
+): AgentListSection[] {
+  const sliced: AgentListSection[] = [];
+  let sectionStart = 0;
+  for (const section of sections) {
+    const from = Math.max(window.start - sectionStart, 0);
+    const to = Math.min(window.end - sectionStart, section.rows.length);
+    sectionStart += section.rows.length;
+    if (to <= from) continue;
+    sliced.push({
+      heading: section.heading,
+      rows: section.rows.slice(from, to),
+    });
+  }
+  return sliced;
+}
+
+function formatAgentListBody(
+  response: ListAgentsResponse,
+  pageSections: readonly AgentListSection[],
+  window: AgentListPageWindow,
+  total: number,
+  showSend: boolean,
+  detail: AgentListDetail,
+): string {
+  if (response.agents.length === 0) {
+    return `No agents found for scope '${response.scope}'.`;
+  }
+  if (window.paged && total > 0 && window.start >= total) {
+    return `No agents on this page: the offset is past the end of the listing, which has ${total} agents. Pass offset=0 for the first page.`;
+  }
+  return pageSections
+    .map((section) => {
+      const lines = section.rows
+        .map(
+          (row) =>
+            `${row.prefix}${formatAgentListLine(row.agent, showSend, detail)}${
+              row.cycle ? " [cycle]" : ""
+            }`,
+        )
+        .join("\n");
+      return section.heading === null ? lines : `${section.heading}\n${lines}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * The line that closes a listing whose page does not hold every row, or
+ * `null` when it does. Rows are never left out without the text saying so,
+ * and the line names the two arguments that make the listing smaller as well
+ * as the one that fetches the rest.
+ *
+ * An offset past the end prints no footer: the body already says so, and
+ * "Showing 451-450" would be a range that does not exist.
+ */
+function formatAgentListFooter(
+  window: AgentListPageWindow,
+  total: number,
+): string | null {
+  if (!window.paged) return null;
+  if (window.start === 0 && window.end === total) return null;
+  if (window.start >= total) return null;
+  const shown = `Showing ${window.start + 1}-${window.end} of ${total} agents`;
+  const shrink = "archived='exclude' / detail='compact' to shrink the listing.";
+  return window.end < total
+    ? `${shown}; pass offset=${window.end} for the next page, or ${shrink}`
+    : `${shown}; pass ${shrink}`;
 }
 
 /**
@@ -50,12 +224,11 @@ ${formatAgentListLegend(
  * be asked about another task, one agent can hold listings from more than one
  * and has nothing to tell them apart by.
  *
- * Read at RUNTIME rather than typed, for the same reason `archived` and
- * `ownerHostConnectivity` are on the rows: the released
- * `listAgentsResponseSchema` has no `epicId`, so a response that has been
- * through it (the CLI path) has had the key stripped and must keep the older
- * wording rather than print a task it cannot name. The direct host-side A2A
- * listing carries it.
+ * Read at RUNTIME rather than typed, for the same reason
+ * `ownerHostConnectivity` is on the rows: `listAgentsResponseSchema` has no
+ * `epicId`, so a response that has been through it (the CLI path) has had the
+ * key stripped and must keep the older wording rather than print a task it
+ * cannot name. The direct host-side A2A listing carries it.
  */
 function formatAgentListHeading(response: ListAgentsResponse): string {
   if (!("epicId" in response)) return "Agents in epic (relative to you):";
@@ -111,15 +284,19 @@ function formatSelfLocationLine(agent: AgentSummary): string {
  * anchored on the requesting agent. When the caller is not present in the
  * visible set (unexpected), the whole list falls back to a single relationship
  * forest so no agent is dropped.
+ *
+ * Returns the sections as rows rather than as text, in the order they print,
+ * so a page can be cut out of them after every row has its section and its
+ * tree connector.
  */
-function formatCategorizedAgents(
+function categorizeAgents(
   agents: readonly AgentSummary[],
   callerAgentId: string,
-  showSend: boolean,
-): string {
+): AgentListSection[] {
+  if (agents.length === 0) return [];
   const caller = agents.find((agent) => agent.id === callerAgentId) ?? null;
   if (caller === null) {
-    return renderAgentForest(agents, showSend);
+    return [{ heading: null, rows: buildAgentForestRows(agents) }];
   }
 
   const ids = new Set(agents.map((agent) => agent.id));
@@ -175,57 +352,55 @@ function formatCategorizedAgents(
   );
   const otherMembers = agents.filter((agent) => !consumed.has(agent.id));
 
-  const sections: string[] = [`You:\n${formatAgentListLine(caller, showSend)}`];
+  const sections: AgentListSection[] = [
+    { heading: "You:", rows: [flatAgentRow(caller)] },
+  ];
   if (ancestors.length === 1) {
-    sections.push(`Parent:\n${formatAgentListLine(ancestors[0], showSend)}`);
+    sections.push({ heading: "Parent:", rows: [flatAgentRow(ancestors[0])] });
   } else if (ancestors.length > 1) {
-    sections.push(
-      `Parent chain (nearest first):\n${ancestors
-        .map((ancestor) => formatAgentListLine(ancestor, showSend))
-        .join("\n")}`,
-    );
+    sections.push({
+      heading: "Parent chain (nearest first):",
+      rows: ancestors.map(flatAgentRow),
+    });
   }
   if (siblingMembers.length > 0) {
-    sections.push(`Siblings:\n${renderAgentForest(siblingMembers, showSend)}`);
+    sections.push({
+      heading: "Siblings:",
+      rows: buildAgentForestRows(siblingMembers),
+    });
   }
   if (childrenMembers.length > 0) {
-    sections.push(
-      `Children (agents you spawned):\n${renderAgentForest(
-        childrenMembers,
-        showSend,
-      )}`,
-    );
+    sections.push({
+      heading: "Children (agents you spawned):",
+      rows: buildAgentForestRows(childrenMembers),
+    });
   }
   if (otherMembers.length > 0) {
-    sections.push(
-      `Other agents (user-triggered):\n${renderAgentForest(
-        otherMembers,
-        showSend,
-      )}`,
-    );
+    sections.push({
+      heading: "Other agents (user-triggered):",
+      rows: buildAgentForestRows(otherMembers),
+    });
   }
-  return sections.join("\n\n");
+  return sections;
+}
+
+/** A row printed on its own, outside any tree: no connector, never a cycle. */
+function flatAgentRow(agent: AgentSummary): AgentListRow {
+  return { agent, prefix: "", cycle: false };
 }
 
 /**
- * Renders a flat set of agents as an indentation-tree forest. Roots are the
- * members whose (effective) parent is not itself a member of the set, so a
- * category that contains a subtree renders it nested while a category of
- * unrelated agents renders them side by side.
+ * Lays a flat set of agents out as an indentation-tree forest, one row per
+ * printed line. Roots are the members whose (effective) parent is not itself a
+ * member of the set, so a category that contains a subtree renders it nested
+ * while a category of unrelated agents renders them side by side.
  */
-function renderAgentForest(
+function buildAgentForestRows(
   members: readonly AgentSummary[],
-  showSend: boolean,
-): string {
+): AgentListRow[] {
   const ids = new Set(members.map((agent) => agent.id));
   const childrenByParent = buildChildrenByParent(members, ids);
-  return formatAgentTreeLevel(
-    childrenByParent,
-    null,
-    "",
-    showSend,
-    new Set<string>(),
-  ).join("\n");
+  return buildAgentTreeLevelRows(childrenByParent, null, "", new Set<string>());
 }
 
 function buildChildrenByParent(
@@ -264,47 +439,50 @@ function collectDescendantIds(
   return out;
 }
 
-function formatAgentTreeLevel(
+function buildAgentTreeLevelRows(
   childrenByParent: ReadonlyMap<string | null, readonly AgentSummary[]>,
   parentId: string | null,
   prefix: string,
-  showSend: boolean,
   ancestors: Set<string>,
-): string[] {
+): AgentListRow[] {
   const children = childrenByParent.get(parentId) ?? [];
-  return children.flatMap((agent, index) => {
+  return children.flatMap((agent, index): AgentListRow[] => {
     const isLast = index === children.length - 1;
     const connector = parentId === null ? "" : isLast ? "└─ " : "├─ ";
     const childPrefix = parentId === null ? "" : prefix + connector;
     const nestedPrefix =
       parentId === null ? "" : prefix + (isLast ? "   " : "│  ");
     if (ancestors.has(agent.id)) {
-      return [`${childPrefix}${formatAgentListLine(agent, showSend)} [cycle]`];
+      return [{ agent, prefix: childPrefix, cycle: true }];
     }
     ancestors.add(agent.id);
-    const lines = [
-      `${childPrefix}${formatAgentListLine(agent, showSend)}`,
-      ...formatAgentTreeLevel(
+    const rows = [
+      { agent, prefix: childPrefix, cycle: false },
+      ...buildAgentTreeLevelRows(
         childrenByParent,
         agent.id,
         nestedPrefix,
-        showSend,
         ancestors,
       ),
     ];
     ancestors.delete(agent.id);
-    return lines;
+    return rows;
   });
 }
 
-function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
+function formatAgentListLine(
+  agent: AgentSummary,
+  showSend: boolean,
+  detail: AgentListDetail,
+): string {
   const self = agent.isSelf ? " [self]" : "";
   const archived = isArchivedAgent(agent) ? " [archived]" : "";
   const parts = [
     `${agent.id}${self}${archived}${formatTitleToken(agent)}`,
     `${agent.surface}/${agent.harnessId ?? "-"}`,
   ];
-  const runConfig = formatRunConfigToken(agent);
+  const full = detail === "full";
+  const runConfig = full ? formatRunConfigToken(agent) : "";
   if (runConfig.length > 0) parts.push(runConfig);
   // The capability token describes what *the caller* can do to a row, so it is
   // meaningless on the caller's own [self] row (you don't read your own
@@ -313,6 +491,10 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   if (!agent.isSelf) {
     parts.push(formatCapabilityToken(agent, showSend));
   }
+  // A compact row stops here: where the agent runs, its model, its session and
+  // its owner host are what make a row long, and none of them is needed to
+  // address it.
+  if (!full) return parts.join(" ");
   const location = formatAgentLocation(agent);
   if (location.length > 0) parts.push(location);
   const session = formatSessionStateToken(agent);
@@ -331,7 +513,7 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
  * orchestrator enumerating its peers concluded a reaped one had died and
  * stopped addressing it. A reaped agent resumes on the very next message.
  *
- * Read straight off the row, with no `in` probe - unlike `archived` and
+ * Read straight off the row, with no `in` probe - unlike
  * `ownerHostConnectivity`, this is a real `@9.1` schema field, so the wire
  * carries it and the `@9.0 -> @9.1` upgrade path fills `null` for a host that
  * predates it.
@@ -365,9 +547,9 @@ type AgentSessionStateWord = (typeof AGENT_SESSION_STATE_WORDS)[number];
 /**
  * `sessionState` off a row, narrowed to a word the legend covers.
  *
- * Unlike `archived` and `ownerHostConnectivity` this is a real `@9.1` schema
- * field, so it survives the wire and needs no `in` probe - but the allowlist is
- * the same defence. The enum is deliberately CLOSED (widening it is a new minor
+ * Unlike `ownerHostConnectivity` this is a real `@9.1` schema field, so it
+ * survives the wire and needs no `in` probe - but the allowlist is the same
+ * defence. The enum is deliberately CLOSED (widening it is a new minor
  * with the response growth declared), so a fourth word can only reach here from
  * a host this build does not understand, and an absent key can only reach here
  * from a hand-built summary that skipped the schema. Both render as absent:
@@ -397,10 +579,9 @@ type OwnerHostConnectivityWord = (typeof OWNER_HOST_CONNECTIVITY_WORDS)[number];
 /**
  * `ownerHostConnectivity` off a row, or `null` when the row does not carry it.
  *
- * Narrowed at RUNTIME rather than typed, for the same reason `archived` is: the
- * released `AgentSummary` has no such property, so a listing that has been
- * through the wire schema has had it stripped, and this formatter renders both
- * shapes. An unrecognised value reads as absent rather than being printed
+ * Narrowed at RUNTIME rather than typed: `AgentSummary` has no such property,
+ * so a listing that has been through the wire schema has had it stripped, and
+ * this formatter renders both shapes. An unrecognised value reads as absent rather than being printed
  * verbatim - a newer host inventing a fourth word must not put an unexplained
  * token in front of a model whose legend cannot describe it.
  */
@@ -473,6 +654,7 @@ function formatCapabilityToken(agent: AgentSummary, showSend: boolean): string {
 }
 
 function formatAgentListLegend(
+  detail: AgentListDetail,
   showSend: boolean,
   showArchived: boolean,
   showRunConfig: boolean,
@@ -505,10 +687,10 @@ function formatAgentListLegend(
   // before anyone can enumerate it. So a bare "the agent is over" documented
   // the unreachable case and asserted finality about the reachable one, while
   // archiving is explicitly recoverable: a later user or A2A message
-  // unarchives and wakes the agent. The CLI is why the wording carries the
-  // whole burden - it parses through the wire schema, which has no `archived`
-  // key, so there is no `[archived]` marker on the row to contradict a
-  // finality claim in the legend.
+  // unarchives and wakes the agent. A host older than `agent.list@9.2` is why
+  // the wording carries the whole burden - its rows reach a client with
+  // `archived: null`, so there is no `[archived]` marker on the row to
+  // contradict a finality claim in the legend.
   //
   // "running does NOT mean mid-turn": `active` is the executing-right-now
   // field and this formatter never renders it, so `running` is the listing's
@@ -517,14 +699,18 @@ function formatAgentListLegend(
   const sessionState = showSessionState
     ? "\nsession: <state>: the agent's own session as its binding host sees it - running (a live session exists on that host - the agent's process is up; it does NOT say the agent is mid-turn), sleeping (no live session; it RESUMES on your next message or when the agent is opened, so a sleeping peer is still addressable and is not dead), or stopped (the agent was archived, or deleted; a stopped row you can still see is almost always the archived case, because a deleted record drops out of the listing. An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone). 'last exit' says how the last session ended - reaped (idle), user-stop, restart, or process-exit - and is display detail only: all four resume identically. A row with no session token is one this host cannot observe (another machine's agent, a GUI chat, or a record older than the field), which is not the same as stopped"
     : "";
+  // A compact row prints no location, so its legend explains none. The other
+  // three detail entries are already off for it: their gates are false.
+  const location =
+    detail === "full"
+      ? "\ndir: <path>: the working directory the agent runs in\nworktree: <path>: the agent runs in a dedicated git worktree"
+      : "";
   if (!showSend) {
     return `Legend:
 [self]: this agent, i.e. the caller of agent.list${archived}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
--: the agent has no readable transcript
-dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}
+-: the agent has no readable transcript${location}${runConfig}${sessionState}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
@@ -533,9 +719,7 @@ Sending is unavailable in this session`;
 R: the agent has a readable transcript
 S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
--: no available action
-dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}`;
+-: no available action${location}${runConfig}${sessionState}${ownerHost}`;
 }
 
 function hasRunConfigEnrichment(agent: AgentSummary): boolean {
@@ -569,25 +753,27 @@ function formatRunConfigSelfLines(agent: AgentSummary): string[] {
 }
 
 /**
- * The direct host-side A2A list enriches the released RPC row with an
- * `archived` flag before calling this formatter. The versioned `agent.list`
- * wire schema intentionally remains unchanged, so a response that has been
- * through `listAgentsResponseSchema` (the CLI path) has the key stripped and
- * carries no archive information at all.
+ * Whether this row REPORTS its archive status, which is what the legend entry
+ * is gated on.
  *
- * Presence - not truthiness - is what distinguishes the two: an enriched
- * listing whose agents are all unarchived still carries `archived: false` on
- * every row, and must keep explaining the marker, while a stripped listing must
- * never advertise a marker its schema cannot represent.
+ * `archived` is a wire field since `agent.list@9.2`: a host at or past it
+ * answers `true` or `false`, and a host that predates it is upgraded to
+ * `null`, "never asked". A hand-built row that skipped the schema may carry no
+ * key at all. Both read as not reported.
+ *
+ * A boolean - not `true` - is what lights the entry: a listing whose agents
+ * are all unarchived still carries `archived: false` on every row and must
+ * keep explaining the marker, while a listing from an older host must never
+ * advertise a marker none of its rows can show.
  */
 function hasArchiveEnrichment(agent: AgentSummary): boolean {
-  return "archived" in agent;
+  return typeof agent.archived === "boolean";
 }
 
 /**
- * Archived rows are only ever marked on the enriched surface: an absent key can
- * never be `true`, so the row marker needs no separate gate.
+ * Only an affirmative `true` marks a row. `null` and an absent key are "not
+ * reported", which is neither archived nor live, and prints nothing.
  */
 function isArchivedAgent(agent: AgentSummary): boolean {
-  return "archived" in agent && agent.archived === true;
+  return agent.archived === true;
 }

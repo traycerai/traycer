@@ -112,6 +112,15 @@ traycer worktree create --workspace /path/to/repo --branch my-feature
 
 These commands are mainly intended for Traycer-managed automation, but they are regular CLI commands and can be scripted when the host is running and the required IDs are supplied.
 
+`traycer agent list` takes two flags that shorten its output:
+
+| Flag | Effect |
+| --- | --- |
+| `--live` | Leave archived agents out. Against a host too old to report which agents are archived, the command exits 1 and says so. |
+| `--compact` | One short line per agent, without folders, model, or session detail. |
+
+With `--json`, each agent carries an `archived` field: `true`, `false`, or `null` when the host is too old to report it.
+
 ## Host Security
 
 The npm package ships the CLI bundle only. The Traycer Host is a separate signed binary distributed through GitHub Releases. Before installation, host archives are verified by checksum and minisign signature against the trust root embedded in the CLI.

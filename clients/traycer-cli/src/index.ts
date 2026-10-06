@@ -3073,12 +3073,19 @@ function registerAgentCommands(
       .option(
         "-a, --all",
         "List all agents in this Task, not just agents belonging to this user",
+      )
+      .option("--live", "Hide archived agents")
+      .option(
+        "--compact",
+        "One short line per agent, without folders, model or session detail",
       ),
     (opts) =>
       buildAgentListCommand({
         epicId: null,
         senderAgentId: null,
         all: opts.all === true,
+        live: opts.live === true,
+        compact: opts.compact === true,
       }),
   );
 
