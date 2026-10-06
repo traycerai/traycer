@@ -26,6 +26,10 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
   const showSessionState = agents.some(
     (agent) => readAgentSessionState(agent) !== null,
   );
+  // Gated on a row rendering the token, like the session entry above.
+  const showTurnState = agents.some(
+    (agent) => formatTurnStateToken(agent).length > 0,
+  );
   const body =
     agents.length === 0
       ? `No agents found for scope '${response.scope}'.`
@@ -39,6 +43,7 @@ ${formatAgentListLegend(
   showRunConfig,
   showOwnerHostConnectivity,
   showSessionState,
+  showTurnState,
 )}`;
 }
 
@@ -315,11 +320,33 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   }
   const location = formatAgentLocation(agent);
   if (location.length > 0) parts.push(location);
+  const turn = formatTurnStateToken(agent);
+  if (turn.length > 0) parts.push(turn);
   const session = formatSessionStateToken(agent);
   if (session.length > 0) parts.push(session);
   const ownerHost = formatOwnerHostToken(agent);
   if (ownerHost.length > 0) parts.push(ownerHost);
   return parts.join(" ");
+}
+
+/**
+ * Whether the agent is executing right now, so an orchestrator waiting on a
+ * silent peer can tell one that is still working from one whose turn ended
+ * (traycerai/traycer#2009).
+ *
+ * `active` is a released schema field the host fills from its activity
+ * tracker, and it is `false` for every cross-host row because the serving host
+ * cannot see another machine's turns. So the token renders on LOCAL rows only:
+ * `turn: idle` on a remote row would turn "not observable" into a claim, the
+ * same reason `session:` renders nothing for `null`.
+ *
+ * Omitted on the caller's own row, like the capability token: the question is
+ * about a peer, and a `[self] ... turn: idle` line in front of the agent that
+ * is reading it is noise at best.
+ */
+function formatTurnStateToken(agent: AgentSummary): string {
+  if (agent.isSelf || !agent.isLocal) return "";
+  return agent.active ? "turn: working" : "turn: idle";
 }
 
 /**
@@ -478,6 +505,7 @@ function formatAgentListLegend(
   showRunConfig: boolean,
   showOwnerHostConnectivity: boolean,
   showSessionState: boolean,
+  showTurnState: boolean,
 ): string {
   const archived = showArchived
     ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
@@ -510,12 +538,18 @@ function formatAgentListLegend(
   // key, so there is no `[archived]` marker on the row to contradict a
   // finality claim in the legend.
   //
-  // "running does NOT mean mid-turn": `active` is the executing-right-now
-  // field and this formatter never renders it, so `running` is the listing's
-  // only liveness word. It reports that a session exists on the binding host,
-  // which is equally true of an agent sitting idle at a prompt for an hour.
+  // "running does NOT mean mid-turn": `running` reports that a session exists
+  // on the binding host, which is equally true of an agent sitting idle at a
+  // prompt for an hour. Mid-turn is the `turn:` token's word, and that token
+  // is absent on every row this host cannot observe.
   const sessionState = showSessionState
     ? "\nsession: <state>: the agent's own session as its binding host sees it - running (a live session exists on that host - the agent's process is up; it does NOT say the agent is mid-turn), sleeping (no live session; it RESUMES on your next message or when the agent is opened, so a sleeping peer is still addressable and is not dead), or stopped (the agent was archived, or deleted; a stopped row you can still see is almost always the archived case, because a deleted record drops out of the listing. An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone). 'last exit' says how the last session ended - reaped (idle), user-stop, restart, or process-exit - and is display detail only: all four resume identically. A row with no session token is one this host cannot observe (another machine's agent, a GUI chat, or a record older than the field), which is not the same as stopped"
+    : "";
+  // "it has NOT necessarily replied": an orchestrator's question is "do I keep
+  // waiting", and idle answers only half of it - a turn that ended without the
+  // reply it owed reads idle too.
+  const turnState = showTurnState
+    ? "\nturn: <state>: whether the agent is executing right now, as this host sees it - working (a turn is running, or a terminal agent's CLI is producing output) or idle (no turn is running; it acts again only when it gets a message, and it has NOT necessarily replied to you). Your own row carries none. Any other row with no turn token runs on another machine, whose turns this host cannot observe - that is not the same as idle"
     : "";
   if (!showSend) {
     return `Legend:
@@ -524,7 +558,7 @@ function formatAgentListLegend(
 R: the agent has a readable transcript
 -: the agent has no readable transcript
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${turnState}${sessionState}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
@@ -535,7 +569,7 @@ S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}`;
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${turnState}${sessionState}${ownerHost}`;
 }
 
 function hasRunConfigEnrichment(agent: AgentSummary): boolean {

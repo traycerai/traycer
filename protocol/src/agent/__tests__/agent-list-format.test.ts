@@ -668,6 +668,122 @@ describe("session state token", () => {
   });
 });
 
+describe("turn state token", () => {
+  it("renders working or idle on a local row from `active`", () => {
+    const output = formatAgentListResponse(
+      response(
+        [
+          agent({ id: "caller", isSelf: true }),
+          agent({ id: "busy", active: true }),
+          agent({ id: "quiet", active: false }),
+        ],
+        "caller",
+      ),
+    );
+
+    expect(agentLine(output, "busy ")).toContain("turn: working");
+    expect(agentLine(output, "quiet ")).toContain("turn: idle");
+  });
+
+  it("renders no token on a non-local row, whatever `active` says", () => {
+    const output = formatAgentListResponse(
+      response(
+        [
+          agent({ id: "caller", isSelf: true }),
+          agent({ id: "remote", isLocal: false, active: true }),
+        ],
+        "caller",
+      ),
+    );
+
+    expect(agentLine(output, "remote ")).not.toContain("turn:");
+  });
+
+  it("explains the token only when a row renders it, and pins the two load-bearing phrases", () => {
+    const withToken = formatAgentListResponse(
+      response(
+        [agent({ id: "caller", isSelf: true }), agent({ id: "peer" })],
+        "caller",
+      ),
+    );
+    expect(withToken).toContain("turn: <state>:");
+    expect(withToken).toContain("Your own row carries none");
+    expect(withToken).toContain("it has NOT necessarily replied to you");
+    expect(withToken).toContain("that is not the same as idle");
+
+    const allRemote = formatAgentListResponse(
+      response(
+        [
+          agent({ id: "caller", isSelf: true, isLocal: false }),
+          agent({ id: "remote", isLocal: false, active: true }),
+        ],
+        "caller",
+      ),
+    );
+    expect(allRemote).not.toContain("turn:");
+
+    expect(formatAgentListResponse(response([], "caller"))).not.toContain(
+      "turn:",
+    );
+  });
+
+  it("renders no token on the caller's own row, and no legend line when it is the only local row", () => {
+    const output = formatAgentListResponse(
+      response(
+        [
+          agent({ id: "caller", isSelf: true, active: true }),
+          agent({ id: "remote", isLocal: false }),
+        ],
+        "caller",
+      ),
+    );
+
+    expect(agentLine(output, "caller ")).not.toContain("turn:");
+    expect(output).not.toContain("turn: <state>:");
+  });
+
+  it("places the token after the location and before the session token", () => {
+    const output = formatAgentListResponse(
+      response(
+        [
+          agent({ id: "caller", isSelf: true }),
+          agent({
+            id: "full",
+            active: true,
+            folderPaths: ["/repo/wt"],
+            isWorktree: true,
+            sessionState: "running",
+          }),
+        ],
+        "caller",
+      ),
+    );
+    const line = agentLine(output, "full ");
+
+    expect(line.indexOf("worktree:")).toBeGreaterThan(-1);
+    expect(line.indexOf("turn: working")).toBeGreaterThan(
+      line.indexOf("worktree:"),
+    );
+    expect(line.indexOf("session: running")).toBeGreaterThan(
+      line.indexOf("turn: working"),
+    );
+  });
+
+  it("carries the turn legend line when sending is unavailable", () => {
+    const output = formatAgentListResponse({
+      ...response(
+        [agent({ id: "caller", isSelf: true }), agent({ id: "peer" })],
+        "caller",
+      ),
+      caller: { agentId: "caller", canSendMessages: false },
+    });
+
+    expect(output).toContain("Sending is unavailable in this session");
+    expect(output).toContain("turn: <state>:");
+    expect(output).toContain("that is not the same as idle");
+  });
+});
+
 describe("formatAgentSelf", () => {
   it("reports the agent's own working directory", () => {
     const output = formatAgentSelf(
