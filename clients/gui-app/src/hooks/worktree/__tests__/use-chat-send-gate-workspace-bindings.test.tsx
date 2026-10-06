@@ -8,6 +8,11 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -27,17 +32,21 @@ interface BindingsFixture {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly callCount: () => number;
   readonly setFail: (next: boolean) => void;
+  readonly watchHostDirectory: () => void;
+  readonly dropHostEndpoint: () => void;
 }
 
 function createFixture(): BindingsFixture {
   const queryClient = createAppQueryClient();
   let fail = true;
   let calls = 0;
+  let hostEntry: HostDirectoryEntry = mockLocalHostEntry;
+  const directoryListeners = new Set<() => void>();
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      hostId === mockLocalHostEntry.hostId ? hostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `req-${String(calls)}`,
@@ -69,6 +78,27 @@ function createFixture(): BindingsFixture {
     callCount: () => calls,
     setFail: (next: boolean) => {
       fail = next;
+    },
+    watchHostDirectory: () => {
+      installHostConnectionRegistrySource({
+        directory: {
+          findById: (hostId) =>
+            hostId === mockLocalHostEntry.hostId ? hostEntry : null,
+          onDirectoryChanged: (listener) => {
+            directoryListeners.add(listener);
+            return {
+              dispose: () => {
+                directoryListeners.delete(listener);
+              },
+            };
+          },
+        },
+        leases: null,
+      });
+    },
+    dropHostEndpoint: () => {
+      hostEntry = { ...mockLocalHostEntry, websocketUrl: null };
+      for (const listener of directoryListeners) listener();
     },
   };
 }
@@ -107,6 +137,10 @@ function dropThenRestoreConnection(): void {
 
 function queryStatus(queryClient: QueryClient): string | undefined {
   return queryClient.getQueryCache().getAll()[0]?.state.status;
+}
+
+function errorUpdateCount(queryClient: QueryClient): number | undefined {
+  return queryClient.getQueryCache().getAll()[0]?.state.errorUpdateCount;
 }
 
 describe("useChatSendGateWorkspaceBindingsForClient", () => {
@@ -190,6 +224,7 @@ describe("useChatSendGateWorkspaceBindingsForClient on a plain window focus", ()
   afterEach(() => {
     cleanup();
     focusManager.setFocused(undefined);
+    resetHostConnectionRegistryForTest();
   });
 
   function renderGate(fixture: BindingsFixture) {
@@ -232,6 +267,30 @@ describe("useChatSendGateWorkspaceBindingsForClient on a plain window focus", ()
 
     expect(fixture.callCount()).toBe(settledCalls);
     expect(result.current.isSuccess).toBe(true);
+  });
+
+  it("does not refetch while the host has no endpoint, on the same query key", async () => {
+    const fixture = createFixture();
+    fixture.watchHostDirectory();
+    const { result } = renderGate(fixture);
+    await waitFor(() => expect(result.current.isError).toBe(true), {
+      timeout: RETRY_SETTLE_TIMEOUT_MS,
+    });
+    fixture.setFail(false);
+
+    fixture.dropHostEndpoint();
+
+    await waitFor(() => expect(result.current.isEnabled).toBe(false));
+    expect(result.current.isError).toBe(true);
+    const settledCalls = fixture.callCount();
+    const settledErrors = errorUpdateCount(fixture.queryClient);
+
+    focusWindowWithoutVisibilityChange();
+    await flush();
+
+    expect(fixture.callCount()).toBe(settledCalls);
+    expect(errorUpdateCount(fixture.queryClient)).toBe(settledErrors);
+    expect(result.current.isError).toBe(true);
   });
 
   it("sends one request for several observers of the same failed entry", async () => {

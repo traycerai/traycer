@@ -131,9 +131,11 @@ export function useResolvedWorkspaceFolders(
   });
   // The focus option follows page visibility, which a plain return to a
   // window that stayed visible never changes; a failed resolution is the case
-  // whose hint promises that return retries.
+  // whose hint promises that return retries. `isEnabled` carries both this
+  // query's own condition and the host-readiness gate `useHostQuery` adds,
+  // which a manual refetch would otherwise skip.
   useRetryFailedQueryOnWindowFocus({
-    enabled: repoIdentifiers.length > 0,
+    enabled: query.isEnabled,
     isError: query.isError,
     refetch: query.refetch,
   });

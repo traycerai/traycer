@@ -13,6 +13,8 @@ import { useEffect, useEffectEvent } from "react";
  * plain return to the app.
  *
  * A settled query is left alone, so this adds no request on the success path.
+ * Pass the query's own `isEnabled` as `enabled`: a manual refetch ignores the
+ * `enabled` option, so this is the only place a disabled query is refused.
  * `cancelRefetch: false` joins a fetch already in flight: several observers of
  * one cache entry, or the focus manager firing for the same return, send one
  * request.

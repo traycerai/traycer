@@ -74,8 +74,10 @@ export function useChatSendGateWorkspaceBindingsForClient(args: {
   });
   // The option above covers a page that was hidden and shown again; a plain
   // return to a window that stayed visible needs the window's own event.
+  // `isEnabled`, not `args.enabled`: it also carries the host-readiness gate
+  // `useHostQuery` adds, which a manual refetch would otherwise skip.
   useRetryFailedQueryOnWindowFocus({
-    enabled: args.enabled,
+    enabled: query.isEnabled,
     isError: query.isError,
     refetch: query.refetch,
   });
