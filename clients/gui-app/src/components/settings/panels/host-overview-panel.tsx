@@ -1799,6 +1799,13 @@ export function HostOverviewPanel(props: {
             }
       }
       inFlight={inFlightKind !== null}
+      // The app in THIS window, so only beside the host on this machine. Same
+      // snapshot the header's update button reads.
+      desktopApp={
+        host.isLocalMachine && desktopUpdates.bridge !== null
+          ? { bridge: desktopUpdates.bridge, snapshot: desktopUpdates.snapshot }
+          : null
+      }
       // An account write: no route needed, so it survives an outage.
       autoUpdate={
         registryItem === null

@@ -193,7 +193,7 @@ function buildDetailRows(
   snapshot: DesktopSupportSnapshot,
 ): readonly (readonly [string, string])[] {
   return [
-    ["Version", snapshot.appVersion],
+    ["App version", snapshot.appVersion],
     ["Signed In", formatSignedInUser(snapshot)],
     ["Support", snapshot.supportEmail],
     ["Platform", `${snapshot.platform} ${snapshot.arch}`],
@@ -201,7 +201,7 @@ function buildDetailRows(
     ["Chrome", snapshot.versions.chrome],
     ["Node", snapshot.versions.node],
     [
-      "Host",
+      "Host version",
       snapshot.host.status === "ready"
         ? `${snapshot.host.version ?? "unknown"} (pid ${
             snapshot.host.pid ?? "unknown"
