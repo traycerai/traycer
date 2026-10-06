@@ -611,7 +611,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     await screen.findByTestId("host-busy-force-defer-dialog");
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(activateInstalled).toHaveBeenCalledWith(true);
+      expect(activateInstalled).toHaveBeenCalledWith(true, false);
     });
     expect(applyStaged).toHaveBeenCalledTimes(1);
   });

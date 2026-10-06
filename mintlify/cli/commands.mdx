@@ -252,6 +252,9 @@ Agent commands are for agents that Traycer launches. They read the Task and the 
 | --- | --- |
 | `traycer agent list` | List your agents in the Task, with the settings each one runs with. |
 | `traycer agent list --all` | Include other people's agents in the Task. |
+| `traycer agent list --live` | Leave archived agents out. If the host is too old to report which agents are archived, the command fails and says so; update the host, or run it without `--live`. |
+| `traycer agent list --compact` | Print one short line per agent, without folders, model, or session detail. |
+| `traycer agent list --json` | Each agent carries `archived`: `true`, `false`, or `null` when the host is too old to report it. |
 | `traycer agent create` | Create a child agent of the calling agent. See [Create Options](#create-options). |
 | `traycer agent fork --agent-id <id>` | Copy an agent on this host into a new agent, starting from its latest checkpoint. Works for Chat-interface agents and Claude Code Terminal agents. See [Fork Options](#fork-options). |
 | `traycer agent configure` | Change the coding agent, model, and account a Chat-interface agent uses from its next turn. See [Configure Options](#configure-options). |

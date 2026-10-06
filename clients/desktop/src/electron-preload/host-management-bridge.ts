@@ -58,6 +58,7 @@ export interface HostManagementBridgeSurface {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    retryWhenIdle: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,
@@ -142,9 +143,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         trigger,
         force,
       }) as Promise<MutationOutcome<ApplyStagedOk>>,
-    activateInstalled: (force) =>
+    activateInstalled: (force, retryWhenIdle) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostActivateInstalled, {
         force,
+        retryWhenIdle,
       }) as Promise<MutationOutcome<ActivateInstalledOk>>,
     installVersion: (pin, force) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostInstallVersion, {

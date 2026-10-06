@@ -190,6 +190,52 @@ describe("workspace folder resolution cache", () => {
     });
   });
 
+  it("distinguishes a failed check and recovers on a plain window focus", async () => {
+    const fixture = createFixture({
+      failedResolveRequests: new Set([1]),
+      holdFirstResolution: false,
+      startsResolved: true,
+    });
+    const source = workspaceSource(fixture);
+    const rendered = renderHook(
+      () => {
+        const resolved = useResolvedWorkspaceFolders(
+          source,
+          fixture.client,
+          null,
+        );
+        return {
+          resolved,
+          availability: deriveFolderlessAllowedWorkspaceAvailability(
+            resolved.folders,
+            resolved.isLoading,
+            resolved.isError,
+          ),
+        };
+      },
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.resolved.isError).toBe(true);
+    });
+    expect(rendered.result.current.availability).toEqual({
+      status: "blocked",
+      disabledHint: WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+    });
+
+    expect(document.visibilityState).toBe("visible");
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.resolved.folders).toEqual([
+        expect.objectContaining({ kind: "resolved" }),
+      ]);
+    });
+  });
+
   it("blocks when refreshing a cached resolution fails", async () => {
     const fixture = createFixture({
       failedResolveRequests: new Set([2]),

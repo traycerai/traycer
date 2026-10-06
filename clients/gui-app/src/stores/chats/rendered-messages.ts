@@ -212,6 +212,15 @@ export interface RenderedMessagesInput {
    */
   readonly runStatus: ChatRunStatus;
   /**
+   * Whether the host reports the chat as anything but idle - the RAW
+   * `runStatus` that {@link RenderedMessagesInput.runStatus} deliberately is
+   * not. Read for one thing: a background-outcome note at the transcript's
+   * tail does not say "Agent not resumed" while the host is still working
+   * toward handing that outcome to the agent (`withOwedAutonomousResume`).
+   * Absent means idle, so a caller with no live session draws every ending.
+   */
+  readonly chatWorking?: boolean;
+  /**
    * Chat-tile binding identity, threaded straight into `buildSetupCardRows` so
    * a synthesized setup-card row can route its per-workspace retry mutation and
    * scope the terminal-liveness query. These are tile-owned and stable across
@@ -1488,7 +1497,7 @@ export function useRenderedMessages(
     ],
   );
 
-  return useMemo(() => {
+  const rows = useMemo(() => {
     // A withdrawn opening has left the conversation - its prompt is back in the
     // composer - so neither its row nor an optimistic copy of it is drawn, from
     // the moment the host's delivery view says so. The host's own removal
@@ -1673,6 +1682,46 @@ export function useRenderedMessages(
     turnPauseAccounting,
     displayContext,
   ]);
+  // A memo of its own, off the one above: `chatWorking` flips with every
+  // background edge and must not rebuild the row list to restamp one row.
+  const chatWorking = input.chatWorking ?? false;
+  return useMemo(
+    () => withOwedAutonomousResume(rows, chatWorking),
+    [rows, chatWorking],
+  );
+}
+
+/**
+ * Marks a background-outcome note at the transcript's tail as still owed to
+ * the agent while the host reports the chat working.
+ *
+ * A notification row no provider turn has adopted is the same row whether the
+ * resume is still coming or never will: nothing durable tells the two apart.
+ * The chat's own run state does. The host counts a settled outcome it has yet
+ * to hand over as work, so while that reads true the row has not ended and
+ * must not say it did; once the chat goes idle, or anything follows the row,
+ * it has.
+ *
+ * Only the last row is read. Background work unrelated to the note also keeps
+ * the chat working, and that is why this holds the ending back rather than
+ * asserting a resume: all it knows is that the agent may yet be woken.
+ */
+function withOwedAutonomousResume(
+  rows: ReadonlyArray<ChatMessageModel>,
+  chatWorking: boolean,
+): ReadonlyArray<ChatMessageModel> {
+  if (!chatWorking) return rows;
+  const last = rows.at(-1);
+  if (
+    last === undefined ||
+    last.role !== "assistant" ||
+    last.turnHasOnlyAutonomousResumeSegments !== true ||
+    last.showCompletionFooter !== false ||
+    last.stopped !== null
+  ) {
+    return rows;
+  }
+  return [...rows.slice(0, -1), { ...last, autonomousResumeOwed: true }];
 }
 
 /**

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentListCommand } from "../agent-list";
 import { callHostRpc } from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 
 const loggerMock = vi.hoisted(() => ({
@@ -59,6 +60,10 @@ const LEGACY_LIST_RESPONSE = {
       // carry it. A GUI chat has no PTY session, so `null` is its answer.
       sessionState: null,
       lastExit: null,
+      // `agent.list@9.2`'s archive flag. The `@9.1 -> @9.2` upgrade fills
+      // `null` for an older host ("never asked"), and this mock stands in for
+      // the transport that has already run that chain.
+      archived: null,
     },
   ],
 };
@@ -79,8 +84,9 @@ worktree: <path>: the agent runs in a dedicated git worktree`;
 
 // Key ORDER is load-bearing: the assertions below compare `JSON.stringify`
 // bytes, and zod emits in schema-declaration order - `runConfig` comes from
-// the `@9.0` row and the session facet extends it at `@9.1`, so the facet
-// trails `runConfig` however the fixture above happens to be written.
+// the `@9.0` row, the session facet extends it at `@9.1` and `archived` at
+// `@9.2`, so they trail `runConfig` in that order however the fixture above
+// happens to be written.
 const EXPECTED_DEFAULT_FILLED_DATA = {
   ...LEGACY_LIST_RESPONSE,
   agents: [
@@ -89,6 +95,7 @@ const EXPECTED_DEFAULT_FILLED_DATA = {
       runConfig: null,
       sessionState: null,
       lastExit: null,
+      archived: null,
     },
   ],
 };
@@ -120,7 +127,43 @@ function buildCommand() {
     epicId: "epic-1",
     senderAgentId: "agent-parent",
     all: false,
+    live: false,
+    compact: false,
   });
+}
+
+function buildCommandWith(flags: { live: boolean; compact: boolean }) {
+  return buildAgentListCommand({
+    epicId: "epic-1",
+    senderAgentId: "agent-parent",
+    all: false,
+    live: flags.live,
+    compact: flags.compact,
+  });
+}
+
+/** The legacy listing with the caller row plus one extra row per entry. */
+function listingWith(
+  callerArchived: boolean | null,
+  extra: ReadonlyArray<{
+    id: string;
+    archived: boolean | null;
+  }>,
+) {
+  return {
+    ...LEGACY_LIST_RESPONSE,
+    agents: [
+      { ...LEGACY_LIST_RESPONSE.agents[0], archived: callerArchived },
+      ...extra.map((row) => ({
+        ...LEGACY_LIST_RESPONSE.agents[0],
+        id: row.id,
+        isSelf: false,
+        parentId: "agent-parent",
+        title: row.id,
+        archived: row.archived,
+      })),
+    ],
+  };
 }
 
 beforeEach(() => {
@@ -200,25 +243,20 @@ describe("agent list run config", () => {
 });
 
 describe("agent list session facet", () => {
-  it("describes an archived row with no [archived] marker to lean on", async () => {
-    // This command is the WORST surface for the `stopped` wording, and the
-    // reason is structural: it renders the response it just parsed through
-    // `listAgentsResponseSchema`, which has no `archived` key, so zod strips
-    // it. `sessionState` is a real `@9.1` field and survives. An archived
-    // agent therefore reaches a CLI reader as a bare `session: stopped` with
-    // no `[archived]` marker and no `[archived]` legend line anywhere - the
-    // legend clause is the ONLY thing said about that row, and the reader
-    // cannot tell archived from deleted from the row itself.
+  it("renders an archived row with its marker and legend line, and keeps the not-over wording", async () => {
+    // `archived` is a wire field since `agent.list@9.2`, so the schema this
+    // command parses through keeps it: an archived agent reaches a CLI reader
+    // with `[archived]` on the row, the legend line explaining it, and
+    // `archived: true` in `--json`.
     //
-    // That is why the clause may not assert finality: it shipped as "the agent
-    // is over as a record", which on this surface is an unqualified death
-    // claim about an agent a message would wake.
+    // The `stopped` clause still may not assert finality: it shipped as "the
+    // agent is over as a record", which is an unqualified death claim about an
+    // agent a message would wake.
     rpcMock.mockResolvedValue({
       ...LEGACY_LIST_RESPONSE,
       agents: [
         {
           ...LEGACY_LIST_RESPONSE.agents[0],
-          // Present on the host-enriched listing, absent from the wire schema.
           archived: true,
           sessionState: "stopped",
           lastExit: null,
@@ -228,12 +266,198 @@ describe("agent list session facet", () => {
 
     const result = await buildCommand()(makeCtx(false));
 
-    expect(result.data).not.toHaveProperty("agents.0.archived");
-    expect(result.human).not.toContain("[archived]");
+    expect(result.data).toHaveProperty("agents.0.archived", true);
+    expect(result.human).toContain("[archived]");
+    expect(result.human).toContain("\n[archived]: the agent/chat is archived");
     expect(result.human).toContain("session: stopped");
     expect(result.human).toContain(
       "An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone",
     );
     expect(result.human).not.toContain("the agent is over as a record");
+  });
+
+  it("says no [archived] anywhere for an older host, and still carries the not-over wording", async () => {
+    // A host older than `agent.list@9.2` reaches the CLI with `archived: null`
+    // on every row: there is no marker to draw and no legend line to explain
+    // one, so the `stopped` clause is the ONLY thing said about the row and
+    // must keep qualifying it.
+    rpcMock.mockResolvedValue({
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        {
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          archived: null,
+          sessionState: "stopped",
+          lastExit: null,
+        },
+      ],
+    });
+
+    const result = await buildCommand()(makeCtx(false));
+
+    expect(result.data).toHaveProperty("agents.0.archived", null);
+    expect(result.human).not.toContain("[archived]");
+    expect(result.human).toContain("session: stopped");
+    expect(result.human).toContain(
+      "An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone",
+    );
+  });
+});
+
+describe("agent list archived flag in --json", () => {
+  it("carries archived as true, false and null exactly as sent", async () => {
+    rpcMock.mockResolvedValue(
+      listingWith(null, [
+        { id: "gone", archived: true },
+        { id: "here", archived: false },
+        { id: "unknown", archived: null },
+      ]),
+    );
+
+    const result = await buildCommand()(makeCtx(true));
+
+    expect(result.data).toMatchObject({
+      agents: [
+        { id: "agent-parent", archived: null },
+        { id: "gone", archived: true },
+        { id: "here", archived: false },
+        { id: "unknown", archived: null },
+      ],
+    });
+  });
+});
+
+describe("agent list --live", () => {
+  it("drops archived rows from both the data and the text, and leaves the request unchanged", async () => {
+    rpcMock.mockResolvedValue(
+      listingWith(false, [
+        { id: "gone", archived: true },
+        { id: "here", archived: false },
+      ]),
+    );
+
+    const result = await buildCommandWith({ live: true, compact: false })(
+      makeCtx(false),
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith("agent.list", {
+      epicId: "epic-1",
+      senderAgentId: "agent-parent",
+      scope: "user",
+    });
+    expect(result.data).toMatchObject({
+      agents: [{ id: "agent-parent" }, { id: "here" }],
+    });
+    expect(JSON.stringify(result.data)).not.toContain('"gone"');
+    expect(result.human).toContain("here ");
+    expect(result.human).not.toContain("gone");
+    expect(result.human).not.toContain("[archived] ");
+  });
+
+  it("rejects with HOST_UNSUPPORTED when any row's archived is null", async () => {
+    rpcMock.mockResolvedValue(LEGACY_LIST_RESPONSE);
+
+    const run = buildCommandWith({ live: true, compact: false })(
+      makeCtx(false),
+    );
+
+    await expect(run).rejects.toBeInstanceOf(CliError);
+    await expect(run).rejects.toMatchObject({
+      exitCode: 1,
+      code: CLI_ERROR_CODES.HOST_UNSUPPORTED,
+      message: expect.stringContaining(
+        "this Host does not report archive status yet",
+      ),
+    });
+    await expect(run).rejects.toMatchObject({
+      message: expect.stringContaining("Update the Host, or drop --live"),
+    });
+  });
+
+  it("rejects a mixed listing, one row false and one null", async () => {
+    rpcMock.mockResolvedValue({
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        { ...LEGACY_LIST_RESPONSE.agents[0], archived: false },
+        {
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          id: "agent-old",
+          isSelf: false,
+          archived: null,
+        },
+      ],
+    });
+
+    await expect(
+      buildCommandWith({ live: true, compact: false })(makeCtx(false)),
+    ).rejects.toMatchObject({
+      exitCode: 1,
+      code: CLI_ERROR_CODES.HOST_UNSUPPORTED,
+    });
+  });
+
+  it("does not reject archived: null rows without --live", async () => {
+    rpcMock.mockResolvedValue(LEGACY_LIST_RESPONSE);
+
+    await expect(
+      buildCommandWith({ live: false, compact: false })(makeCtx(false)),
+    ).resolves.toMatchObject({ exitCode: 0 });
+  });
+});
+
+describe("agent list --compact", () => {
+  it("drops folders and model from the text and leaves the data alone", async () => {
+    rpcMock.mockResolvedValue({
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        {
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          runConfig: {
+            model: { kind: "concrete", slug: "gpt-5.6-codex" },
+            reasoningEffort: null,
+            fastMode: null,
+          },
+        },
+      ],
+    });
+
+    const full = await buildCommand()(makeCtx(false));
+    const compact = await buildCommandWith({ live: false, compact: true })(
+      makeCtx(false),
+    );
+
+    expect(full.human).toContain("dir: /repo");
+    expect(full.human).toContain("model: gpt-5.6-codex");
+    expect(compact.human).not.toContain("dir:");
+    expect(compact.human).not.toContain("model:");
+    expect(compact.human).toContain('agent-parent [self] "Parent" gui/codex');
+    expect(compact.data).toEqual(full.data);
+  });
+
+  it("combines with --live: archived rows go, the rest print compact", async () => {
+    rpcMock.mockResolvedValue({
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        { ...LEGACY_LIST_RESPONSE.agents[0], archived: false },
+        {
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          id: "gone",
+          isSelf: false,
+          parentId: "agent-parent",
+          title: "gone",
+          archived: true,
+        },
+      ],
+    });
+
+    const result = await buildCommandWith({ live: true, compact: true })(
+      makeCtx(false),
+    );
+
+    expect(result.data).toMatchObject({ agents: [{ id: "agent-parent" }] });
+    expect(JSON.stringify(result.data)).not.toContain('"gone"');
+    expect(result.human).not.toContain("gone");
+    expect(result.human).not.toContain("dir:");
+    expect(result.human).toContain('agent-parent [self] "Parent" gui/codex');
   });
 });

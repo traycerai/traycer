@@ -22,6 +22,7 @@ import {
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV90,
+  listAgentsResponseSchemaV91,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -120,7 +121,12 @@ const FIXTURES = {
   // which this row stopped being when major 9 opened against live under a
   // major-8 name. `@9.0` holds the pre-session-facet bytes it used to dump.
   "agent.list@9.0": dump(listAgentsResponseSchemaV90),
-  "agent.list@9.1": dump(listAgentsResponseSchema),
+  // 9.1 froze when 9.2 opened to put `archived` on the row. It is RELEASED
+  // (`host-v1.4.2` registers `agent.list@9.1`), so it names its own frozen
+  // schema and must not regenerate. 9.2 is the head and dumps the live schema,
+  // so the next attempt to grow the row goes red on that line.
+  "agent.list@9.1": dump(listAgentsResponseSchemaV91),
+  "agent.list@9.2": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this

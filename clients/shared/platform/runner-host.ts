@@ -2656,9 +2656,14 @@ export interface IHostManagement {
   // (packaged-macOS post-commit activation, or clearing
   // pendingActivation/activationUnknown debt). `force` is the Force
   // continuation after a busy `applyStaged`/pin outcome that carried
-  // `continuation: "activate"`.
+  // `continuation: "activate"`. `retryWhenIdle` is that dialog's other
+  // answer, "Restart when idle": the idle-gated attempt is made now, and when
+  // it settles `busy` the shell keeps making it until the host is idle, so a
+  // `busy` outcome here means "scheduled", not "refused". Ignored with
+  // `force`, which supersedes a scheduled restart.
   readonly activateInstalled: (
     force: boolean,
+    retryWhenIdle: boolean,
   ) => Promise<MutationOutcome<ActivateInstalledOk>>;
   // Pins an explicit version (incl. downgrades), bypassing the staged
   // update. `force` is the Force continuation after a busy outcome that
