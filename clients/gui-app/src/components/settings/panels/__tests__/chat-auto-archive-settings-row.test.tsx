@@ -263,6 +263,29 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
     expectWrite({ ...NEVER_SAVED_WRITE, idleSeconds: 7200 });
   });
 
+  it("does not commit on an Enter that confirms an IME composition", () => {
+    harness.query.data = NEVER_SAVED;
+    renderRow();
+    const input = idleInput();
+    input.focus();
+    fireEvent.change(input, { target: { value: "7200" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(document.activeElement).toBe(input);
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  it("clamps the never-saved default into the host's bounds", () => {
+    harness.query.data = {
+      policy: null,
+      bounds: { minSeconds: 7200, maxSeconds: 9000 },
+    };
+    renderRow();
+    expect(idleInput().value).toBe("7200");
+    fireEvent.click(mainSwitch());
+    expectWrite({ ...NEVER_SAVED_WRITE, enabled: true, idleSeconds: 7200 });
+  });
+
   it("refuses an out-of-range or non-integer idle-seconds value without mutating", () => {
     harness.query.data = NEVER_SAVED;
     renderRow();

@@ -20,7 +20,7 @@ import { useChatAutoArchivePolicyQuery } from "@/hooks/chat-auto-archive/use-cha
 import { useChatAutoArchiveSetMutation } from "@/hooks/chat-auto-archive/use-chat-auto-archive-set-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import {
-  CHAT_AUTO_ARCHIVE_DEFAULT_IDLE_SECONDS,
+  chatAutoArchiveShownPolicy,
   CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS,
   chatAutoArchiveStatusLine,
   idleSecondsError,
@@ -57,12 +57,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   // read is disabled there), a read in flight and a failed read: every
   // control waits for a policy it can write over.
   const data = query.data;
-  const policy = data?.policy ?? null;
-  const current: ChatAutoArchiveSetRequest = {
-    enabled: policy?.enabled ?? false,
-    includeUserCreated: policy?.includeUserCreated ?? false,
-    idleSeconds: policy?.idleSeconds ?? CHAT_AUTO_ARCHIVE_DEFAULT_IDLE_SECONDS,
-  };
+  const current = chatAutoArchiveShownPolicy(data);
   const disabled = data === undefined || setPolicy.isPending;
 
   // `onRejected` runs after the hook's own error toast, for the one write
@@ -244,7 +239,17 @@ function IdleSecondsField(props: {
           onChange={(event) => onChange?.(event.target.value)}
           onBlur={(event) => onCommit?.(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
+            // An Enter that confirms an IME composition is the IME's, not a
+            // commit (the drafts dialog's guard, copied).
+            if (
+              event.key !== "Enter" ||
+              event.nativeEvent.isComposing ||
+              // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
+              event.keyCode === 229
+            ) {
+              return;
+            }
+            event.currentTarget.blur();
           }}
         />
         <span className="text-ui-sm text-muted-foreground">seconds</span>

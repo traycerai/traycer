@@ -5,14 +5,55 @@
  */
 import type {
   ChatAutoArchiveBounds,
+  ChatAutoArchiveGetResponse,
   ChatAutoArchiveSetRequest,
 } from "@traycer/protocol/host/chat-auto-archive/contracts";
 
 /** The threshold shown for an account that has never saved a policy. */
 export const CHAT_AUTO_ARCHIVE_DEFAULT_IDLE_SECONDS = 3600;
 
+/**
+ * The never-saved threshold, clamped into the host's bounds. The switches
+ * write the shown threshold, so a default outside the bounds would be a write
+ * the host refuses. `null` bounds (read not landed) show the plain default;
+ * every control is disabled then.
+ */
+export function chatAutoArchiveDefaultIdleSeconds(
+  bounds: ChatAutoArchiveBounds | null,
+): number {
+  if (bounds === null) return CHAT_AUTO_ARCHIVE_DEFAULT_IDLE_SECONDS;
+  return Math.min(
+    Math.max(CHAT_AUTO_ARCHIVE_DEFAULT_IDLE_SECONDS, bounds.minSeconds),
+    bounds.maxSeconds,
+  );
+}
+
 export const CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS =
   "Couldn't read the auto-archive setting from this host.";
+
+/**
+ * What the row shows and every write sends: the saved policy, or for a
+ * never-saved account the defaults (off, agent-created only, the threshold
+ * clamped into the host's bounds). `undefined` data (read not landed) yields
+ * the defaults too; every control is disabled then.
+ */
+export function chatAutoArchiveShownPolicy(
+  data: ChatAutoArchiveGetResponse | undefined,
+): ChatAutoArchiveSetRequest {
+  const policy = data?.policy ?? null;
+  if (policy !== null) {
+    return {
+      enabled: policy.enabled,
+      includeUserCreated: policy.includeUserCreated,
+      idleSeconds: policy.idleSeconds,
+    };
+  }
+  return {
+    enabled: false,
+    includeUserCreated: false,
+    idleSeconds: chatAutoArchiveDefaultIdleSeconds(data?.bounds ?? null),
+  };
+}
 
 /** `null` when `draft` is a whole number of seconds inside `bounds`. */
 export function idleSecondsError(

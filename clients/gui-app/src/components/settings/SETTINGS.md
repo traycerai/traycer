@@ -1178,8 +1178,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       own: its label and keywords (archive, idle, inactive, auto, cleanup,
       timer) contribute to the Agents group. Controls: the main switch
       (`enabled`), a seconds field (whole number inside the host's `bounds`,
-      committed on blur or Enter, an inline error and no write otherwise,
-      editable while the switch is off, 3600 for a never-saved account), and
+      committed on blur or Enter (not an Enter that confirms an IME
+      composition), an inline error and no write otherwise,
+      editable while the switch is off, 3600 clamped into the host's
+      `bounds` for a never-saved account, which is also what the switches
+      write), and
       under the description "Also archive chats I created"
       (`includeUserCreated`, off by default; terminal agents count as the
       user's). Every write sends all three fields. The status line is the
