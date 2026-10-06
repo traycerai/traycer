@@ -387,6 +387,7 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
           answer: answerWithUpdatable(),
           inFlight,
         }}
+        desktopApp={null}
         autoUpdate={null}
         versions={pickerProps()}
         inFlight={inFlight}
@@ -755,6 +756,7 @@ describe("<HostBusyForceDeferDialog/> Force is destructive only where it consent
     return (
       <HostBusyForceDeferDialog
         purpose="restart"
+        idleAction={null}
         open
         title="Host is busy"
         message="host-a is busy running 2 sessions."

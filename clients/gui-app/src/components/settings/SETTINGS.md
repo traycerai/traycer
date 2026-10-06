@@ -5797,6 +5797,66 @@ set-state-in-effect` forbids the effect form, and an effect would also
     - **No auto-update caption.** The switch is the next row on the same tab
       and states the policy itself.
 
+  - **Updates ▸ Traycer Desktop row** (`HostOverviewDesktopAppRow` in
+    `host-overview-desktop-app-row.tsx`), under the answer card and above the
+    auto-update row. It is the APP's update, not the host's: the two are
+    separate artifacts that update separately, and this is the page where a
+    host update happens, so a host that just moved to a new version would
+    otherwise sit above an app still on the old one with nothing saying the
+    app has an update of its own.
+    - **Gate.** `host.isLocalMachine` and a desktop updater bridge
+      (`useDesktopAppUpdates().bridge !== null`), decided in the panel. A
+      remote host's page says nothing about the app in this window, and a
+      browser has no app to update. It needs no route to the host, so it
+      stays while the host cannot be reached. Nothing is drawn until the
+      updater's first snapshot names a version.
+    - **One snapshot, no machinery.** It reads the snapshot the header's
+      update button and the update toast read, and runs the same download
+      (`bridge.downloadUpdate()`) and the same guarded restart
+      (`requestAppUpdateInstall`), so the three cannot disagree.
+
+      | Updater state                                         | State line            | Control                             |
+      | ----------------------------------------------------- | --------------------- | ----------------------------------- |
+      | a finished check found nothing                        | `Up to date (vX)`     | none                                |
+      | `available`                                           | `vY available`        | Download                            |
+      | `downloading`                                         | `Downloading N%`      | Download, waiting, with a spinner   |
+      | `ready`                                               | `vY ready`            | Restart                             |
+      | `ready` with `installGuidance`                        | `vY ready`            | Finish update (the guidance dialog) |
+      | `error` with `installGuidance`                        | `Update not finished` | Finish update (the guidance dialog) |
+      | anything else (checking, a plain error, no check yet) | `vX`                  | none                                |
+
+    - **"Up to date" is a claim about a check.** The updater publishes
+      `up-to-date` only for a check the user asked for; an automatic check
+      that finds nothing returns to `idle` with the check time and the feed's
+      latest version set. Both read "Up to date". An `idle` without them, and
+      every other state, shows the version and claims nothing.
+    - **An `error` carrying `installGuidance` keeps Finish update, and
+      names no version.** A Linux deb/rpm install whose privilege prompt
+      failed reports the failure AND the steps that finish the downloaded
+      file by hand, so the row keeps Finish update, as the update toast keeps
+      View instructions. Its state line is "Update not finished", never
+      "vY ready": the updater holds that guidance until the staged update is
+      discarded, so it can outlive the install it came from (a newer version
+      found later replaces `latestVersion`, and if that download fails the
+      guidance is for the older file). The snapshot does not tell the two
+      apart, so the row claims neither. `ready` does name its version. A
+      blocked install (`installBlockedReason`) keeps its control disabled
+      with the reason as the row's line.
+    - **One button, and one standing live region.** Download, Download
+      waiting, and Restart are the same button, so the focus of whoever
+      pressed it is not dropped when the download starts. While it waits
+      (the download, the restart) it is `aria-disabled` with its press
+      ignored, NOT natively `disabled`: Chromium moves the focus to the
+      document the moment a focused button becomes `disabled` and does not
+      return it (measured in the app's engine; jsdom keeps it, so no Vitest
+      case can see the difference). Native `disabled` is only the blocked
+      install. When the control does go (a failed download, a withdrawn
+      candidate) while it holds the focus, the row itself takes it. The
+      row's `role="status"` region is always mounted and empty when quiet,
+      for the reason the answer card's is; it says the download began (never
+      its percentage), that the update is ready (and, when it is, that
+      finishing needs a manual step), and that the restart began. A failure
+      is the update toast's to report, here as everywhere.
   - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
     stays at panel level, so it opens over whichever tab is showing.
   - **One component per tab**, each drawing what the panel hands it; the
@@ -5810,12 +5870,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
     badges (the Ports count, the Installation dot) hang on `HostOverviewTabs`'
     `badges`.
 
-    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-    | ------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last |
-    | Updates      | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                           |
-    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                              |
-    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                               |
+    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+    | ------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                      |
+    | Updates      | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal |
+    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                                                                                                                   |
+    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                                                                                                                    |
 
   - **Ports is on every host, in every state.** There used to be a card that
     was absent whenever nothing was forwarded and on hosts without port

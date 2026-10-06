@@ -762,14 +762,14 @@ describe("<TabOverflowRow />", () => {
 });
 
 describe("<ResourceReadingsRow /> (G7)", () => {
-  it("draws the shipped default: on", () => {
+  it("draws the shipped default: off", () => {
     render(<ResourceReadings />);
 
     expect(
       screen
         .getByRole("switch", { name: "Readings on agent rows" })
         .getAttribute("aria-checked"),
-    ).toBe("true");
+    ).toBe("false");
   });
 
   it("stays operable while the Resource monitor itself is Hidden - it tunes the sidebar, not the monitor", () => {
@@ -786,7 +786,7 @@ describe("<ResourceReadingsRow /> (G7)", () => {
     fireEvent.click(toggle);
 
     expect(useLayoutStore.getState().overrides.resourceMonitor?.agentRows).toBe(
-      false,
+      true,
     );
     // The monitor's own Hidden is untouched by this write.
     expect(useLayoutStore.getState().overrides.resourceMonitor?.shown).toBe(

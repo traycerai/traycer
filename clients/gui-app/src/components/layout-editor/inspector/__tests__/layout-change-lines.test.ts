@@ -136,7 +136,7 @@ describe("a value stored in another region's bag is named for the row that sets 
 
   it("reads the Resource monitor's agentRows as the Sidebar's readings row", () => {
     const result = lines(
-      snapshotWithOverrides({ resourceMonitor: { agentRows: false } }),
+      snapshotWithOverrides({ resourceMonitor: { agentRows: true } }),
     );
 
     expect(result.map((line) => line.label)).toEqual([

@@ -744,6 +744,14 @@ export interface ChatMessage {
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
   /**
+   * Set on the transcript's last row when it is a background-outcome note no
+   * provider turn has adopted AND the host still reports the chat working:
+   * the outcome may yet be handed to the agent, so the row does not say how
+   * it ended. Absent everywhere else, including on the same row once the chat
+   * goes idle - at which point it reads "Agent not resumed".
+   */
+  autonomousResumeOwed?: boolean;
+  /**
    * The host turn this assistant row belongs to. Absent on user rows, on
    * synthesized event rows, and on records persisted before `turnId` existed.
    *

@@ -1,3 +1,8 @@
+// Must stay the first import, ahead of anything that can open a connection:
+// without it a reset loopback connection throws out of Node's HTTP client as
+// an uncaught exception (traycerai/traycer#2093), and the main process probes
+// the local host over exactly that kind of connection.
+import "@traycer-clients/shared/platform/install-socket-tos-guard";
 import { app } from "electron";
 import { join } from "node:path";
 import { config, DESKTOP_APP_NAME } from "../config";

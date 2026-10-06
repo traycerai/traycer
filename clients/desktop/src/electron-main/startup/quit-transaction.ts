@@ -3,6 +3,7 @@ import {
   refreshOnModeChange,
   type HostLifecycleMode,
 } from "@traycer/protocol/config/host-lifecycle-policy";
+import type { HostActivityProbe } from "@traycer-clients/shared/host-client/host-activity-probe";
 import type {
   HostLifecycleSetRequest,
   HostLifecycleSetResult,
@@ -52,9 +53,13 @@ import type { HostQuitPrompt } from "../ipc/runner-ipc-bridge";
 //                                        the consent), quit at completion or
 //                                        at the deadline.
 //                     ask                the host quit modal ("initial").
-//                     stop-if-idle       `host stop --if-idle` with no prompt;
-//                                        E_HOST_BUSY asks ("busy"), an
-//                                        unknown outcome asks ("initial").
+//                     stop-if-idle       the host's activity probe first.
+//                                        A terminal in use asks before any
+//                                        stop ("terminals-in-use", or "busy"
+//                                        when the probe also said busy).
+//                                        Otherwise `host stop --if-idle` with
+//                                        no prompt; E_HOST_BUSY asks ("busy"),
+//                                        an unknown outcome asks ("initial").
 //                   No prompt is shown for a host that is not running: there
 //                   is nothing to keep or stop, and the quit goes on.
 //                   A host a person started in a terminal is left alone in
@@ -63,10 +68,13 @@ import type { HostQuitPrompt } from "../ipc/runner-ipc-bridge";
 //                   anyway (`not-service-run`: the record predates the field)
 //                   leaves `keep` too, and is never asked again.
 //
-// A Stop chosen over an idle list runs `--if-idle` too; E_HOST_BUSY there
-// asks again ("busy-retry": something started meanwhile). Both busy rounds'
-// Stop is the force. The host's refusal text is the CLI's instruction to its
-// own caller and never reaches a prompt; `HostController` logs its code.
+// A Stop chosen over an idle list runs `--if-idle` too, and so does a Stop
+// chosen on the "terminals-in-use" round, whose count discloses no working
+// agent; E_HOST_BUSY there asks again ("busy-retry": something started
+// meanwhile). Both busy rounds' Stop is the force: the host has just answered
+// busy, through a refused idle-only stop or through the quit's own probe. The
+// host's refusal text is the CLI's instruction to its own caller and never
+// reaches a prompt; `HostController` logs its code.
 //
 // Force happens only under Linked or after the user pressed Stop on a list
 // that disclosed busy work. Presence `stop` is what the supervisor
@@ -157,6 +165,14 @@ export interface QuitTransactionDeps {
    * run (`not-service-run`) is the backstop.
    */
   readonly isForegroundHostRun: () => Promise<boolean>;
+  /**
+   * The local host's `GET /activity` answer, read fresh: busy, and how many
+   * terminals are in use (`null` when the host does not report the count).
+   * Stop-if-idle reads it before it stops anything. Resolves, never rejects:
+   * no endpoint to ask, or none that answers within the probe's own bound, is
+   * `unreachable`.
+   */
+  readonly probeHostActivity: () => Promise<HostActivityProbe>;
   /**
    * The host quit modal round-trip (`RunnerIpcBridge.requestHostQuitDecision`).
    * Rejects when no renderer can answer - none listening, no servicing ack,
@@ -547,7 +563,7 @@ class QuitTransaction {
         await this.runLinked();
         return;
       case "ask":
-        await this.prompt("ask", "initial");
+        await this.prompt({ mode: "ask", round: "initial" });
         return;
       case "stop-if-idle":
         await this.runStopIfIdle();
@@ -593,8 +609,47 @@ class QuitTransaction {
    * list; an outcome that says nothing about idleness asks from scratch (the
    * modal's own status query can say "can't tell"); the deadline quits with
    * the host kept - nothing is ever stopped silently.
+   *
+   * Before any of that, the terminals the host's busy rule cannot see: a
+   * terminal a person entered a line in, whose shell is alive, may be running
+   * a command inside the shell with no output, which reads idle. The host
+   * reports their count on its activity probe, and a count above zero asks
+   * before a stop is tried. The count is decided on BEFORE the busy flag:
+   * busy lapses by itself (a 10-second output window), so a busy answer sent
+   * down the path below could still end in a silent stop once it had. A
+   * count of zero, a host that reports none (an older host), and a host that
+   * cannot be reached all take the path below unchanged - unknown never asks,
+   * or the mode would become Ask.
    */
   private async runStopIfIdle(): Promise<void> {
+    // Read before the stopping phase is announced: nothing is stopping yet,
+    // and the answer may be a question instead.
+    const activity = await this.probeHostActivity();
+    if (this.superseded) return;
+    if (
+      activity.kind === "answered" &&
+      activity.terminalsInUse !== null &&
+      activity.terminalsInUse > 0
+    ) {
+      log.info("[host-quit] quit", {
+        mode: "stop-if-idle",
+        reason: "terminals-in-use",
+        terminalsInUse: activity.terminalsInUse,
+        busy: activity.busy,
+      });
+      if (activity.busy) {
+        // The host has just answered busy, to this probe: the busy round,
+        // with no stop tried in between.
+        await this.prompt({ mode: "stop-if-idle", round: "busy" });
+        return;
+      }
+      await this.prompt({
+        mode: "stop-if-idle",
+        round: "terminals-in-use",
+        terminalsInUse: activity.terminalsInUse,
+      });
+      return;
+    }
     this.beginStopping(true);
     const outcome = await this.runStop("if-idle");
     if (this.superseded) return;
@@ -613,7 +668,7 @@ class QuitTransaction {
         return;
       case "host-busy":
         // The first thing this quit shows: nothing "started meanwhile".
-        await this.prompt("stop-if-idle", "busy");
+        await this.prompt({ mode: "stop-if-idle", round: "busy" });
         return;
       case "deadline":
       case "withdrawn":
@@ -629,7 +684,7 @@ class QuitTransaction {
       case "update-active":
       case "failed":
         this.logStopOutcome("stop-if-idle", outcome);
-        await this.prompt("stop-if-idle", "initial");
+        await this.prompt({ mode: "stop-if-idle", round: "initial" });
         return;
     }
   }
@@ -648,10 +703,8 @@ class QuitTransaction {
     this.onRelaunchTakeover();
   }
 
-  private async prompt(
-    mode: HostQuitDecisionMode,
-    round: HostQuitDecisionRequest["round"],
-  ): Promise<void> {
+  private async prompt(prompt: HostQuitPrompt): Promise<void> {
+    const { mode, round } = prompt;
     // Only a dead host skips the question: there is nothing to keep or stop,
     // so neither the modal nor main's own dialog is shown for it.
     if (!(await this.isLocalHostRunning())) {
@@ -662,7 +715,7 @@ class QuitTransaction {
       return;
     }
     if (this.superseded) return;
-    const answered = await this.ask({ mode, round });
+    const answered = await this.ask(prompt);
     if (this.superseded) return;
     await this.applyDecision({ mode, promptMode: mode, round }, answered);
   }
@@ -672,6 +725,14 @@ class QuitTransaction {
       return await this.deps.isLocalHostRunning();
     } catch {
       return true;
+    }
+  }
+
+  private async probeHostActivity(): Promise<HostActivityProbe> {
+    try {
+      return await this.deps.probeHostActivity();
+    } catch {
+      return { kind: "unreachable" };
     }
   }
 
@@ -722,7 +783,9 @@ class QuitTransaction {
     if (answered.requestId !== null) this.requestId = answered.requestId;
     // Force on a busy round whatever the answer says: that round's list
     // disclosed the busy work, and its Stop is the force (a second if-idle
-    // would only loop).
+    // would only loop). The "terminals-in-use" round is not one: its Stop is
+    // idle-only unless the answer itself carries a force, which neither the
+    // modal's row nor the native dialog sends for it.
     const forced =
       decision.kind === "stop" &&
       (decision.force ||
@@ -770,7 +833,7 @@ class QuitTransaction {
           // new list once more; that round's Stop is the force. Its answer
           // replaces this one's "Remember", and its Cancel drops it.
           this.stopCommitted = false;
-          await this.prompt(context.promptMode, "busy-retry");
+          await this.prompt({ mode: context.promptMode, round: "busy-retry" });
           return;
         }
         this.logStopOutcome(context.mode, outcome);

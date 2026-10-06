@@ -453,3 +453,116 @@ describe("<HostQuitDialog /> - not-running verdict (a directory entry that is do
     expect(screen.queryByTestId("host-quit-dialog")).toBeNull();
   });
 });
+
+describe("<HostQuitDialog /> - the terminals-in-use round", () => {
+  const TERMINALS_REQUEST: HostQuitDecisionRequest = {
+    requestId: "req-1",
+    mode: "stop-if-idle",
+    round: "terminals-in-use",
+    terminalsInUse: 2,
+  };
+  const STATUSES: ReadonlyArray<readonly [string, LocalHostQuitStatus]> = [
+    ["busy", busyStatus()],
+    ["idle", idleStatus()],
+    ["checking", { ...idleStatus(), verdict: { kind: "checking" } }],
+    [
+      "unknown",
+      { ...idleStatus(), verdict: { kind: "unknown", reason: "unreachable" } },
+    ],
+  ];
+
+  it("renders the count in the title and no counts line, even beside an idle verdict", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = idleStatus();
+    renderDialog(baseProps(TERMINALS_REQUEST, {}), quit);
+
+    const dialog = await screen.findByTestId("host-quit-dialog");
+    expect(dialog.dataset.quitState).toBe("terminals-in-use");
+    expect(screen.getByText("2 terminals are still in use")).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Stopping the host ends them. Quitting Traycer can keep the host running so they carry on, or stop it now.",
+      ),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("host-quit-counts")).toBeNull();
+    expect(screen.queryByText(/Nothing is running/)).toBeNull();
+    expect(screen.getByTestId("host-quit-stop").textContent).toBe(
+      "Stop host and quit",
+    );
+  });
+
+  for (const [label, status] of STATUSES) {
+    it(`${label} status: Stop answers the idle-only stop {stop, force:false, remember:false} and is enabled`, async () => {
+      const quit = createFakeQuit();
+      localHostQuitStatusMock.current = status;
+      renderDialog(baseProps(TERMINALS_REQUEST, {}), quit);
+      await screen.findByTestId("host-quit-dialog");
+
+      expect(
+        screen.getByTestId("host-quit-stop").hasAttribute("disabled"),
+      ).toBe(false);
+      // Not answered by itself: only a person's click is.
+      expect(quit.respondCalls).toEqual([]);
+
+      act(() => {
+        screen.getByTestId("host-quit-stop").click();
+      });
+
+      await waitFor(() => {
+        expect(quit.respondCalls).toHaveLength(1);
+      });
+      expect(quit.respondCalls[0]).toEqual({
+        requestId: "req-1",
+        decision: { kind: "stop", force: false, remember: false },
+      });
+    });
+  }
+
+  it("a poll that turns the status busy under the open question still sends force:false", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = idleStatus();
+    const { rerenderDialog } = renderDialog(
+      baseProps(TERMINALS_REQUEST, {}),
+      quit,
+    );
+    await screen.findByTestId("host-quit-dialog");
+
+    localHostQuitStatusMock.current = busyStatus();
+    rerenderDialog(baseProps(TERMINALS_REQUEST, {}));
+    expect(screen.getByTestId("host-quit-dialog").dataset.quitState).toBe(
+      "terminals-in-use",
+    );
+
+    act(() => {
+      screen.getByTestId("host-quit-stop").click();
+    });
+
+    await waitFor(() => {
+      expect(quit.respondCalls).toHaveLength(1);
+    });
+    expect(quit.respondCalls[0].decision).toEqual({
+      kind: "stop",
+      force: false,
+      remember: false,
+    });
+  });
+
+  it("Keep answers keep", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = idleStatus();
+    renderDialog(baseProps(TERMINALS_REQUEST, {}), quit);
+    await screen.findByTestId("host-quit-dialog");
+
+    act(() => {
+      screen.getByTestId("host-quit-keep").click();
+    });
+
+    await waitFor(() => {
+      expect(quit.respondCalls).toHaveLength(1);
+    });
+    expect(quit.respondCalls[0].decision).toEqual({
+      kind: "keep",
+      remember: false,
+    });
+  });
+});

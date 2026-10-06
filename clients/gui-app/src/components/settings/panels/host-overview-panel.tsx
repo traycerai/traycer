@@ -1799,6 +1799,13 @@ export function HostOverviewPanel(props: {
             }
       }
       inFlight={inFlightKind !== null}
+      // The app in THIS window, so only beside the host on this machine. Same
+      // snapshot the header's update button reads.
+      desktopApp={
+        host.isLocalMachine && desktopUpdates.bridge !== null
+          ? { bridge: desktopUpdates.bridge, snapshot: desktopUpdates.snapshot }
+          : null
+      }
       // An account write: no route needed, so it survives an outage.
       autoUpdate={
         registryItem === null
@@ -2061,6 +2068,7 @@ export function HostOverviewPanel(props: {
       <HostBusyForceDeferDialog
         purpose="restart"
         detail={null}
+        idleAction={null}
         open={forceRestartOffer !== null}
         title="Host is busy"
         message={
@@ -2114,6 +2122,7 @@ export function HostOverviewPanel(props: {
       <HostBusyForceDeferDialog
         purpose="update"
         detail={forceUpdateOffer?.storeFormatConfirmation ?? null}
+        idleAction={null}
         open={forceUpdateOffer !== null}
         title="Host is busy"
         message={
@@ -2161,6 +2170,7 @@ export function HostOverviewPanel(props: {
       <HostBusyForceDeferDialog
         purpose="update"
         detail={null}
+        idleAction={null}
         open={boundOffer !== null}
         title={
           boundOffer === null ? "Host is busy" : boundDispatchTitle(boundOffer)

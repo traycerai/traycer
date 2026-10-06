@@ -36,6 +36,7 @@ import {
 } from "../host/host-paths";
 import { backfillSubstrateOwnerAtLaunch } from "../host/substrate-backfill-contender";
 import { HostLifecyclePolicyStore } from "../host/host-lifecycle-policy";
+import { probeLocalHostActivity } from "../host/host-state";
 import {
   HOST_LIFECYCLE_OBSERVATION_POLL_MS,
   HostLifecycleService,
@@ -1449,6 +1450,8 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     isLocalHostRunning: () => isLocalHostRunningForQuit(services.host),
     isForegroundHostRun: async () =>
       (await services.hostLifecycle.readRunAdmission()) === "foreground",
+    probeHostActivity: () =>
+      probeLocalHostActivity(getHostFsLayout(state.config.environment)),
     requestDecision: (prompt) =>
       services.bridge.requestHostQuitDecision(prompt),
     withdrawDecision: (error) => {

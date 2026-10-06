@@ -64,6 +64,7 @@ vi.mock("@/hooks/auth/use-update-host-version-mutation", () => ({
 
 import type { ReactElement } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -83,6 +84,13 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  DesktopAppUpdateChannelChange,
+  DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateSnapshot,
+  DesktopAppUpdatesBridge,
+  DesktopCompatRecoveryPlan,
+} from "@/lib/windows/types";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -410,14 +418,14 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: false,
-      hostVersion: "1.6.0",
+      hostVersion: "1.7.0",
       overrideHandlers: {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
             effectiveIncludePreReleases: false,
             includePreReleasesSource: "stable-default" as const,
-            manifest: multiVersionManifest(["1.6.0", "1.5.0", "1.4.0"]),
+            manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
           }),
         "host.update.install": async (req) => {
           await gate;
@@ -451,14 +459,14 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
-    const targetRow = rows.find((row) => row.textContent.includes("v1.5.0"));
-    const otherRow = rows.find((row) => row.textContent.includes("v1.4.0"));
+    const targetRow = rows.find((row) => row.textContent.includes("v1.6.0"));
+    const otherRow = rows.find((row) => row.textContent.includes("v1.5.0"));
     if (targetRow === undefined || otherRow === undefined) {
       throw new Error("expected both version rows to render");
     }
 
     fireEvent.click(
-      within(targetRow).getByRole("button", { name: "Install 1.5.0" }),
+      within(targetRow).getByRole("button", { name: "Install 1.6.0" }),
     );
 
     // While the dispatch is in flight every row freezes — the one pressed
@@ -466,7 +474,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => {
       expect(
         within(otherRow)
-          .getByRole("button", { name: "Install 1.4.0" })
+          .getByRole("button", { name: "Install 1.5.0" })
           .hasAttribute("disabled"),
       ).toBe(true);
     });
@@ -478,10 +486,10 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-version-install-refused").textContent,
-      ).toContain("host-a's CLI can't downgrade to v1.5.0");
+      ).toContain("host-a's CLI can't downgrade to v1.6.0");
     });
     // … and once above it, from the SAME failure. This host is current
-    // (1.6.0 is the latest), so the answer is quiet and there is no answer
+    // (1.7.0 is the latest), so the answer is quiet and there is no answer
     // for the failure to sit under: it is drawn as a card of its own, the
     // `failed-attempt` kind, and its title carries the reason.
     const failedCard = screen.getByTestId("host-overview-answer-card");
@@ -489,13 +497,13 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(
       within(failedCard).getByTestId("host-overview-update-attempt-failed")
         .textContent,
-    ).toContain("host-a's CLI can't downgrade to v1.5.0");
+    ).toContain("host-a's CLI can't downgrade to v1.6.0");
 
     // The rows unfreeze; nothing switched tabs.
     await waitFor(() => {
       expect(
         within(otherRow)
-          .getByRole("button", { name: "Install 1.4.0" })
+          .getByRole("button", { name: "Install 1.5.0" })
           .hasAttribute("disabled"),
       ).toBe(false);
     });
@@ -1321,5 +1329,128 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab — a re-check leaves t
     });
     expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
     expect(checksA).toBe(1);
+  });
+});
+
+const DESKTOP_APP_SNAPSHOT: DesktopAppUpdateSnapshot = {
+  sequence: 1,
+  status: "up-to-date",
+  currentVersion: "1.4.0",
+  allowPrerelease: false,
+  latestVersion: null,
+  latestCompatibilityEpoch: null,
+  downloadProgress: null,
+  installBlockedReason: null,
+  installGuidance: null,
+  installInFlight: false,
+  errorMessage: null,
+  lastCheckedAt: null,
+  lastCheckIntent: null,
+};
+
+class StubAppUpdatesBridge implements DesktopAppUpdatesBridge {
+  /** Every snapshot load handed out, so a test can wait for their delivery. */
+  readonly snapshotLoads: Promise<DesktopAppUpdateSnapshot>[] = [];
+  readonly getSnapshot = vi.fn((): Promise<DesktopAppUpdateSnapshot> => {
+    const load = Promise.resolve(DESKTOP_APP_SNAPSHOT);
+    this.snapshotLoads.push(load);
+    return load;
+  });
+  readonly checkForUpdates = vi.fn(
+    (_intent: DesktopAppUpdateCheckIntent): Promise<DesktopAppUpdateSnapshot> =>
+      Promise.resolve(DESKTOP_APP_SNAPSHOT),
+  );
+  readonly setAllowPrerelease = vi.fn(
+    (): Promise<DesktopAppUpdateChannelChange> =>
+      Promise.resolve({ outcome: "changed", snapshot: DESKTOP_APP_SNAPSHOT }),
+  );
+  readonly resolveCompatRecovery = vi.fn(
+    (): Promise<DesktopCompatRecoveryPlan> =>
+      Promise.resolve({
+        route: "manual",
+        rcCandidateVersion: null,
+        stagedVersion: null,
+      }),
+  );
+  readonly downloadUpdate = vi.fn(() => Promise.resolve(DESKTOP_APP_SNAPSHOT));
+  readonly installUpdate = vi.fn(() => Promise.resolve(DESKTOP_APP_SNAPSHOT));
+  onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
+    dispose(): void;
+  } {
+    queueMicrotask(() => handler(DESKTOP_APP_SNAPSHOT));
+    return { dispose: () => undefined };
+  }
+}
+
+/** `appUpdates` is not on `IRunnerHost`; the desktop shell adds it, so the
+ * test assigns it onto the constructed host (the intersection is assignable). */
+function makeDesktopRunnerHost(bridge: StubAppUpdatesBridge): IRunnerHost {
+  return Object.assign(makeRunnerHost(), { appUpdates: bridge });
+}
+
+async function renderUpdatesTabFor(
+  isLocalMachine: boolean,
+  runnerHost: IRunnerHost,
+): Promise<void> {
+  const fixture = buildOverviewHostFixture({
+    hostId: "host-a",
+    isLocalMachine,
+  });
+  recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+  hostBindingMock.current = bindingWith(fixture.client);
+  scopeOverrides.current = scopeFrom(
+    "host-a",
+    fixture,
+    registryItemFor("host-a", "manual"),
+    {
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        isLocalMachine,
+        connectable: true,
+        item: registryItemFor("host-a", "manual"),
+      }),
+    },
+  );
+  render(
+    panelElement(
+      new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      }),
+      runnerHost,
+    ),
+  );
+  await selectHostOverviewTab("updates");
+  await screen.findByTestId("host-auto-update-host-a");
+}
+
+describe("<HostSettingsPanel /> Overview ▸ Updates tab, desktop app row", () => {
+  it("shows the desktop app row for the local host when the desktop bridge is present", async () => {
+    await renderUpdatesTabFor(
+      true,
+      makeDesktopRunnerHost(new StubAppUpdatesBridge()),
+    );
+    const state = await screen.findByTestId("host-overview-desktop-app-state");
+    expect(state.textContent).toBe("Up to date (v1.4.0)");
+  });
+
+  it("omits the desktop app row for a remote host even with the desktop bridge", async () => {
+    const bridge = new StubAppUpdatesBridge();
+    await renderUpdatesTabFor(false, makeDesktopRunnerHost(bridge));
+    // Same setup as the local case, which does render the row, and the row
+    // draws nothing until the app's snapshot has loaded. So the absence is
+    // read only after that load has been delivered and rendered: it is the
+    // isLocalMachine gate, not a missing bridge or a snapshot still in flight.
+    await waitFor(() => {
+      expect(bridge.getSnapshot).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.all(bridge.snapshotLoads);
+    });
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
+  });
+
+  it("omits the desktop app row when there is no desktop bridge", async () => {
+    await renderUpdatesTabFor(true, makeRunnerHost());
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
   });
 });

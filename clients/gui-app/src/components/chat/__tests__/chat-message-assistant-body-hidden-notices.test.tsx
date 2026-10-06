@@ -250,6 +250,7 @@ function Body({
       manualRungAnchorId={null}
       elapsedStartedAt={0}
       turnHasOnlyAutonomousResumeSegments={false}
+      autonomousResumeOwed={false}
       showCompletionFooter={false}
       pausedDurationMs={0}
       pausedSinceMs={null}
@@ -280,6 +281,7 @@ function CompletedBody({
       manualRungAnchorId="queue-paused:u1"
       elapsedStartedAt={0}
       turnHasOnlyAutonomousResumeSegments={false}
+      autonomousResumeOwed={false}
       showCompletionFooter
       pausedDurationMs={0}
       pausedSinceMs={null}
@@ -486,6 +488,7 @@ describe("elapsed footer", () => {
                 manualRungAnchorId="queue-paused:u1"
                 elapsedStartedAt={0}
                 turnHasOnlyAutonomousResumeSegments={false}
+                autonomousResumeOwed={false}
                 showCompletionFooter
                 pausedDurationMs={0}
                 pausedSinceMs={null}

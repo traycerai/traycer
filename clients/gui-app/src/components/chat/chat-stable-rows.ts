@@ -119,6 +119,8 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   turnHasOnlyAutonomousResumeSegments: (a, b) =>
     a.turnHasOnlyAutonomousResumeSegments ===
     b.turnHasOnlyAutonomousResumeSegments,
+  autonomousResumeOwed: (a, b) =>
+    a.autonomousResumeOwed === b.autonomousResumeOwed,
   turnId: (a, b) => a.turnId === b.turnId,
   manualRungAnchorId: (a, b) => a.manualRungAnchorId === b.manualRungAnchorId,
   routingSettledNoticeId: (a, b) =>

@@ -53,7 +53,9 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
     memory: false,
     processes: true,
     ramShare: false,
-    agentRows: true,
+    // Off: per-row readings are clutter for most people; the status bar's
+    // total still reads, and Detailed turns them on.
+    agentRows: false,
     density: "auto",
   },
   minimap: { shown: "shown" },

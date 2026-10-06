@@ -914,6 +914,26 @@ describe("persistent browser guest host", () => {
   });
 
   describe("presentation states", () => {
+    /**
+     * The parked posture: laid out at the window's origin at full size, shrunk
+     * to a speck by a transform and made invisible by a filter. The plain
+     * `opacity` stays unset because opacity:0 stops the compositor drawing the
+     * guest, and a guest nobody draws cannot be captured.
+     */
+    function expectParkedPosture(wrapper: HTMLElement): void {
+      expect(wrapper.style.position).toBe("fixed");
+      expect(wrapper.style.insetInlineStart).toBe("0px");
+      expect(wrapper.style.insetBlockStart).toBe("0px");
+      expect(wrapper.style.width).toBe("1280px");
+      expect(wrapper.style.height).toBe("800px");
+      expect(wrapper.style.transform).toBe("scale(0.02)");
+      expect(wrapper.style.transformOrigin).toBe("top left");
+      expect(wrapper.style.filter).toBe("opacity(0)");
+      expect(wrapper.style.opacity).toBe("");
+      expect(wrapper.style.pointerEvents).toBe("none");
+      expect(wrapper.style.display).toBe("block");
+    }
+
     it("maps presented, retained, and unbound onto visibility and interactivity", () => {
       const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
@@ -921,13 +941,7 @@ describe("persistent browser guest host", () => {
       const { wrapper } = guestNodes(REGISTRATION_A);
 
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("unbound");
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("-10000px");
-      expect(wrapper.style.width).toBe("1280px");
-      expect(wrapper.style.height).toBe("800px");
-      expect(wrapper.style.opacity).toBe("0");
-      expect(wrapper.style.pointerEvents).toBe("none");
-      expect(wrapper.style.display).toBe("block");
+      expectParkedPosture(wrapper);
       expect(wrapper.inert).toBe(true);
       expect(wrapper.getAttribute("aria-hidden")).toBe("true");
       expect(wrapper.hasAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
@@ -949,6 +963,8 @@ describe("persistent browser guest host", () => {
       expect(wrapper.style.position).toBe("fixed");
       expect(wrapper.style.getPropertyValue("position-anchor")).toBe(ANCHOR_A);
       expect(wrapper.style.opacity).toBe("1");
+      expect(wrapper.style.transform).toBe("");
+      expect(wrapper.style.filter).toBe("");
       expect(wrapper.style.pointerEvents).toBe("auto");
       expect(wrapper.style.display).toBe("block");
       expect(wrapper.inert).toBe(false);
@@ -972,13 +988,10 @@ describe("persistent browser guest host", () => {
         viewport: null,
       });
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
-      // Retained keeps the unbound offscreen posture: a `display: none` guest
-      // stops compositing, and CDP/PiP frames go blank with it.
-      expect(wrapper.style.display).toBe("block");
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("-10000px");
-      expect(wrapper.style.pointerEvents).toBe("none");
-      expect(wrapper.style.opacity).toBe("0");
+      // Retained keeps the unbound parked posture. A guest is captured only
+      // while the compositor draws it, and `display: none`, `opacity: 0` and
+      // an off-viewport box each stop that.
+      expectParkedPosture(wrapper);
       expect(wrapper.style.getPropertyValue("position-anchor")).toBe("");
       expect(wrapper.inert).toBe(true);
       expect(wrapper.getAttribute("aria-hidden")).toBe("true");
@@ -991,10 +1004,7 @@ describe("persistent browser guest host", () => {
 
       clearBrowserGuestTilePlacement(owner, REGISTRATION_A);
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("unbound");
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("-10000px");
-      expect(wrapper.style.width).toBe("1280px");
-      expect(wrapper.style.height).toBe("800px");
+      expectParkedPosture(wrapper);
       expect(wrapper.inert).toBe(true);
       expect(wrapper.getAttribute("aria-hidden")).toBe("true");
     });

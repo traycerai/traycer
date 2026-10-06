@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { downgradeRequestAcrossMajors } from "@traycer/protocol/framework/index";
-import { agentListHarnessModelsDowngradeV2ToV1 } from "@traycer/protocol/host/agent/contracts";
+import {
+  agentListDowngradeV9ToV1,
+  agentListDowngradeV9ToV2,
+  agentListDowngradeV9ToV3,
+  agentListDowngradeV9ToV4,
+  agentListDowngradeV9ToV5,
+  agentListDowngradeV9ToV6,
+  agentListDowngradeV9ToV7,
+  agentListDowngradeV9ToV8,
+  agentListHarnessModelsDowngradeV2ToV1,
+  agentListUpgradeV91ToV92,
+  agentListV92,
+} from "@traycer/protocol/host/agent/contracts";
 import {
   AGENT_FACING_HARNESS_IDS,
+  agentSummarySchema,
+  agentSummarySchemaV90,
+  agentSummarySchemaV91,
   guiHarnessIdSchema,
+  listAgentsResponseSchemaV91,
+  type AgentSummary,
+  type ListAgentsResponse,
   tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
@@ -317,6 +335,8 @@ describe("agent host schemas", () => {
             // session, so `null` is its permanent answer.
             sessionState: null,
             lastExit: null,
+            // The `@9.2` archive flag: required and nullable the same way.
+            archived: false,
           },
         ],
       }),
@@ -346,6 +366,7 @@ describe("agent host schemas", () => {
           isWorktree: false,
           sessionState: null,
           lastExit: null,
+          archived: false,
           runConfig: {
             model: { kind: "concrete", slug: "gpt-5.6-codex" },
             reasoningEffort: "high",
@@ -388,6 +409,7 @@ describe("agent host schemas", () => {
           // and supplied by the upgrade path, so it is spelled out here.
           sessionState: null,
           lastExit: null,
+          archived: false,
         },
       ],
     });
@@ -489,5 +511,118 @@ describe("agent host schemas", () => {
     expect(
       hostRpcRegistry["agent.list"][1].versions[0].contract.schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
+  });
+});
+
+const V92_ROW: AgentSummary = {
+  id: "agent-1",
+  parentId: null,
+  hostId: "host-1",
+  isLocal: true,
+  surface: "gui",
+  harnessId: "codex",
+  title: "Existing chat",
+  isSelf: true,
+  capabilities: { readTranscript: true, sendMessage: true },
+  active: false,
+  folderPaths: ["/repo"],
+  isWorktree: false,
+  runConfig: null,
+  sessionState: null,
+  lastExit: null,
+  archived: true,
+};
+
+const V92_RESPONSE: ListAgentsResponse = {
+  caller: { agentId: "agent-1", canSendMessages: true },
+  scope: "user",
+  agents: [
+    V92_ROW,
+    { ...V92_ROW, id: "agent-2", isSelf: false, archived: null },
+  ],
+};
+
+describe("agent.list@9.2 archived flag", () => {
+  it("upgrades a @9.1 response by filling archived: null on every row and nothing else", () => {
+    const v91 = listAgentsResponseSchemaV91.parse(V92_RESPONSE);
+
+    const upgraded = agentListUpgradeV91ToV92.upgradeResponse(v91);
+
+    expect(upgraded.agents).toHaveLength(2);
+    expect(upgraded.agents.map((row) => row.archived)).toEqual([null, null]);
+    expect(upgraded.agents).toEqual(
+      v91.agents.map((row) => ({ ...row, archived: null })),
+    );
+    expect(upgraded.caller).toEqual(v91.caller);
+    expect(upgraded.scope).toBe(v91.scope);
+  });
+
+  it("leaves the request untouched on the @9.1 -> @9.2 upgrade", () => {
+    const request = {
+      epicId: "epic-1",
+      senderAgentId: "agent-1",
+      scope: "all" as const,
+    };
+    expect(agentListUpgradeV91ToV92.upgradeRequest(request)).toEqual(request);
+  });
+
+  it("strips archived from a row parsed through the frozen @9.1 and @9.0 summaries", () => {
+    expect(
+      Object.hasOwn(agentSummarySchemaV91.parse(V92_ROW), "archived"),
+    ).toBe(false);
+    expect(
+      Object.hasOwn(agentSummarySchemaV90.parse(V92_ROW), "archived"),
+    ).toBe(false);
+    // `@9.1` keeps the session facet it introduced.
+    expect(agentSummarySchemaV91.parse(V92_ROW)).toHaveProperty(
+      "sessionState",
+      null,
+    );
+    for (const row of listAgentsResponseSchemaV91.parse(V92_RESPONSE).agents) {
+      expect(Object.hasOwn(row, "archived")).toBe(false);
+    }
+  });
+
+  it("registers @9.2 as the latest minor of agent.list major 9", () => {
+    const line = hostRpcRegistry["agent.list"][9];
+
+    expect(line.latestMinor).toBe(2);
+    expect(line.versions[2].contract).toBe(agentListV92);
+  });
+
+  it("starts every major-9 downgrade bridge at @9.2 and drops archived on the way out", () => {
+    const bridges = [
+      agentListDowngradeV9ToV1,
+      agentListDowngradeV9ToV2,
+      agentListDowngradeV9ToV3,
+      agentListDowngradeV9ToV4,
+      agentListDowngradeV9ToV5,
+      agentListDowngradeV9ToV6,
+      agentListDowngradeV9ToV7,
+      agentListDowngradeV9ToV8,
+    ];
+    expect(bridges).toHaveLength(8);
+
+    for (const bridge of bridges) {
+      expect(bridge.from).toEqual({ major: 9, minor: 2 });
+      const downgraded = bridge.downgradeResponse(V92_RESPONSE);
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) throw new Error("expected the downgrade to succeed");
+      expect(downgraded.value.agents.length).toBeGreaterThan(0);
+      for (const row of downgraded.value.agents) {
+        expect(Object.hasOwn(row, "archived")).toBe(false);
+      }
+    }
+  });
+
+  it("requires archived on the canonical row and accepts true, false and null", () => {
+    const { archived: _omitted, ...keyless } = V92_ROW;
+
+    expect(agentSummarySchema.safeParse(keyless).success).toBe(false);
+    for (const archived of [true, false, null]) {
+      expect(
+        agentSummarySchema.safeParse({ ...V92_ROW, archived }).success,
+      ).toBe(true);
+    }
   });
 });

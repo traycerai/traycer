@@ -210,6 +210,28 @@ describe("useLayoutStore", () => {
     });
   });
 
+  describe("readings on agent rows by preset", () => {
+    it.each([
+      ["default", false],
+      ["compact", false],
+      ["detailed", true],
+    ] as const)(
+      "%s resolves agentRows to %s, whatever was set before",
+      (presetId, expected) => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("resourceMonitor", { agentRows: !expected });
+
+        useLayoutStore.getState().applyPreset(presetId);
+
+        expect(
+          effectiveLayoutValues(presetId, getLayoutSnapshot().overrides)
+            .resourceMonitor.agentRows,
+        ).toBe(expected);
+      },
+    );
+  });
+
   describe("applying a preset that changes nothing", () => {
     it("neither notifies subscribers nor writes storage when the current preset is applied over no overrides", () => {
       const listener = vi.fn();
@@ -495,7 +517,7 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
           pinBreakdown: true,
           pinnedFields: ["used", "output"],
         },
-        resourceMonitor: { shown: "hidden", agentRows: false },
+        resourceMonitor: { shown: "hidden" },
         railComments: { shown: "hidden" },
         railPullRequests: { shown: "shown" },
       });
@@ -583,30 +605,37 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
 
   it.each([
     {
-      name: "a valid empty list turns the agent rows off and keeps the metric defaults",
+      // Off is the shipped default, so nothing is recorded.
+      name: "a valid empty list turns the agent rows off, which is the default",
       state: { navigatorResourceMetrics: [] },
-      monitor: { agentRows: false },
+      monitor: null,
     },
     {
-      // The rows' own default is already ON (`SHIPPED_DEFAULT_VALUES.resourceMonitor.agentRows`),
-      // so a nonempty list agreeing with it costs nothing to record - only the
-      // metrics that differ from the shipped set survive the diff.
+      // The rows' own default is OFF (`SHIPPED_DEFAULT_VALUES.resourceMonitor.agentRows`),
+      // so a nonempty list turns them on and that differs from the default -
+      // it is recorded alongside the metrics that differ from the shipped set.
       name: "a nonempty list sets each metric from membership, under a hidden monitor",
       state: {
         showGlobalResourceMonitor: false,
         navigatorResourceMetrics: ["memory"],
       },
-      monitor: { shown: "hidden", cpu: false, memory: true, processes: false },
+      monitor: {
+        shown: "hidden",
+        cpu: false,
+        memory: true,
+        processes: false,
+        agentRows: true,
+      },
     },
     {
-      // Every field this record resolves to - the switch, the metrics, the
-      // rows - equals the shipped Default, so nothing is recorded at all.
-      name: "a nonempty list matching the shipped metrics carries nothing",
+      // The metrics and the switch equal the shipped Default; only the rows
+      // differ (a nonempty list means rows on, the default is off).
+      name: "a nonempty list matching the shipped metrics carries only the rows",
       state: {
         showGlobalResourceMonitor: true,
         navigatorResourceMetrics: ["cpu", "processes"],
       },
-      monitor: null,
+      monitor: { agentRows: true },
     },
     {
       name: "an invalid list carries no row or metric preference",
@@ -745,7 +774,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     usageLimits: { reset: false, amount: "remaining", readingStyle: "percent" },
     // Header placement: the sidebar chips (cpu) were the only metrics this
     // user saw and picked, so they win over the strip's never-drawn list.
-    resourceMonitor: { shown: "hidden", processes: false },
+    resourceMonitor: { shown: "hidden", processes: false, agentRows: true },
     contextUsage: {
       style: "ring",
       pinBreakdown: true,
@@ -919,8 +948,8 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
       return state().overrides.resourceMonitor;
     }
 
-    // Only a value that differs from the shipped Default is kept (cpu and
-    // agentRows are on there, memory and ramShare off), which is why each
+    // Only a value that differs from the shipped Default is kept (cpu is on
+    // there; memory, ramShare and agentRows are off), which is why each
     // expectation names just the metrics that moved.
     it("takes the sidebar chips under the header, where the strip list was never on screen", async () => {
       // Chips are memory alone: memory on, the shipped cpu and processes off,
@@ -929,6 +958,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
         cpu: false,
         memory: true,
         processes: false,
+        agentRows: true,
       });
     });
 
@@ -937,6 +967,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
       expect(await monitorFor("status-bar")).toEqual({
         processes: false,
         ramShare: true,
+        agentRows: true,
       });
     });
   });

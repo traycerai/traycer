@@ -164,13 +164,22 @@ export async function runCommand(
       "CLI command completed after a process-fatal failure",
       { commandExitCode: result.exitCode, emittedAsJson: runtime.json },
       // The originating error was already captured and logged by the fatal
-      // handler; this record is about the result being suppressed.
+      // handler; this record is about the result going out under an error.
       null,
     );
+    // The status stays `error`, but what the command did is not thrown away:
+    // by now it has run to its end, and a `host restart` that reports only
+    // "the process failed" leaves the caller unable to tell whether the host
+    // was restarted (traycerai/traycer#2093). The envelope carries the
+    // command's own result beside its exit code, and the human path prints the
+    // command's text ahead of the error line.
+    if (result.human !== null) {
+      output.human(result.human);
+    }
     output.emitError(
       CLI_ERROR_CODES.UNEXPECTED,
       "the CLI process failed while this command was running",
-      { commandExitCode: result.exitCode },
+      { commandExitCode: result.exitCode, commandResult: result.data },
     );
     await finishAndExit(1);
     return;

@@ -176,6 +176,9 @@ function agentSummary(id: string, harnessId: string | null) {
     // below reparses through a frozen summary that drops both keys.
     sessionState: null,
     lastExit: null,
+    // The `@9.2` archive flag; the bridges reparse through a frozen summary
+    // that drops it as well.
+    archived: false,
   };
 }
 

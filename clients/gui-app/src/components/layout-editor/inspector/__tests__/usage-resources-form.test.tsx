@@ -276,22 +276,7 @@ describe("the rows a Compact reading ignores are disabled, never removed", () =>
     });
     render(<StatusBarSurface />);
 
-    // Agent rows are on at the shipped default and use the metrics picked.
-    expect(drawn("resourceMonitor").metrics).toBe("live");
-    expect(
-      within(section("resourceMonitor"))
-        .getByText(
-          "Compact shows CPU only. Agent rows use the metrics picked here, except RAM share.",
-        )
-        .getAttribute("data-row-availability"),
-    ).toBe("live");
-    expect(reasonsIn("resourceMonitor", DETAILED_REASON)).toHaveLength(0);
-
-    act(() => {
-      useLayoutStore.getState().setRegionValues("resourceMonitor", {
-        agentRows: false,
-      });
-    });
+    // Agent rows are off at the shipped default, so they use no metrics.
     expect(drawn("resourceMonitor").metrics).toBe("disabled");
     expect(drawn("resourceMonitor").density).toBe("live");
     expect(
@@ -304,6 +289,21 @@ describe("the rows a Compact reading ignores are disabled, never removed", () =>
         .getByRole("checkbox", { name: "CPU" })
         .matches(":disabled"),
     ).toBe(true);
+
+    act(() => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        agentRows: true,
+      });
+    });
+    expect(drawn("resourceMonitor").metrics).toBe("live");
+    expect(
+      within(section("resourceMonitor"))
+        .getByText(
+          "Compact shows CPU only. Agent rows use the metrics picked here, except RAM share.",
+        )
+        .getAttribute("data-row-availability"),
+    ).toBe("live");
+    expect(reasonsIn("resourceMonitor", DETAILED_REASON)).toHaveLength(0);
   });
 
   it("disables them for Auto in the top tab strip and in a side strip, and brings them back for Detailed", () => {
