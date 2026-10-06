@@ -111,11 +111,11 @@ describe("chat-auto-archive protocol contracts", () => {
       expect(entry[1].latestMinor).toBe(0);
     }
 
-    expect(
-      hostRpcRegistry["chatAutoArchive.get"][1].versions[0].contract,
-    ).toBe(chatAutoArchiveGetV10);
-    expect(
-      hostRpcRegistry["chatAutoArchive.set"][1].versions[0].contract,
-    ).toBe(chatAutoArchiveSetV10);
+    expect(hostRpcRegistry["chatAutoArchive.get"][1].versions[0].contract).toBe(
+      chatAutoArchiveGetV10,
+    );
+    expect(hostRpcRegistry["chatAutoArchive.set"][1].versions[0].contract).toBe(
+      chatAutoArchiveSetV10,
+    );
   });
 });

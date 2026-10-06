@@ -1104,8 +1104,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       no alias for it (nothing stores an anchor token, so there is nothing an
       alias would redirect).
   - **Agents** (anchor `general-agents`, `data-testid="settings-general-agents"`):
-    Prevent sleep while running, When you quit Traycer, Worktree branch prefix
-    and Agent roles. These were four groups of one setting each (Running
+    Prevent sleep while running, When you quit Traycer, Worktree branch prefix,
+    Agent roles and Archive idle agents automatically. These were four groups of one setting each (Running
     agents, When you quit Traycer, Worktrees, Experimental), which drew four
     headings and four borders around four settings. The rule now is the one
     under "Page shapes": a group holds at least two rows. Each row gates
@@ -1167,6 +1167,30 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       feature-settings bridge) and marked with the muted xs **Experimental**
       badge the permission modes use, in place of an Experimental heading over
       one row.
+    - **Archive idle agents automatically** (`ChatAutoArchiveSettingsRow` in
+      `panels/chat-auto-archive-settings-row.tsx`, definition
+      `chatAutoArchive`): the ACCOUNT-wide chat auto-archive setting, read and
+      written through the app-wide host (`chatAutoArchive.get` / `.set`,
+      hooks under `hooks/chat-auto-archive/`), which proxies one cloud row
+      every host the user runs applies. Rendered only when that host
+      advertises BOTH methods (two `useHostMethodSupport` calls); otherwise
+      absent. Gated on the selected host, so it has no search entry of its
+      own: its label and keywords (archive, idle, inactive, auto, cleanup,
+      timer) contribute to the Agents group. Controls: the main switch
+      (`enabled`), a seconds field (whole number inside the host's `bounds`,
+      committed on blur or Enter, an inline error and no write otherwise,
+      editable while the switch is off, 3600 for a never-saved account), and
+      under the description "Also archive chats I created"
+      (`includeUserCreated`, off by default; terminal agents count as the
+      user's). Every write sends all three fields. The status line is the
+      threshold in words ("After 1 hour of inactivity, on all your hosts.
+      Applied when a host next looks at the chat's task."), "Off on all your
+      hosts." while disabled, and "Couldn't read the auto-archive setting from
+      this host." on a failed read. Controls stay disabled with no error until
+      the viewer id resolves and the read lands, and while a save is pending
+      (with `AgentSpinningDots`). The client never schedules archiving: the
+      host's sweep does, and a task nothing holds open is swept when a host
+      next opens it, which is why the copy makes no wall-clock promise.
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
     your work and Data migration used to share this group under the name
     "Setup & migration"; both moved to the scoped host's **Overview**, because

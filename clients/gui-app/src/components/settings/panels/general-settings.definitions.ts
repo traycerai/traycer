@@ -173,6 +173,20 @@ export const GENERAL = defineSettingsSection("general", {
       "labs",
     ],
   },
+  // Gated on the SELECTED HOST (both `chatAutoArchive.*` methods advertised),
+  // which no shell-level predicate can decide, so it has no entry of its own:
+  // its label and keywords fold into the Agents group, a destination drawn in
+  // every shell (SETTINGS.md, "A result must land somewhere").
+  chatAutoArchive: {
+    kind: "row",
+    group: "agents",
+    search: { contributesTo: "agents" },
+    label: "Archive idle agents automatically",
+    description:
+      "Archive a chat an agent created once it has been idle this long. A new message unarchives it.",
+    availableWhen: alwaysAvailable,
+    keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
+  },
   dangerZone: {
     kind: "group",
     search: { anchor: "general-danger-zone" },

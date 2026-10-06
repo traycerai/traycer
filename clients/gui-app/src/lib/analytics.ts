@@ -313,6 +313,7 @@ export type AnalyticsSetting =
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
   | "artifactIconColors"
+  | "chatAutoArchive"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
@@ -1384,6 +1385,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     allowPrereleaseUpdates: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
+    chatAutoArchive: true,
     codeFontFamily: true,
     codeFontSize: true,
     composerMode: true,
