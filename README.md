@@ -85,6 +85,9 @@ Traycer connects to the subscriptions you already pay for instead of locking you
     <td align="center" width="150"><a href="https://reasonix.io"><img src="assets/readme/agents/reasonix.svg" width="28" alt="Reasonix" /><br /><b>Reasonix</b></a></td>
     <td align="center" width="150"><a href="https://antigravity.google"><img src="assets/readme/agents/antigravity.svg" width="28" alt="Antigravity" /><br /><b>Antigravity</b></a></td>
   </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://commandcode.ai"><img src="assets/readme/agents/commandcode.svg" width="28" alt="Command Code" /><br /><b>Command Code</b></a></td>
+  </tr>
 </table>
 </div>
 

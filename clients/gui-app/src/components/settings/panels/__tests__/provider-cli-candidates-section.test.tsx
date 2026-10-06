@@ -329,6 +329,36 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     );
   });
 
+  it("shows Command Code's install notice with its quickstart link when candidates are empty", () => {
+    // Command Code is PATH-only as well (the user installs `command-code`
+    // from npm), so the same notice is its only route to an install.
+    const state = providerState({
+      providerId: "commandcode",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Command Code CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Command Code installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://commandcode.ai/docs/quickstart",
+    );
+
+    fireEvent.click(guide);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://commandcode.ai/docs/quickstart",
+      "docs",
+      null,
+    );
+  });
+
   it("waits for the PATH probe instead of declaring the binary missing", () => {
     // `availabilityPending` means the host's shell/PATH probe has not settled,
     // and the protocol is explicit that `candidates` must not be trusted until
