@@ -34,6 +34,7 @@ import {
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV80,
   listAgentsResponseSchemaV90,
+  listAgentsResponseSchemaV91,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
@@ -1038,13 +1039,14 @@ export const agentListUpgradeV8ToV9 = defineUpgradePath<
 // resumable on the next message) from one that is over. Two plain added keys
 // on a non-strict row, so a @9.0 peer's schema strips them; the reasoning
 // lives on `agentSummarySchemaV91`.
+//
+// RELEASED (`host-v1.4.2` registers it), so it names its own frozen response
+// and never grows again. `@9.2` took the canonical alias.
 export const agentListV91 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 9, minor: 1 } as const,
   requestSchema: listAgentsRequestSchema,
-  // The CANONICAL alias, which this head must name - see
-  // `head-names-canonical-alias.test.ts`. `@9.0` holds the suffixed copy.
-  responseSchema: listAgentsResponseSchema,
+  responseSchema: listAgentsResponseSchemaV91,
 });
 
 /**
@@ -1074,11 +1076,49 @@ export const agentListUpgradeV90ToV91 = defineUpgradePath<
   }),
 });
 
-export const agentListDowngradeV9ToV8 = defineDowngradePath<
+// @9.2 puts `archived` on the row. The host always knew it and marked it on
+// the direct A2A tool listing only; the wire row had no key for it, so
+// `traycer agent list --json` could not tell an archived agent from an idle
+// live one. One plain added key on a non-strict row, so a @9.1 or @9.0 peer's
+// schema strips it; the reasoning lives on `agentSummarySchema`.
+export const agentListV92 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 9, minor: 2 } as const,
+  requestSchema: listAgentsRequestSchema,
+  // The CANONICAL alias, which this head must name - see
+  // `head-names-canonical-alias.test.ts`. `@9.0` and `@9.1` hold the suffixed
+  // copies.
+  responseSchema: listAgentsResponseSchema,
+});
+
+/**
+ * REQUEST: unchanged, so the fill is the identity.
+ *
+ * RESPONSE, `archived: null` on every row: a `@9.1` host was never asked.
+ * `null` is the row's vocabulary for "this answer cannot say", exactly as the
+ * `@9.0 -> @9.1` fill uses it for the session facet. Writing `false` here
+ * would put "not archived" in the mouth of a host that may well hold the
+ * agent archived, and a caller filtering on the flag would then list it as
+ * live.
+ */
+export const agentListUpgradeV91ToV92 = defineUpgradePath<
   typeof agentListV91,
+  typeof agentListV92
+>({
+  from: agentListV91.schemaVersion,
+  to: agentListV92.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    agents: response.agents.map((agent) => ({ ...agent, archived: null })),
+  }),
+});
+
+export const agentListDowngradeV9ToV8 = defineDowngradePath<
+  typeof agentListV92,
   typeof agentListV80
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Antigravity agents so an already-shipped v8.0 client's strict decode
@@ -1095,10 +1135,10 @@ export const agentListDowngradeV9ToV8 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV7 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV70
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1113,10 +1153,10 @@ export const agentListDowngradeV9ToV7 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV6 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV60
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1131,10 +1171,10 @@ export const agentListDowngradeV9ToV6 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV5 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV50
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1149,10 +1189,10 @@ export const agentListDowngradeV9ToV5 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV4 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV40
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1167,10 +1207,10 @@ export const agentListDowngradeV9ToV4 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV3 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV30
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1185,10 +1225,10 @@ export const agentListDowngradeV9ToV3 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV2 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV20
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1203,10 +1243,10 @@ export const agentListDowngradeV9ToV2 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV1 = defineDowngradePath<
-  typeof agentListV91,
+  typeof agentListV92,
   typeof agentListV10
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

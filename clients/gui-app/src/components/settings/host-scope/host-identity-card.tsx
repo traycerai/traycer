@@ -142,7 +142,7 @@ export function HostIdentityCard(props: {
   const arch = formatArchitecture(host.platform);
   const version = formatHostVersion(props.version);
   // One line of provenance, in words a person reads rather than the build
-  // target string the registry happens to store. This is the page's ONLY
+  // target string the registry happens to store. This is the card's ONLY
   // version, on purpose.
   const facts = [platform, arch, version].filter(
     (part): part is string => part !== null && part.length > 0,
