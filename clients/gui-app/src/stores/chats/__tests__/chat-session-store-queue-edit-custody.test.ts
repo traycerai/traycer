@@ -1065,6 +1065,40 @@ describe("cancelling a row retires its returned queue-edit records", () => {
   });
 });
 
+describe("a row that drains after the settings frame was seen applied", () => {
+  it("reports the follow-up alone when the message that arrives holds the earlier text", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      OTHER_SETTINGS,
+      [],
+    );
+    // The row comes back with the earlier text beside the requested settings.
+    reconnectWithItems(harness, [
+      { ...queuedRow(ORIGINAL), settings: OTHER_SETTINGS },
+    ]);
+    const kept = harness.handle.store.getState().queueEditRecords[editActionId];
+    expect(kept?.followUp).toBe("accepted");
+    expect(kept?.contentReturned).toBe(true);
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(EDITED);
+
+    emitQueue(harness, []);
+    acceptQueuedMessage(harness, ORIGINAL);
+
+    const state = harness.handle.store.getState();
+    const told = state.errorNotices.filter(
+      (notice) => notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+    );
+    expect(told).toHaveLength(1);
+    expect(told[0].clientActionId).toBe(followUpActionId);
+    expect(state.queueEditRecords).toEqual({});
+    expect(sendFrameCount(harness)).toBe(0);
+  });
+});
+
 describe("the saved-after-return notice survives the ordinary ring until delivered", () => {
   function floodOrdinaryNotices(target: Harness): void {
     for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {

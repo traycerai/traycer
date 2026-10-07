@@ -596,8 +596,12 @@ function accountForUnconfirmedRecord(
     };
   }
   const edit = editOutcomeForVerdict(record.edit, verdict);
-  const followUp =
-    edit === "accepted" && followUpApplied ? "accepted" : record.followUp;
+  // Kept whatever the text's own state: the row can show the settings or the
+  // steer while it still holds the earlier text, and that row is gone by the
+  // time a transcript message settles the text. Evidence dropped here could
+  // not be read again, and a prompt that then ran with its earlier text would
+  // be settled with nothing said about the second frame having gone ahead.
+  const followUp = followUpApplied ? "accepted" : record.followUp;
   if (edit === record.edit && followUp === record.followUp) {
     return settleQueueEditRecord(record, UNCONFIRMED_RETURN);
   }

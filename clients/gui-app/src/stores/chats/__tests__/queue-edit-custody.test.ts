@@ -536,6 +536,117 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
   });
 });
 
+describe("second-frame evidence kept while the text is unknown", () => {
+  const CHANGES = ["model gpt-5-mini"];
+  const STEER_TAKEN = {
+    status: "steer_requested",
+    delivery: "same_turn",
+    targetTurnId: "turn-1",
+    steerRequest: {
+      mode: "safe_point",
+      targetTurnId: "turn-1",
+      requestedAt: 1,
+    },
+  } as const;
+
+  function firstPass(
+    intent: QueueEditIntent,
+    rowOverrides: Partial<ChatQueuedPromptItem>,
+  ) {
+    return accountForQueueEdits({
+      records: recordsOf(
+        record({ settings: OTHER_SETTINGS, requestedChanges: CHANGES }, intent),
+      ),
+      sweptActionIds: BOTH_SWEPT,
+      evidence: evidence({
+        items: [rowHolding(ORIGINAL, rowOverrides)],
+        messages: [],
+      }),
+    });
+  }
+
+  function secondPass(
+    records: QueueEditRecords,
+    content: JsonContent,
+    rowItems: ReadonlyArray<ChatQueuedPromptItem>,
+  ) {
+    return accountForQueueEdits({
+      records,
+      sweptActionIds: NONE_SWEPT,
+      evidence: evidence({
+        items: rowItems,
+        messages:
+          rowItems.length === 0 ? [userMessage(MESSAGE_ID, content)] : [],
+      }),
+    });
+  }
+
+  it("a: keeps followUp accepted on the retained record, then reports follow_up_alone when the message proves the text was not saved", () => {
+    const first = firstPass("save", { settings: OTHER_SETTINGS });
+    expect(first.settlements).toHaveLength(1);
+    expect(first.settlements[0]).toMatchObject({
+      kind: "content_returned",
+      cause: "unconfirmed",
+    });
+    const kept = first.records[EDIT_ACTION_ID];
+    expect(kept?.followUp).toBe("accepted");
+    expect(kept?.edit).toBe("unconfirmed");
+    expect(kept?.contentReturned).toBe(true);
+
+    const second = secondPass(first.records, ORIGINAL, []);
+    expect(second.settlements).toEqual([
+      {
+        kind: "follow_up_alone",
+        clientActionId: FOLLOW_UP_ACTION_ID,
+        intent: "save",
+        requestedChanges: CHANGES,
+      },
+    ]);
+    expect(second.records).toEqual({});
+  });
+
+  it("b: the same for a steer the host took", () => {
+    const first = firstPass("steer", STEER_TAKEN);
+    expect(first.records[EDIT_ACTION_ID]?.followUp).toBe("accepted");
+
+    const second = secondPass(first.records, ORIGINAL, []);
+    expect(second.settlements).toEqual([
+      {
+        kind: "follow_up_alone",
+        clientActionId: FOLLOW_UP_ACTION_ID,
+        intent: "steer",
+        requestedChanges: CHANGES,
+      },
+    ]);
+    expect(second.records).toEqual({});
+  });
+
+  it("c: control - settings that differ show nothing applied, so the follow-up stays unconfirmed and no follow_up_alone is emitted", () => {
+    const first = firstPass("save", { settings: SETTINGS });
+    expect(first.records[EDIT_ACTION_ID]?.followUp).toBe("unconfirmed");
+
+    const second = secondPass(first.records, ORIGINAL, []);
+    expect(second.settlements).toEqual([]);
+    expect(second.records).toEqual({});
+  });
+
+  it("d: the saved-after-all path is undisturbed - the edited row gives one saved_after_return with followUpApplied", () => {
+    const first = firstPass("save", { settings: OTHER_SETTINGS });
+    const second = secondPass(first.records, EDITED, [
+      rowHolding(EDITED, { settings: OTHER_SETTINGS }),
+    ]);
+    expect(second.settlements).toEqual([
+      {
+        kind: "saved_after_return",
+        clientActionId: FOLLOW_UP_ACTION_ID,
+        intent: "save",
+        followUpApplied: true,
+      },
+    ]);
+    expect(second.records).toEqual({});
+  });
+});
+
 describe("queue-edit record predicates", () => {
   it("queueEditRecordsInCustody names every record whose text has not been handed back, including saved text with a pending follow-up, and not a returned one", () => {
     const pending = record({ editActionId: "pending" }, "save");
