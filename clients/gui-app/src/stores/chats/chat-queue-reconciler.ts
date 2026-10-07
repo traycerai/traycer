@@ -74,9 +74,23 @@ export const SEND_RESTORED_NOTICE_CODE = "SEND_RESTORED";
  */
 export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
   return (
-    noticeCarriesOnlyCopy(notice) || notice.code === SEND_RESTORED_NOTICE_CODE
+    noticeCarriesOnlyCopy(notice) ||
+    notice.code === SEND_RESTORED_NOTICE_CODE ||
+    notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE
   );
 }
+
+/**
+ * Notice code for an edit to a queued prompt that was handed back as
+ * unconfirmed and that the host has since shown it DID save.
+ *
+ * It must survive an unfocused pane for the reason `SEND_RESTORED` does: it
+ * arrives around a reconnect, and it is the only thing telling the user that
+ * the draft sitting in their composer is a duplicate of a prompt the host
+ * already holds.
+ */
+export const QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE =
+  "QUEUE_EDIT_SAVED_AFTER_RETURN";
 
 /**
  * Whether this notice inlines content nothing else holds any more. Both passes
@@ -458,6 +472,36 @@ export function unrecoverableSendNotice(
 }
 
 /**
+ * The statement for a queue-edit submission the host applied only in part: the
+ * text was saved, and the settings or the steer were not.
+ *
+ * A last-copy notice, and deliberately not a restoration. The text is on the
+ * host, so putting it back in the composer would present a saved prompt as an
+ * unsent one. But the SUBMISSION - the document as the user composed it, with
+ * its annotation cards - is held nowhere else once the custody record settles,
+ * so it gets the durability every last-copy record has: never evicted, shown
+ * until dismissed, and stashed with its sidecar at teardown.
+ *
+ * Says "do not send it again" where the other two say "resend", because that
+ * is the one way this copy can do harm.
+ */
+export function keptQueueEditSubmissionNotice(
+  send: UnrecoverableSend,
+): ChatErrorNotice {
+  const draft = quotedDraftOf(send.content);
+  const said = `${send.circumstance}.`;
+  return {
+    code: SEND_NOT_RECORDED_NOTICE_CODE,
+    message:
+      draft === null
+        ? said
+        : `${said}\n\nWhat you submitted is kept below to copy. It is already saved on the queued message, so do not send it again:\n${draft}`,
+    severity: "warning",
+    clientActionId: send.clientActionId,
+  };
+}
+
+/**
  * The statement for a restored prompt the composer could NOT take, because the
  * user has already typed something else there.
  *
@@ -800,6 +844,27 @@ function settingsDriftClause(
   ];
   if (named.length === 0) return "";
   return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
+}
+
+/**
+ * What a submission asked a queued row to change, named the way a drift is:
+ * each setting that differs from what the row held, with the value asked for.
+ * Empty when the row already held everything requested.
+ *
+ * For the one statement that has to say what was NOT applied - a queue edit
+ * whose text the host saved and whose settings it did not - so the user can
+ * see what to set again without the composer having kept it.
+ */
+export function namedSettingsChanges(input: {
+  readonly requested: ChatRunSettings;
+  readonly held: ChatRunSettings;
+  readonly requestedAccount: AccountContext;
+  readonly heldAccount: AccountContext;
+}): ReadonlyArray<string> {
+  return [
+    ...runSettingsDrift(input.requested, input.held),
+    ...accountDrift(input.requestedAccount, input.heldAccount),
+  ];
 }
 
 /** Nothing to compare when either side is absent - unlike billing. */

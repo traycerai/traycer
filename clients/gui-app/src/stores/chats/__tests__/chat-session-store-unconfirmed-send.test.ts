@@ -3,6 +3,7 @@ import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
@@ -41,11 +42,21 @@ const CONTENT = {
   ],
 };
 
+const SEEDED_MESSAGE: Message = {
+  role: "user",
+  messageId: "seeded-message",
+  sender: { type: "user", userId: OWNER_ID },
+  message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+  timestamp: 1,
+  sessionAnchor: null,
+};
+
 interface Harness {
   readonly handle: ChatSessionStoreHandle;
   readonly sent: ChatSubscribeClientFrame[];
   readonly resnapshots: number[];
   readonly factoryCalls: number[];
+  readonly wakes: number[];
   callbacks(): ChatStreamCallbacks;
 }
 
@@ -53,6 +64,7 @@ function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   const resnapshots: number[] = [];
   const factoryCalls: number[] = [];
+  const wakes: number[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
     environment: CHAT_STORE_TEST_ENVIRONMENT,
@@ -62,7 +74,9 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
-    wakeTransport: null,
+    wakeTransport: () => {
+      wakes.push(wakes.length);
+    },
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -86,6 +100,7 @@ function createHarness(): Harness {
     sent,
     resnapshots,
     factoryCalls,
+    wakes,
     callbacks: () => {
       if (callbacks === null) throw new Error("Expected callbacks");
       return callbacks;
@@ -112,7 +127,7 @@ function emitSnapshot(harness: Harness): void {
         settings: SETTINGS,
         activeSessionChain: null,
         claudePendingWakes: [],
-        messages: [],
+        messages: [SEEDED_MESSAGE],
         events: [],
         archivedAt: null,
         pinnedUserProviderHandle: null,
@@ -286,25 +301,88 @@ describe("a send unanswered at the display deadline", () => {
   });
 });
 
-describe("checkSendDelivery", () => {
-  it("asks the host again without dispatching a send, leaving the pending send untouched", () => {
+function acceptMessage(harness: Harness, send: DispatchedSend): void {
+  harness.callbacks().onMessageAccepted({
+    kind: "messageAccepted",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    message: {
+      role: "user",
+      messageId: send.messageId,
+      sender: { type: "user", userId: OWNER_ID },
+      message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+      timestamp: 2,
+      sessionAnchor: null,
+    },
+  });
+}
+
+describe("a send the host has named through messageAccepted (finding 7)", () => {
+  it("is skipped by the deadline timer when messageAccepted arrived before the ack", () => {
+    harness = openHarness();
+    const send = dispatchSend(harness);
+    acceptMessage(harness, send);
+    // The action is still pending (no ack), and the host has confirmed it.
+    const pending =
+      harness.handle.store.getState().pendingActions[send.clientActionId];
+    expect(pending.action).toBe("send");
+    expect(pending.messageConfirmedByHost).toBe(true);
+
+    vi.advanceTimersByTime(UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS);
+
+    expect(
+      harness.handle.store
+        .getState()
+        .unconfirmedSendActionIds.has(send.clientActionId),
+    ).toBe(false);
+  });
+
+  it("drops out of unconfirmedSendActionIdsOf when messageAccepted arrives after the deadline, though the raw set still holds the id", () => {
     harness = openHarness();
     const send = dispatchSend(harness);
     vi.advanceTimersByTime(UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS);
-    const pendingBefore =
-      harness.handle.store.getState().pendingActions[send.clientActionId];
-    const askedBefore =
-      harness.resnapshots.length + harness.factoryCalls.length;
+    expect(
+      unconfirmedSendActionIdsOf(harness.handle.store.getState()).has(
+        send.clientActionId,
+      ),
+    ).toBe(true);
+
+    acceptMessage(harness, send);
+
+    const state = harness.handle.store.getState();
+    expect(state.unconfirmedSendActionIds.has(send.clientActionId)).toBe(true);
+    expect(unconfirmedSendActionIdsOf(state).has(send.clientActionId)).toBe(
+      false,
+    );
+  });
+});
+
+describe("checkSendDelivery", () => {
+  it("wakes the transport without dispatching a send, closing the stream or touching the transcript or the pending send", () => {
+    harness = openHarness();
+    const send = dispatchSend(harness);
+    vi.advanceTimersByTime(UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS);
+    const before = harness.handle.store.getState();
+    const pendingBefore = before.pendingActions[send.clientActionId];
+    expect(before.snapshotLoaded).toBe(true);
+    expect(before.messages.map((m) => m.messageId)).toEqual(["seeded-message"]);
+    const factoryCallsBefore = harness.factoryCalls.length;
+    expect(harness.wakes).toHaveLength(0);
 
     harness.handle.store.getState().checkSendDelivery();
 
-    // It DID something: a resnapshot request or a re-subscribe.
-    expect(
-      harness.resnapshots.length + harness.factoryCalls.length,
-    ).toBeGreaterThan(askedBefore);
+    // It DID something: the transport was woken (this harness is a legacy
+    // line, which has no resnapshot to ask).
+    expect(harness.wakes).toHaveLength(1);
     expect(sendFrames(harness)).toHaveLength(1);
     const state = harness.handle.store.getState();
+    expect(state.snapshotLoaded).toBe(true);
+    expect(state.connectionStatus).toBe("open");
+    expect(state.messages.map((m) => m.messageId)).toEqual(["seeded-message"]);
     expect(state.pendingActions[send.clientActionId]).toBe(pendingBefore);
     expect(pendingBefore.messageId).toBe(send.messageId);
+    // No re-subscribe either: a retry would have built a new stream client.
+    expect(harness.factoryCalls).toHaveLength(factoryCallsBefore);
   });
 });

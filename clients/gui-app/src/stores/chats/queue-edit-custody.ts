@@ -4,9 +4,9 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import { recoveryTextFromContent } from "@/lib/composer/content-recovery";
-import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
+import { stringValue } from "@/lib/composer/tiptap-json-content";
 import type {
   ChatSendRestore,
   PendingChatAction,
@@ -19,12 +19,24 @@ import type {
  */
 export type QueueEditIntent = "save" | "steer";
 
-/** One frame's answer. `pending` until its ack arrives or a reconnect sweeps it. */
-export type QueueEditFrameOutcome = "pending" | "accepted" | "rejected";
+/**
+ * One frame's answer.
+ *
+ * `pending` while its ack can still arrive. `unconfirmed` once that ack died
+ * with a connection: nothing will ever answer it, so only what the host is
+ * later SEEN to hold can account for it. The two are kept apart because they
+ * are owed different things - a pending frame is owed patience, an unconfirmed
+ * one is owed evidence.
+ */
+export type QueueEditFrameOutcome =
+  | "pending"
+  | "accepted"
+  | "rejected"
+  | "unconfirmed";
 
 /**
  * An edited queued prompt, held from the moment the composer is cleared until
- * the host has answered for BOTH frames the submission went out as.
+ * the host has accounted for BOTH frames the submission went out as.
  *
  * A queue edit is two independent stream frames - `queueEdit` (the text) and
  * `queueSettingsUpdate` or `queueSteerNow` (the settings, or the steer) - and
@@ -32,6 +44,11 @@ export type QueueEditFrameOutcome = "pending" | "accepted" | "rejected";
  * edited text lived nowhere after that clear: a `queueEdit` the host refused
  * because the item had already started left a warning and nothing to recover
  * (traycerai/traycer#2418).
+ *
+ * "Accounted for" is an ack, or a POSITIVE match against what the host holds.
+ * It is never an absence: a row that still shows the old text may belong to a
+ * host that is still installing the edit, and a transcript body this client
+ * has not loaded says nothing about what ran.
  *
  * WHY ITS OWN SLOT AND NOT `PendingChatAction.restore`. The same reason
  * `pendingCancelRestorations` gives: `restore` on a pending action is read as
@@ -45,8 +62,7 @@ export interface QueueEditRecord {
   readonly queueItemId: string;
   /**
    * The message the edited row will become, captured at dispatch. Once the row
-   * leaves the queue this is the only way to find what the host ran, which is
-   * what a reconnect reads to learn whether the edit landed first.
+   * leaves the queue this is the only way to find what the host ran.
    */
   readonly messageId: string;
   readonly intent: QueueEditIntent;
@@ -55,15 +71,36 @@ export interface QueueEditRecord {
   /** The document the `queueEdit` frame carried - what the host would hold. */
   readonly wireContent: JsonContent;
   readonly settings: ChatRunSettings;
+  /** The billing context the settings frame carried beside `settings`. */
+  readonly accountContext: AccountContext;
+  /**
+   * Whether the row already held these settings and this account when the
+   * submission left. The second frame then asks for nothing the host does not
+   * have, so its answer cannot leave the submission half applied.
+   */
+  readonly followUpIsNoOp: boolean;
+  /**
+   * Each setting the submission asked the row to change, already named
+   * ("model x", "billing team y"). Kept so a partial result can say what was
+   * not applied after the row that showed the difference is gone.
+   */
+  readonly requestedChanges: ReadonlyArray<string>;
   readonly editActionId: string;
   /** The `queueSettingsUpdate` (save) or `queueSteerNow` (steer) action. */
   readonly followUpActionId: string;
   readonly edit: QueueEditFrameOutcome;
   readonly followUp: QueueEditFrameOutcome;
   /**
+   * The host's reason for refusing the second frame, kept because that ack can
+   * arrive BEFORE the text's own: the partial result is only stated once the
+   * text is known saved, and by then the refusal's frame is gone.
+   */
+  readonly followUpReason: string | null;
+  /**
    * Whether the edited text has already been handed back. A refused content
-   * edit returns it at once rather than waiting on the second frame, and the
-   * record then stays only to account for that frame's answer.
+   * edit returns it at once rather than waiting on the second frame, and an
+   * unconfirmed one returns it while the record keeps watching for the host to
+   * show what it did.
    */
   readonly contentReturned: boolean;
   /** Local dispatch time. Never shown as a host-confirmed transition. */
@@ -74,27 +111,66 @@ export type QueueEditRecords = Readonly<
   Record<string, QueueEditRecord | undefined>
 >;
 
-/** What settling a record owes the user. Nothing, for a submission that landed whole. */
+/**
+ * Why an edited text is going back to the user.
+ *
+ * - `refused`: the host said no, on this connection, with a reason.
+ * - `not_applied`: no ack, but the host shows the prompt ran - or left the
+ *   queue - as something else. An edit cannot land on a prompt that has
+ *   started, so this is settled.
+ * - `unconfirmed`: no ack and nothing the host shows settles it. The text goes
+ *   back so it is not held out of sight, and it may still have been saved.
+ */
+export type QueueEditReturnCause = "refused" | "not_applied" | "unconfirmed";
+
+/** What accounting for a record owes the user. Nothing, for one that landed whole. */
 export type QueueEditSettlement =
   /**
-   * The text was not saved. The edited draft goes back to the composer (or to
-   * a copyable entry when a newer draft is there); the original prompt is left
-   * to whatever the host did with it and is never re-sent from here.
+   * The edited draft goes back to the composer (or to a copyable entry when a
+   * newer draft is there). The original prompt is left to whatever the host
+   * did with it and is never re-sent from here.
    */
   | {
       readonly kind: "content_returned";
       readonly clientActionId: string;
       readonly restore: ChatSendRestore;
-      /** The host's refusal, or `null` when a reconnect settled it. */
+      /**
+       * The document the frame carried. It can name images the composer's own
+       * document does not (an annotation crop is added on the way out), and a
+       * hand-back has to stop trusting the host to hold those as well.
+       */
+      readonly wireContent: JsonContent;
+      readonly cause: QueueEditReturnCause;
+      /** The host's refusal. `null` for every cause but `refused`. */
       readonly hostReason: string | null;
     }
-  /** The text was saved and the second frame was not applied. */
+  /**
+   * The text was saved and the second frame was not applied - or, after a
+   * reconnect, could not be confirmed. The whole submission is kept for the
+   * user as a copyable entry; the text itself is on the host and is not put
+   * back in the composer, where it would read as unsent.
+   */
   | {
       readonly kind: "partial";
       readonly clientActionId: string;
       readonly intent: QueueEditIntent;
-      /** The host's refusal, or `null` when a reconnect could not confirm it. */
+      readonly restore: ChatSendRestore;
+      /** See {@link QueueEditRecord.requestedChanges}. */
+      readonly requestedChanges: ReadonlyArray<string>;
+      /** `true` for a refusal the host stated, `false` for one never answered. */
+      readonly refused: boolean;
       readonly hostReason: string | null;
+    }
+  /**
+   * An edit handed back as unconfirmed that the host has since shown it did
+   * save. The copy already returned is now a duplicate, and the user is told
+   * so rather than left to send it a second time.
+   */
+  | {
+      readonly kind: "saved_after_return";
+      readonly clientActionId: string;
+      readonly intent: QueueEditIntent;
+      readonly followUpApplied: boolean;
     };
 
 export interface QueueEditFold {
@@ -128,7 +204,7 @@ export function withQueueEditRecord(
   return { ...records, [record.editActionId]: record };
 }
 
-function withoutQueueEditRecord(
+export function withoutQueueEditRecord(
   records: QueueEditRecords,
   editActionId: string,
 ): QueueEditRecords {
@@ -138,45 +214,92 @@ function withoutQueueEditRecord(
 }
 
 /**
+ * The records whose edited text is held NOWHERE else: not yet handed back, and
+ * not yet known saved. These are what a disposing session must hand off and
+ * what an eviction must wait for.
+ */
+export function queueEditRecordsHoldingOnlyCopy(
+  records: QueueEditRecords,
+): ReadonlyArray<QueueEditRecord> {
+  return Object.values(records).filter(
+    (record): record is QueueEditRecord =>
+      record !== undefined &&
+      !record.contentReturned &&
+      record.edit !== "accepted",
+  );
+}
+
+/** Whether any record is waiting on host evidence rather than on an ack. */
+export function hasUnconfirmedQueueEdit(records: QueueEditRecords): boolean {
+  for (const record of Object.values(records)) {
+    if (record === undefined) continue;
+    if (record.edit === "unconfirmed" || record.followUp === "unconfirmed") {
+      return true;
+    }
+  }
+  return false;
+}
+
+interface SettledQueueEditRecord {
+  readonly record: QueueEditRecord | null;
+  readonly settlements: ReadonlyArray<QueueEditSettlement>;
+}
+
+/**
  * What a record owes once an outcome has moved, and what is left of it.
  *
- * A refused content edit returns the text IMMEDIATELY: waiting for the second
- * frame would hold the user's only copy behind an answer that changes nothing
- * about where the text belongs. The record survives that hand-back until the
- * second frame is accounted for, so its refusal is not narrated as a separate
- * failure of a submission already reported.
+ * The text goes back as soon as its own frame is refused or left unconfirmed:
+ * waiting on the second frame would hold the user's only copy behind an answer
+ * that changes nothing about where the text belongs. The record survives that
+ * hand-back - a refused one until the second frame is answered, so its refusal
+ * is not narrated as a separate failure, and an unconfirmed one until the host
+ * shows what it did.
  */
 function settleQueueEditRecord(
   record: QueueEditRecord,
-  hostReason: string | null,
-): {
-  readonly record: QueueEditRecord | null;
-  readonly settlement: QueueEditSettlement | null;
-} {
-  const settled = record.edit !== "pending" && record.followUp !== "pending";
-  if (record.edit === "rejected" && !record.contentReturned) {
-    return {
-      record: settled ? null : { ...record, contentReturned: true },
-      settlement: {
-        kind: "content_returned",
-        clientActionId: record.editActionId,
-        restore: record.restore,
-        hostReason,
-      },
-    };
+  returned: {
+    readonly cause: QueueEditReturnCause;
+    readonly hostReason: string | null;
+  },
+): SettledQueueEditRecord {
+  const settlements: QueueEditSettlement[] = [];
+  let next = record;
+  if (
+    (next.edit === "rejected" || next.edit === "unconfirmed") &&
+    !next.contentReturned
+  ) {
+    settlements.push({
+      kind: "content_returned",
+      clientActionId: next.editActionId,
+      restore: next.restore,
+      wireContent: next.wireContent,
+      cause: returned.cause,
+      hostReason: returned.hostReason,
+    });
+    next = { ...next, contentReturned: true };
   }
-  if (record.edit === "accepted" && record.followUp === "rejected") {
-    return {
-      record: null,
-      settlement: {
-        kind: "partial",
-        clientActionId: record.followUpActionId,
-        intent: record.intent,
-        hostReason,
-      },
-    };
+  if (
+    next.edit === "accepted" &&
+    (next.followUp === "rejected" || next.followUp === "unconfirmed")
+  ) {
+    settlements.push({
+      kind: "partial",
+      clientActionId: next.followUpActionId,
+      intent: next.intent,
+      restore: next.restore,
+      requestedChanges: next.requestedChanges,
+      refused: next.followUp === "rejected",
+      hostReason: next.followUpReason,
+    });
+    return { record: null, settlements };
   }
-  return { record: settled ? null : record, settlement: null };
+  const landedWhole = next.edit === "accepted" && next.followUp === "accepted";
+  const refusedAndAnswered =
+    next.edit === "rejected" && next.followUp !== "pending";
+  return {
+    record: landedWhole || refusedAndAnswered ? null : next,
+    settlements,
+  };
 }
 
 /**
@@ -193,177 +316,283 @@ export function foldQueueEditAck(
 ): QueueEditFold {
   const record = queueEditRecordForAction(records, ack.clientActionId);
   if (record === null) return { records, settlements: NO_SETTLEMENTS };
-  const answered: QueueEditRecord =
-    record.editActionId === ack.clientActionId
-      ? { ...record, edit: ack.status }
-      : { ...record, followUp: ack.status };
-  const { record: next, settlement } = settleQueueEditRecord(
-    answered,
-    ack.status === "rejected" ? ack.reason : null,
-  );
+  const answersEdit = record.editActionId === ack.clientActionId;
+  const answered: QueueEditRecord = answersEdit
+    ? { ...record, edit: ack.status }
+    : {
+        ...record,
+        followUp: ack.status,
+        followUpReason: ack.status === "rejected" ? ack.reason : null,
+      };
+  const { record: next, settlements } = settleQueueEditRecord(answered, {
+    cause: "refused",
+    hostReason: answersEdit ? ack.reason : null,
+  });
   return {
     records:
       next === null
         ? withoutQueueEditRecord(records, record.editActionId)
         : withQueueEditRecord(records, next),
-    settlements: settlement === null ? NO_SETTLEMENTS : [settlement],
+    settlements,
   };
 }
 
+/** An image node reduced to the one attribute that survives the host. */
+function imageHashOf(node: JsonContent): string | null {
+  return stringValue(node.attrs?.hash);
+}
+
+/** Whether every image in the document names its bytes by hash. */
+function everyImageIsHashed(node: JsonContent): boolean {
+  if (node.type === "imageAttachment") return imageHashOf(node) !== null;
+  return (node.content ?? []).every(everyImageIsHashed);
+}
+
 /**
- * Whether two documents are the same prompt as far as a person can tell: the
- * same recoverable text and the same images.
+ * The document with each image reduced to its hash, IN PLACE: same node, same
+ * position, same number of occurrences.
+ */
+function withImagesByHash(node: JsonContent): JsonContent {
+  if (node.type === "imageAttachment") {
+    return { type: "imageAttachment", attrs: { hash: imageHashOf(node) } };
+  }
+  if (node.content === undefined) return node;
+  return { ...node, content: node.content.map(withImagesByHash) };
+}
+
+/** `JSON.stringify` with object keys ordered and absent values dropped. */
+function canonicalJson(value: JsonContent): string {
+  return JSON.stringify(value, (_key, inner: unknown) => {
+    if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
+      return inner;
+    }
+    const ordered: Record<string, unknown> = {};
+    for (const key of Object.keys(inner).sort()) {
+      const entry: unknown = Reflect.get(inner, key);
+      if (entry !== null && entry !== undefined) ordered[key] = entry;
+    }
+    return ordered;
+  });
+}
+
+/**
+ * Whether the host holds exactly the document this edit sent.
  *
- * Deliberately not `JSON.stringify` equality. The frame carries images inline
- * when this host is not known to hold their bytes, and the host stores them by
- * hash, so the document that comes back is never byte-identical to the one that
- * left even when the edit landed exactly.
+ * A structural comparison, node for node and in order. The one thing it
+ * normalises is how an image names its bytes: the frame carries them inline
+ * when this host is not known to hold them, and the host stores them by hash,
+ * so the document that comes back is never byte-identical to the one that left
+ * even when the edit landed exactly. Everything else has to be the same -
+ * including where each image sits and how many times it appears, because an
+ * edit that only moves or repeats an image is still an edit. A document with
+ * an image that names no hash matches nothing: there is no identity to compare.
  */
 export function queueEditContentMatches(
   sent: JsonContent,
   held: JsonContent,
 ): boolean {
-  if (recoveryTextFromContent(sent) !== recoveryTextFromContent(held)) {
-    return false;
-  }
-  const sentHashes = [...blobHashesFromContent(sent)].sort();
-  const heldHashes = [...blobHashesFromContent(held)].sort();
+  if (!everyImageIsHashed(sent) || !everyImageIsHashed(held)) return false;
   return (
-    sentHashes.length === heldHashes.length &&
-    sentHashes.every((hash, index) => hash === heldHashes[index])
+    canonicalJson(withImagesByHash(sent)) ===
+    canonicalJson(withImagesByHash(held))
   );
 }
 
-interface HeldQueueEditContent {
-  /** The row, while it is still queued. */
-  readonly row: ChatQueuedItem | null;
-  /** The document the host holds for it - queued or run - or `null` if unknown. */
-  readonly content: JsonContent | null;
+/** What the host can be seen to hold, at the moment a record is accounted for. */
+export interface QueueEditEvidence {
+  readonly queue: ChatQueueState;
+  /** The transcript messages whose bodies this client holds. */
+  readonly messages: ReadonlyArray<Message>;
+  /**
+   * Whether `messages` is the WHOLE transcript. Only then does a message that
+   * is not in it not exist; on a windowed transcript with rows still unloaded,
+   * "not found" means "not loaded".
+   */
+  readonly transcriptComplete: boolean;
+  readonly settingsEqual: (a: ChatRunSettings, b: ChatRunSettings) => boolean;
+  readonly accountContextEqual: (
+    a: AccountContext,
+    b: AccountContext,
+  ) => boolean;
 }
 
-/** What the host holds for a record's prompt now - queued, run, or unknown. */
-function heldContentFor(
+type QueueEditVerdict = "applied" | "not_applied" | "unknown";
+
+/**
+ * Whether the host saved the edited text, as far as it can be SEEN.
+ *
+ * - The edited document on the row, or on the message the row became: applied.
+ * - The message the row became, holding something else: not applied. The host
+ *   refuses an edit to a prompt that has started, so nothing can change it now.
+ * - The row gone from a transcript held whole, with no such message: not
+ *   applied - the prompt was removed without running.
+ * - Anything else is unknown. A row still showing other text may be about to
+ *   change (the host finishes a handler it had already started when the
+ *   connection dropped), and a body this client has not loaded says nothing.
+ */
+function queueEditVerdict(
   record: QueueEditRecord,
-  queue: ChatQueueState,
-  messages: ReadonlyArray<Message>,
-): HeldQueueEditContent {
-  const row =
-    queue.items.find((item) => item.queueItemId === record.queueItemId) ?? null;
+  row: ChatQueuedItem | null,
+  evidence: QueueEditEvidence,
+): QueueEditVerdict {
   if (row !== null) {
-    return {
-      row,
-      content: row.kind === "prompt" ? row.message.content : null,
-    };
+    return row.kind === "prompt" &&
+      queueEditContentMatches(record.wireContent, row.message.content)
+      ? "applied"
+      : "unknown";
   }
-  const message = messages.find(
+  const message = evidence.messages.find(
     (candidate) =>
       candidate.role === "user" && candidate.messageId === record.messageId,
   );
-  return {
-    row: null,
-    content:
-      message !== undefined && message.role === "user"
-        ? message.message.content
-        : null,
-  };
-}
-
-/**
- * A swept content edit, decided by what the host holds: only the edited text
- * itself, on the row or on the message the row became, confirms it landed.
- */
-function sweptEditOutcome(
-  record: QueueEditRecord,
-  held: HeldQueueEditContent,
-): QueueEditFrameOutcome {
-  if (held.content === null) return "rejected";
-  return queueEditContentMatches(record.wireContent, held.content)
-    ? "accepted"
-    : "rejected";
-}
-
-/**
- * A swept second frame nobody can answer for any more. It is read as applied
- * unless a still-queued row shows otherwise: once the row has run, the
- * transcript is what says how.
- */
-function sweptFollowUpOutcome(
-  record: QueueEditRecord,
-  held: HeldQueueEditContent,
-  settingsEqual: (a: ChatRunSettings, b: ChatRunSettings) => boolean,
-): QueueEditFrameOutcome {
-  if (held.row === null) return "accepted";
-  return followUpAppliedOnRow(record, held.row, settingsEqual)
-    ? "accepted"
-    : "rejected";
-}
-
-/**
- * Whether a still-queued row shows the second frame landed. A row that has left
- * the queue answers nothing here: the transcript shows how it ran.
- */
-function followUpAppliedOnRow(
-  record: QueueEditRecord,
-  row: ChatQueuedItem,
-  settingsEqual: (a: ChatRunSettings, b: ChatRunSettings) => boolean,
-): boolean {
-  if (row.kind !== "prompt") return false;
-  if (record.intent === "save") {
-    return settingsEqual(row.settings, record.settings);
+  if (message !== undefined && message.role === "user") {
+    return queueEditContentMatches(record.wireContent, message.message.content)
+      ? "applied"
+      : "not_applied";
   }
-  // A steer the host took leaves the row aimed at the running turn, or already
-  // moved on from `pending` (requested, steering, injected, or fallen back with
-  // the row saying so itself).
-  return row.delivery === "same_turn" || row.status !== "pending";
+  return evidence.transcriptComplete ? "not_applied" : "unknown";
 }
 
 /**
- * Account for the records whose acks died with an earlier connection, BEFORE
- * their action ids are swept.
- *
- * Scoped to swept ids only, like the cancel restorations: a frame dispatched on
- * the current connection can still be answered, and the snapshot not showing
- * its effect yet proves nothing about it.
- *
- * The snapshot is the evidence. The edited text on the row - or on the message
- * the row became - confirms the edit landed. Anything else leaves the edit
- * unconfirmed, and the text goes back to the user: a copy they may not need is
- * recoverable, a correction held nowhere is not. Nothing here ever re-sends.
+ * Whether the host can be SEEN to hold what the second frame asked for. Only a
+ * still-queued row can show it: the settings and account it carries, or a
+ * steer the host has taken. A row that has left the queue, or one that is
+ * merely paused, shows nothing either way.
  */
-export function settleQueueEditsForSnapshot(input: {
+function followUpShownApplied(
+  record: QueueEditRecord,
+  row: ChatQueuedItem | null,
+  evidence: QueueEditEvidence,
+): boolean {
+  if (record.followUpIsNoOp) return true;
+  if (row === null || row.kind !== "prompt") return false;
+  if (record.intent === "save") {
+    return (
+      evidence.settingsEqual(row.settings, record.settings) &&
+      evidence.accountContextEqual(row.accountContext, record.accountContext)
+    );
+  }
+  return (
+    row.steerRequest !== null ||
+    row.status === "steering" ||
+    row.status === "injected"
+  );
+}
+
+/**
+ * Account for one record that has a frame no ack will answer, from what the
+ * host shows now.
+ */
+function accountForUnconfirmedRecord(
+  record: QueueEditRecord,
+  evidence: QueueEditEvidence,
+): SettledQueueEditRecord {
+  const row =
+    evidence.queue.items.find(
+      (item) => item.queueItemId === record.queueItemId,
+    ) ?? null;
+  const verdict =
+    record.edit === "unconfirmed"
+      ? queueEditVerdict(record, row, evidence)
+      : null;
+  const followUpApplied =
+    record.followUp === "accepted" ||
+    (record.followUp === "unconfirmed" &&
+      followUpShownApplied(record, row, evidence));
+  if (verdict === "applied" && record.contentReturned) {
+    return {
+      record: null,
+      settlements: [
+        {
+          kind: "saved_after_return",
+          clientActionId: record.editActionId,
+          intent: record.intent,
+          followUpApplied,
+        },
+      ],
+    };
+  }
+  const edit = editOutcomeForVerdict(record.edit, verdict);
+  const followUp =
+    edit === "accepted" && followUpApplied ? "accepted" : record.followUp;
+  if (edit === record.edit && followUp === record.followUp) {
+    return settleQueueEditRecord(record, UNCONFIRMED_RETURN);
+  }
+  return settleQueueEditRecord(
+    { ...record, edit, followUp },
+    verdict === "not_applied" ? NOT_APPLIED_RETURN : UNCONFIRMED_RETURN,
+  );
+}
+
+const UNCONFIRMED_RETURN = { cause: "unconfirmed", hostReason: null } as const;
+const NOT_APPLIED_RETURN = { cause: "not_applied", hostReason: null } as const;
+
+function editOutcomeForVerdict(
+  current: QueueEditFrameOutcome,
+  verdict: QueueEditVerdict | null,
+): QueueEditFrameOutcome {
+  if (verdict === "applied") return "accepted";
+  if (verdict === "not_applied") return "rejected";
+  return current;
+}
+
+/**
+ * Account for the records no ack can answer any more, from what the host
+ * shows.
+ *
+ * Called with the ids a reconnect is about to sweep, BEFORE they are dropped:
+ * a frame dispatched on an earlier connection will never be acked, so it
+ * becomes `unconfirmed` here. Called again, with no swept ids, whenever the
+ * host shows something new - a queue change, a later snapshot, a transcript
+ * body arriving - so a record left unconfirmed is settled by the first
+ * evidence that can settle it. A frame still pending on the current connection
+ * is never touched: its ack can still arrive, and a snapshot not showing its
+ * effect yet proves nothing about it.
+ *
+ * Nothing here ever re-sends.
+ */
+export function accountForQueueEdits(input: {
   readonly records: QueueEditRecords;
   readonly sweptActionIds: ReadonlySet<string>;
-  readonly queue: ChatQueueState;
-  readonly messages: ReadonlyArray<Message>;
-  readonly settingsEqual: (a: ChatRunSettings, b: ChatRunSettings) => boolean;
+  readonly evidence: QueueEditEvidence;
 }): QueueEditFold {
   let records = input.records;
   const settlements: QueueEditSettlement[] = [];
   for (const record of Object.values(input.records)) {
     if (record === undefined) continue;
-    const editSwept =
-      record.edit === "pending" &&
-      input.sweptActionIds.has(record.editActionId);
-    const followUpSwept =
-      record.followUp === "pending" &&
-      input.sweptActionIds.has(record.followUpActionId);
-    if (!editSwept && !followUpSwept) continue;
-    const held = heldContentFor(record, input.queue, input.messages);
-    const edit = editSwept ? sweptEditOutcome(record, held) : record.edit;
-    const followUp = followUpSwept
-      ? sweptFollowUpOutcome(record, held, input.settingsEqual)
-      : record.followUp;
-    const { record: next, settlement } = settleQueueEditRecord(
-      { ...record, edit, followUp },
-      null,
-    );
+    const swept = withSweptFramesUnconfirmed(record, input.sweptActionIds);
+    if (swept.edit !== "unconfirmed" && swept.followUp !== "unconfirmed") {
+      continue;
+    }
+    const accounted = accountForUnconfirmedRecord(swept, input.evidence);
+    if (accounted.record === record && accounted.settlements.length === 0) {
+      continue;
+    }
     records =
-      next === null
+      accounted.record === null
         ? withoutQueueEditRecord(records, record.editActionId)
-        : withQueueEditRecord(records, next);
-    if (settlement !== null) settlements.push(settlement);
+        : withQueueEditRecord(records, accounted.record);
+    settlements.push(...accounted.settlements);
   }
   return { records, settlements };
+}
+
+/** The record with each swept, still-pending frame marked unanswerable. */
+function withSweptFramesUnconfirmed(
+  record: QueueEditRecord,
+  sweptActionIds: ReadonlySet<string>,
+): QueueEditRecord {
+  const editSwept =
+    record.edit === "pending" && sweptActionIds.has(record.editActionId);
+  const followUpSwept =
+    record.followUp === "pending" &&
+    sweptActionIds.has(record.followUpActionId);
+  if (!editSwept && !followUpSwept) return record;
+  return {
+    ...record,
+    edit: editSwept ? "unconfirmed" : record.edit,
+    followUp: followUpSwept ? "unconfirmed" : record.followUp,
+  };
 }
 
 /** What a queued row's own control is doing while its frame is unanswered. */

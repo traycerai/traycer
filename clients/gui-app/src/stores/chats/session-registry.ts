@@ -17,6 +17,7 @@ import {
   acceptedActionIsUnsettled,
   noticeCarriesOnlyCopy,
 } from "@/stores/chats/chat-queue-reconciler";
+import { queueEditRecordsHoldingOnlyCopy } from "@/stores/chats/queue-edit-custody";
 
 /**
  * How long a chat session is kept warm after its last tile unmounts. A chat
@@ -530,6 +531,12 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
   if (
     Object.values(state.pendingActions).some((action) => action.hashOnlyRetry)
   ) {
+    return true;
+  }
+  // 5. An edit to a queued prompt still in custody. The composer cleared when
+  //    it was submitted, and until the host answers - or the text is handed
+  //    back - this store holds the only copy of it.
+  if (queueEditRecordsHoldingOnlyCopy(state.queueEditRecords).length > 0) {
     return true;
   }
   // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration

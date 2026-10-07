@@ -23,7 +23,10 @@ interface AccountContextStoreState {
   readonly setAccountContext: (context: AccountContext) => void;
 }
 
-function accountContextsEqual(a: AccountContext, b: AccountContext): boolean {
+export function accountContextsEqual(
+  a: AccountContext,
+  b: AccountContext,
+): boolean {
   if (a.type !== b.type) return false;
   return a.type === "TEAM" && b.type === "TEAM" ? a.teamId === b.teamId : true;
 }

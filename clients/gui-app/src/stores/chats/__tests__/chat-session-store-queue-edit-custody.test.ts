@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedPromptItem,
@@ -7,12 +7,22 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
+import { QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
 import {
-  QUEUE_EDIT_PARTIAL_NOTICE_CODE,
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { queueItemsInFlight } from "@/stores/chats/queue-edit-custody";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  isDraftBlobConfirmed,
+  putDraftBlobs,
+  resetDraftBlobTransportForTests,
+  type DraftBlobClient,
+} from "@/lib/drafts/draft-blob-transport";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -23,6 +33,15 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
  * callbacks and read the store, so what is proven is the custody the store
  * keeps, not a helper called in isolation.
  */
+
+vi.mock("@/lib/composer/landing-image-store", () => ({
+  getImageBytes: (hash: string) =>
+    Promise.resolve(
+      hash === "d".repeat(64) ? new Uint8Array([1, 2, 3, 4]) : undefined,
+    ),
+  putImageBytesAtHash: () => Promise.resolve(true),
+  ensureMeasuredImageSizes: () => Promise.resolve(),
+}));
 
 const EPIC_ID = "epic-queue-edit";
 const CHAT_ID = "chat-queue-edit";
@@ -47,6 +66,25 @@ function textDoc(text: string): JsonContent {
     content: [{ type: "paragraph", content: [{ type: "text", text }] }],
   };
 }
+
+const ANNOTATION: BrowserAnnotationRecord = {
+  kind: "browser-annotation",
+  annotationId: "annotation-1",
+  tabId: "tab-1",
+  sessionId: "session-1",
+  origin: "https://example.test",
+  pageUrl: "https://example.test/page",
+  pageTitle: "Example",
+  capturedAt: 1,
+  comment: "this button",
+  counts: { elements: 1, regions: 0, strokes: 0 },
+  elements: [],
+  imageFileName: "crop.png",
+  imageHash: "c".repeat(64),
+  droppedElementCount: 0,
+};
+
+const OTHER_SETTINGS: ChatRunSettings = { ...SETTINGS, model: "gpt-5-mini" };
 
 const ORIGINAL = textDoc("original queued text");
 const EDITED = textDoc("the corrected text");
@@ -182,12 +220,17 @@ interface EditFrames {
   readonly followUpActionId: string;
 }
 
-function submitEdit(harness: Harness, intent: "save" | "steer"): EditFrames {
+function submitEdit(
+  harness: Harness,
+  intent: "save" | "steer",
+  settings: ChatRunSettings,
+  browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>,
+): EditFrames {
   const editActionId = harness.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
     content: EDITED,
-    restore: { content: EDITED, browserAnnotations: [] },
-    settings: SETTINGS,
+    restore: { content: EDITED, browserAnnotations },
+    settings,
     intent,
   });
   if (editActionId === null) throw new Error("expected the edit to dispatch");
@@ -243,22 +286,37 @@ function sendFrameCount(harness: Harness): number {
 
 let harness: Harness | null = null;
 
+beforeEach(() => {
+  // A blob confirmation is recorded and read PER ACCOUNT, and a null owner
+  // confirms nothing: without an identity the `toBe(false)` below would read
+  // "signed out" rather than "the refusal retracted the memo".
+  useAuthStore.setState({
+    contextMetadata: { userId: OWNER_ID, username: OWNER_ID },
+  });
+  resetDraftBlobTransportForTests();
+});
+
 afterEach(() => {
+  useAuthStore.setState({ contextMetadata: null });
   harness?.handle.dispose();
   harness = null;
+  resetDraftBlobTransportForTests();
 });
 
 describe("a queued-prompt edit stays in custody until the host answers", () => {
   it("hands the EDITED text back, with no generic notice and no send, when the host refuses both frames (the #2418 sequence)", () => {
     harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(harness, "save");
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      SETTINGS,
+      [],
+    );
 
     // Before ANY ack: both frames carry the row, and the edited text is held.
     const before = harness.handle.store.getState();
-    expect(before.pendingActions[editActionId]?.queueItemId).toBe(
-      QUEUE_ITEM_ID,
-    );
-    expect(before.pendingActions[followUpActionId]?.queueItemId).toBe(
+    expect(before.pendingActions[editActionId].queueItemId).toBe(QUEUE_ITEM_ID);
+    expect(before.pendingActions[followUpActionId].queueItemId).toBe(
       QUEUE_ITEM_ID,
     );
     expect(before.queueEditRecords[editActionId]?.restore.content).toEqual(
@@ -328,7 +386,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     const occupant = harness.handle.store.getState().failedSendRestoration;
     expect(occupant?.content).toEqual(textDoc("an earlier draft"));
 
-    const { editActionId } = submitEdit(harness, "save");
+    const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
     ack(harness, {
       clientActionId: editActionId,
       action: "queueEdit",
@@ -349,12 +407,17 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
       (notice) => notice.clientActionId === editActionId,
     );
     expect(stated).toHaveLength(1);
-    expect(stated[0]?.code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
+    expect(stated[0].code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
   });
 
-  it("states a partial save, and restores nothing, when the edit is accepted and the follow-up refused", () => {
+  it("keeps the whole submission as a last-copy record, quoting the text, and restores nothing, when the edit is accepted and the follow-up refused (finding 6)", () => {
     harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(harness, "steer");
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [ANNOTATION],
+    );
 
     ack(harness, {
       clientActionId: editActionId,
@@ -368,23 +431,100 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     });
 
     const state = harness.handle.store.getState();
-    const partial = state.errorNotices.filter(
-      (notice) => notice.code === QUEUE_EDIT_PARTIAL_NOTICE_CODE,
+    const kept = state.lastCopyPrompts[followUpActionId];
+    expect(kept).toBeDefined();
+    expect(kept.content).toEqual(EDITED);
+    expect(kept.browserAnnotations).toEqual([ANNOTATION]);
+    const stated = state.errorNotices.filter(
+      (notice) => notice.clientActionId === followUpActionId,
     );
-    expect(partial).toHaveLength(1);
-    expect(
-      partial[0]?.message.startsWith(
-        "Text saved; settings/steering were not applied",
-      ),
-    ).toBe(true);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not applied",
+    );
+    expect(stated[0].message).toContain("the corrected text");
+    expect(stated[0].message).toContain("do not send it again");
     expect(state.failedSendRestoration).toBeNull();
     expect(state.queueEditRecords).toEqual({});
     expect(sendFrameCount(harness)).toBe(0);
   });
 
-  it("hands the edited text back after a reconnect whose snapshot row still holds the ORIGINAL", () => {
+  it("names what the submission asked for in the partial notice when the settings differed from the row's (finding 6, addendum)", () => {
     harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(harness, "save");
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      OTHER_SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+    });
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.clientActionId === followUpActionId,
+      );
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not applied",
+    );
+    expect(stated[0].message).toContain("You asked for");
+    expect(stated[0].message).toContain("gpt-5-mini");
+  });
+
+  it("does not claim a requested change when the submission's settings equal the row's (steer rejected)", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+    });
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.clientActionId === followUpActionId,
+      );
+    // The partial really was stated (the path ran)...
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not applied",
+    );
+    // ...and there was nothing to name.
+    expect(stated[0].message).not.toContain("You asked for");
+  });
+
+  it("hands the edited text back as UNCONFIRMED after a reconnect whose snapshot row still holds the ORIGINAL, and retains the record (finding 2)", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      SETTINGS,
+      [],
+    );
     expect(Object.keys(harness.handle.store.getState().pendingActions)).toEqual(
       expect.arrayContaining([editActionId, followUpActionId]),
     );
@@ -393,16 +533,71 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
     const state = harness.handle.store.getState();
     expect(state.failedSendRestoration?.content).toEqual(EDITED);
-    expect(state.queueEditRecords).toEqual({});
+    expect(state.failedSendRestoration?.reason).toContain(
+      "could not be confirmed after reconnecting",
+    );
+    // Retained, because a row still showing the old text is no proof the host
+    // is not about to install the edit.
+    const kept = state.queueEditRecords[editActionId];
+    expect(kept?.edit).toBe("unconfirmed");
+    expect(kept?.contentReturned).toBe(true);
     // The sweep did run: the ids the record named are gone from pending.
     expect(state.pendingActions[editActionId]).toBeUndefined();
     expect(state.pendingActions[followUpActionId]).toBeUndefined();
     expect(sendFrameCount(harness)).toBe(0);
   });
 
+  it("tells the user ONCE that an unconfirmed edit was saved after all, drops the record, and does not award the slot again (finding 2)", () => {
+    harness = openWithQueuedRow();
+    const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+    const slotBefore = harness.handle.store.getState().failedSendRestoration;
+    expect(slotBefore?.content).toEqual(EDITED);
+
+    // The host finishes the handler it had started: the row now holds the edit.
+    harness.callbacks().onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [queuedRow(EDITED)] },
+    });
+
+    const state = harness.handle.store.getState();
+    const told = state.errorNotices.filter(
+      (notice) => notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+    );
+    expect(told).toHaveLength(1);
+    expect(told[0].clientActionId).toBe(editActionId);
+    expect(state.queueEditRecords).toEqual({});
+    expect(state.failedSendRestoration).toBe(slotBefore);
+    expect(sendFrameCount(harness)).toBe(0);
+
+    // A later, identical queue change has nothing left to say.
+    harness.callbacks().onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [queuedRow(EDITED)] },
+    });
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+        ),
+    ).toHaveLength(1);
+  });
+
   it("hands nothing back after a reconnect whose snapshot row already holds the EDITED text", () => {
     harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(harness, "save");
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      SETTINGS,
+      [],
+    );
 
     reconnectWithItems(harness, [queuedRow(EDITED)]);
 
@@ -418,7 +613,12 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
   it("keeps the record and both pending frames when a SAME-connection snapshot lacks the row", () => {
     harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(harness, "save");
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      SETTINGS,
+      [],
+    );
 
     emitSnapshot(harness, []);
 
@@ -437,7 +637,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
     const steerId = store.getState().queueSteerNow(QUEUE_ITEM_ID, SETTINGS);
     if (steerId === null) throw new Error("expected a steer frame");
-    expect(store.getState().pendingActions[steerId]?.queueItemId).toBe(
+    expect(store.getState().pendingActions[steerId].queueItemId).toBe(
       QUEUE_ITEM_ID,
     );
     expect(
@@ -498,5 +698,70 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     expect(result).toBeNull();
     expect(harness.sent.length).toBe(framesBefore);
     expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+  });
+});
+
+describe("a refused queue edit retracts this host's blob acks (finding 8)", () => {
+  const WIRE_HASH = "d".repeat(64);
+  const ACK_CLIENT: DraftBlobClient = {
+    request: (() =>
+      Promise.resolve({})) as HostRequester<HostRpcRegistry>["request"],
+    requestWithOptions: (() =>
+      Promise.resolve({
+        ok: true,
+      })) as HostRequester<HostRpcRegistry>["requestWithOptions"],
+  };
+  const WIRE_ONLY_IMAGE: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "img-1",
+              fileName: "crop.png",
+              mimeType: "image/png",
+              size: 4,
+              hash: WIRE_HASH,
+            },
+          },
+          { type: "text", text: "the corrected text" },
+        ],
+      },
+    ],
+  };
+
+  it("forgets a hash present only in the frame's document, not in the composer's", async () => {
+    await putDraftBlobs(HOST_ID, ACK_CLIENT, [WIRE_HASH], OWNER_ID);
+    expect(isDraftBlobConfirmed(HOST_ID, WIRE_HASH, OWNER_ID)).toBe(true);
+
+    harness = openWithQueuedRow();
+    // The composer's own document names no image; the frame's does (an
+    // annotation crop is added on the way out).
+    const editActionId = harness.handle.store.getState().submitQueueEdit({
+      queueItemId: QUEUE_ITEM_ID,
+      content: WIRE_ONLY_IMAGE,
+      restore: { content: EDITED, browserAnnotations: [] },
+      settings: SETTINGS,
+      intent: "save",
+    });
+    if (editActionId === null) throw new Error("expected the edit to dispatch");
+    // Nothing is forgotten by submitting.
+    expect(isDraftBlobConfirmed(HOST_ID, WIRE_HASH, OWNER_ID)).toBe(true);
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+
+    // The refusal really handed the text back (the path ran)...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(EDITED);
+    // ...and the wire-only hash is no longer believed to be on this host.
+    expect(isDraftBlobConfirmed(HOST_ID, WIRE_HASH, OWNER_ID)).toBe(false);
   });
 });

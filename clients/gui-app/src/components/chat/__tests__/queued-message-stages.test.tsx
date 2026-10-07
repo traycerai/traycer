@@ -14,6 +14,9 @@ import {
 } from "@/components/chat/queued-message-stages";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { QUEUE_PAUSED_AFTER_ERROR_TOOLTIP } from "@/components/chat/fallback/fallback-copy";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
 import type { QueueItemInFlight } from "@/stores/chats/queue-edit-custody";
 
@@ -108,10 +111,20 @@ function renderPanel(
   items: ReadonlyArray<ChatQueuedItem>,
   provided: QueuedMessageStages | null,
 ) {
+  return renderPanelWithQueue(
+    { status: "running", items: [...items] },
+    provided,
+  );
+}
+
+function renderPanelWithQueue(
+  queue: ChatSessionState["queue"],
+  provided: QueuedMessageStages | null,
+) {
   const panel = (
     <TooltipProvider delayDuration={0}>
       <QueuedMessagePanel
-        queue={{ status: "running", items: [...items] }}
+        queue={queue}
         activeTurnStatus="running"
         canAct
         resumeRequested={false}
@@ -282,5 +295,60 @@ describe("a row with its own mutation in flight withholds its repeat controls", 
     for (const label of ["Saving", "Requesting steer", "Cancelling"]) {
       expect(within(row).queryByText(label)).toBeNull();
     }
+  });
+});
+
+describe("a held queue and an in-flight save (finding 9)", () => {
+  it("gives a paused row with an in-flight save the in-flight tooltip, not the paused reason", () => {
+    const pausedRow = queuedItem("paused-row", "Paused text", "paused");
+    const heldQueue: ChatSessionState["queue"] = {
+      status: "paused",
+      pausedReason: "turn_error",
+      items: [pausedRow],
+    };
+
+    // The control: not in flight, the pill carries the paused reason.
+    const { unmount } = renderPanelWithQueue(heldQueue, stages({}));
+    const pausedPill = within(rowWithText("Paused text")).getByText(
+      "Paused after an error",
+    );
+    expect(tooltipTextNear(pausedPill)).toBe(QUEUE_PAUSED_AFTER_ERROR_TOOLTIP);
+    unmount();
+
+    renderPanelWithQueue(
+      heldQueue,
+      stages({ inFlight: new Map([["paused-row", "saving"]]) }),
+    );
+    const savingPill = within(rowWithText("Paused text")).getByText("Saving");
+    expect(tooltipTextNear(savingPill)).toBe(
+      "Sent from this device. Waiting for the host to answer.",
+    );
+  });
+
+  it("shows no Queued for next turn pill on a pending row while the queue is paused, and shows it when idle or running", () => {
+    const pendingRow = queuedItem("pending-row", "Pending text", "pending");
+
+    const paused = renderPanelWithQueue(
+      { status: "paused", pausedReason: "turn_error", items: [pendingRow] },
+      stages({}),
+    );
+    // The row rendered (the path ran) ...
+    expect(rowWithText("Pending text")).not.toBeNull();
+    // ... and makes no next-turn promise.
+    expect(screen.queryByText("Queued for next turn")).toBeNull();
+    paused.unmount();
+
+    const idle = renderPanelWithQueue(
+      { status: "idle", items: [pendingRow] },
+      stages({}),
+    );
+    expect(screen.getByText("Queued for next turn")).not.toBeNull();
+    idle.unmount();
+
+    renderPanelWithQueue(
+      { status: "running", items: [pendingRow] },
+      stages({}),
+    );
+    expect(screen.getByText("Queued for next turn")).not.toBeNull();
   });
 });

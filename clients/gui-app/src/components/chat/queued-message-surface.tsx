@@ -748,7 +748,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   const statusLabel = queuedMessageStatusLabel(
     item,
     pausedAfterErrorTooltip !== null,
-    { inFlight, deliveryUnconfirmed },
+    { inFlight, deliveryUnconfirmed, queuePaused: queueStatus === "paused" },
   );
   const statusTooltip = queuedMessageStatusTooltip(item, {
     inFlight,
@@ -1305,6 +1305,7 @@ function queuedMessageStatusLabel(
   local: {
     readonly inFlight: QueueItemInFlight | null;
     readonly deliveryUnconfirmed: boolean;
+    readonly queuePaused: boolean;
   },
 ): string | null {
   const pausedLabel = pausedAfterError
@@ -1316,13 +1317,14 @@ function queuedMessageStatusLabel(
       : QUEUED_MESSAGE_SENDING_LABEL;
   }
   if (local.inFlight !== null) return queueItemInFlightLabel(local.inFlight);
-  return hostConfirmedStatusLabel(item, pausedLabel);
+  return hostConfirmedStatusLabel(item, pausedLabel, local.queuePaused);
 }
 
 /** The host's own account of a row, read off its item and nothing else. */
 function hostConfirmedStatusLabel(
   item: ChatQueuedItem,
   pausedLabel: string,
+  queuePaused: boolean,
 ): string | null {
   if (item.kind !== "prompt") {
     // Both host-authored kinds (a shell's output, a forward's interruption)
@@ -1358,7 +1360,9 @@ function hostConfirmedStatusLabel(
     // name the automatic behavior instead for received responses.
     return isReceivedAgentResponse(item) ? "Will steer" : "Can steer";
   }
-  return QUEUED_MESSAGE_NEXT_TURN_LABEL;
+  // A held queue runs nothing next turn, so a pending row in one makes no such
+  // promise: the paused rows beside it carry the reason the queue is held.
+  return queuePaused ? null : QUEUED_MESSAGE_NEXT_TURN_LABEL;
 }
 
 /**
@@ -1376,13 +1380,15 @@ function queuedMessageStatusTooltip(
     readonly pausedAfterErrorTooltip: string | null;
   },
 ): string | null {
+  // Ahead of the paused reason, to match the pill: a paused row with an
+  // unanswered save says "Saving", and its tooltip has to explain that.
+  if (input.inFlight !== null && !isOptimisticQueuedItem(item)) {
+    return "Sent from this device. Waiting for the host to answer.";
+  }
   if (item.status === "paused") return input.pausedAfterErrorTooltip;
   if (item.kind !== "prompt") return null;
   if (isOptimisticQueuedItem(item)) {
     return `Sent from this device at ${formatClockTime(item.createdAt)}. The host has not confirmed it yet.`;
-  }
-  if (input.inFlight !== null) {
-    return "Sent from this device. Waiting for the host to answer.";
   }
   if (item.status === "steer_requested" && item.steerRequest !== null) {
     return `The host requested the steer at ${formatClockTime(item.steerRequest.requestedAt)}.`;

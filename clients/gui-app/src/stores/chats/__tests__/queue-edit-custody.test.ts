@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type {
   ChatQueuedPromptItem,
   ChatQueueState,
@@ -11,10 +12,13 @@ import type {
   PendingChatAction,
 } from "@/stores/chats/chat-session-store";
 import {
+  accountForQueueEdits,
   foldQueueEditAck,
+  hasUnconfirmedQueueEdit,
   queueEditContentMatches,
+  queueEditRecordsHoldingOnlyCopy,
   queueItemsInFlight,
-  settleQueueEditsForSnapshot,
+  type QueueEditEvidence,
   type QueueEditIntent,
   type QueueEditRecord,
   type QueueEditRecords,
@@ -38,6 +42,9 @@ const SETTINGS: ChatRunSettings = {
 
 const OTHER_SETTINGS: ChatRunSettings = { ...SETTINGS, model: "gpt-5-mini" };
 
+const PERSONAL: AccountContext = { type: "PERSONAL" };
+const TEAM: AccountContext = { type: "TEAM", teamId: "team-1" };
+
 function textDoc(text: string): JsonContent {
   return {
     type: "doc",
@@ -45,10 +52,16 @@ function textDoc(text: string): JsonContent {
   };
 }
 
-function imageDoc(
+const HASH_A = "a".repeat(64);
+const HASH_B = "b".repeat(64);
+
+/** A paragraph of text followed by one image node per entry, in order. */
+function imagesDoc(
   text: string,
-  hash: string,
-  inlineBytes: boolean,
+  images: ReadonlyArray<{
+    readonly hash: string | null;
+    readonly inline: boolean;
+  }>,
 ): JsonContent {
   return {
     type: "doc",
@@ -56,23 +69,29 @@ function imageDoc(
       {
         type: "paragraph",
         content: [
-          {
+          { type: "text", text },
+          ...images.map((image, index): JsonContent => ({
             type: "imageAttachment",
             attrs: {
-              id: "img-1",
+              id: `img-${index}`,
               fileName: "shot.png",
               mimeType: "image/png",
               size: 4,
-              byHashEligible: true,
-              hash,
-              ...(inlineBytes ? { data: "AQIDBA==" } : {}),
+              ...(image.hash === null ? {} : { hash: image.hash }),
+              ...(image.inline ? { data: "AQIDBA==" } : {}),
             },
-          },
-          { type: "text", text },
+          })),
         ],
       },
     ],
   };
+}
+
+function hashedImages(...hashes: ReadonlyArray<string>): JsonContent {
+  return imagesDoc(
+    "look",
+    hashes.map((hash) => ({ hash, inline: false })),
+  );
 }
 
 const ORIGINAL = textDoc("original text");
@@ -94,10 +113,14 @@ function record(
     restore: RESTORE,
     wireContent: EDITED,
     settings: SETTINGS,
+    accountContext: PERSONAL,
+    followUpIsNoOp: false,
+    requestedChanges: [],
     editActionId: EDIT_ACTION_ID,
     followUpActionId: FOLLOW_UP_ACTION_ID,
     edit: "pending",
     followUp: "pending",
+    followUpReason: null,
     contentReturned: false,
     dispatchedAt: 0,
     ...overrides,
@@ -116,7 +139,7 @@ function row(overrides: Partial<ChatQueuedPromptItem>): ChatQueuedPromptItem {
     message: { kind: "user", content: ORIGINAL, browserAnnotations: [] },
     sender: { type: "user", userId: OWNER_ID },
     settings: SETTINGS,
-    accountContext: { type: "PERSONAL" },
+    accountContext: PERSONAL,
     sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
@@ -127,6 +150,16 @@ function row(overrides: Partial<ChatQueuedPromptItem>): ChatQueuedPromptItem {
     updatedAt: 1,
     ...overrides,
   };
+}
+
+function rowHolding(
+  content: JsonContent,
+  overrides: Partial<ChatQueuedPromptItem>,
+): ChatQueuedPromptItem {
+  return row({
+    message: { kind: "user", content, browserAnnotations: [] },
+    ...overrides,
+  });
 }
 
 function queueOf(items: ReadonlyArray<ChatQueuedPromptItem>): ChatQueueState {
@@ -144,14 +177,30 @@ function userMessage(messageId: string, content: JsonContent): Message {
   };
 }
 
-function settingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
-  return a.model === b.model;
+function evidence(input: {
+  readonly items: ReadonlyArray<ChatQueuedPromptItem>;
+  readonly messages: ReadonlyArray<Message>;
+  readonly transcriptComplete: boolean;
+}): QueueEditEvidence {
+  return {
+    queue: queueOf(input.items),
+    messages: input.messages,
+    transcriptComplete: input.transcriptComplete,
+    settingsEqual: (a, b) => a.model === b.model,
+    accountContextEqual: (a, b) =>
+      a.type === b.type &&
+      (a.type !== "TEAM" || b.type !== "TEAM" || a.teamId === b.teamId),
+  };
 }
 
-const NO_MESSAGES: ReadonlyArray<Message> = [];
+const BOTH_SWEPT: ReadonlySet<string> = new Set([
+  EDIT_ACTION_ID,
+  FOLLOW_UP_ACTION_ID,
+]);
+const NONE_SWEPT: ReadonlySet<string> = new Set();
 
 describe("foldQueueEditAck", () => {
-  it("returns the edited content on a refused edit, keeps the record for the pending follow-up, then settles nothing more when the follow-up is refused", () => {
+  it("returns the edited content as a refusal, keeps the record for the pending follow-up, then settles nothing more when the follow-up is refused", () => {
     const start = recordsOf(record({}, "save"));
 
     const first = foldQueueEditAck(start, {
@@ -164,10 +213,11 @@ describe("foldQueueEditAck", () => {
         kind: "content_returned",
         clientActionId: EDIT_ACTION_ID,
         restore: RESTORE,
+        wireContent: EDITED,
+        cause: "refused",
         hostReason: "The queued prompt is no longer pending.",
       },
     ]);
-    // Kept, flagged as already handed back, while the follow-up is pending.
     expect(first.records[EDIT_ACTION_ID]?.contentReturned).toBe(true);
     expect(first.records[EDIT_ACTION_ID]?.edit).toBe("rejected");
     expect(first.records[EDIT_ACTION_ID]?.followUp).toBe("pending");
@@ -177,16 +227,12 @@ describe("foldQueueEditAck", () => {
       status: "rejected",
       reason: "The queued prompt is no longer pending.",
     });
-    // The record WAS still there to be answered (positive), and now goes
-    // without a second settlement.
-    expect(Object.keys(first.records)).toEqual([EDIT_ACTION_ID]);
     expect(second.settlements).toEqual([]);
     expect(second.records).toEqual({});
   });
 
-  it("settles a partial exactly once when the edit was accepted and the follow-up refused", () => {
-    const start = recordsOf(record({}, "steer"));
-    const afterEdit = foldQueueEditAck(start, {
+  it("settles a partial exactly once, with the submission and the host's reason, when the edit was accepted and the follow-up refused", () => {
+    const afterEdit = foldQueueEditAck(recordsOf(record({}, "steer")), {
       clientActionId: EDIT_ACTION_ID,
       status: "accepted",
       reason: null,
@@ -204,10 +250,62 @@ describe("foldQueueEditAck", () => {
         kind: "partial",
         clientActionId: FOLLOW_UP_ACTION_ID,
         intent: "steer",
+        restore: RESTORE,
+        requestedChanges: [],
+        refused: true,
         hostReason: "Steering is unavailable.",
       },
     ]);
     expect(afterFollowUp.records).toEqual({});
+  });
+
+  it("carries the record's requested changes onto the partial (finding 6, addendum)", () => {
+    const accepted = foldQueueEditAck(
+      recordsOf(record({ requestedChanges: ["model gpt-x"] }, "save")),
+      { clientActionId: EDIT_ACTION_ID, status: "accepted", reason: null },
+    );
+    const fold = foldQueueEditAck(accepted.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "no",
+    });
+    expect(fold.settlements).toHaveLength(1);
+    expect(fold.settlements[0]).toMatchObject({
+      kind: "partial",
+      requestedChanges: ["model gpt-x"],
+    });
+  });
+
+  it("keeps a follow-up's refusal reason when it is answered BEFORE the edit's acceptance (finding 5e)", () => {
+    const afterFollowUp = foldQueueEditAck(recordsOf(record({}, "save")), {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "Settings are locked.",
+    });
+    // Nothing to say yet: the text's own answer is still to come.
+    expect(afterFollowUp.settlements).toEqual([]);
+    expect(afterFollowUp.records[EDIT_ACTION_ID]?.followUp).toBe("rejected");
+    expect(afterFollowUp.records[EDIT_ACTION_ID]?.followUpReason).toBe(
+      "Settings are locked.",
+    );
+
+    const afterEdit = foldQueueEditAck(afterFollowUp.records, {
+      clientActionId: EDIT_ACTION_ID,
+      status: "accepted",
+      reason: null,
+    });
+    expect(afterEdit.settlements).toEqual([
+      {
+        kind: "partial",
+        clientActionId: FOLLOW_UP_ACTION_ID,
+        intent: "save",
+        restore: RESTORE,
+        requestedChanges: [],
+        refused: true,
+        hostReason: "Settings are locked.",
+      },
+    ]);
+    expect(afterEdit.records).toEqual({});
   });
 
   it("settles nothing and removes the record when both frames are accepted", () => {
@@ -216,7 +314,6 @@ describe("foldQueueEditAck", () => {
       status: "accepted",
       reason: null,
     });
-    // The first ack alone must not have removed it (the path ran).
     expect(Object.keys(afterEdit.records)).toEqual([EDIT_ACTION_ID]);
     const afterBoth = foldQueueEditAck(afterEdit.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
@@ -239,173 +336,430 @@ describe("foldQueueEditAck", () => {
   });
 });
 
-describe("settleQueueEditsForSnapshot", () => {
-  const bothSwept = new Set([EDIT_ACTION_ID, FOLLOW_UP_ACTION_ID]);
+describe("queue-edit record predicates", () => {
+  it("queueEditRecordsHoldingOnlyCopy names a record whose text is held nowhere else, and not one already returned or already saved", () => {
+    const pending = record({ editActionId: "pending" }, "save");
+    const returned = record(
+      { editActionId: "returned", edit: "unconfirmed", contentReturned: true },
+      "save",
+    );
+    const saved = record({ editActionId: "saved", edit: "accepted" }, "save");
+    const holding = queueEditRecordsHoldingOnlyCopy({
+      pending,
+      returned,
+      saved,
+    });
+    expect(holding.map((entry) => entry.editActionId)).toEqual(["pending"]);
+  });
 
+  it("hasUnconfirmedQueueEdit is true only for a record with an unconfirmed frame", () => {
+    expect(
+      hasUnconfirmedQueueEdit(
+        recordsOf(record({ edit: "unconfirmed" }, "save")),
+      ),
+    ).toBe(true);
+    expect(
+      hasUnconfirmedQueueEdit(
+        recordsOf(record({ followUp: "unconfirmed" }, "save")),
+      ),
+    ).toBe(true);
+    expect(hasUnconfirmedQueueEdit(recordsOf(record({}, "save")))).toBe(false);
+  });
+});
+
+describe("accountForQueueEdits", () => {
   it("leaves a record whose ids were not swept untouched even though its row is absent", () => {
     const records = recordsOf(record({}, "save"));
-    const fold = settleQueueEditsForSnapshot({
+    const fold = accountForQueueEdits({
       records,
       sweptActionIds: new Set(["some-other-action"]),
-      queue: queueOf([]),
-      messages: NO_MESSAGES,
-      settingsEqual,
+      evidence: evidence({ items: [], messages: [], transcriptComplete: true }),
     });
     expect(fold.records).toBe(records);
     expect(fold.settlements).toEqual([]);
   });
 
-  it("settles nothing when the swept row carries the edited content and matching settings", () => {
-    const fold = settleQueueEditsForSnapshot({
-      records: recordsOf(record({}, "save")),
-      sweptActionIds: bothSwept,
-      queue: queueOf([
-        row({
-          message: { kind: "user", content: EDITED, browserAnnotations: [] },
-        }),
-      ]),
-      messages: NO_MESSAGES,
-      settingsEqual,
+  it("settles nothing, and drops the record, when the swept row carries the edited text and the follow-up is a no-op", () => {
+    const fold = accountForQueueEdits({
+      records: recordsOf(record({ followUpIsNoOp: true }, "save")),
+      sweptActionIds: BOTH_SWEPT,
+      evidence: evidence({
+        items: [rowHolding(EDITED, {})],
+        messages: [],
+        transcriptComplete: true,
+      }),
     });
     expect(fold.settlements).toEqual([]);
-    // Settled, so accounted for and gone - not merely skipped.
     expect(fold.records).toEqual({});
   });
 
-  it("returns the content with a null reason when the swept row still holds the original", () => {
-    const fold = settleQueueEditsForSnapshot({
+  it("returns the text as unconfirmed, and RETAINS the record, when a swept row still holds the original (finding 2)", () => {
+    const fold = accountForQueueEdits({
       records: recordsOf(record({}, "save")),
-      sweptActionIds: bothSwept,
-      queue: queueOf([row({})]),
-      messages: NO_MESSAGES,
-      settingsEqual,
+      sweptActionIds: BOTH_SWEPT,
+      evidence: evidence({
+        items: [row({})],
+        messages: [],
+        transcriptComplete: true,
+      }),
     });
     expect(fold.settlements).toEqual([
       {
         kind: "content_returned",
         clientActionId: EDIT_ACTION_ID,
         restore: RESTORE,
+        wireContent: EDITED,
+        cause: "unconfirmed",
         hostReason: null,
       },
     ]);
-    expect(fold.records).toEqual({});
+    const kept = fold.records[EDIT_ACTION_ID];
+    expect(kept?.edit).toBe("unconfirmed");
+    expect(kept?.contentReturned).toBe(true);
   });
 
-  it("settles nothing when the row is gone and the transcript message holds the edited content", () => {
-    const fold = settleQueueEditsForSnapshot({
-      records: recordsOf(record({}, "save")),
-      sweptActionIds: bothSwept,
-      queue: queueOf([]),
-      messages: [userMessage(MESSAGE_ID, EDITED)],
-      settingsEqual,
+  it("settles saved_after_return exactly once when a later review finds the edited text on the row, and drops the record", () => {
+    const first = accountForQueueEdits({
+      records: recordsOf(record({ followUpIsNoOp: true }, "save")),
+      sweptActionIds: BOTH_SWEPT,
+      evidence: evidence({
+        items: [row({})],
+        messages: [],
+        transcriptComplete: true,
+      }),
     });
-    expect(fold.settlements).toEqual([]);
-    expect(fold.records).toEqual({});
-  });
+    expect(first.settlements).toHaveLength(1);
 
-  it("returns the content when the row is gone and the transcript holds nothing for the message", () => {
-    const fold = settleQueueEditsForSnapshot({
-      records: recordsOf(record({}, "save")),
-      sweptActionIds: bothSwept,
-      queue: queueOf([]),
-      messages: [userMessage("a-different-message", EDITED)],
-      settingsEqual,
+    const review = accountForQueueEdits({
+      records: first.records,
+      sweptActionIds: NONE_SWEPT,
+      evidence: evidence({
+        items: [rowHolding(EDITED, {})],
+        messages: [],
+        transcriptComplete: true,
+      }),
     });
-    expect(fold.settlements).toEqual([
+    expect(review.settlements).toEqual([
       {
-        kind: "content_returned",
+        kind: "saved_after_return",
         clientActionId: EDIT_ACTION_ID,
-        restore: RESTORE,
-        hostReason: null,
-      },
-    ]);
-    expect(fold.records).toEqual({});
-  });
-
-  it("settles a partial with a null reason when the edit was accepted and the swept row still shows other settings", () => {
-    const fold = settleQueueEditsForSnapshot({
-      records: recordsOf(record({ edit: "accepted" }, "save")),
-      sweptActionIds: new Set([FOLLOW_UP_ACTION_ID]),
-      queue: queueOf([
-        row({
-          message: { kind: "user", content: EDITED, browserAnnotations: [] },
-          settings: OTHER_SETTINGS,
-        }),
-      ]),
-      messages: NO_MESSAGES,
-      settingsEqual,
-    });
-    expect(fold.settlements).toEqual([
-      {
-        kind: "partial",
-        clientActionId: FOLLOW_UP_ACTION_ID,
         intent: "save",
-        hostReason: null,
+        followUpApplied: true,
       },
     ]);
-    expect(fold.records).toEqual({});
+    expect(review.records).toEqual({});
+
+    // A further review has nothing left to say.
+    const again = accountForQueueEdits({
+      records: review.records,
+      sweptActionIds: NONE_SWEPT,
+      evidence: evidence({
+        items: [rowHolding(EDITED, {})],
+        messages: [],
+        transcriptComplete: true,
+      }),
+    });
+    expect(again.settlements).toEqual([]);
   });
 
-  it("reads a steer as applied when the row is steer_requested, and as not applied while it is still a plain pending next-turn row", () => {
-    const applied = settleQueueEditsForSnapshot({
-      records: recordsOf(record({ edit: "accepted" }, "steer")),
-      sweptActionIds: new Set([FOLLOW_UP_ACTION_ID]),
-      queue: queueOf([
-        row({
-          message: { kind: "user", content: EDITED, browserAnnotations: [] },
-          status: "steer_requested",
+  describe("a transcript body this client has not loaded (finding 3)", () => {
+    it("reads an absent message on an INCOMPLETE transcript as unknown: hand-back as unconfirmed, record retained", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(record({}, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [],
+          transcriptComplete: false,
         }),
-      ]),
-      messages: NO_MESSAGES,
-      settingsEqual,
-    });
-    expect(applied.settlements).toEqual([]);
-    expect(applied.records).toEqual({});
-
-    // The control: the same record against a row that never moved IS partial,
-    // so the line above passed because of the status, not by default.
-    const notApplied = settleQueueEditsForSnapshot({
-      records: recordsOf(record({ edit: "accepted" }, "steer")),
-      sweptActionIds: new Set([FOLLOW_UP_ACTION_ID]),
-      queue: queueOf([
-        row({
-          message: { kind: "user", content: EDITED, browserAnnotations: [] },
-        }),
-      ]),
-      messages: NO_MESSAGES,
-      settingsEqual,
-    });
-    expect(notApplied.settlements).toEqual([
-      {
-        kind: "partial",
-        clientActionId: FOLLOW_UP_ACTION_ID,
-        intent: "steer",
+      });
+      expect(fold.settlements).toHaveLength(1);
+      expect(fold.settlements[0]).toMatchObject({
+        kind: "content_returned",
+        cause: "unconfirmed",
         hostReason: null,
-      },
-    ]);
+      });
+      expect(fold.records[EDIT_ACTION_ID]?.edit).toBe("unconfirmed");
+      expect(fold.records[EDIT_ACTION_ID]?.contentReturned).toBe(true);
+    });
+
+    it("then reads the hydrated message: edited document -> saved_after_return", () => {
+      const first = accountForQueueEdits({
+        records: recordsOf(record({}, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [],
+          transcriptComplete: false,
+        }),
+      });
+      const review = accountForQueueEdits({
+        records: first.records,
+        sweptActionIds: NONE_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [userMessage(MESSAGE_ID, EDITED)],
+          transcriptComplete: false,
+        }),
+      });
+      expect(review.settlements).toEqual([
+        {
+          kind: "saved_after_return",
+          clientActionId: EDIT_ACTION_ID,
+          intent: "save",
+          // The row is gone and the follow-up was not a no-op: nothing shows it.
+          followUpApplied: false,
+        },
+      ]);
+      expect(review.records).toEqual({});
+    });
+
+    it("or the hydrated message holding the ORIGINAL -> record dropped, no further settlement", () => {
+      const first = accountForQueueEdits({
+        records: recordsOf(record({}, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [],
+          transcriptComplete: false,
+        }),
+      });
+      expect(Object.keys(first.records)).toEqual([EDIT_ACTION_ID]);
+      const review = accountForQueueEdits({
+        records: first.records,
+        sweptActionIds: NONE_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [userMessage(MESSAGE_ID, ORIGINAL)],
+          transcriptComplete: false,
+        }),
+      });
+      expect(review.settlements).toEqual([]);
+      expect(review.records).toEqual({});
+    });
+
+    it("reads an absent message on a COMPLETE transcript as not_applied", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(record({}, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [userMessage("a-different-message", EDITED)],
+          transcriptComplete: true,
+        }),
+      });
+      expect(fold.settlements).toEqual([
+        {
+          kind: "content_returned",
+          clientActionId: EDIT_ACTION_ID,
+          restore: RESTORE,
+          wireContent: EDITED,
+          cause: "not_applied",
+          hostReason: null,
+        },
+      ]);
+      expect(fold.records).toEqual({});
+    });
+  });
+
+  describe("follow-up evidence (finding 5)", () => {
+    it("5a: an edit confirmed by the transcript with the row gone, and a follow-up that changed settings, is a partial and never a silent acceptance", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(
+          record({ settings: OTHER_SETTINGS, followUpIsNoOp: false }, "save"),
+        ),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [userMessage(MESSAGE_ID, EDITED)],
+          transcriptComplete: true,
+        }),
+      });
+      expect(fold.settlements).toEqual([
+        {
+          kind: "partial",
+          clientActionId: FOLLOW_UP_ACTION_ID,
+          intent: "save",
+          restore: RESTORE,
+          requestedChanges: [],
+          refused: false,
+          hostReason: null,
+        },
+      ]);
+      expect(fold.records).toEqual({});
+    });
+
+    it("5b: a steer is not read as applied from a paused row, and is from a row the host has taken", () => {
+      const paused = accountForQueueEdits({
+        records: recordsOf(record({}, "steer")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(EDITED, { status: "paused" })],
+          messages: [],
+          transcriptComplete: true,
+        }),
+      });
+      expect(paused.settlements).toHaveLength(1);
+      expect(paused.settlements[0]).toMatchObject({
+        kind: "partial",
+        intent: "steer",
+        refused: false,
+      });
+
+      const taken = accountForQueueEdits({
+        records: recordsOf(record({}, "steer")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [
+            rowHolding(EDITED, {
+              status: "steer_requested",
+              delivery: "same_turn",
+              targetTurnId: "turn-1",
+              steerRequest: {
+                mode: "safe_point",
+                targetTurnId: "turn-1",
+                requestedAt: 1,
+              },
+            }),
+          ],
+          messages: [],
+          transcriptComplete: true,
+        }),
+      });
+      expect(taken.settlements).toEqual([]);
+      expect(taken.records).toEqual({});
+    });
+
+    it("5c: matching settings with a DIFFERENT account context are not applied; the same account is", () => {
+      const differentAccount = accountForQueueEdits({
+        records: recordsOf(record({ accountContext: PERSONAL }, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(EDITED, { accountContext: TEAM })],
+          messages: [],
+          transcriptComplete: true,
+        }),
+      });
+      expect(differentAccount.settlements).toHaveLength(1);
+      expect(differentAccount.settlements[0]).toMatchObject({
+        kind: "partial",
+        refused: false,
+      });
+
+      const sameAccount = accountForQueueEdits({
+        records: recordsOf(record({ accountContext: PERSONAL }, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(EDITED, { accountContext: PERSONAL })],
+          messages: [],
+          transcriptComplete: true,
+        }),
+      });
+      expect(sameAccount.settlements).toEqual([]);
+      expect(sameAccount.records).toEqual({});
+    });
+
+    it("5d: a no-op follow-up settles silently once the edit is confirmed, even with the row gone", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(record({ followUpIsNoOp: true }, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [userMessage(MESSAGE_ID, EDITED)],
+          transcriptComplete: true,
+        }),
+      });
+      expect(fold.settlements).toEqual([]);
+      expect(fold.records).toEqual({});
+    });
+  });
+
+  describe("attachment order (finding 4)", () => {
+    it("does not read a swept edit that only reorders images as accepted when the row still shows the old order", () => {
+      const sent = hashedImages(HASH_B, HASH_A);
+      const held = hashedImages(HASH_A, HASH_B);
+      const fold = accountForQueueEdits({
+        records: recordsOf(
+          record({ wireContent: sent, followUpIsNoOp: true }, "save"),
+        ),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(held, {})],
+          messages: [],
+          transcriptComplete: true,
+        }),
+      });
+      expect(fold.settlements).toHaveLength(1);
+      expect(fold.settlements[0]).toMatchObject({
+        kind: "content_returned",
+        cause: "unconfirmed",
+      });
+      expect(fold.records[EDIT_ACTION_ID]?.edit).toBe("unconfirmed");
+
+      // The control: the same record against the SAME order is accepted.
+      const matched = accountForQueueEdits({
+        records: recordsOf(
+          record({ wireContent: sent, followUpIsNoOp: true }, "save"),
+        ),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(sent, {})],
+          messages: [],
+          transcriptComplete: true,
+        }),
+      });
+      expect(matched.settlements).toEqual([]);
+      expect(matched.records).toEqual({});
+    });
   });
 });
 
 describe("queueEditContentMatches", () => {
-  const HASH =
-    "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
-
-  it("matches the same text and image hashes when only one side carries inline bytes", () => {
+  it("is false for the same text with images A,B against B,A", () => {
     expect(
       queueEditContentMatches(
-        imageDoc("look", HASH, true),
-        imageDoc("look", HASH, false),
+        hashedImages(HASH_A, HASH_B),
+        hashedImages(HASH_B, HASH_A),
+      ),
+    ).toBe(false);
+    // The control: identical order matches, so the line above is about order.
+    expect(
+      queueEditContentMatches(
+        hashedImages(HASH_A, HASH_B),
+        hashedImages(HASH_A, HASH_B),
       ),
     ).toBe(true);
   });
 
-  it("does not match different text", () => {
+  it("is false for one image against the same image twice", () => {
     expect(
       queueEditContentMatches(
-        imageDoc("look", HASH, true),
-        imageDoc("look again", HASH, true),
+        hashedImages(HASH_A),
+        hashedImages(HASH_A, HASH_A),
       ),
     ).toBe(false);
+  });
+
+  it("is true when the only difference is inline bytes against hash-only for the same hash in the same position", () => {
+    expect(
+      queueEditContentMatches(
+        imagesDoc("look", [{ hash: HASH_A, inline: true }]),
+        imagesDoc("look", [{ hash: HASH_A, inline: false }]),
+      ),
+    ).toBe(true);
+    expect(
+      queueEditContentMatches(
+        imagesDoc("look", [{ hash: HASH_A, inline: true }]),
+        imagesDoc("look again", [{ hash: HASH_A, inline: false }]),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when either side has an image with no hash, even for identical documents", () => {
+    const unhashed = imagesDoc("look", [{ hash: null, inline: true }]);
+    expect(queueEditContentMatches(unhashed, unhashed)).toBe(false);
+    expect(queueEditContentMatches(unhashed, hashedImages(HASH_A))).toBe(false);
+    expect(queueEditContentMatches(hashedImages(HASH_A), unhashed)).toBe(false);
   });
 });
 

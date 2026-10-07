@@ -4,6 +4,9 @@ import {
   addAcceptedAction,
   confirmAcceptedSendByMessageId,
   noticeCarriesOnlyCopy,
+  keptQueueEditSubmissionNotice,
+  namedSettingsChanges,
+  QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
   unrecoverableSendNotice,
   unrecoverableSendPrompt,
   type UnrecoverableSend,
@@ -67,13 +70,19 @@ import {
 import { createRecoveryLedger } from "@/stores/chats/recovery-ledger";
 import {
   UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS,
+  accountForQueueEdits,
   foldQueueEditAck,
+  hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
-  settleQueueEditsForSnapshot,
+  queueEditRecordsHoldingOnlyCopy,
   withQueueEditRecord,
+  withoutQueueEditRecord,
+  type QueueEditEvidence,
   type QueueEditFold,
   type QueueEditIntent,
+  type QueueEditRecord,
   type QueueEditRecords,
+  type QueueEditReturnCause,
   type QueueEditSettlement,
 } from "@/stores/chats/queue-edit-custody";
 import { nextTurnLifecycleRevision } from "@/stores/chats/chat-turn-lifecycle";
@@ -99,6 +108,7 @@ import {
   isTailHydrated,
   mapWindowMessages,
   planTranscriptHydration,
+  unhydratedRowCount,
   activeTurnOrdinalsOf,
   rangeRecordsInstalled,
   rangeSeatsActiveTurn,
@@ -140,7 +150,10 @@ import type {
   StreamFlushLease,
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import {
+  accountContextsEqual,
+  useAccountContextStore,
+} from "@/stores/auth/account-context-store";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
@@ -2031,9 +2044,10 @@ export interface ChatSessionState {
   /**
    * Ask the host what became of a send it has not acknowledged, through the
    * recovery this stream already has: a resnapshot while the stream is live,
-   * a re-subscribe when the transport itself reports silence (or the line has
-   * no resnapshot). Never retransmits, and never reads a relay pong as
-   * acceptance - only a snapshot naming the message, or its ack, confirms it.
+   * a transport re-dial when the transport itself reports silence (or the line
+   * has no resnapshot). Keeps the transcript on screen either way. Never
+   * retransmits, and never reads a relay pong as acceptance - only a snapshot
+   * naming the message, or its ack, confirms it.
    */
   checkSendDelivery: () => void;
   queueCancel: (queueItemId: string) => string | null;
@@ -3654,6 +3668,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         clientActionId,
       );
       if (pending === null || pending.action !== "send") return;
+      // `messageAccepted` can arrive ahead of the ack, and it is the host
+      // saying it has the message. Nothing about that send is unconfirmed.
+      if (pending.messageConfirmedByHost) return;
       // A send from an earlier connection is the reconnect's to settle: its
       // snapshot either names the message or hands the prompt back. Saying
       // "not confirmed" over a stream already known to be down would only
@@ -4345,16 +4362,31 @@ export function createChatSessionStoreWithNotificationDependencies(
         forgetRefusedContentBlobAcks(options.hostId, honoured.restore.content);
       }
       // The queue-edit records whose acks died with that connection, accounted
-      // for BEFORE the sweep's ids are dropped: this snapshot's queue and
-      // transcript say whether each edit landed, and an edit they do not
-      // confirm hands its text back rather than vanishing with its action.
-      const queueEditSettlement = settleQueueEditsForSnapshot({
+      // for BEFORE the sweep's ids are dropped, together with any an earlier
+      // reconnect left unconfirmed. Only what this snapshot SHOWS settles one:
+      // the edited text on the row or on the message the row became says it
+      // landed, and an edit nothing confirms hands its text back while its
+      // record keeps watching, rather than vanishing with its action.
+      //
+      // The window, when the caller hands one over, is the windowed line's: the
+      // messages beside it are then only its loaded rows, and a message that is
+      // not among them may simply not be loaded.
+      const snapshotWindow = extra?.transcriptWindow;
+      const queueEditSettlement = accountForQueueEdits({
         records: get().queueEditRecords,
         sweptActionIds: sweep.sweptActionIds,
-        queue: frame.snapshot.queue,
-        messages: frame.snapshot.chat.messages,
-        settingsEqual: chatRunSettingsEqual,
+        evidence: queueEditEvidence({
+          queue: frame.snapshot.queue,
+          messages: frame.snapshot.chat.messages,
+          transcriptComplete:
+            snapshotWindow === undefined ||
+            unhydratedRowCount(snapshotWindow) === 0,
+        }),
       });
+      forgetReturnedQueueEditBlobAcks(
+        options.hostId,
+        queueEditSettlement.settlements,
+      );
       // Filled by the updater, sent after it: the frames go out only once the
       // records are re-stamped, so a re-entrant snapshot cannot send them twice.
       let retransmitRestoreActions: ReadonlyArray<AcceptedChatAction> = [];
@@ -4472,10 +4504,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           readonly appendedLastCopyPrompts: UnrecoverableSendPrompt[];
         }>(
           (carried, honoured) => {
-            const awarded = awardCancelRestorationSlot(
+            const awarded = awardHandBackSlot(
               carried.slot,
               honoured.clientActionId,
               honoured.restore,
+              CANCELLED_AFTER_SETUP_FAILED_COPY,
             );
             if (awarded.notice !== null) carried.notices.push(awarded.notice);
             if (awarded.lastCopy !== null) {
@@ -6202,6 +6235,48 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
     settleOwnedStateBudget = commitWholeSetSliceBudget;
 
+    /**
+     * Account again for the queue edits no ack will ever answer, from what the
+     * host shows NOW.
+     *
+     * A reconnect that could not settle an edit leaves its record unconfirmed
+     * rather than guessing. This is where the later evidence reaches it: a
+     * queue change that shows the edited text on the row (a host that was
+     * still installing the edit when the connection dropped), or a transcript
+     * body arriving that shows what the prompt ran as. The snapshot handler
+     * does the same accounting itself, inside its own update.
+     *
+     * A no-op without such a record, which is every chat almost all the time.
+     */
+    const reviewUnconfirmedQueueEdits = (): void => {
+      if (disposed || !hasUnconfirmedQueueEdit(get().queueEditRecords)) return;
+      const state = get();
+      const fold = accountForQueueEdits({
+        records: state.queueEditRecords,
+        sweptActionIds: NO_SWEPT_ACTION_IDS,
+        evidence: queueEditEvidence({
+          queue: state.queue,
+          messages: state.messages,
+          transcriptComplete:
+            !windowedLine || unhydratedRowCount(state.transcriptWindow) === 0,
+        }),
+      });
+      if (fold.records === state.queueEditRecords) return;
+      forgetReturnedQueueEditBlobAcks(options.hostId, fold.settlements);
+      set((current) => ({
+        queueEditRecords: fold.records,
+        ...withQueueEditSettlements(
+          {
+            failedSendRestoration: current.failedSendRestoration,
+            errorNotices: current.errorNotices,
+            lastCopyPrompts: current.lastCopyPrompts,
+          },
+          fold.settlements,
+          current.deliveredNoticeActionIds,
+        ),
+      }));
+    };
+
     const publishWindowedTranscript = (
       window: TranscriptWindow,
       // How the rows got here, when that is something a consumer has to know.
@@ -6219,6 +6294,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         ...(provenance ?? {}),
       });
       commitChatWindowBudget(window);
+      reviewUnconfirmedQueueEdits();
     };
 
     memory.chatWindows.attach({
@@ -6780,14 +6856,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       // A prompt the host's delivery view names is recorded, not lost: the view
       // hands it back itself, so stashing it would be a second copy.
       const delivery = state.messageDelivery;
-      for (const source of unrecordedPromptSources(
-        messageDeliveryNames(
+      for (const source of unrecordedPromptSources({
+        restoration: messageDeliveryNames(
           delivery,
           state.failedSendRestoration?.messageId ?? null,
         )
           ? null
           : state.failedSendRestoration,
-        Object.values(state.pendingActions).filter(
+        actions: Object.values(state.pendingActions).filter(
           (action) => !messageDeliveryNames(delivery, action.messageId),
         ),
         // No `deliveredLastCopyActionIds` filter here, and it would now be
@@ -6800,9 +6876,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         // showed the sidecar, and filtering on the delivered set would skip
         // exactly the prompt this handoff exists to save. One mechanism,
         // stated where it lives: the map holds what still needs stashing.
-        Object.values(state.lastCopyPrompts),
-        retryHandoffAccountFor,
-      )) {
+        lastCopies: Object.values(state.lastCopyPrompts),
+        // An edit to a queued prompt still in custody: neither handed back
+        // nor known saved, so this store is the only holder of its text.
+        queueEdits: queueEditRecordsHoldingOnlyCopy(state.queueEditRecords),
+        accountForRetry: retryHandoffAccountFor,
+      })) {
         const captureId = uuidv4();
         // Root the bytes for the capture. Registered BEFORE the first await:
         // `dispose()` drops this store from `liveChatSessionStores`
@@ -7641,6 +7720,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         forgetRefusedContentBlobAcks(
           options.hostId,
           refusedQueueEdit.restore.content,
+        );
+        // The frame's own document as well: it can name an image the
+        // composer's does not (an annotation crop added on the way out), and a
+        // resend would otherwise send that hash bare into the same refusal.
+        forgetRefusedContentBlobAcks(
+          options.hostId,
+          refusedQueueEdit.wireContent,
         );
       }
       // Arm 4 of the same class: an ACCEPTED cancel of a setup-failed row hands
@@ -8851,6 +8937,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // item whose pending action has since settled.
         commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux(() => ({ queue: frame.queue }));
+        reviewUnconfirmedQueueEdits();
       },
       onTurnStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -10987,6 +11074,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (row === undefined || row.kind !== "prompt") return null;
         const editActionId = uuidv4();
         const followUpActionId = uuidv4();
+        const accountContext = useAccountContextStore.getState().accountContext;
         // The record FIRST. Once the composer clears it is the only copy of
         // the edited text, and an ack must never find an action it does not
         // name yet.
@@ -10998,10 +11086,24 @@ export function createChatSessionStoreWithNotificationDependencies(
             restore: input.restore,
             wireContent: input.content,
             settings: input.settings,
+            accountContext,
+            // A plain save that asks for the settings and account the row
+            // already has cannot leave the submission half applied.
+            followUpIsNoOp:
+              input.intent === "save" &&
+              chatRunSettingsEqual(row.settings, input.settings) &&
+              accountContextsEqual(row.accountContext, accountContext),
+            requestedChanges: namedSettingsChanges({
+              requested: input.settings,
+              held: row.settings,
+              requestedAccount: accountContext,
+              heldAccount: row.accountContext,
+            }),
             editActionId,
             followUpActionId,
             edit: "pending",
             followUp: "pending",
+            followUpReason: null,
             contentReturned: false,
             dispatchedAt: Date.now(),
           }),
@@ -11033,10 +11135,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           // cleared and the draft there is still the copy. Dropping the record
           // is what keeps the text from being handed back a second time.
           set((state) => ({
-            queueEditRecords: Object.fromEntries(
-              Object.entries(state.queueEditRecords).filter(
-                ([id]) => id !== editActionId,
-              ),
+            queueEditRecords: withoutQueueEditRecord(
+              state.queueEditRecords,
+              editActionId,
             ),
           }));
           return null;
@@ -11045,16 +11146,20 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       checkSendDelivery: () => {
         if (disposed || get().connectionStatus !== "open") return;
-        // A line with no resnapshot, or a transport that itself reports
-        // silence, has only the re-subscribe - the same call the pane's Retry
-        // makes. On a live windowed stream the resnapshot asks without a
-        // connection boundary, so a host that is merely slow cannot have its
-        // unanswered send read as absent and handed back while it still runs.
+        // Never `retry()`: that closes the stream and puts the loading state
+        // where the transcript was, which is not what checking on one message
+        // should cost. A line with no resnapshot, or a transport that itself
+        // reports silence, re-dials instead - `wake` keeps the transcript, the
+        // snapshot and every pending action, and the reconnect's own snapshot
+        // is what settles the send. On a live windowed stream the resnapshot
+        // asks without a connection boundary at all, so a host that is merely
+        // slow cannot have its unanswered send read as absent and handed back
+        // while it still runs.
         if (
           !windowedLine ||
           options.transportSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true
         ) {
-          get().retryFromUser();
+          get().wake();
           return;
         }
         requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
@@ -11994,39 +12099,6 @@ const CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON =
 const CANCELLED_AFTER_SETUP_FAILED_CIRCUMSTANCE =
   "Workspace setup failed, so a cancelled message was never sent";
 
-/**
- * Award the single restoration slot to a cancelled row's prompt, or take
- * custody of it.
- *
- * The invariant the rejection paths and `reconcileTurnSettled` already keep:
- * there is ONE slot, first writer wins, and a prompt that loses it is never
- * dropped. Dropping was the defect here - the comment reasoned that the row was
- * still in the dock, which is true right up until the accepted cancellation
- * removes it, and then the only remaining copy was the one this function
- * discarded.
- *
- * The loser becomes an {@link UnrecoverableSend} rather than a bare
- * `displacedRestorationNotice`, because upstream's custody model is strictly
- * the stronger answer to the same problem: the notice is only a rendering, and
- * a user who never reads that toast still loses the text, while a LAST-COPY
- * prompt is also rooted against the image sweep and stashed at teardown. The
- * caller is what completes it - this function cannot write state - so a caller
- * that takes the `notice` and drops the `lastCopy` has reintroduced the defect
- * in a quieter form.
- */
-function awardCancelRestorationSlot(
-  current: FailedSendRestorationState | null,
-  clientActionId: string,
-  restore: ChatSendRestore,
-): HandBackSlotAward {
-  return awardHandBackSlot(
-    current,
-    clientActionId,
-    restore,
-    CANCELLED_AFTER_SETUP_FAILED_COPY,
-  );
-}
-
 /** The three ways one hand-back is told, depending on where the prompt lands. */
 interface HandBackCopy {
   /** Said when the prompt lands in the composer. */
@@ -12050,10 +12122,25 @@ const CANCELLED_AFTER_SETUP_FAILED_COPY: HandBackCopy = {
 };
 
 /**
- * The single-slot rule itself, for any prompt that is the user's own gesture
- * coming back rather than a message the host's delivery view could name: a
- * cancelled setup-failed row, and an edit to a queued prompt the host did not
- * save. First writer wins, and the loser keeps its document.
+ * Award the single restoration slot to a prompt that is the user's own gesture
+ * coming back - a cancelled setup-failed row, or an edit to a queued prompt the
+ * host did not save - or take custody of it.
+ *
+ * The invariant the rejection paths and `reconcileTurnSettled` already keep:
+ * there is ONE slot, first writer wins, and a prompt that loses it is never
+ * dropped. Dropping was the defect here - the comment reasoned that the row was
+ * still in the dock, which is true right up until the accepted cancellation
+ * removes it, and then the only remaining copy was the one this function
+ * discarded.
+ *
+ * The loser becomes an {@link UnrecoverableSend} rather than a bare
+ * `displacedRestorationNotice`, because upstream's custody model is strictly
+ * the stronger answer to the same problem: the notice is only a rendering, and
+ * a user who never reads that toast still loses the text, while a LAST-COPY
+ * prompt is also rooted against the image sweep and stashed at teardown. The
+ * caller is what completes it - this function cannot write state - so a caller
+ * that takes the `notice` and drops the `lastCopy` has reintroduced the defect
+ * in a quieter form.
  */
 function awardHandBackSlot(
   current: FailedSendRestorationState | null,
@@ -12135,10 +12222,11 @@ function cancelRestorationSettlementForAck(
   // The first version of this reasoned that a displaced cancel's prompt was
   // still safe in the dock; it is not, because the very cancellation being
   // acked is what removes that row, so the discarded copy was the last one.
-  const awarded = awardCancelRestorationSlot(
+  const awarded = awardHandBackSlot(
     state.failedSendRestoration,
     clientActionId,
     cancelRestoration.restore,
+    CANCELLED_AFTER_SETUP_FAILED_COPY,
   );
   return {
     failedSendRestoration: awarded.failedSendRestoration,
@@ -12160,30 +12248,40 @@ function cancelRestorationSettlementForAck(
   };
 }
 
-/**
- * Notice code for a queue-edit submission whose text the host saved and whose
- * second frame - the settings, or the steer - it did not apply.
- */
-export const QUEUE_EDIT_PARTIAL_NOTICE_CODE = "QUEUE_EDIT_PARTIAL";
-
-/** The host's refusal as a parenthesis, or nothing when a reconnect settled it. */
+/** The host's refusal as a parenthesis, or nothing when it gave no reason. */
 function hostReasonClause(hostReason: string | null): string {
   if (hostReason === null) return "";
   return ` (${hostReason.replace(/\.$/, "")})`;
 }
 
+/** What became of the edit, in the words each cause can honestly use. */
+function queueEditReturnedBecause(
+  cause: QueueEditReturnCause,
+  hostReason: string | null,
+): string {
+  switch (cause) {
+    case "refused":
+      return `was not saved${hostReasonClause(hostReason)}`;
+    case "not_applied":
+      return "was not saved: the queued message had already started or been removed when this chat reconnected";
+    case "unconfirmed":
+      return "could not be confirmed after reconnecting, and may still have been saved - check the queued message before sending this again";
+  }
+}
+
 /**
- * How a returned edit is told. With a host refusal it is a fact ("was not
- * saved"); after a reconnect it is only what this client can know ("could not
- * be confirmed"), because the ack that would have said died with the
- * connection. Neither says what became of the ORIGINAL prompt: that is the
+ * How a returned edit is told. A refusal, or a prompt seen to have run as
+ * something else, is a fact ("was not saved"). After a reconnect that settles
+ * nothing it is only what this client can know ("could not be confirmed"),
+ * and it says so, because the copy going back may duplicate a prompt the host
+ * did save. None of them says what became of the ORIGINAL prompt: that is the
  * host's to show, in the queue or the transcript, and it is never re-sent.
  */
-function queueEditHandBackCopy(hostReason: string | null): HandBackCopy {
-  const what =
-    hostReason === null
-      ? "could not be confirmed after reconnecting"
-      : `was not saved${hostReasonClause(hostReason)}`;
+function queueEditHandBackCopy(
+  cause: QueueEditReturnCause,
+  hostReason: string | null,
+): HandBackCopy {
+  const what = queueEditReturnedBecause(cause, hostReason);
   return {
     reason: `Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
     displacedReason: `Your edit to a queued message ${what}.`,
@@ -12191,15 +12289,49 @@ function queueEditHandBackCopy(hostReason: string | null): HandBackCopy {
   };
 }
 
-function queueEditPartialNotice(
+/**
+ * The submission a partial result keeps for the user, as a last-copy record.
+ *
+ * `refused` is the host saying no to the second frame; otherwise its ack died
+ * with a connection and nothing the host shows confirms it, which is said as
+ * exactly that rather than as a failure.
+ */
+function partialQueueEditLastCopy(
   settlement: Extract<QueueEditSettlement, { readonly kind: "partial" }>,
-): ChatErrorNotice {
+): UnrecoverableSend {
+  const outcome = settlement.refused
+    ? `Text saved; settings/steering were not applied${hostReasonClause(settlement.hostReason)}`
+    : "Text saved; settings/steering were not confirmed after reconnecting";
+  // What was asked for, said here because nothing else still holds it: the
+  // composer's picker has moved on, and the row may have left the queue.
+  const asked =
+    settlement.requestedChanges.length === 0
+      ? ""
+      : `. You asked for ${settlement.requestedChanges.join(", ")}`;
   return {
-    code: QUEUE_EDIT_PARTIAL_NOTICE_CODE,
-    message:
-      settlement.hostReason === null
-        ? "Text saved; settings/steering were not confirmed after reconnecting."
-        : `Text saved; settings/steering were not applied${hostReasonClause(settlement.hostReason)}.`,
+    clientActionId: settlement.clientActionId,
+    content: settlement.restore.content,
+    browserAnnotations: settlement.restore.browserAnnotations,
+    circumstance: `${outcome}${asked}`,
+    // No staged worktree and no delivery to account for: the prompt is on the
+    // host's queue, under whatever binding that row already has.
+    account: EMPTY_DEAD_SEND_ACCOUNT,
+  };
+}
+
+/** Told once, when an edit handed back as unconfirmed turns out to be saved. */
+function queueEditSavedAfterReturnNotice(
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "saved_after_return" }
+  >,
+): ChatErrorNotice {
+  const secondFrame = settlement.followUpApplied
+    ? ""
+    : " Its settings/steering were not confirmed.";
+  return {
+    code: QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+    message: `Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,
     severity: "warning",
     clientActionId: settlement.clientActionId,
   };
@@ -12212,8 +12344,8 @@ interface SnapshotHandBacks {
 }
 
 /**
- * The reconnect's settled queue edits, folded onto the hand-backs the snapshot
- * has already decided. Same contest and same rule as the ack path
+ * The reconnect's accounted queue edits, folded onto the hand-backs the
+ * snapshot has already decided. Same contest and same rule as the ack path
  * ({@link withQueueEditSettlements}); a separate function only because the
  * snapshot accumulates notices and documents as deltas for its own patch.
  */
@@ -12222,17 +12354,28 @@ function foldQueueEditSettlementsForSnapshot(
   fold: QueueEditFold,
 ): SnapshotHandBacks {
   return fold.settlements.reduce<SnapshotHandBacks>((next, settlement) => {
-    if (settlement.kind === "partial") {
+    if (settlement.kind === "saved_after_return") {
       return {
         ...next,
-        notices: [...next.notices, queueEditPartialNotice(settlement)],
+        notices: [...next.notices, queueEditSavedAfterReturnNotice(settlement)],
+      };
+    }
+    if (settlement.kind === "partial") {
+      const kept = partialQueueEditLastCopy(settlement);
+      return {
+        ...next,
+        notices: [...next.notices, keptQueueEditSubmissionNotice(kept)],
+        appendedLastCopyPrompts: [
+          ...next.appendedLastCopyPrompts,
+          unrecoverableSendPrompt(kept),
+        ],
       };
     }
     const awarded = awardHandBackSlot(
       next.slot,
       settlement.clientActionId,
       settlement.restore,
-      queueEditHandBackCopy(settlement.hostReason),
+      queueEditHandBackCopy(settlement.cause, settlement.hostReason),
     );
     return {
       slot: awarded.failedSendRestoration,
@@ -12257,7 +12400,7 @@ type HandBackSurfaces = Pick<
 >;
 
 /**
- * What settled queue-edit records owe the user, folded onto the three slices
+ * What accounted queue-edit records owe the user, folded onto the three slices
  * every hand-back shares.
  *
  * A returned edit joins the SAME single-slot contest a rejected send and a
@@ -12266,6 +12409,9 @@ type HandBackSurfaces = Pick<
  * handoff driver needs nothing new - an empty composer takes the text as an
  * unsent draft, and a newer draft there keeps the composer while the edit is
  * stated with its text quoted.
+ *
+ * A partial result never enters that contest. Its text is on the host, so the
+ * submission is kept as a last-copy record and the composer is left alone.
  */
 function withQueueEditSettlements(
   surfaces: HandBackSurfaces,
@@ -12273,21 +12419,33 @@ function withQueueEditSettlements(
   delivered: ReadonlySet<string>,
 ): HandBackSurfaces {
   return settlements.reduce<HandBackSurfaces>((carried, settlement) => {
-    if (settlement.kind === "partial") {
+    if (settlement.kind === "saved_after_return") {
       return {
         ...carried,
         errorNotices: appendErrorNotice(
           carried.errorNotices,
-          queueEditPartialNotice(settlement),
+          queueEditSavedAfterReturnNotice(settlement),
           delivered,
         ),
+      };
+    }
+    if (settlement.kind === "partial") {
+      const kept = partialQueueEditLastCopy(settlement);
+      return {
+        ...carried,
+        errorNotices: appendErrorNotice(
+          carried.errorNotices,
+          keptQueueEditSubmissionNotice(kept),
+          delivered,
+        ),
+        lastCopyPrompts: recordLastCopyPrompt(carried.lastCopyPrompts, kept),
       };
     }
     const awarded = awardHandBackSlot(
       carried.failedSendRestoration,
       settlement.clientActionId,
       settlement.restore,
-      queueEditHandBackCopy(settlement.hostReason),
+      queueEditHandBackCopy(settlement.cause, settlement.hostReason),
     );
     return {
       failedSendRestoration: awarded.failedSendRestoration,
@@ -12327,6 +12485,45 @@ function queueEditSurfacesForAck(
   };
 }
 
+/**
+ * What the host can be seen to hold, as the queue-edit accounting reads it.
+ * `transcriptComplete` is the caller's to answer: only it knows whether the
+ * messages it is passing are the whole transcript or the loaded part of one.
+ */
+function queueEditEvidence(input: {
+  readonly queue: ChatQueueState;
+  readonly messages: ReadonlyArray<Message>;
+  readonly transcriptComplete: boolean;
+}): QueueEditEvidence {
+  return {
+    queue: input.queue,
+    messages: input.messages,
+    transcriptComplete: input.transcriptComplete,
+    settingsEqual: chatRunSettingsEqual,
+    accountContextEqual: accountContextsEqual,
+  };
+}
+
+/** No reconnect swept anything: the accounting is a review of old records. */
+const NO_SWEPT_ACTION_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * A handed-back edit must re-upload its bytes whatever it is sent as next, for
+ * the reason a refused send must: the host was never shown to hold them. Both
+ * documents are forgotten, because the frame's can name images the composer's
+ * does not - an annotation crop is added on the way out.
+ */
+function forgetReturnedQueueEditBlobAcks(
+  hostId: string,
+  settlements: ReadonlyArray<QueueEditSettlement>,
+): void {
+  for (const settlement of settlements) {
+    if (settlement.kind !== "content_returned") continue;
+    forgetRefusedContentBlobAcks(hostId, settlement.restore.content);
+    forgetRefusedContentBlobAcks(hostId, settlement.wireContent);
+  }
+}
+
 /** No send has passed its display deadline - shared so the slice stays stable. */
 const EMPTY_UNCONFIRMED_SEND_ACTION_IDS: ReadonlySet<string> = new Set();
 
@@ -12343,7 +12540,7 @@ function withoutUnconfirmedSend(
 
 /**
  * The sends still unanswered past the display deadline: the recorded ids that
- * are STILL pending sends. Filtered on read, so every path that settles a send
+ * are STILL pending sends the host has not named. Filtered on read, so every path that settles a send
  * - ack, snapshot, turn-settled, withdrawal - clears its uncertainty without
  * each having to remember this slice.
  */
@@ -12353,11 +12550,16 @@ export function unconfirmedSendActionIdsOf(
   if (state.unconfirmedSendActionIds.size === 0) {
     return EMPTY_UNCONFIRMED_SEND_ACTION_IDS;
   }
-  const live = [...state.unconfirmedSendActionIds].filter(
-    (clientActionId) =>
-      pendingActionForId(state.pendingActions, clientActionId)?.action ===
-      "send",
-  );
+  const live = [...state.unconfirmedSendActionIds].filter((clientActionId) => {
+    const pending = pendingActionForId(state.pendingActions, clientActionId);
+    // Still a pending send, and not one the host has since named through
+    // `messageAccepted`: that frame can arrive while the ack never does.
+    return (
+      pending !== null &&
+      pending.action === "send" &&
+      !pending.messageConfirmedByHost
+    );
+  });
   return live.length === 0 ? EMPTY_UNCONFIRMED_SEND_ACTION_IDS : new Set(live);
 }
 
@@ -12987,19 +13189,22 @@ interface UnrecordedPrompt {
  * EVERY prompt a disposing store still owns, deduplicated by action id.
  *
  * Plural because `holdsUnrecordedPrompt` is: a session is held back from
- * eviction for four distinct states, and a handoff covering fewer of them
+ * eviction for five distinct states, and a handoff covering fewer of them
  * leaves the registry refusing to dispose for a reason the handoff cannot
  * discharge - which is the deferral cap arriving and destroying it anyway.
  *
  * `displaced` are the abandonment losers: prompts that could not take the
  * single restoration slot and exist only inside a notice's text.
  */
-function unrecordedPromptSources(
-  restoration: FailedSendRestorationState | null,
-  actions: ReadonlyArray<PendingChatAction>,
-  lastCopies: ReadonlyArray<UnrecoverableSendPrompt>,
-  accountForRetry: (action: PendingChatAction) => string,
-): ReadonlyArray<UnrecordedPrompt> {
+function unrecordedPromptSources(sources: {
+  readonly restoration: FailedSendRestorationState | null;
+  readonly actions: ReadonlyArray<PendingChatAction>;
+  readonly lastCopies: ReadonlyArray<UnrecoverableSendPrompt>;
+  readonly queueEdits: ReadonlyArray<QueueEditRecord>;
+  readonly accountForRetry: (action: PendingChatAction) => string;
+}): ReadonlyArray<UnrecordedPrompt> {
+  const { restoration, actions, lastCopies, queueEdits, accountForRetry } =
+    sources;
   const byAction = new Map<string, UnrecordedPrompt>();
   if (restoration !== null) {
     byAction.set(restoration.clientActionId, {
@@ -13031,6 +13236,18 @@ function unrecordedPromptSources(
   for (const prompt of lastCopies) {
     if (byAction.has(prompt.clientActionId)) continue;
     byAction.set(prompt.clientActionId, prompt);
+  }
+  for (const record of queueEdits) {
+    if (byAction.has(record.editActionId)) continue;
+    byAction.set(record.editActionId, {
+      clientActionId: record.editActionId,
+      content: record.restore.content,
+      browserAnnotations: record.restore.browserAnnotations,
+      // Said as what this client knows and no more: the edit may have been
+      // saved, and the stash is where the text waits either way.
+      reason:
+        "The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.",
+    });
   }
   return [...byAction.values()];
 }
