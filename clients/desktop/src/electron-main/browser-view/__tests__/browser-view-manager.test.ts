@@ -1326,9 +1326,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await harness.manager.acceptTab(ready);
     const interceptions = () =>
       view.debugger.commands
-        .filter(
-          ({ method }) => method === "Page.setInterceptFileChooserDialog",
-        )
+        .filter(({ method }) => method === "Page.setInterceptFileChooserDialog")
         .map(({ params }) => params);
 
     await harness.manager.dispatchElectronTabCdp({

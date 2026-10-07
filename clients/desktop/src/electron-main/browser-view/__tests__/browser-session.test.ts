@@ -799,7 +799,9 @@ describe("browser view session policy", () => {
 
     expect(electronState.messageBoxCalls).toBe(1);
     expect(dirname(item.savePath)).toBe(electronState.downloadsDirectory);
-    expect(basename(item.savePath)).toMatch(/^Unconfirmed .*\.traycer-download$/);
+    expect(basename(item.savePath)).toMatch(
+      /^Unconfirmed .*\.traycer-download$/,
+    );
     expect(item.cancelCalls).toBe(0);
     expect(changes.map((change) => change.state)).toEqual(["prompting"]);
     expect(changes[0]).toMatchObject({ dangerType: ".sh" });
