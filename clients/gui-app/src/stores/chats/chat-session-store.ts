@@ -5051,7 +5051,8 @@ export function createChatSessionStoreWithNotificationDependencies(
      * generation whose count had been rewound to zero as a finished one.
      */
     let assemblingSummaries:
-      readonly ChatAccumulatedFileChangeSummary[] | null = null;
+      | readonly ChatAccumulatedFileChangeSummary[]
+      | null = null;
     const accountSummaryAssembly = (
       assembly: readonly ChatAccumulatedFileChangeSummary[] | null,
     ): void => {

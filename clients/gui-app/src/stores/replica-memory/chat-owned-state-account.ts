@@ -233,9 +233,11 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   };
   const summaryRowSizes = new WeakMap<object, RetainedValueSize>();
   let summaryAssembly:
-    ChatSessionState["accumulatedFileChangeSummaries"] | null = null;
+    | ChatSessionState["accumulatedFileChangeSummaries"]
+    | null = null;
   let publishedSummaries:
-    ChatSessionState["accumulatedFileChangeSummaries"] | null = null;
+    | ChatSessionState["accumulatedFileChangeSummaries"]
+    | null = null;
   let summaryAssemblySize: RetainedValueSize = {
     rawBytes: 0,
     estimatedHeapBytes: 0,

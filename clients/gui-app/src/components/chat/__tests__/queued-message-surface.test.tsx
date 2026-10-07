@@ -568,7 +568,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(frozenHandle.getAttribute("data-disabled")).toBe("true");
   });
 
-  it("renders optimistic queued sends as locked "Sending to host" rows", () => {
+  it("renders optimistic queued sends as locked sending rows", () => {
     renderPanel({
       queue: queueState([
         queuedItem(
