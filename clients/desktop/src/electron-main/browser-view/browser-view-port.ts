@@ -180,6 +180,8 @@ export interface BrowserViewPopupWebContents {
 export interface BrowserViewPopupWindow {
   readonly webContents: BrowserViewPopupWebContents;
   isDestroyed(): boolean;
+  isVisible(): boolean;
+  isMinimized(): boolean;
   close(): void;
   on(event: "closed", listener: () => void): void;
   off(event: "closed", listener: () => void): void;

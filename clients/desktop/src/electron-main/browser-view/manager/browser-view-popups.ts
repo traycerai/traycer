@@ -92,6 +92,16 @@ export class BrowserViewPopups {
   // tracking them so manager disposal closes any popup that is still alive.
   private readonly openWindows = new Set<BrowserViewPopupWindow>();
   /**
+   * The tile each open popup was opened from, by the popup's WebContents id
+   * (read once at tracking: a closed window's contents throw on every read).
+   * A popup has no tile of its own, so what it has to tell a person - a
+   * download's progress, its Cancel - is shown on this one.
+   */
+  private readonly openerSurfaceByWebContentsId = new Map<
+    number,
+    BrowserViewEntryKey
+  >();
+  /**
    * Browser-process input timeline per opener: Electron's window-open details
    * carry no user-activation flag, so main tracks its own. The value's listener
    * is released on the opener's `destroyed`, breaking the value->key cycle so
@@ -107,6 +117,27 @@ export class BrowserViewPopups {
     this.createPopupWindow = options.createPopupWindow;
     this.registerPopupWebContents = options.registerPopupWebContents;
     this.send = options.send;
+  }
+
+  /**
+   * Whether this WebContents is a popup window a person can see. A popup is a
+   * native window of its own, so its opener's tile says nothing about it; its
+   * own window does, and a popup that is hidden or minimized is as unattended
+   * as a tab with no tile.
+   */
+  ownsShownWindow(webContentsId: number): boolean {
+    for (const window of this.openWindows) {
+      if (window.isDestroyed() || window.webContents.id !== webContentsId) {
+        continue;
+      }
+      return window.isVisible() && !window.isMinimized();
+    }
+    return false;
+  }
+
+  /** The tile an open popup was opened from, or null for anything else. */
+  openerSurfaceFor(webContentsId: number): BrowserViewEntryKey | null {
+    return this.openerSurfaceByWebContentsId.get(webContentsId) ?? null;
   }
 
   /**
@@ -223,8 +254,11 @@ export class BrowserViewPopups {
     this.registerPopupWebContents(window.webContents);
     this.installPopupPolicy(surface, initialUrl, window.webContents);
     this.openWindows.add(window);
+    const popupWebContentsId = window.webContents.id;
+    this.openerSurfaceByWebContentsId.set(popupWebContentsId, surface);
     window.on("closed", () => {
       this.openWindows.delete(window);
+      this.openerSurfaceByWebContentsId.delete(popupWebContentsId);
     });
     log.info("[browser-view] popup created", {
       popupWebContentsId: window.webContents.id,
@@ -264,6 +298,7 @@ export class BrowserViewPopups {
       this.openWindows.delete(window);
       if (!window.isDestroyed()) window.close();
     }
+    this.openerSurfaceByWebContentsId.clear();
   }
 }
 

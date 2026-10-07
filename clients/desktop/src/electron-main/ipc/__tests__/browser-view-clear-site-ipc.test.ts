@@ -100,7 +100,6 @@ vi.mock("electron", () => {
     },
     BrowserWindow,
     dialog: {
-      showSaveDialogSync: () => undefined,
       /**
        * The destructive handlers ask ASYNCHRONOUSLY. A dialog answered while
        * main's event loop keeps turning is the point: main owns every
@@ -124,11 +123,10 @@ vi.mock("electron", () => {
         });
       },
       /**
-       * Present, because the download prompt genuinely cannot await its
-       * answer - and loud, because nothing under test here may use it. A
-       * destructive browser action that fell back to the blocking dialog would
-       * pass every assertion below while freezing main, so the fall back is
-       * failed here rather than measured.
+       * Loud, because nothing on the browser plane may use it: a destructive
+       * action that fell back to the blocking dialog would pass every
+       * assertion below while freezing main, so the fall back is failed here
+       * rather than measured.
        */
       showMessageBoxSync: (): number => {
         throw new Error(
@@ -212,6 +210,8 @@ vi.mock("../../browser-view/browser-session", () => {
     BROWSER_VIEW_EPHEMERAL_PARTITION: fixture.ephemeralPartition,
     createBrowserViewWebPreferences: vi.fn(() => ({})),
     cancelBrowserViewDownload: vi.fn(),
+    setBrowserViewOnScreenProbe: vi.fn(),
+    discardHeldBrowserViewDownloads: vi.fn(),
     clearBrowserViewPendingCertificateError: vi.fn(),
     ensureBrowserViewSession: vi.fn(() =>
       ensureBrowserViewSessionForPartition(fixture.activePartition),

@@ -28,10 +28,8 @@ vi.mock("electron", () => {
     },
     BrowserWindow,
     dialog: {
-      showSaveDialogSync: () => undefined,
       showMessageBox: (): Promise<{ readonly response: number }> =>
         Promise.resolve({ response: 0 }),
-      showMessageBoxSync: () => 0,
     },
     session: {
       fromPartition: () => ({
@@ -93,6 +91,8 @@ vi.mock("../../app/cert-trust", () => ({
 vi.mock("../../browser-view/browser-session", () => ({
   createBrowserViewWebPreferences: vi.fn((request: unknown) => ({ request })),
   cancelBrowserViewDownload: vi.fn(),
+  setBrowserViewOnScreenProbe: vi.fn(),
+  discardHeldBrowserViewDownloads: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
   ensureBrowserViewSessionForPartition: vi.fn(),

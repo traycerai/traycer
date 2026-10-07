@@ -361,6 +361,7 @@ function createDebugSession(webContents: FakeWebContents): BrowserDebugSession {
   return new BrowserDebugSession({
     webContents,
     onDetached: () => undefined,
+    interceptFileChooser: () => false,
   });
 }
 
