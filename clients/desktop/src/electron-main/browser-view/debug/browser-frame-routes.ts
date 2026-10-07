@@ -24,6 +24,8 @@ interface ChildSession {
   route: FrameRoute;
   state: "attaching" | "ready" | "retiring";
   sessionId: string | null;
+  /** What this target's session was last told about the file chooser. */
+  fileChooserIntercepted: boolean;
   readonly readiness: Promise<string>;
   readonly rejectReadiness: (reason: Error) => void;
   retirement: Promise<boolean> | null;
@@ -65,6 +67,8 @@ export interface BrowserFrameRoutesPort {
   ) => Promise<T>;
   /** Resolves when the current attachment ends. */
   readonly attachmentEnded: () => Promise<void>;
+  /** The session's file-chooser reading; see `BrowserDebugSessionOptions`. */
+  readonly interceptFileChooser: () => boolean;
 }
 
 /**
@@ -267,6 +271,30 @@ export class BrowserFrameRoutes {
     this.frameRouteById.clear();
     for (const [targetId, childSession] of this.childSessionByTargetId) {
       this.retireChildSessionRecord(targetId, childSession);
+    }
+  }
+
+  /**
+   * The chooser interception is per TARGET: set on the root, it does not reach
+   * an out-of-process iframe (measured on Electron 42.11.10: with the root
+   * intercepting and the iframe's own session not, a click on a file input
+   * inside a cross-site iframe raised no `Page.fileChooserOpened`). So every
+   * child session carries the same reading as the root - from its enable
+   * batch, and here on every later edge.
+   *
+   * A child session exists for exactly the iframes an agent has reached into,
+   * which are the only ones it can give the user activation a chooser needs:
+   * every agent action resolves an element through its frame's own session.
+   */
+  syncFileChooserInterception(): void {
+    for (const childSession of this.childSessionByTargetId.values()) {
+      if (childSession.state !== "ready" || childSession.sessionId === null) {
+        continue;
+      }
+      void this.applyFileChooserInterception(
+        childSession,
+        childSession.sessionId,
+      );
     }
   }
 
@@ -517,6 +545,7 @@ export class BrowserFrameRoutes {
       route,
       state: "attaching",
       sessionId: null,
+      fileChooserIntercepted: false,
       readiness: deferred.promise,
       rejectReadiness: deferred.reject,
       retirement: null,
@@ -532,6 +561,33 @@ export class BrowserFrameRoutes {
       attachmentGeneration,
       childSession,
     );
+  }
+
+  /** Never rejects, for the reason the root's own apply does not. */
+  private applyFileChooserInterception(
+    childSession: ChildSession,
+    sessionId: string,
+  ): Promise<void> {
+    const enabled = this.port.interceptFileChooser();
+    if (childSession.fileChooserIntercepted === enabled) {
+      return Promise.resolve();
+    }
+    childSession.fileChooserIntercepted = enabled;
+    return this.port
+      .browserDebugger()
+      .sendCommand("Page.setInterceptFileChooserDialog", { enabled }, sessionId)
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          if (childSession.fileChooserIntercepted === enabled) {
+            childSession.fileChooserIntercepted = !enabled;
+          }
+          log.warn("[browser-view] child file chooser interception failed", {
+            enabled,
+            error: describeLogError(err),
+          });
+        },
+      );
   }
 
   private discoverIframeTargetIds(): Promise<ReadonlySet<string>> {
@@ -597,11 +653,14 @@ export class BrowserFrameRoutes {
           browserDebugger.sendCommand("Runtime.enable", {}, sessionId),
           browserDebugger.sendCommand("Network.enable", {}, sessionId),
           browserDebugger.sendCommand("DOM.enable", {}, sessionId),
+          this.applyFileChooserInterception(childSession, sessionId),
         ]).then(() => undefined),
         "Child debugger session ended while enabling",
       );
       this.assertChildSessionCurrent(targetId, childSession);
       childSession.state = "ready";
+      // The on-screen reading may have moved while the batch was in flight.
+      void this.applyFileChooserInterception(childSession, sessionId);
       return sessionId;
     } catch (err) {
       log.warn("[browser-view] child debugger domain enable failed", {

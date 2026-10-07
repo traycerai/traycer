@@ -83,6 +83,7 @@ export class BrowserDebugSession {
       raceWithSessionEnd: <T>(work: Promise<T>, message: string) =>
         this.raceWithDebugSessionEnd(work, message),
       attachmentEnded: () => this.attachmentEnd.promise,
+      interceptFileChooser: () => this.interceptFileChooser(),
     });
   }
 
@@ -125,6 +126,8 @@ export class BrowserDebugSession {
   syncFileChooserInterception(): void {
     if (!this.isReady()) return;
     void this.applyFileChooserInterception(this.webContents.debugger);
+    // Per target: an out-of-process iframe's session needs its own.
+    this.frameRoutes.syncFileChooserInterception();
   }
 
   onBindingCalled(

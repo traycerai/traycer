@@ -109,7 +109,14 @@ interface Harness {
   readonly renameCalls: Array<{ readonly from: string; readonly to: string }>;
   readonly removeCalls: string[];
   readonly removeSyncCalls: string[];
-  readonly state: { failRename: boolean; onScreen: boolean };
+  readonly state: {
+    failRename: boolean;
+    onScreen: boolean;
+    /** When set, `rename` waits for it after recording the call. */
+    renameGate: PromiseWithResolvers<void> | null;
+    /** When set, `remove` waits for it after recording the call. */
+    removeGate: PromiseWithResolvers<void> | null;
+  };
 }
 
 function createHarness(directory: () => string): Harness {
@@ -120,18 +127,25 @@ function createHarness(directory: () => string): Harness {
   const renameCalls: Array<{ readonly from: string; readonly to: string }> = [];
   const removeCalls: string[] = [];
   const removeSyncCalls: string[] = [];
-  const state = { failRename: false, onScreen: true };
+  const state: Harness["state"] = {
+    failRename: false,
+    onScreen: true,
+    renameGate: null,
+    removeGate: null,
+  };
   const files: BrowserDownloadFiles = {
     exists: (path) => existing.has(path),
     ensureDirectory: () => undefined,
     rename: async (from, to) => {
       renameCalls.push({ from, to });
+      if (state.renameGate !== null) await state.renameGate.promise;
       if (state.failRename) throw new Error("rename failed");
       existing.delete(from);
       existing.add(to);
     },
     remove: async (path) => {
       removeCalls.push(path);
+      if (state.removeGate !== null) await state.removeGate.promise;
       existing.delete(path);
     },
     removeSync: (path) => {
@@ -189,6 +203,12 @@ function lastChange(h: Harness): BrowserSessionDownloadChange {
   const change = h.changes.at(-1);
   if (change === undefined) throw new Error("no change emitted");
   return change;
+}
+
+function promptingDownloadId(h: Harness): string {
+  const prompting = h.changes.find((change) => change.state === "prompting");
+  if (prompting === undefined) throw new Error("prompting change missing");
+  return prompting.downloadId;
 }
 
 /** Starts a dangerous download on a tab a person is looking at. */
@@ -491,5 +511,177 @@ describe("BrowserViewDownloads", () => {
     expect(item.savePath).toBe("");
     expect(h.changes).toHaveLength(1);
     expect(lastChange(h)).toMatchObject({ state: "cancelled" });
+  });
+  it("refuses .pif off screen and holds it on screen", () => {
+    const off = harness();
+    off.state.onScreen = false;
+    const offItem = new FakeItem("setup.pif", 10);
+    off.downloads.handle(offItem, new FakeWebContents(1));
+    expect(offItem.cancelCalls).toBe(1);
+    expect(offItem.savePath).toBe("");
+    expect(off.confirmCalls).toHaveLength(0);
+    expect(lastChange(off)).toMatchObject({
+      state: "cancelled",
+      dangerType: ".pif",
+    });
+
+    const on = harness();
+    const onItem = startHeld(on, new FakeWebContents(1), "setup.pif");
+    expect(onItem.savePath.endsWith(HELD_DOWNLOAD_EXTENSION)).toBe(true);
+    expect(on.confirmCalls).toHaveLength(1);
+    expect(on.changes[0]).toMatchObject({
+      state: "prompting",
+      dangerType: ".pif",
+    });
+  });
+
+  it("cancels in flight after Save anyway through the tile", async () => {
+    const h = harness();
+    const item = startHeld(h, new FakeWebContents(1), "install.sh");
+    const heldPath = item.savePath;
+    const downloadId = promptingDownloadId(h);
+
+    pendingConfirmation(h, 0).resolve(true);
+    await flush();
+    expect(h.downloads.cancel(downloadId)).toBe(true);
+    expect(item.cancelCalls).toBe(1);
+
+    item.emitDone("cancelled");
+    await flush();
+
+    expect(h.removeCalls).toEqual([heldPath]);
+    expect(h.renameCalls).toHaveLength(0);
+    expect(lastChange(h)).toMatchObject({ state: "cancelled" });
+  });
+
+  it("keeps the person's save once the rename has started", async () => {
+    const h = harness();
+    h.state.renameGate = Promise.withResolvers<void>();
+    const item = startHeld(h, new FakeWebContents(1), "install.sh");
+    const downloadId = promptingDownloadId(h);
+
+    complete(h, item);
+    pendingConfirmation(h, 0).resolve(true);
+    await flush();
+    expect(h.renameCalls).toHaveLength(1);
+
+    expect(h.downloads.cancel(downloadId)).toBe(false);
+    expect(item.cancelCalls).toBe(0);
+
+    h.state.renameGate.resolve();
+    await flush();
+    expect(lastChange(h)).toMatchObject({
+      state: "completed",
+      savePath: join(DIRECTORY, "install.sh"),
+    });
+    expect(h.removeCalls).toHaveLength(0);
+  });
+
+  it("takes the dialog's answer once: a late Save anyway after Cancel renames nothing", async () => {
+    const h = harness();
+    const item = startHeld(h, new FakeWebContents(1), "install.sh");
+    const downloadId = promptingDownloadId(h);
+
+    expect(h.downloads.cancel(downloadId)).toBe(true);
+    expect(item.cancelCalls).toBe(1);
+    pendingConfirmation(h, 0).resolve(true);
+    await flush();
+    item.emitDone("cancelled");
+    await flush();
+
+    expect(h.renameCalls).toHaveLength(0);
+    expect(h.removeCalls).toEqual([item.savePath]);
+    expect(lastChange(h)).toMatchObject({ state: "cancelled" });
+  });
+
+  it("does not cancel a confirmed download when its tab is destroyed", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    const item = startHeld(h, webContents, "install.sh");
+    const heldPath = item.savePath;
+
+    pendingConfirmation(h, 0).resolve(true);
+    await flush();
+    webContents.fireDestroyed();
+    expect(item.cancelCalls).toBe(0);
+
+    complete(h, item);
+    await flush();
+
+    expect(h.renameCalls).toEqual([
+      { from: heldPath, to: join(DIRECTORY, "install.sh") },
+    ]);
+    expect(lastChange(h)).toMatchObject({ state: "completed" });
+  });
+
+  it("removes synchronously a held file whose async unlink is still in flight", async () => {
+    const h = harness();
+    h.state.removeGate = Promise.withResolvers<void>();
+    const item = startHeld(h, new FakeWebContents(1), "install.sh");
+    const heldPath = item.savePath;
+
+    complete(h, item);
+    pendingConfirmation(h, 0).resolve(false);
+    await flush();
+    expect(h.removeCalls).toEqual([heldPath]);
+    expect(h.removeSyncCalls).toHaveLength(0);
+
+    h.downloads.discardHeld();
+
+    expect(h.removeSyncCalls).toEqual([heldPath]);
+    h.state.removeGate.resolve();
+    await flush();
+  });
+
+  it("leaves a rename in flight alone when the app goes away", async () => {
+    const h = harness();
+    h.state.renameGate = Promise.withResolvers<void>();
+    const item = startHeld(h, new FakeWebContents(1), "install.sh");
+
+    complete(h, item);
+    pendingConfirmation(h, 0).resolve(true);
+    await flush();
+    expect(h.renameCalls).toHaveLength(1);
+
+    h.downloads.discardHeld();
+
+    expect(h.removeSyncCalls).toEqual([]);
+    expect(item.cancelCalls).toBe(0);
+    h.state.renameGate.resolve();
+    await flush();
+    expect(lastChange(h)).toMatchObject({ state: "completed" });
+  });
+
+  it("tells canonically equivalent names apart while both are in flight", () => {
+    const h = harness();
+    const composed = new FakeItem("caf\u00e9.txt", 10);
+    const decomposed = new FakeItem("cafe\u0301.txt", 10);
+    const webContents = new FakeWebContents(1);
+
+    h.downloads.handle(composed, webContents);
+    h.downloads.handle(decomposed, webContents);
+
+    expect(composed.savePath).toBe(join(DIRECTORY, "caf\u00e9.txt"));
+    expect(decomposed.savePath).toBe(join(DIRECTORY, "cafe\u0301 (1).txt"));
+  });
+
+  it("publishes two confirmed downloads of equivalent names to different paths", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    const first = startHeld(h, webContents, "caf\u00e9.sh");
+    const second = startHeld(h, webContents, "cafe\u0301.sh");
+    complete(h, first);
+    complete(h, second);
+
+    pendingConfirmation(h, 0).resolve(true);
+    pendingConfirmation(h, 1).resolve(true);
+    await flush();
+
+    expect(h.renameCalls).toHaveLength(2);
+    const [one, two] = h.renameCalls;
+    if (one === undefined || two === undefined) throw new Error("renames");
+    expect(one.to).not.toBe(two.to);
+    const fold = (path: string): string => path.normalize("NFC").toLowerCase();
+    expect(fold(one.to)).not.toBe(fold(two.to));
   });
 });

@@ -3,6 +3,7 @@ import { basename, extname, join } from "node:path";
 import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
 import type { MainConfirmation } from "../app/confirm-destructive";
 import { describeLogError, log } from "../app/logger";
+import { CHROMIUM_DANGEROUS_DOWNLOAD_EXTENSIONS } from "./chromium-download-file-types";
 
 /**
  * Downloads from an in-app browser tab, decided without blocking main.
@@ -91,7 +92,20 @@ export const HELD_DOWNLOAD_EXTENSION = ".traycer-download";
 
 const MAX_NUMBERED_DOWNLOAD_NAMES = 1000;
 
+/**
+ * The person's decision about a held download. The dialog answers ONCE
+ * (`pending` to `save` or `cancel`); a Cancel can still arrive after "Save
+ * anyway" while the transfer runs, from the tile's own Cancel, and `cancel` is
+ * final: nothing turns it back into a save.
+ */
 type HeldAnswer = "pending" | "save" | "cancel";
+
+/**
+ * What has been done with the held file. `publishing` and `removing` are the
+ * rename and the unlink in flight; once either starts, no later event acts on
+ * the file again.
+ */
+type HeldSettlement = "open" | "publishing" | "removing";
 
 interface DownloadSnapshot {
   readonly url: string;
@@ -113,8 +127,7 @@ interface HeldDownload {
   answer: HeldAnswer;
   /** The item's terminal state, or `null` while it is still in flight. */
   done: string | null;
-  /** Set once the rename or the unlink has started; nothing acts twice. */
-  settling: boolean;
+  settlement: HeldSettlement;
 }
 
 export class BrowserViewDownloads {
@@ -193,13 +206,15 @@ export class BrowserViewDownloads {
   /**
    * The app is going away: every download still under its held name is
    * discarded as if its question had been answered Cancel. Synchronous,
-   * because nothing awaited here would run before the process exits.
+   * because nothing awaited here would run before the process exits - which
+   * is also why an unlink that is already in flight is done again here rather
+   * than trusted to finish. Only a rename the person asked for is left alone.
    */
   discardHeld(): void {
     for (const [downloadId, held] of this.heldById) {
-      if (held.settling) continue;
+      if (held.settlement === "publishing") continue;
       held.answer = "cancel";
-      held.settling = true;
+      held.settlement = "removing";
       this.cancelById.delete(downloadId);
       try {
         if (held.done === null) held.item.cancel();
@@ -281,26 +296,39 @@ export class BrowserViewDownloads {
       ),
       answer: "pending",
       done: null,
-      settling: false,
+      settlement: "open",
     };
     item.setSavePath(held.heldPath);
     this.heldById.set(identity.downloadId, held);
     let latest = snapshotOf(item);
-    const answer = (decision: "save" | "cancel"): void => {
-      if (held.answer !== "pending") return;
-      held.answer = decision;
-      if (decision === "cancel") {
-        // A no-op on an item that already completed, which is why the held
-        // file is unlinked below instead of trusting this to remove it.
-        if (held.done === null) item.cancel();
-      } else if (held.done === null) {
-        this.emitChange(identity, latest, "progressing", null, true);
-      }
+    const settle = (): void => {
       void this.settleHeld(identity, held, directory, filename, latest);
     };
-    this.cancelById.set(identity.downloadId, () => {
-      answer("cancel");
-    });
+    // Allowed until the file is being renamed or removed, whatever the dialog
+    // said: a download that still offers Cancel must still be cancellable.
+    const cancelHeld = (): void => {
+      if (held.answer === "cancel" || held.settlement !== "open") return;
+      held.answer = "cancel";
+      // A no-op on an item that already completed, which is why the held
+      // file is unlinked at settlement instead of trusting this to remove it.
+      if (held.done === null) item.cancel();
+      settle();
+    };
+    // The dialog's answer, taken once. A late "Save anyway" after any Cancel
+    // changes nothing.
+    const answerQuestion = (confirmed: boolean): void => {
+      if (held.answer !== "pending") return;
+      if (!confirmed) {
+        cancelHeld();
+        return;
+      }
+      held.answer = "save";
+      if (held.done === null) {
+        this.emitChange(identity, latest, "progressing", null, true);
+      }
+      settle();
+    };
+    this.cancelById.set(identity.downloadId, cancelHeld);
     this.emitChange(identity, latest, "prompting", null, true);
     item.on("updated", (_updatedEvent, state) => {
       latest = snapshotOf(item);
@@ -320,27 +348,24 @@ export class BrowserViewDownloads {
     item.on("done", (_doneEvent, state) => {
       latest = snapshotOf(item);
       held.done = state;
-      void this.settleHeld(identity, held, directory, filename, latest);
+      settle();
     });
+    // An unanswered question dies with its tab. A download the person already
+    // confirmed carries on, as any other download outlives its tab.
     webContents.once("destroyed", () => {
-      answer("cancel");
+      if (held.answer === "pending") cancelHeld();
     });
     void this.confirm({
       title: "Confirm download",
       message: `Save ${filename}?`,
-      detail: `${identity.dangerType} files can run code on your machine.\n\nSource: ${latest.url}`,
+      detail: `${identity.dangerType} files can run code or change settings on your machine.\n\nSource: ${latest.url}`,
       confirmLabel: "Save anyway",
-    }).then(
-      (confirmed) => {
-        answer(confirmed ? "save" : "cancel");
-      },
-      (error: unknown) => {
-        log.warn("[browser-view] download confirmation failed", {
-          error: describeLogError(error),
-        });
-        answer("cancel");
-      },
-    );
+    }).then(answerQuestion, (error: unknown) => {
+      log.warn("[browser-view] download confirmation failed", {
+        error: describeLogError(error),
+      });
+      answerQuestion(false);
+    });
   }
 
   /**
@@ -355,12 +380,16 @@ export class BrowserViewDownloads {
     filename: string,
     snapshot: DownloadSnapshot,
   ): Promise<void> {
-    if (held.answer === "pending" || held.done === null || held.settling) {
+    if (
+      held.answer === "pending" ||
+      held.done === null ||
+      held.settlement !== "open"
+    ) {
       return;
     }
-    held.settling = true;
     this.cancelById.delete(identity.downloadId);
     if (held.answer === "save" && held.done === "completed") {
+      held.settlement = "publishing";
       const savePath = this.reserveUniquePath(directory, filename);
       try {
         await this.files.rename(held.heldPath, savePath);
@@ -374,6 +403,7 @@ export class BrowserViewDownloads {
         log.warn("[browser-view] confirmed download could not be saved", {
           error: describeLogError(error),
         });
+        held.settlement = "removing";
         await this.removeHeld(held);
         this.emitChange(identity, snapshot, "interrupted", null, false);
       } finally {
@@ -382,6 +412,7 @@ export class BrowserViewDownloads {
       }
       return;
     }
+    held.settlement = "removing";
     await this.removeHeld(held);
     this.heldById.delete(identity.downloadId);
     this.emitChange(
@@ -486,9 +517,14 @@ function safeDownloadFilename(suggested: string): string {
   return name;
 }
 
-/** Case-folded: the default macOS and Windows volumes do not tell case apart. */
+/**
+ * Two names the filesystem may treat as one must reserve as one. The default
+ * macOS and Windows volumes do not tell case apart, and macOS does not tell a
+ * composed character from its decomposed spelling either (`é` against `e`
+ * plus a combining accent).
+ */
 function reservationKey(path: string): string {
-  return path.toLowerCase();
+  return path.normalize("NFC").toLowerCase();
 }
 
 function terminalDownloadState(state: string): BrowserViewDownloadState {
@@ -502,32 +538,6 @@ function dangerousDownloadType(filename: string): string | null {
   const extension = lower.includes(".")
     ? lower.slice(lower.lastIndexOf("."))
     : "";
-  if (DANGEROUS_DOWNLOAD_EXTENSIONS.has(extension)) return extension;
+  if (CHROMIUM_DANGEROUS_DOWNLOAD_EXTENSIONS.has(extension)) return extension;
   return null;
 }
-
-const DANGEROUS_DOWNLOAD_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".app",
-  ".applescript",
-  ".bat",
-  ".cmd",
-  ".command",
-  ".com",
-  ".cpl",
-  ".dmg",
-  ".exe",
-  ".hta",
-  ".jar",
-  ".js",
-  ".jse",
-  ".msi",
-  ".pkg",
-  ".ps1",
-  ".reg",
-  ".scr",
-  ".sh",
-  ".vb",
-  ".vbe",
-  ".vbs",
-  ".wsf",
-]);
