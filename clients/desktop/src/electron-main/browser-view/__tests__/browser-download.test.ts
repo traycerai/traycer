@@ -886,7 +886,7 @@ describe("BrowserViewDownloads tab watching", () => {
 });
 
 describe("BrowserViewDownloads publishing", () => {
-  it("tells the tile Cancel is gone before a slow publish, then reports completed", async () => {
+  it("keeps Cancel on the last change only: nothing without Cancel is emitted during a slow publish", async () => {
     const h = harness();
     h.state.publishGate = Promise.withResolvers<void>();
     const item = start(h, new FakeWebContents(1), "file.txt");
@@ -896,11 +896,8 @@ describe("BrowserViewDownloads publishing", () => {
     await flush();
 
     expect(h.publishCalls).toHaveLength(1);
-    expect(lastChange(h)).toMatchObject({
-      state: "progressing",
-      canCancel: false,
-      savePath: null,
-    });
+    expect(h.changes.some((change) => !change.canCancel)).toBe(false);
+    expect(lastChange(h)).toMatchObject({ canCancel: true });
     expect(h.downloads.cancel(downloadId)).toBe(false);
     expect(item.cancelCalls).toBe(0);
     expect(h.removeCalls).toHaveLength(0);
@@ -908,13 +905,152 @@ describe("BrowserViewDownloads publishing", () => {
     h.state.publishGate.resolve();
     await flush();
 
-    expect(lastChange(h)).toMatchObject({
+    const withoutCancel = h.changes.filter((change) => !change.canCancel);
+    expect(withoutCancel).toHaveLength(1);
+    expect(withoutCancel[0]).toMatchObject({
       state: "completed",
       savePath: join(DIRECTORY, "file.txt"),
-      canCancel: false,
     });
+    expect(lastChange(h)).toBe(withoutCancel[0]);
     expect(h.disk.get(join(DIRECTORY, "file.txt"))).toBe("bytes of file.txt");
   });
+});
+
+interface LifecycleScenario {
+  readonly name: string;
+  readonly run: () => Promise<Harness>;
+}
+
+const LIFECYCLES: readonly LifecycleScenario[] = [
+  {
+    name: "plain download completed",
+    run: async () => {
+      const h = harness();
+      const item = start(h, new FakeWebContents(1), "file.txt");
+      complete(h, item);
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "plain download cancelled in flight from the tile",
+    run: async () => {
+      const h = harness();
+      const item = start(h, new FakeWebContents(1), "file.txt");
+      h.downloads.cancel(firstDownloadId(h));
+      item.emitDone("cancelled");
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "plain download interrupted by the item",
+    run: async () => {
+      const h = harness();
+      const item = start(h, new FakeWebContents(1), "file.txt");
+      item.emitUpdated("progressing", 5);
+      item.emitDone("interrupted");
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "plain download whose publish rejects",
+    run: async () => {
+      const h = harness();
+      h.state.rejectPublish = true;
+      const item = start(h, new FakeWebContents(1), "file.txt");
+      complete(h, item);
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "dangerous download refused off screen",
+    run: async () => {
+      const h = harness();
+      h.state.onScreen = false;
+      start(h, new FakeWebContents(1), "install.sh");
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "dangerous download confirmed then completed",
+    run: async () => {
+      const h = harness();
+      const item = start(h, new FakeWebContents(1), "install.sh");
+      pendingConfirmation(h, 0).resolve(true);
+      await flush();
+      complete(h, item);
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "dangerous download declined",
+    run: async () => {
+      const h = harness();
+      const item = start(h, new FakeWebContents(1), "install.sh");
+      pendingConfirmation(h, 0).resolve(false);
+      await flush();
+      item.emitDone("cancelled");
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "dangerous download cancelled by the tile while the question is open",
+    run: async () => {
+      const h = harness();
+      const item = start(h, new FakeWebContents(1), "install.sh");
+      h.downloads.cancel(firstDownloadId(h));
+      item.emitDone("cancelled");
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "dangerous download whose tab is destroyed while the question is open",
+    run: async () => {
+      const h = harness();
+      const webContents = new FakeWebContents(1);
+      const item = start(h, webContents, "install.sh");
+      webContents.fireDestroyed();
+      item.emitDone("cancelled");
+      await flush();
+      return h;
+    },
+  },
+  {
+    name: "missing Downloads folder",
+    run: async () => {
+      const h = createHarness(() => {
+        throw new Error("no downloads folder");
+      }, false);
+      h.downloads.handle(new FakeItem("file.txt", 10), new FakeWebContents(1));
+      await flush();
+      return h;
+    },
+  },
+];
+
+describe("BrowserViewDownloads Cancel contract", () => {
+  it.each(LIFECYCLES)(
+    "every download emits exactly one change without Cancel, and it is its last: $name",
+    async (scenario) => {
+      const h = await scenario.run();
+
+      const downloadId = firstDownloadId(h);
+      const mine = h.changes.filter(
+        (change) => change.downloadId === downloadId,
+      );
+      expect(mine).toEqual(h.changes);
+      const withoutCancel = mine.filter((change) => !change.canCancel);
+      expect(withoutCancel).toHaveLength(1);
+      expect(mine.at(-1)).toBe(withoutCancel[0]);
+    },
+  );
 });
 
 describe("BrowserViewDownloads published name", () => {

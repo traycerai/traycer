@@ -56,6 +56,10 @@ export interface BrowserSessionDownloadChange {
   readonly state: BrowserViewDownloadState;
   readonly savePath: string | null;
   readonly dangerType: string | null;
+  /**
+   * False on a download's last change and on no other: the tile settles its
+   * toast on the first change that offers no Cancel.
+   */
   readonly canCancel: boolean;
 }
 
@@ -394,10 +398,11 @@ export class BrowserViewDownloads {
     this.cancelById.delete(identity.downloadId);
     if (held.answer === "save" && held.done === "completed") {
       held.settlement = "publishing";
-      // Cancel stops working here, so the tile is told before the move: on a
-      // volume with no hard links the move is a copy, and a Cancel button
-      // left up for its whole length would be one that does nothing.
-      this.emitChange(identity, snapshot, "progressing", null, false);
+      // Nothing is reported here. The tile reads a report with no Cancel as
+      // a download's LAST one (it settles the toast on it), so the only such
+      // report is the outcome below. A Cancel clicked while the finished file
+      // is being moved does nothing, like one clicked a moment after
+      // completion.
       try {
         const savePath = await this.publish(held.heldPath, directory, filename);
         log.info("[browser-view] download finished", {
