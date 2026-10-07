@@ -8,7 +8,7 @@ rss: true
 <Update label="v1.5.0">
 Profile sync, native subagent continuation, and protection against incompatible task-store rollbacks.
 
-* **Profile sync** — transfer supported Claude Code, Codex, Grok, and Antigravity sign-ins directly between your Hosts. Synced profiles carry refreshed sign-ins between devices, and a source Terminal account arrives as a managed profile without replacing the destination's Terminal account.
+* **Profile sync** — transfer supported Claude Code, Codex, Grok, and Antigravity sign-ins directly between your Hosts. Synced profiles carry refreshed sign-ins between devices, and a source Terminal account arrives as a regular profile without replacing the destination's Terminal account.
 * **Subagents** — continue a completed Claude Code or Codex native subagent in its own chat on the same Host, sharing the parent's workspace. Repeating the action opens the chat already created for that subagent.
 * **Host rollback** — compatibility checks now include the local task store. A rollback to a Host that cannot read it is refused unless you explicitly accept the temporary loss of access to local tasks; the task store is not deleted.
 
