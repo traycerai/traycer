@@ -110,15 +110,17 @@ export class BrowserViewPopups {
   }
 
   /**
-   * Whether this WebContents is an open popup window. A popup is a native
-   * window of its own, so a person can see it whatever its opener's tile is
-   * doing.
+   * Whether this WebContents is a popup window a person can see. A popup is a
+   * native window of its own, so its opener's tile says nothing about it; its
+   * own window does, and a popup that is hidden or minimized is as unattended
+   * as a tab with no tile.
    */
-  ownsOpenWindow(webContentsId: number): boolean {
+  ownsShownWindow(webContentsId: number): boolean {
     for (const window of this.openWindows) {
-      if (!window.isDestroyed() && window.webContents.id === webContentsId) {
-        return true;
+      if (window.isDestroyed() || window.webContents.id !== webContentsId) {
+        continue;
       }
+      return window.isVisible() && !window.isMinimized();
     }
     return false;
   }

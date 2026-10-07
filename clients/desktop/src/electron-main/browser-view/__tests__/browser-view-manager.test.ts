@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { log } from "../../app/logger";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
+import type { MainConfirmation } from "../../app/confirm-destructive";
+import {
+  BrowserViewDownloads,
+  type BrowserDownloadItem,
+} from "../browser-download";
 import { BrowserViewManager } from "../browser-view-manager";
 import { BrowserSessionsRegistry } from "../../browser-sessions/browser-sessions-owner";
 import { createRegistryHarness } from "../../browser-sessions/__tests__/browser-sessions-stream-fixture";
@@ -601,6 +606,8 @@ class FakePopupWebContents extends EventEmitter {
 class FakePopupWindow extends EventEmitter {
   readonly webContents: FakePopupWebContents;
   destroyed = false;
+  visible = true;
+  minimized = false;
   closeCalls = 0;
 
   constructor(webContentsId: number) {
@@ -612,6 +619,14 @@ class FakePopupWindow extends EventEmitter {
     return this.destroyed;
   }
 
+  isVisible(): boolean {
+    return this.visible;
+  }
+
+  isMinimized(): boolean {
+    return this.minimized;
+  }
+
   close(): void {
     this.closeCalls += 1;
     this.destroyed = true;
@@ -621,6 +636,50 @@ class FakePopupWindow extends EventEmitter {
 interface CreatedPopupWindow {
   readonly window: FakePopupWindow;
   readonly adopted: WebContents | undefined;
+}
+
+class FakeDownloadItem implements BrowserDownloadItem {
+  savePath = "";
+  cancelCalls = 0;
+
+  constructor(readonly filename: string) {}
+
+  getURL(): string {
+    return `https://opener.example/${this.filename}`;
+  }
+
+  getFilename(): string {
+    return this.filename;
+  }
+
+  getMimeType(): string {
+    return "application/octet-stream";
+  }
+
+  getTotalBytes(): number {
+    return 10;
+  }
+
+  getReceivedBytes(): number {
+    return 0;
+  }
+
+  getSavePath(): string {
+    return this.savePath;
+  }
+
+  setSavePath(path: string): void {
+    this.savePath = path;
+  }
+
+  cancel(): void {
+    this.cancelCalls += 1;
+  }
+
+  on(
+    _event: "updated" | "done",
+    _listener: (downloadEvent: unknown, state: string) => void,
+  ): void {}
 }
 
 class FakeDevToolsWindow {
@@ -1441,6 +1500,140 @@ describe("BrowserViewManager native tab lifecycle", () => {
       { enabled: true },
     ]);
     expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
+  });
+
+  async function openOnePopup(harness: Harness): Promise<FakePopupWindow> {
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    return openPopupThroughHandler(harness, handler, view, {
+      url: "https://opener.example/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+  }
+
+  it("reads a visible, restored popup as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      true,
+    );
+  });
+
+  it("does not read a minimized popup as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    popup.minimized = true;
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      false,
+    );
+  });
+
+  it("does not read a hidden popup as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    popup.visible = false;
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      false,
+    );
+  });
+
+  it("reads a popup as on screen again once it is restored", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    popup.minimized = true;
+    popup.visible = false;
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      false,
+    );
+
+    popup.minimized = false;
+    popup.visible = true;
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      true,
+    );
+  });
+
+  it("does not read a destroyed popup or an unknown WebContents as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const popupId = popup.webContents.id;
+    expect(harness.manager.isWebContentsOnScreen(popupId)).toBe(true);
+
+    popup.destroyed = true;
+
+    expect(harness.manager.isWebContentsOnScreen(popupId)).toBe(false);
+    expect(harness.manager.isWebContentsOnScreen(987654)).toBe(false);
+  });
+
+  it("refuses a dangerous download from a minimized popup and holds it once restored", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const confirmCalls: MainConfirmation[] = [];
+    const changes: BrowserSessionDownloadChange[] = [];
+    const downloads = new BrowserViewDownloads({
+      downloadsDirectory: () => "downloads-root",
+      files: {
+        publish: async () => "published",
+        remove: async () => undefined,
+        removeSync: () => undefined,
+      },
+      confirm: (confirmation) => {
+        confirmCalls.push(confirmation);
+        return new Promise<boolean>(() => undefined);
+      },
+      isOnScreen: (webContentsId) =>
+        harness.manager.isWebContentsOnScreen(webContentsId),
+      emit: (change) => {
+        changes.push(change);
+      },
+    });
+    const downloadContents = {
+      id: popup.webContents.id,
+      getURL: () => "https://opener.example/popup",
+      once: (event: "destroyed", listener: () => void) => {
+        popup.webContents.once(event, listener);
+      },
+    };
+    const startSetup = (): FakeDownloadItem => {
+      const item = new FakeDownloadItem("setup.exe");
+      downloads.handle(item, downloadContents);
+      return item;
+    };
+
+    popup.minimized = true;
+    const refused = startSetup();
+    expect(refused.cancelCalls).toBe(1);
+    expect(refused.savePath).toBe("");
+    expect(confirmCalls).toHaveLength(0);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      state: "cancelled",
+      dangerType: ".exe",
+    });
+
+    popup.minimized = false;
+    const held = startSetup();
+    expect(held.cancelCalls).toBe(0);
+    expect(held.savePath).not.toBe("");
+    expect(confirmCalls).toHaveLength(1);
+    expect(changes.at(-1)).toMatchObject({
+      state: "prompting",
+      dangerType: ".exe",
+    });
   });
 
   it("sends nothing on an unleased tab's navigation, and recovers a leased one", async () => {

@@ -973,14 +973,15 @@ export class BrowserViewManager {
 
   /**
    * Whether a person can see the tab this WebContents belongs to: a guest a
-   * tile is showing in a window that is itself shown, or a popup window.
-   * Anything else - a guest kept with no tile, a tile in a window hidden to
-   * the tray, a WebContents this manager never knew - is not on screen.
+   * tile is showing in a window that is itself shown, or a popup window that
+   * is shown. Anything else - a guest kept with no tile, a tile in a window
+   * hidden to the tray, a minimized popup, a WebContents this manager never
+   * knew - is not on screen.
    */
   isWebContentsOnScreen(webContentsId: number): boolean {
     const entry = this.findEntryByWebContentsId(webContentsId);
     if (entry !== null) return this.isEntryOnScreen(entry);
-    return this.popups.ownsOpenWindow(webContentsId);
+    return this.popups.ownsShownWindow(webContentsId);
   }
 
   /**
