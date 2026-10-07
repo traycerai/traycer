@@ -376,6 +376,84 @@ describe("withoutReturnedQueueEditsForRow", () => {
   });
 });
 
+describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
+  const NO_OP = { followUpIsNoOp: true } as const;
+
+  it("lands whole, with no settlement on either ack, when the edit is accepted and the no-op follow-up refused", () => {
+    const afterEdit = foldQueueEditAck(recordsOf(record(NO_OP, "save")), {
+      clientActionId: EDIT_ACTION_ID,
+      status: "accepted",
+      reason: null,
+    });
+    // The edit alone does not finish the record (the path ran).
+    expect(Object.keys(afterEdit.records)).toEqual([EDIT_ACTION_ID]);
+    expect(afterEdit.settlements).toEqual([]);
+
+    const afterFollowUp = foldQueueEditAck(afterEdit.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "The queued prompt is no longer pending.",
+    });
+    expect(afterFollowUp.settlements).toEqual([]);
+    expect(afterFollowUp.records).toEqual({});
+  });
+
+  it("lands whole in the other order too: the no-op follow-up refused first, then the edit accepted", () => {
+    const afterFollowUp = foldQueueEditAck(recordsOf(record(NO_OP, "save")), {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "The queued prompt is no longer pending.",
+    });
+    expect(Object.keys(afterFollowUp.records)).toEqual([EDIT_ACTION_ID]);
+    expect(afterFollowUp.settlements).toEqual([]);
+
+    const afterEdit = foldQueueEditAck(afterFollowUp.records, {
+      clientActionId: EDIT_ACTION_ID,
+      status: "accepted",
+      reason: null,
+    });
+    expect(afterEdit.settlements).toEqual([]);
+    expect(afterEdit.records).toEqual({});
+  });
+
+  it("control: the same sequence with followUpIsNoOp false emits one refused partial", () => {
+    // Also pinned, in a steer variant, by "settles a partial exactly once…".
+    const afterEdit = foldQueueEditAck(
+      recordsOf(record({ followUpIsNoOp: false }, "save")),
+      { clientActionId: EDIT_ACTION_ID, status: "accepted", reason: null },
+    );
+    const afterFollowUp = foldQueueEditAck(afterEdit.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "The queued prompt is no longer pending.",
+    });
+    expect(afterFollowUp.settlements).toHaveLength(1);
+    expect(afterFollowUp.settlements[0]).toMatchObject({
+      kind: "partial",
+      refused: true,
+    });
+    expect(afterFollowUp.records).toEqual({});
+  });
+
+  it("returns the text once and nothing else when both frames of a no-op record are refused", () => {
+    const afterEdit = foldQueueEditAck(recordsOf(record(NO_OP, "save")), {
+      clientActionId: EDIT_ACTION_ID,
+      status: "rejected",
+      reason: "gone",
+    });
+    const afterFollowUp = foldQueueEditAck(afterEdit.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "gone",
+    });
+    const kinds = [...afterEdit.settlements, ...afterFollowUp.settlements].map(
+      (entry) => entry.kind,
+    );
+    expect(kinds).toEqual(["content_returned"]);
+    expect(afterFollowUp.records).toEqual({});
+  });
+});
+
 describe("follow_up_alone (edit refused, follow-up applied)", () => {
   const CHANGES = ["model gpt-x"];
   const ALONE = {

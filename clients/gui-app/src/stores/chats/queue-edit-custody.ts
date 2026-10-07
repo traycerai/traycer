@@ -360,6 +360,22 @@ function settleQueueEditRecord(
 }
 
 /**
+ * What an answer to the second frame leaves of it.
+ *
+ * A refusal of a frame that asked the row to change nothing leaves nothing
+ * unapplied - typically a text-only save whose row started between the two
+ * frames, so the settings frame found no row. It is recorded as answered in
+ * full, so no outcome downstream reports settings that "were not applied"
+ * for a submission that asked for none.
+ */
+function followUpOutcomeForAck(
+  record: QueueEditRecord,
+  status: "accepted" | "rejected",
+): QueueEditFrameOutcome {
+  return status === "rejected" && record.followUpIsNoOp ? "accepted" : status;
+}
+
+/**
  * Fold one `actionAck` into the records. Unchanged (same reference, no
  * settlements) for an ack that names neither frame of any record.
  */
@@ -378,7 +394,7 @@ export function foldQueueEditAck(
     ? { ...record, edit: ack.status }
     : {
         ...record,
-        followUp: ack.status,
+        followUp: followUpOutcomeForAck(record, ack.status),
         followUpReason: ack.status === "rejected" ? ack.reason : null,
       };
   const { record: next, settlements } = settleQueueEditRecord(answered, {

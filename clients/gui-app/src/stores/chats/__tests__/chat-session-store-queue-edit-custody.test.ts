@@ -882,6 +882,44 @@ describe("the host's own notice after a refused queue-edit frame", () => {
   });
 });
 
+describe("a text-only save whose settings frame is refused", () => {
+  it("states nothing, keeps nothing and swallows the host's notice, because the submission asked for no settings", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      SETTINGS,
+      [],
+    );
+    // The submission asked the row to change nothing.
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]
+        ?.followUpIsNoOp,
+    ).toBe(true);
+    const before = harness.handle.store.getState();
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+    });
+    hostNotice(harness, followUpActionId);
+
+    const after = harness.handle.store.getState();
+    expect(after.lastCopyPrompts).toEqual(before.lastCopyPrompts);
+    expect(after.errorNotices).toEqual(before.errorNotices);
+    expect(after.failedSendRestoration).toBeNull();
+    expect(after.queueEditRecords).toEqual({});
+    // The refusal really was applied: the follow-up is no longer pending.
+    expect(after.pendingActions[followUpActionId]).toBeUndefined();
+  });
+});
+
 describe("an edit refused while its follow-up is applied", () => {
   function followUpAloneNotices(target: Harness) {
     return target.handle.store
