@@ -1214,6 +1214,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
     ]);
 
@@ -1230,6 +1231,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",
@@ -1303,6 +1305,68 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(view.debugger.attached).toBe(true);
     expect(view.debugger.detached).toBe(false);
     expect(enableCount()).toBe(1);
+  });
+
+  it("intercepts the file chooser on a leased tab only while no tile shows it", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    const interceptions = () =>
+      view.debugger.commands
+        .filter(
+          ({ method }) => method === "Page.setInterceptFileChooserDialog",
+        )
+        .map(({ params }) => params);
+
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+    expect(interceptions()).toEqual([{ enabled: true }]);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile" },
+      }),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(interceptions()).toEqual([{ enabled: true }, { enabled: false }]);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(true);
+
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+      }),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(interceptions()).toEqual([
+      { enabled: true },
+      { enabled: false },
+      { enabled: true },
+    ]);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+    expect(harness.manager.isWebContentsOnScreen(view.id + 9999)).toBe(false);
   });
 
   it("sends nothing on an unleased tab's navigation, and recovers a leased one", async () => {
@@ -4054,6 +4118,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
     ]);
 
@@ -4070,6 +4135,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",

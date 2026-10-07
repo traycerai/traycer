@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import type { Certificate, CertificatePrincipal, Cookie } from "electron";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
@@ -39,8 +42,7 @@ const electronState = vi.hoisted(() => {
   const state = {
     browserSession: null as FakePolicySession | null,
     defaultSession: null as FakePolicySession | null,
-    saveDialogResult: "/tmp/traycer-downloads/file.txt" as string | undefined,
-    saveDialogCalls: 0,
+    downloadsDirectory: "",
     messageBoxResult: 1,
     messageBoxCalls: 0,
     fromPartitionCalls: [] as Array<{
@@ -53,20 +55,19 @@ const electronState = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   app: {
-    getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+    getPath: (key: string): string =>
+      key === "downloads"
+        ? electronState.downloadsDirectory
+        : "/tmp/traycer-desktop-test",
   },
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
   },
   dialog: {
-    showSaveDialogSync: () => {
-      electronState.saveDialogCalls += 1;
-      return electronState.saveDialogResult;
-    },
-    showMessageBoxSync: () => {
+    showMessageBox: async () => {
       electronState.messageBoxCalls += 1;
-      return electronState.messageBoxResult;
+      return { response: electronState.messageBoxResult };
     },
   },
   session: {
@@ -322,6 +323,8 @@ class FakeDownloadWebContents {
     readonly url: string,
   ) {}
 
+  once(_event: "destroyed", _listener: () => void): void {}
+
   getURL(): string {
     return this.url;
   }
@@ -376,14 +379,19 @@ describe("browser view session policy", () => {
     electronState.browserSession = new FakePolicySession();
     electronState.defaultSession = new FakePolicySession();
     electronState.fromPartitionCalls = [];
-    electronState.saveDialogResult = "/tmp/traycer-downloads/file.txt";
-    electronState.saveDialogCalls = 0;
+    electronState.downloadsDirectory = mkdtempSync(
+      join(tmpdir(), "traycer-browser-session-"),
+    );
     electronState.messageBoxResult = 1;
     electronState.messageBoxCalls = 0;
     vi.clearAllMocks();
     // `browser-session` memoises one hardened Session per partition name, so
     // each case needs a fresh module instance to pair with its fresh fakes.
     vi.resetModules();
+  });
+
+  afterEach(() => {
+    rmSync(electronState.downloadsDirectory, { recursive: true, force: true });
   });
 
   it("uses a dedicated persistent partition without mutating defaultSession", async () => {
@@ -670,7 +678,7 @@ describe("browser view session policy", () => {
     expect(session.downloadListeners).toHaveLength(1);
   });
 
-  it("surfaces download prompt, progress, completion, and cancellation states", async () => {
+  it("saves downloads into Downloads without a dialog and surfaces progress, completion and cancellation", async () => {
     const mod = await import("../browser-session");
     const session = new FakePolicySession();
     const changes: BrowserSessionDownloadChange[] = [];
@@ -693,12 +701,10 @@ describe("browser view session policy", () => {
 
     listener({}, completedItem, webContents);
 
-    expect(completedItem.savePath).toBe("/tmp/traycer-downloads/file.txt");
-    expect(electronState.saveDialogCalls).toBe(1);
-    expect(changes.map((change) => change.state)).toEqual([
-      "prompting",
-      "progressing",
-    ]);
+    const expectedPath = join(electronState.downloadsDirectory, "file.txt");
+    expect(completedItem.savePath).toBe(expectedPath);
+    expect(electronState.messageBoxCalls).toBe(0);
+    expect(changes.map((change) => change.state)).toEqual(["progressing"]);
     completedItem.emitUpdated("progressing", 50);
     completedItem.emitDone("completed", 100);
     expect(changes.at(-2)).toMatchObject({
@@ -710,7 +716,7 @@ describe("browser view session policy", () => {
       state: "completed",
       receivedBytes: 100,
       canCancel: false,
-      savePath: "/tmp/traycer-downloads/file.txt",
+      savePath: expectedPath,
     });
 
     const cancellableItem = new FakeDownloadItem(
@@ -737,14 +743,13 @@ describe("browser view session policy", () => {
     offDownloadChange();
   });
 
-  it("requires explicit confirmation before accepting dangerous downloads", async () => {
+  it("cancels a dangerous download on a tab nobody can see, without asking", async () => {
     const mod = await import("../browser-session");
     const session = new FakePolicySession();
     const changes: BrowserSessionDownloadChange[] = [];
     const offDownloadChange = mod.onBrowserViewDownloadChange((change) => {
       changes.push(change);
     });
-    electronState.messageBoxResult = 0;
     electronState.browserSession = session;
 
     mod.ensureBrowserViewSession(PRIMARY);
@@ -760,15 +765,46 @@ describe("browser view session policy", () => {
 
     listener({}, item, new FakeDownloadWebContents(8, "https://app.test/"));
 
-    expect(electronState.messageBoxCalls).toBe(1);
-    expect(electronState.saveDialogCalls).toBe(0);
+    expect(electronState.messageBoxCalls).toBe(0);
     expect(item.cancelCalls).toBe(1);
-    expect(changes.map((change) => change.state)).toEqual([
-      "prompting",
-      "cancelled",
-    ]);
+    expect(item.savePath).toBe("");
+    expect(changes.map((change) => change.state)).toEqual(["cancelled"]);
     expect(changes[0]).toMatchObject({ dangerType: ".sh" });
 
+    offDownloadChange();
+  });
+
+  it("holds a dangerous download on screen under a held name and asks once", async () => {
+    const mod = await import("../browser-session");
+    const session = new FakePolicySession();
+    const changes: BrowserSessionDownloadChange[] = [];
+    const offDownloadChange = mod.onBrowserViewDownloadChange((change) => {
+      changes.push(change);
+    });
+    electronState.browserSession = session;
+    mod.setBrowserViewOnScreenProbe(() => true);
+
+    mod.ensureBrowserViewSession(PRIMARY);
+    const listener = session.downloadListeners[0];
+    if (listener === undefined) throw new Error("download listener missing");
+    const item = new FakeDownloadItem(
+      "https://app.test/install.sh",
+      "install.sh",
+      "text/x-shellscript",
+      10,
+      0,
+    );
+
+    listener({}, item, new FakeDownloadWebContents(8, "https://app.test/"));
+
+    expect(electronState.messageBoxCalls).toBe(1);
+    expect(dirname(item.savePath)).toBe(electronState.downloadsDirectory);
+    expect(basename(item.savePath)).toMatch(/^Unconfirmed .*\.traycer-download$/);
+    expect(item.cancelCalls).toBe(0);
+    expect(changes.map((change) => change.state)).toEqual(["prompting"]);
+    expect(changes[0]).toMatchObject({ dangerType: ".sh" });
+
+    mod.setBrowserViewOnScreenProbe(() => false);
     offDownloadChange();
   });
 

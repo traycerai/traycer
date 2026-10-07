@@ -639,4 +639,3 @@ function findPendingCertificateError(
   }
   return null;
 }
-
