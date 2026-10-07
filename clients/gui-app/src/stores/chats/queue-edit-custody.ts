@@ -496,6 +496,9 @@ type QueueEditVerdict = "applied" | "not_applied" | "unknown";
  * - The edited document on the row, or on the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
  *   refuses an edit to a prompt that has started, so nothing can change it now.
+ *   Only for a sent document that CAN be compared: one carrying an image
+ *   inline has no hash to compare by, and a comparison that cannot be made is
+ *   not a mismatch.
  * - Anything else is unknown, and stays unknown until one of the two above is
  *   seen. A row still showing other text may be about to change (the host
  *   finishes a handler it had already started when the connection dropped). A
@@ -519,9 +522,14 @@ function queueEditVerdict(
       candidate.role === "user" && candidate.messageId === record.messageId,
   );
   if (message !== undefined && message.role === "user") {
-    return queueEditContentMatches(record.wireContent, message.message.content)
-      ? "applied"
-      : "not_applied";
+    if (queueEditContentMatches(record.wireContent, message.message.content)) {
+      return "applied";
+    }
+    // A document that went out with an image inline names no hash for it (the
+    // bytes travel in the hash's place), so it can match nothing the host
+    // holds. Failing to match is then no evidence that the prompt ran as
+    // something else: it stays unknown, and is never told as "not saved".
+    return everyImageIsHashed(record.wireContent) ? "not_applied" : "unknown";
   }
   return "unknown";
 }

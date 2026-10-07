@@ -647,6 +647,75 @@ describe("second-frame evidence kept while the text is unknown", () => {
   });
 });
 
+describe("a sent document that cannot be compared (inlined image, no hash)", () => {
+  function editedWithImage(
+    attrs: Readonly<Record<string, string | number>>,
+  ): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "edited text" },
+            { type: "imageAttachment", attrs },
+          ],
+        },
+      ],
+    };
+  }
+
+  function sweepWithOriginalMessage(wireContent: JsonContent) {
+    return accountForQueueEdits({
+      records: recordsOf(record({ wireContent }, "save")),
+      sweptActionIds: BOTH_SWEPT,
+      evidence: evidence({
+        items: [],
+        messages: [userMessage(MESSAGE_ID, ORIGINAL)],
+      }),
+    });
+  }
+
+  it("reads an unhashed (inlined) image document against a differing message as unconfirmed, and retains the record", () => {
+    // Built as production inlines it: `b64content` and no `hash` key at all.
+    const fold = sweepWithOriginalMessage(
+      editedWithImage({
+        id: "img-1",
+        fileName: "shot.png",
+        mimeType: "image/png",
+        size: 4,
+        b64content: "AQIDBA==",
+      }),
+    );
+    expect(fold.settlements).toHaveLength(1);
+    expect(fold.settlements[0]).toMatchObject({
+      kind: "content_returned",
+      cause: "unconfirmed",
+    });
+    const kept = fold.records[EDIT_ACTION_ID];
+    expect(kept?.edit).toBe("unconfirmed");
+    expect(kept?.contentReturned).toBe(true);
+  });
+
+  it("control: the same evidence against a hashed-image document is not_applied and drops the record", () => {
+    const fold = sweepWithOriginalMessage(
+      editedWithImage({
+        id: "img-1",
+        fileName: "shot.png",
+        mimeType: "image/png",
+        size: 4,
+        hash: HASH_A,
+      }),
+    );
+    expect(fold.settlements).toHaveLength(1);
+    expect(fold.settlements[0]).toMatchObject({
+      kind: "content_returned",
+      cause: "not_applied",
+    });
+    expect(fold.records).toEqual({});
+  });
+});
+
 describe("queue-edit record predicates", () => {
   it("queueEditRecordsInCustody names every record whose text has not been handed back, including saved text with a pending follow-up, and not a returned one", () => {
     const pending = record({ editActionId: "pending" }, "save");
