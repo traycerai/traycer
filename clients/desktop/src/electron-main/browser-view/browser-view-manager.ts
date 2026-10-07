@@ -53,6 +53,7 @@ import {
   type HostPlatform,
 } from "./manager/browser-view-chords";
 import {
+  isEntryViewed,
   requireSurface,
   toTileKey,
   type BrowserViewEntry,
@@ -950,6 +951,17 @@ export class BrowserViewManager {
     this.setStatus(entry, "dead", "Certificate error");
   }
 
+  /**
+   * Whether a person can see the tab this WebContents belongs to: a guest a
+   * tile is showing, or a popup window. Anything else - a guest kept with no
+   * tile, a WebContents this manager never knew - is not on screen.
+   */
+  isWebContentsOnScreen(webContentsId: number): boolean {
+    const entry = this.findEntryByWebContentsId(webContentsId);
+    if (entry !== null) return isEntryViewed(entry);
+    return this.popups.ownsOpenWindow(webContentsId);
+  }
+
   private findEntryByWebContentsId(
     webContentsId: number,
   ): BrowserViewEntry | null {
@@ -1004,6 +1016,10 @@ export class BrowserViewManager {
   }
 
   private emitStatus(entry: BrowserViewEntry): void {
+    // Every edge of `viewed` ends in this call, so the chooser interception
+    // that follows the same reading is brought in line here, ahead of the
+    // returns below: those suppress a report, not the reading.
+    entry.debugSession?.syncFileChooserInterception();
     if (entry.internalNavigation) return;
     const webContents = this.readLiveWebContents(entry);
     if (webContents === null) return;
@@ -1020,7 +1036,7 @@ export class BrowserViewManager {
       canGoForward: readings.canGoForward,
       zoomPercent: readings.zoomPercent,
       navigationAttempt: entry.navigationAttempt,
-      viewed: entry.surface !== null && entry.desiredVisible,
+      viewed: isEntryViewed(entry),
     };
     this.send(
       entry.identity.lifecycleWindowId,

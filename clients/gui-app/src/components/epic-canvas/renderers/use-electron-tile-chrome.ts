@@ -282,7 +282,7 @@ export function useElectronTabChrome(
 }
 
 function downloadLabel(download: BrowserViewDownloadChange): string {
-  if (download.state === "prompting") return "Waiting for save location";
+  if (download.state === "prompting") return "Waiting for confirmation";
   if (download.state === "completed") return "Download complete";
   if (download.state === "cancelled") return "Download cancelled";
   if (download.state === "interrupted") return "Download interrupted";

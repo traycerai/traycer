@@ -16,6 +16,14 @@ import { isRecord, recordValue } from "../guards";
 interface BrowserDebugSessionOptions {
   readonly webContents: BrowserDebugWebContents;
   readonly onDetached: (reason: string) => void;
+  /**
+   * Whether a click on a file input should open NO OS picker right now. True
+   * while nobody can see the tab: the picker is window-modal over the app and
+   * only a person can close it, so one an agent's click raised on a hidden tab
+   * sat there until someone noticed (traycerai/traycer#2420). False while the
+   * tab is on screen, where the person at the tile still gets the picker.
+   */
+  readonly interceptFileChooser: () => boolean;
 }
 
 interface CdpEvent {
@@ -35,6 +43,12 @@ export interface BrowserDebugLease {
 export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
+  private readonly interceptFileChooser: () => boolean;
+  /**
+   * What the attached debugger holds. A fresh attachment intercepts nothing,
+   * so an on-screen tab costs no command at all.
+   */
+  private appliedFileChooserInterception = false;
   private readonly frameRoutes: BrowserFrameRoutes;
   private readonly bindingCalledListeners = new Set<
     (params: Record<string, unknown>) => void
@@ -58,6 +72,7 @@ export class BrowserDebugSession {
   constructor(options: BrowserDebugSessionOptions) {
     this.webContents = options.webContents;
     this.onDetached = options.onDetached;
+    this.interceptFileChooser = options.interceptFileChooser;
     this.frameRoutes = new BrowserFrameRoutes({
       browserDebugger: () => this.webContents.debugger,
       isAttached: () => this.isAttached(),
@@ -98,6 +113,18 @@ export class BrowserDebugSession {
     } finally {
       this.stopListeningIfIdle();
     }
+  }
+
+  /**
+   * Brings the attached debugger's chooser interception in line with
+   * `interceptFileChooser`. Called on every edge of the tab's on-screen
+   * reading; a no-op while nothing is attached, because the enable batch
+   * applies the current reading whenever the debugger comes up, and a tab with
+   * no debugger has nobody who could click a file input off screen.
+   */
+  syncFileChooserInterception(): void {
+    if (!this.isReady()) return;
+    void this.applyFileChooserInterception(this.webContents.debugger);
   }
 
   onBindingCalled(
@@ -235,6 +262,7 @@ export class BrowserDebugSession {
         browserDebugger.sendCommand("Network.enable", {}, undefined),
         // DOM.describeNode requires its domain to be enabled first.
         browserDebugger.sendCommand("DOM.enable", {}, undefined),
+        this.applyFileChooserInterception(browserDebugger),
       ]).then(() => undefined),
       "Browser debugger detached while enabling",
     )
@@ -247,6 +275,8 @@ export class BrowserDebugSession {
           throw new Error("Browser debug session ended while enabling");
         }
         this.enabled = true;
+        // The on-screen reading may have moved while the batch was in flight.
+        this.syncFileChooserInterception();
       })
       .catch((err: unknown) => {
         if (this.enablePromise !== enablePromise) throw err;
@@ -373,7 +403,37 @@ export class BrowserDebugSession {
     }
   }
 
+  /**
+   * Never rejects: a debugger that refuses the command still drives the tab,
+   * and the cost of the refusal is the picker this exists to prevent.
+   */
+  private applyFileChooserInterception(
+    browserDebugger: BrowserViewDebugger,
+  ): Promise<void> {
+    const enabled = this.interceptFileChooser();
+    if (this.appliedFileChooserInterception === enabled) {
+      return Promise.resolve();
+    }
+    this.appliedFileChooserInterception = enabled;
+    return browserDebugger
+      .sendCommand("Page.setInterceptFileChooserDialog", { enabled }, undefined)
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          if (this.appliedFileChooserInterception === enabled) {
+            this.appliedFileChooserInterception = !enabled;
+          }
+          log.warn("[browser-view] file chooser interception failed", {
+            enabled,
+            error: describeLogError(err),
+          });
+        },
+      );
+  }
+
   private resetDetachedState(): void {
+    // A detached debugger took its interception with it.
+    this.appliedFileChooserInterception = false;
     this.frameRoutes.rejectPending("Browser debugger detached while enabling");
     this.attachmentEnd.resolve();
     this.attachmentEnd = Promise.withResolvers<void>();

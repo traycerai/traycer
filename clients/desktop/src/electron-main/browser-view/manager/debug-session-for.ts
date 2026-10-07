@@ -1,5 +1,5 @@
 import { BrowserDebugSession } from "../debug/browser-debug-session";
-import type { BrowserViewEntry } from "./browser-view-entry";
+import { isEntryViewed, type BrowserViewEntry } from "./browser-view-entry";
 
 interface BrowserViewDebugSessionsOptions {
   /**
@@ -39,6 +39,7 @@ export class BrowserViewDebugSessions {
       onDetached: (reason) => {
         this.onDetached(entry, webContents.id, reason);
       },
+      interceptFileChooser: () => !isEntryViewed(entry),
     });
     entry.debugSession = session;
     return session;

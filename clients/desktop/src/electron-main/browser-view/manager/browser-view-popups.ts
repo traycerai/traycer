@@ -110,6 +110,20 @@ export class BrowserViewPopups {
   }
 
   /**
+   * Whether this WebContents is an open popup window. A popup is a native
+   * window of its own, so a person can see it whatever its opener's tile is
+   * doing.
+   */
+  ownsOpenWindow(webContentsId: number): boolean {
+    for (const window of this.openWindows) {
+      if (!window.isDestroyed() && window.webContents.id === webContentsId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Start observing input on an opener before it can call `window.open`, so a
    * gesture-less popup (spam, or a page replaying an old click) fails the gate.
    * Idempotent per opener.

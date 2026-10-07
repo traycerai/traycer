@@ -104,6 +104,16 @@ export interface BrowserViewEntry {
   closePromise: Promise<void> | null;
 }
 
+/**
+ * Whether a tile is showing this guest: the one reading behind `viewed` on
+ * `electronTabState`, the off-screen preview refusal, the file-chooser
+ * interception and the dangerous-download question. A guest kept alive with no
+ * tile is a real, running tab that nobody is looking at.
+ */
+export function isEntryViewed(entry: BrowserViewEntry): boolean {
+  return entry.surface !== null && entry.desiredVisible;
+}
+
 export interface BrowserViewNativeIdentity {
   readonly key: BrowserViewNativeTabKey;
   /**

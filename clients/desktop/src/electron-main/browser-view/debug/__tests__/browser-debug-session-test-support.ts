@@ -287,6 +287,7 @@ export function createHarness(): BrowserDebugSessionHarness {
     onDetached: (reason) => {
       detachReports.push(reason);
     },
+    interceptFileChooser: () => false,
   });
   return { session, webContents, detachReports };
 }
