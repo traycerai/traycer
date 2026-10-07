@@ -5,6 +5,15 @@ description: "Track the latest updates and improvements to the Traycer CLI."
 rss: true
 ---
 
+<Update label="v1.5.0">
+Manage provider profiles from the terminal, with clearer protection when rolling back the Host.
+
+* **Provider profiles** — `traycer profile` lists, adds, signs in, renames, enables, disables, and removes profiles for Claude Code, Codex, Grok, and Antigravity. See [profile commands](/cli/commands#provider-profile-commands).
+* **Host rollback** — before installing an older Host, the CLI also checks whether it can read the local task store. `--accept-store-format-loss` explicitly accepts that local tasks may be unavailable until a compatible Host is installed again; nothing in the task store is deleted.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/cli-v1.5.0).
+</Update>
+
 <Update label="v1.4.2">
 Quieter crash reporting and fixes for sign-in cancellation and shell notifications.
 
