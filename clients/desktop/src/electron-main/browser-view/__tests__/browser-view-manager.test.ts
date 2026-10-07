@@ -1714,9 +1714,92 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.downloads).toHaveLength(1);
 
     popup.emit("closed");
-    harness.emitDownload(downloadChangeFor(popupId));
+    // A download that never reported while the popup was open has no tile.
+    harness.emitDownload({
+      ...downloadChangeFor(popupId),
+      downloadId: "download-started-after-close",
+    });
 
     expect(harness.downloads).toHaveLength(1);
+  });
+
+  it("keeps routing a popup download to its opener's tile after the popup closes, until the download settles", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const popupId = popup.webContents.id;
+    const base = downloadChangeFor(popupId);
+
+    harness.emitDownload(base);
+    popup.emit("closed");
+    harness.emitDownload({ ...base, receivedBytes: 70 });
+    harness.emitDownload({
+      ...base,
+      state: "completed",
+      receivedBytes: 100,
+      canCancel: false,
+    });
+
+    expect(harness.downloadWindowIds).toEqual([
+      "window-1",
+      "window-1",
+      "window-1",
+    ]);
+    expect(harness.downloads).toEqual([
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: base.downloadId,
+        state: "progressing",
+        canCancel: true,
+      }),
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: base.downloadId,
+        state: "progressing",
+        receivedBytes: 70,
+      }),
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: base.downloadId,
+        state: "completed",
+        receivedBytes: 100,
+        canCancel: false,
+      }),
+    ]);
+
+    // Settled: the association is gone.
+    harness.emitDownload({ ...base, receivedBytes: 90 });
+    expect(harness.downloads).toHaveLength(3);
+  });
+
+  it("keeps routing an interrupted popup download until its final report", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const base = downloadChangeFor(popup.webContents.id);
+
+    harness.emitDownload(base);
+    popup.emit("closed");
+    // Interrupted but still cancellable (it can resume): not the last report.
+    harness.emitDownload({ ...base, state: "interrupted", canCancel: true });
+    harness.emitDownload({ ...base, state: "interrupted", canCancel: false });
+
+    expect(harness.downloads.map((change) => change.state)).toEqual([
+      "progressing",
+      "interrupted",
+      "interrupted",
+    ]);
+    expect(harness.downloads.map((change) => change.canCancel)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(harness.downloadWindowIds).toEqual([
+      "window-1",
+      "window-1",
+      "window-1",
+    ]);
+
+    harness.emitDownload({ ...base, receivedBytes: 90 });
+    expect(harness.downloads).toHaveLength(3);
   });
 
   it("drops a download change for an unknown WebContents", () => {

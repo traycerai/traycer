@@ -193,6 +193,11 @@ export class BrowserViewManager {
   private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
   private readonly offWindowShownChange: () => void;
+  /** The opener tile of each popup download still in flight, by download id. */
+  private readonly popupDownloadSurfaces = new Map<
+    string,
+    BrowserViewEntryKey
+  >();
   private readonly isWindowShown: (windowId: string) => boolean;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
@@ -641,6 +646,7 @@ export class BrowserViewManager {
     this.offWindowShownChange();
     this.windows.dispose();
     this.offDownloadChange();
+    this.popupDownloadSurfaces.clear();
     this.offCertificateError();
     for (const entry of Array.from(this.entries.guestValues())) {
       void this.closeEntry(entry);
@@ -927,29 +933,37 @@ export class BrowserViewManager {
   }
 
   private handleDownloadChange(change: BrowserSessionDownloadChange): void {
+    const ownSurface =
+      this.findEntryByWebContentsId(change.webContentsId)?.surface ?? null;
     // A popup window has no tile of its own; its downloads are shown on the
     // tile it was opened from. Without that a file saved from a popup would
-    // arrive in Downloads with nothing on screen saying so.
+    // arrive in Downloads with nothing on screen saying so. The tile is
+    // remembered per download, because a download outlives the popup that
+    // started it and its last report must still close the tile's toast.
     const surface =
-      this.findEntryByWebContentsId(change.webContentsId)?.surface ??
+      ownSurface ??
+      this.popupDownloadSurfaces.get(change.downloadId) ??
       this.popups.openerSurfaceFor(change.webContentsId);
     if (surface === null) return;
-    this.send(
-      surface.windowId,
-      RunnerHostEvent.browserViewDownloadChange,
-      {
-        ...toTileKey(surface),
-        downloadId: change.downloadId,
-        url: change.url,
-        filename: change.filename,
-        mimeType: change.mimeType,
-        totalBytes: change.totalBytes,
-        receivedBytes: change.receivedBytes,
-        state: change.state,
-        dangerType: change.dangerType,
-        canCancel: change.canCancel,
-      },
-    );
+    if (ownSurface === null) {
+      if (isSettledDownloadChange(change)) {
+        this.popupDownloadSurfaces.delete(change.downloadId);
+      } else {
+        this.popupDownloadSurfaces.set(change.downloadId, surface);
+      }
+    }
+    this.send(surface.windowId, RunnerHostEvent.browserViewDownloadChange, {
+      ...toTileKey(surface),
+      downloadId: change.downloadId,
+      url: change.url,
+      filename: change.filename,
+      mimeType: change.mimeType,
+      totalBytes: change.totalBytes,
+      receivedBytes: change.receivedBytes,
+      state: change.state,
+      dangerType: change.dangerType,
+      canCancel: change.canCancel,
+    });
   }
 
   private handleCertificateError(
@@ -1305,4 +1319,19 @@ function isHttpBrowserUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a download change is the last one for its download. `interrupted`
+ * is also a state a running transfer passes through, where Cancel is still
+ * offered; the final report of any kind offers none.
+ */
+function isSettledDownloadChange(
+  change: BrowserSessionDownloadChange,
+): boolean {
+  return (
+    change.state === "completed" ||
+    change.state === "cancelled" ||
+    (change.state === "interrupted" && !change.canCancel)
+  );
 }
