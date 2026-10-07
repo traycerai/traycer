@@ -18,6 +18,7 @@ import {
   queueEditContentMatches,
   queueEditRecordsInCustody,
   queueItemsInFlight,
+  withoutReturnedQueueEditsForRow,
   type QueueEditEvidence,
   type QueueEditIntent,
   type QueueEditRecord,
@@ -331,6 +332,129 @@ describe("foldQueueEditAck", () => {
     });
     expect(fold.records).toBe(records);
     expect(fold.settlements).toEqual([]);
+  });
+});
+
+describe("withoutReturnedQueueEditsForRow", () => {
+  it("drops a returned record for the row", () => {
+    const returned = record(
+      { edit: "unconfirmed", contentReturned: true },
+      "save",
+    );
+    const next = withoutReturnedQueueEditsForRow(
+      recordsOf(returned),
+      QUEUE_ITEM_ID,
+    );
+    expect(next).toEqual({});
+  });
+
+  it("keeps a record for the same row whose text is not returned", () => {
+    const inCustody = record(
+      { edit: "pending", contentReturned: false },
+      "save",
+    );
+    const records = recordsOf(inCustody);
+    const next = withoutReturnedQueueEditsForRow(records, QUEUE_ITEM_ID);
+    expect(Object.keys(next)).toEqual([EDIT_ACTION_ID]);
+    expect(next).toBe(records);
+  });
+
+  it("keeps a returned record for a different row and returns the same object when nothing is dropped", () => {
+    const records = recordsOf(
+      record(
+        {
+          queueItemId: "another-row",
+          edit: "unconfirmed",
+          contentReturned: true,
+        },
+        "save",
+      ),
+    );
+    const next = withoutReturnedQueueEditsForRow(records, QUEUE_ITEM_ID);
+    expect(Object.keys(next)).toEqual([EDIT_ACTION_ID]);
+    expect(next).toBe(records);
+  });
+});
+
+describe("follow_up_alone (edit refused, follow-up applied)", () => {
+  const CHANGES = ["model gpt-x"];
+  const ALONE = {
+    kind: "follow_up_alone",
+    clientActionId: FOLLOW_UP_ACTION_ID,
+    intent: "save",
+    requestedChanges: CHANGES,
+  };
+
+  it("emits content_returned on the edit refusal and exactly one follow_up_alone on the follow-up's acceptance, then drops the record", () => {
+    const first = foldQueueEditAck(
+      recordsOf(record({ requestedChanges: CHANGES }, "save")),
+      { clientActionId: EDIT_ACTION_ID, status: "rejected", reason: "gone" },
+    );
+    expect(first.settlements).toHaveLength(1);
+    expect(first.settlements[0]).toMatchObject({ kind: "content_returned" });
+
+    const second = foldQueueEditAck(first.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "accepted",
+      reason: null,
+    });
+    expect(second.settlements).toEqual([ALONE]);
+    expect(second.records).toEqual({});
+  });
+
+  it("emits both settlements on the second ack when the follow-up is accepted first", () => {
+    const first = foldQueueEditAck(
+      recordsOf(record({ requestedChanges: CHANGES }, "save")),
+      {
+        clientActionId: FOLLOW_UP_ACTION_ID,
+        status: "accepted",
+        reason: null,
+      },
+    );
+    expect(first.settlements).toEqual([]);
+
+    const second = foldQueueEditAck(first.records, {
+      clientActionId: EDIT_ACTION_ID,
+      status: "rejected",
+      reason: "gone",
+    });
+    expect(second.settlements.map((entry) => entry.kind)).toEqual([
+      "content_returned",
+      "follow_up_alone",
+    ]);
+    expect(second.settlements[1]).toEqual(ALONE);
+    expect(second.records).toEqual({});
+  });
+
+  it("emits no follow_up_alone when the follow-up was a no-op", () => {
+    const first = foldQueueEditAck(
+      recordsOf(record({ followUpIsNoOp: true }, "save")),
+      { clientActionId: EDIT_ACTION_ID, status: "rejected", reason: "gone" },
+    );
+    const second = foldQueueEditAck(first.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "accepted",
+      reason: null,
+    });
+    // The record was answered (it is gone) and said nothing more.
+    expect(second.records).toEqual({});
+    expect(second.settlements).toEqual([]);
+  });
+
+  it("emits no follow_up_alone when both frames are refused: one content_returned and nothing else", () => {
+    const first = foldQueueEditAck(recordsOf(record({}, "save")), {
+      clientActionId: EDIT_ACTION_ID,
+      status: "rejected",
+      reason: "gone",
+    });
+    const second = foldQueueEditAck(first.records, {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "gone",
+    });
+    expect(first.settlements).toHaveLength(1);
+    expect(second.settlements).toEqual([]);
+    expect(second.records).toEqual({});
   });
 });
 

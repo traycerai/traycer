@@ -171,6 +171,19 @@ export type QueueEditSettlement =
       readonly clientActionId: string;
       readonly intent: QueueEditIntent;
       readonly followUpApplied: boolean;
+    }
+  /**
+   * The mirror of `partial`: the host refused the text and then took the
+   * second frame, which it handles on its own. The queued message kept its
+   * earlier text and was given the new settings, or steered, all the same -
+   * and the edited draft handed back says only that the edit was not saved.
+   */
+  | {
+      readonly kind: "follow_up_alone";
+      readonly clientActionId: string;
+      readonly intent: QueueEditIntent;
+      /** See {@link QueueEditRecord.requestedChanges}. */
+      readonly requestedChanges: ReadonlyArray<string>;
     };
 
 export interface QueueEditFold {
@@ -211,6 +224,32 @@ export function withoutQueueEditRecord(
   return Object.fromEntries(
     Object.entries(records).filter(([id]) => id !== editActionId),
   );
+}
+
+/**
+ * Retire the returned records aimed at a row the host has just cancelled.
+ *
+ * A record whose text went back as unconfirmed is kept so that a later save
+ * can be reported as a duplicate. An accepted cancel of its row ends that
+ * watch with a fact rather than an absence: the host removed the row while it
+ * was still queued, and it refuses an edit for a row it no longer holds, so
+ * nothing can save or run that text from here on.
+ *
+ * Only returned records: one whose text is still in custody is owed its own
+ * ack, which the host sends whether the cancel got there first or not.
+ */
+export function withoutReturnedQueueEditsForRow(
+  records: QueueEditRecords,
+  queueItemId: string,
+): QueueEditRecords {
+  const kept = Object.entries(records).filter(
+    ([, record]) =>
+      record === undefined ||
+      !(record.contentReturned && record.queueItemId === queueItemId),
+  );
+  return kept.length === Object.keys(records).length
+    ? records
+    : Object.fromEntries(kept);
 }
 
 /**
@@ -296,6 +335,20 @@ function settleQueueEditRecord(
       hostReason: next.followUpReason,
     });
     return { record: null, settlements };
+  }
+  // Not for a follow-up that asked the row to change nothing: there is no
+  // second outcome to tell.
+  if (
+    next.edit === "rejected" &&
+    next.followUp === "accepted" &&
+    !next.followUpIsNoOp
+  ) {
+    settlements.push({
+      kind: "follow_up_alone",
+      clientActionId: next.followUpActionId,
+      intent: next.intent,
+      requestedChanges: next.requestedChanges,
+    });
   }
   const landedWhole = next.edit === "accepted" && next.followUp === "accepted";
   const refusedAndAnswered =

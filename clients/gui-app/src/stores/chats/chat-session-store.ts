@@ -7,6 +7,7 @@ import {
   noticeIsHeldUntilDelivered,
   keptQueueEditSubmissionNotice,
   namedSettingsChanges,
+  QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
   QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
   unrecoverableSendNotice,
   unrecoverableSendPrompt,
@@ -76,6 +77,7 @@ import {
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
+  withoutReturnedQueueEditsForRow,
   withQueueEditRecord,
   withoutQueueEditRecord,
   type QueueEditEvidence,
@@ -8495,6 +8497,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           frame.status,
         );
         retireSweptEvidenceOnAck(frame);
+        // The host follows a rejected ack with its own `errorNotice` for the
+        // same action. For a frame of a queue-edit submission the record
+        // states the refusal, with the text or the settings it concerns, and
+        // may be gone by the time that notice lands - so it is named here,
+        // while the record still answers for the id.
+        if (
+          frame.status === "rejected" &&
+          queueEditRecordForAction(
+            get().queueEditRecords,
+            frame.clientActionId,
+          ) !== null
+        ) {
+          suppressNoticeAfterDispatch(frame.clientActionId);
+        }
         const rejectedPending =
           frame.status === "rejected"
             ? pendingActionForId(get().pendingActions, frame.clientActionId)
@@ -8650,7 +8666,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             failedSendRestoration: nextFailedSendRestoration,
             errorNotices: nextErrorNotices,
             lastCopyPrompts: nextLastCopyPrompts,
-            queueEditRecords: nextQueueEditRecords,
+            queueEditRecords: ackedQueueEditRecords,
           } = queueEditSurfacesForAck(
             state,
             frame,
@@ -8659,6 +8675,11 @@ export function createChatSessionStoreWithNotificationDependencies(
               frame.clientActionId,
               cancelRestoration,
             ),
+          );
+          const nextQueueEditRecords = queueEditRecordsAfterCancelAck(
+            ackedQueueEditRecords,
+            frame,
+            pending,
           );
           // An answered send is no longer unconfirmed, whichever way it went.
           const nextUnconfirmedSends = withoutUnconfirmedSend(
@@ -12359,6 +12380,40 @@ function queueEditSavedAfterReturnNotice(
   };
 }
 
+/**
+ * Told once, when the host refused an edit's text and applied the rest of the
+ * submission to the queued message as it stood.
+ */
+function queueEditFollowUpAloneNotice(
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "follow_up_alone" }
+  >,
+): ChatErrorNotice {
+  const happened =
+    settlement.intent === "steer"
+      ? "the queued message was still steered into the running turn with its earlier text"
+      : `the queued message still took the settings change${requestedChangesClause(settlement.requestedChanges)}. It keeps its earlier text`;
+  return {
+    code: QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+    message: `Your edit to a queued message was not saved, but ${happened}.`,
+    severity: "warning",
+    clientActionId: settlement.clientActionId,
+  };
+}
+
+/** The settlements told as a notice alone: no document moves for either. */
+function queueEditStatedNotice(
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "saved_after_return" | "follow_up_alone" }
+  >,
+): ChatErrorNotice {
+  return settlement.kind === "saved_after_return"
+    ? queueEditSavedAfterReturnNotice(settlement)
+    : queueEditFollowUpAloneNotice(settlement);
+}
+
 interface SnapshotHandBacks {
   readonly slot: FailedSendRestorationState | null;
   readonly notices: ReadonlyArray<ChatErrorNotice>;
@@ -12376,10 +12431,13 @@ function foldQueueEditSettlementsForSnapshot(
   fold: QueueEditFold,
 ): SnapshotHandBacks {
   return fold.settlements.reduce<SnapshotHandBacks>((next, settlement) => {
-    if (settlement.kind === "saved_after_return") {
+    if (
+      settlement.kind === "saved_after_return" ||
+      settlement.kind === "follow_up_alone"
+    ) {
       return {
         ...next,
-        notices: [...next.notices, queueEditSavedAfterReturnNotice(settlement)],
+        notices: [...next.notices, queueEditStatedNotice(settlement)],
       };
     }
     if (settlement.kind === "partial") {
@@ -12441,12 +12499,15 @@ function withQueueEditSettlements(
   delivered: ReadonlySet<string>,
 ): HandBackSurfaces {
   return settlements.reduce<HandBackSurfaces>((carried, settlement) => {
-    if (settlement.kind === "saved_after_return") {
+    if (
+      settlement.kind === "saved_after_return" ||
+      settlement.kind === "follow_up_alone"
+    ) {
       return {
         ...carried,
         errorNotices: appendErrorNotice(
           carried.errorNotices,
-          queueEditSavedAfterReturnNotice(settlement),
+          queueEditStatedNotice(settlement),
           delivered,
         ),
       };
@@ -12505,6 +12566,26 @@ function queueEditSurfacesForAck(
       state.deliveredNoticeActionIds,
     ),
   };
+}
+
+/**
+ * The records left once an accepted cancel has removed its row: a returned
+ * edit that was still being watched for a late save has nothing to watch.
+ */
+function queueEditRecordsAfterCancelAck(
+  records: QueueEditRecords,
+  frame: ChatActionAckFrame,
+  pending: PendingChatAction | null,
+): QueueEditRecords {
+  if (
+    frame.status !== "accepted" ||
+    pending === null ||
+    pending.action !== "queueCancel" ||
+    pending.queueItemId === null
+  ) {
+    return records;
+  }
+  return withoutReturnedQueueEditsForRow(records, pending.queueItemId);
 }
 
 /** What the host can be seen to hold, as the queue-edit accounting reads it. */

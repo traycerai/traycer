@@ -7,13 +7,20 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
-import { QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
+import {
+  QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+  noticeIsHeldUntilDelivered,
+  QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+} from "@/stores/chats/chat-queue-reconciler";
 import {
   MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { queueItemsInFlight } from "@/stores/chats/queue-edit-custody";
+import {
+  hasUnconfirmedQueueEdit,
+  queueItemsInFlight,
+} from "@/stores/chats/queue-edit-custody";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   isDraftBlobConfirmed,
@@ -259,6 +266,7 @@ function ack(
       | "queueSettingsUpdate"
       | "queueSteerNow"
       | "queueAbortSteer"
+      | "queueCancel"
       | "queueReorder";
     readonly status: "accepted" | "rejected";
   },
@@ -791,6 +799,231 @@ describe("a row that drains before its message arrives (legacy line)", () => {
     expect(harness.handle.store.getState().queueEditRecords).toEqual({});
     expect(savedAfterReturnNotices(harness)).toHaveLength(0);
     expect(sendFrameCount(harness)).toBe(0);
+  });
+});
+
+function hostNotice(harness: Harness, clientActionId: string): void {
+  harness.callbacks().onErrorNotice({
+    kind: "errorNotice",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    notice: {
+      code: "QUEUE_ITEM_NOT_FOUND",
+      message: "The queued prompt is no longer pending.",
+      severity: "warning",
+      clientActionId,
+    },
+  });
+}
+
+function genericNoticesFor(harness: Harness, clientActionId: string) {
+  return harness.handle.store
+    .getState()
+    .errorNotices.filter(
+      (notice) =>
+        notice.code === "QUEUE_ITEM_NOT_FOUND" &&
+        notice.clientActionId === clientActionId,
+    );
+}
+
+describe("the host's own notice after a refused queue-edit frame", () => {
+  it("is swallowed for both frames of the #2418 sequence, beside the hand-back", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+    hostNotice(harness, editActionId);
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+    });
+    hostNotice(harness, followUpActionId);
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(
+      state.errorNotices.filter((n) => n.code === "QUEUE_ITEM_NOT_FOUND"),
+    ).toEqual([]);
+  });
+
+  it("still appends the same notice for an action id that belongs to no queue-edit record", () => {
+    harness = openWithQueuedRow();
+
+    hostNotice(harness, "some-other-action");
+
+    expect(genericNoticesFor(harness, "some-other-action")).toHaveLength(1);
+  });
+
+  it("swallows once per frame: a second host notice for the same edit action is appended", () => {
+    harness = openWithQueuedRow();
+    const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+    hostNotice(harness, editActionId);
+    expect(genericNoticesFor(harness, editActionId)).toHaveLength(0);
+
+    hostNotice(harness, editActionId);
+
+    expect(genericNoticesFor(harness, editActionId)).toHaveLength(1);
+  });
+});
+
+describe("an edit refused while its follow-up is applied", () => {
+  function followUpAloneNotices(target: Harness) {
+    return target.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+      );
+  }
+
+  it("states a steer that went ahead with the earlier text, and hands the edit back", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSteerNow",
+      status: "accepted",
+    });
+
+    const state = harness.handle.store.getState();
+    const told = followUpAloneNotices(harness);
+    expect(told).toHaveLength(1);
+    expect(told[0].clientActionId).toBe(followUpActionId);
+    expect(told[0].message).toContain("steered");
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+  });
+
+  it("names the settings change a save still took", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      OTHER_SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "accepted",
+    });
+
+    const state = harness.handle.store.getState();
+    const told = followUpAloneNotices(harness);
+    expect(told).toHaveLength(1);
+    expect(told[0].clientActionId).toBe(followUpActionId);
+    expect(told[0].message).toContain("You asked for");
+    expect(told[0].message).toContain("gpt-5-mini");
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+  });
+
+  it("holds the follow-up-alone notice in the ring until delivered", () => {
+    expect(
+      noticeIsHeldUntilDelivered({
+        code: QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+        message: "m",
+        severity: "warning",
+        clientActionId: "a",
+      }),
+    ).toBe(true);
+    // The control: an ordinary warning is not.
+    expect(
+      noticeIsHeldUntilDelivered({
+        code: "APPROVAL_NOT_PENDING",
+        message: "m",
+        severity: "warning",
+        clientActionId: "a",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("cancelling a row retires its returned queue-edit records", () => {
+  function retainedAfterReconnect(): {
+    readonly started: Harness;
+    readonly editActionId: string;
+    readonly cancelId: string;
+  } {
+    const started = openWithQueuedRow();
+    const { editActionId } = submitEdit(started, "save", SETTINGS, []);
+    reconnectWithItems(started, [queuedRow(ORIGINAL)]);
+    const kept = started.handle.store.getState().queueEditRecords[editActionId];
+    expect(kept?.contentReturned).toBe(true);
+    expect(
+      hasUnconfirmedQueueEdit(started.handle.store.getState().queueEditRecords),
+    ).toBe(true);
+    const cancelId = started.handle.store.getState().queueCancel(QUEUE_ITEM_ID);
+    if (cancelId === null) throw new Error("expected a queueCancel frame");
+    return { started, editActionId, cancelId };
+  }
+
+  it("clears the returned record, and adds no notice, on an ACCEPTED cancel ack", () => {
+    const setup = retainedAfterReconnect();
+    harness = setup.started;
+    const noticesBefore = harness.handle.store.getState().errorNotices;
+
+    ack(harness, {
+      clientActionId: setup.cancelId,
+      action: "queueCancel",
+      status: "accepted",
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.queueEditRecords).toEqual({});
+    expect(hasUnconfirmedQueueEdit(state.queueEditRecords)).toBe(false);
+    expect(state.errorNotices).toEqual(noticesBefore);
+  });
+
+  it("keeps the returned record on a REJECTED cancel ack", () => {
+    const setup = retainedAfterReconnect();
+    harness = setup.started;
+
+    ack(harness, {
+      clientActionId: setup.cancelId,
+      action: "queueCancel",
+      status: "rejected",
+    });
+
+    // The rejection really was applied: the cancel is no longer pending.
+    const state = harness.handle.store.getState();
+    expect(state.pendingActions[setup.cancelId]).toBeUndefined();
+    expect(state.queueEditRecords[setup.editActionId]?.contentReturned).toBe(
+      true,
+    );
+    expect(hasUnconfirmedQueueEdit(state.queueEditRecords)).toBe(true);
   });
 });
 

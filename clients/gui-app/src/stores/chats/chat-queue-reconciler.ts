@@ -90,9 +90,21 @@ export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
 export function noticeIsHeldUntilDelivered(notice: ChatErrorNotice): boolean {
   return (
     notice.code === SEND_RESTORED_NOTICE_CODE ||
-    notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE
+    notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE ||
+    notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE
   );
 }
+
+/**
+ * Notice code for an edit to a queued prompt whose text the host refused
+ * while it took the settings change or the steer sent with it.
+ *
+ * Held like the one below, and for the same reason: the draft handed back
+ * says the edit was not saved, and this is the only telling that the queued
+ * message went ahead with its earlier text regardless.
+ */
+export const QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE =
+  "QUEUE_EDIT_FOLLOW_UP_ALONE";
 
 /**
  * Notice code for an edit to a queued prompt that was handed back as
