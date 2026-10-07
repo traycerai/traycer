@@ -927,13 +927,18 @@ export class BrowserViewManager {
   }
 
   private handleDownloadChange(change: BrowserSessionDownloadChange): void {
-    const entry = this.findEntryByWebContentsId(change.webContentsId);
-    if (entry === null || entry.surface === null) return;
+    // A popup window has no tile of its own; its downloads are shown on the
+    // tile it was opened from. Without that a file saved from a popup would
+    // arrive in Downloads with nothing on screen saying so.
+    const surface =
+      this.findEntryByWebContentsId(change.webContentsId)?.surface ??
+      this.popups.openerSurfaceFor(change.webContentsId);
+    if (surface === null) return;
     this.send(
-      entry.surface.windowId,
+      surface.windowId,
       RunnerHostEvent.browserViewDownloadChange,
       {
-        ...toTileKey(entry.surface),
+        ...toTileKey(surface),
         downloadId: change.downloadId,
         url: change.url,
         filename: change.filename,

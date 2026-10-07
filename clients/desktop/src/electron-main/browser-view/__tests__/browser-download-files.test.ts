@@ -11,6 +11,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserDownloadFiles } from "../browser-download";
 import { nodeBrowserDownloadFiles } from "../browser-download-files";
 
+vi.mock("../../app/logger", () => ({
+  log: {
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+  describeLogError: (error: unknown): string => String(error),
+}));
+
 const linkProbe = vi.hoisted(() => ({
   calls: [] as Array<{ readonly from: string; readonly to: string }>,
 }));
@@ -141,5 +149,33 @@ describe("nodeBrowserDownloadFiles", () => {
     const second = write("held2.traycer-download", "x");
     nodeBrowserDownloadFiles.removeSync(second);
     expect(existsSync(second)).toBe(false);
+  });
+  it("answers published when the held name cannot be removed afterwards", async () => {
+    const held = write("Unconfirmed 6.traycer-download", "payload");
+    const target = join(directory, "file.txt");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      const failing = {
+        ...actual,
+        rm: async (
+          path: Parameters<typeof actual.rm>[0],
+          options: Parameters<typeof actual.rm>[1],
+        ): Promise<void> => {
+          if (path === held) throw new Error("held name is busy");
+          await actual.rm(path, options);
+        },
+      };
+      return { ...failing, default: failing };
+    });
+    const fresh = await import("../browser-download-files");
+
+    await expect(
+      fresh.nodeBrowserDownloadFiles.publish(held, target),
+    ).resolves.toBe("published");
+
+    expect(read(target)).toBe("payload");
+    // The removal really was refused: the held name is still there.
+    expect(existsSync(held)).toBe(true);
   });
 });

@@ -405,7 +405,15 @@ export class BrowserViewDownloads {
           state: held.done,
           receivedBytes: snapshot.receivedBytes,
         });
-        this.emitChange(identity, snapshot, "completed", savePath, false);
+        // Under the name it was actually given: a taken name moves the file
+        // to `name (1).ext`, and the tile must not point at the older file.
+        this.emitChange(
+          identity,
+          { ...snapshot, filename: basename(savePath) },
+          "completed",
+          savePath,
+          false,
+        );
       } catch (error) {
         log.warn("[browser-view] completed download could not be saved", {
           error: describeLogError(error),

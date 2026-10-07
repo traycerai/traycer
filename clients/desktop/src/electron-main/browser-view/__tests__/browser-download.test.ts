@@ -916,3 +916,41 @@ describe("BrowserViewDownloads publishing", () => {
     expect(h.disk.get(join(DIRECTORY, "file.txt"))).toBe("bytes of file.txt");
   });
 });
+
+describe("BrowserViewDownloads published name", () => {
+  it("reports the numbered name the file was actually published to", async () => {
+    const h = harness();
+    h.disk.set(join(DIRECTORY, "file.txt"), "old bytes");
+    const item = start(h, new FakeWebContents(1), "file.txt");
+    item.emitUpdated("progressing", 5);
+
+    complete(h, item);
+    await flush();
+
+    const completed = lastChange(h);
+    expect(completed).toMatchObject({
+      state: "completed",
+      filename: "file (1).txt",
+      savePath: join(DIRECTORY, "file (1).txt"),
+    });
+    const progress = h.changes.filter(
+      (change) => change.state === "progressing",
+    );
+    expect(progress.length).toBeGreaterThan(0);
+    for (const change of progress) expect(change.filename).toBe("file.txt");
+  });
+
+  it("keeps the suggested name when it was free", async () => {
+    const h = harness();
+    const item = start(h, new FakeWebContents(1), "file.txt");
+
+    complete(h, item);
+    await flush();
+
+    expect(lastChange(h)).toMatchObject({
+      state: "completed",
+      filename: "file.txt",
+      savePath: join(DIRECTORY, "file.txt"),
+    });
+  });
+});

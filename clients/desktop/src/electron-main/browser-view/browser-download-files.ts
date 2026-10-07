@@ -1,5 +1,6 @@
 import { constants, rmSync } from "node:fs";
 import { copyFile, link, rm } from "node:fs/promises";
+import { describeLogError, log } from "../app/logger";
 import type { BrowserDownloadFiles } from "./browser-download";
 
 /**
@@ -27,7 +28,16 @@ export const nodeBrowserDownloadFiles: BrowserDownloadFiles = {
         throw copyError;
       }
     }
-    await rm(from, { force: true });
+    // The file is published once it exists under its own name. A held name
+    // that cannot be removed (a scanner holding it open, a network volume
+    // hiccup) is an inert leftover, not a failed download.
+    try {
+      await rm(from, { force: true });
+    } catch (error) {
+      log.warn("[browser-view] published download left its held name behind", {
+        error: describeLogError(error),
+      });
+    }
     return "published";
   },
   remove: async (path) => {

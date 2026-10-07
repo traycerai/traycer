@@ -718,6 +718,8 @@ interface Harness {
   readonly focusedTiles: BrowserViewTileKey[];
   readonly finds: BrowserViewFindChange[];
   readonly downloads: BrowserViewDownloadChange[];
+  /** The window each entry of `downloads` was sent to, in order. */
+  readonly downloadWindowIds: string[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
   readonly openTileRequests: BrowserViewOpenTileRequest[];
   readonly annotationEvents: BrowserAnnotationSessionIpcEvent[];
@@ -806,6 +808,7 @@ function createHarnessWithOptions(
   const focusedTiles: BrowserViewTileKey[] = [];
   const finds: BrowserViewFindChange[] = [];
   const downloads: BrowserViewDownloadChange[] = [];
+  const downloadWindowIds: string[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
   const openTileRequests: BrowserViewOpenTileRequest[] = [];
   const annotationEvents: BrowserAnnotationSessionIpcEvent[] = [];
@@ -960,6 +963,7 @@ function createHarnessWithOptions(
           record(finds, payload);
           return true;
         case RunnerHostEvent.browserViewDownloadChange:
+          downloadWindowIds.push(windowId);
           record(downloads, payload);
           return true;
         case RunnerHostEvent.browserViewCertificateError:
@@ -1013,6 +1017,7 @@ function createHarnessWithOptions(
     focusedTiles,
     finds,
     downloads,
+    downloadWindowIds,
     certificateErrors,
     openTileRequests,
     annotationEvents,
@@ -1637,6 +1642,89 @@ describe("BrowserViewManager native tab lifecycle", () => {
       state: "prompting",
       dangerType: ".exe",
     });
+  });
+
+  function downloadChangeFor(
+    webContentsId: number,
+  ): BrowserSessionDownloadChange {
+    return {
+      webContentsId,
+      downloadId: `download-${webContentsId}`,
+      url: "https://opener.example/file.txt",
+      filename: "file.txt",
+      mimeType: "text/plain",
+      totalBytes: 100,
+      receivedBytes: 40,
+      state: "progressing",
+      savePath: null,
+      dangerType: null,
+      canCancel: true,
+    };
+  }
+
+  it("sends a normal guest's download change to its own tile", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+
+    harness.emitDownload(downloadChangeFor(view.id));
+
+    expect(harness.downloadWindowIds).toEqual(["window-1"]);
+    expect(harness.downloads).toEqual([
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: `download-${view.id}`,
+        state: "progressing",
+        receivedBytes: 40,
+        canCancel: true,
+      }),
+    ]);
+  });
+
+  it("routes a popup's download change to the tile it was opened from", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    harness.emitDownload(downloadChangeFor(popup.webContents.id));
+
+    expect(harness.downloadWindowIds).toEqual(["window-1"]);
+    expect(harness.downloads).toEqual([
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: `download-${popup.webContents.id}`,
+        url: "https://opener.example/file.txt",
+        filename: "file.txt",
+        state: "progressing",
+        totalBytes: 100,
+        receivedBytes: 40,
+        canCancel: true,
+      }),
+    ]);
+  });
+
+  it("drops a download change for a popup that has closed", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const popupId = popup.webContents.id;
+    harness.emitDownload(downloadChangeFor(popupId));
+    expect(harness.downloads).toHaveLength(1);
+
+    popup.emit("closed");
+    harness.emitDownload(downloadChangeFor(popupId));
+
+    expect(harness.downloads).toHaveLength(1);
+  });
+
+  it("drops a download change for an unknown WebContents", () => {
+    const harness = createHarness();
+
+    harness.emitDownload(downloadChangeFor(987654));
+
+    expect(harness.downloads).toEqual([]);
   });
 
   it("sends nothing on an unleased tab's navigation, and recovers a leased one", async () => {
