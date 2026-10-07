@@ -437,7 +437,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(toolbar.className).toContain("float-right");
     expect(toolbar.className).not.toContain("border-border/60");
     expect(toolbar.className).not.toContain("shadow-lg");
-    expect(within(toolbar).getByText("Waiting for steer")).not.toBeNull();
+    expect(within(toolbar).getByText("Waiting for provider")).not.toBeNull();
   });
 
   it("offers an un-stage control for a safe-point steer still waiting", () => {
@@ -558,7 +558,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(3);
     expect(screen.getAllByTestId("queued-message-drag-handle")).toHaveLength(3);
     expect(screen.getByText("Frozen steering prompt")).not.toBeNull();
-    expect(screen.getByText("Waiting for steer")).not.toBeNull();
+    expect(screen.getByText("Waiting for provider")).not.toBeNull();
 
     const frozenRow = screen.getAllByTestId("queued-message-row")[1];
     expect(within(frozenRow).queryByRole("button")).toBeNull();
@@ -568,7 +568,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(frozenHandle.getAttribute("data-disabled")).toBe("true");
   });
 
-  it("renders optimistic queued sends as locked queuing rows", () => {
+  it("renders optimistic queued sends as locked "Sending to host" rows", () => {
     renderPanel({
       queue: queueState([
         queuedItem(
@@ -584,7 +584,7 @@ describe("<QueuedMessagePanel />", () => {
 
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(1);
     expect(screen.getByText("Attachment prompt")).not.toBeNull();
-    expect(screen.getByText("Queuing")).not.toBeNull();
+    expect(screen.getByText("Sending to host")).not.toBeNull();
     expect(
       within(screen.getByTestId("queued-message-row")).queryByRole("button"),
     ).toBeNull();

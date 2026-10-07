@@ -411,6 +411,10 @@ export function publishedChatSessionState(
     // `queueCancel` and never has a cancel's ack to answer.
     pendingCancelRestorations: {},
     failedSendRestoration: null,
+    // No wire here either: no queue edit is ever submitted, and no send can
+    // go unanswered.
+    queueEditRecords: {},
+    unconfirmedSendActionIds: new Set<string>(),
     hashOnlyRecoveries: {},
     currentComposerSettings: null,
     liveAssistantMessage: null,
@@ -458,6 +462,8 @@ export function publishedChatSessionState(
     // A copy has no delivery view, so nothing is ever restored to acknowledge.
     messageDeliveryRestored: () => null,
     queueEdit: () => null,
+    submitQueueEdit: () => null,
+    checkSendDelivery: () => undefined,
     queueCancel: () => null,
     queueReorder: () => null,
     queueSteerNow: () => null,

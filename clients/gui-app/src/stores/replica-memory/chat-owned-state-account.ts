@@ -184,6 +184,8 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   openedSubagentCardBlockIds: true,
   pendingCancelRestorations: true,
   failedSendRestoration: true,
+  queueEditRecords: true,
+  unconfirmedSendActionIds: true,
   hashOnlyRecoveries: true,
   currentComposerSettings: true,
   liveAssistantMessage: true,
@@ -231,11 +233,9 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   };
   const summaryRowSizes = new WeakMap<object, RetainedValueSize>();
   let summaryAssembly:
-    | ChatSessionState["accumulatedFileChangeSummaries"]
-    | null = null;
+    ChatSessionState["accumulatedFileChangeSummaries"] | null = null;
   let publishedSummaries:
-    | ChatSessionState["accumulatedFileChangeSummaries"]
-    | null = null;
+    ChatSessionState["accumulatedFileChangeSummaries"] | null = null;
   let summaryAssemblySize: RetainedValueSize = {
     rawBytes: 0,
     estimatedHeapBytes: 0,

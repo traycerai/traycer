@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import {
   memo,
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -79,7 +80,16 @@ import {
 } from "@/lib/managed-commands/managed-command-copy";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
-import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
+import {
+  isOptimisticQueuedItem,
+  optimisticQueuedItemClientActionId,
+} from "@/stores/chats/optimistic-queue";
+import {
+  queueItemInFlightLabel,
+  type QueueItemInFlight,
+} from "@/stores/chats/queue-edit-custody";
+import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
+import { formatClockTime } from "@/lib/relative-time";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import {
@@ -99,6 +109,8 @@ interface QueuedMessageRowActionState {
 
 interface QueuedMessageRowActionStateInput {
   readonly item: ChatQueuedItem;
+  /** This row's own unanswered mutation, or `null` when it has none. */
+  readonly inFlight: QueueItemInFlight | null;
   readonly queueStatus: ChatSessionState["queue"]["status"];
   readonly canReorder: boolean;
   readonly canAct: boolean;
@@ -119,6 +131,8 @@ interface QueuedMessageRowChromeInput {
   readonly readOnly: boolean;
   readonly canAct: boolean;
   readonly isLocked: boolean;
+  /** This row has a mutation of its own the host has not answered. */
+  readonly mutationInFlight: boolean;
 }
 
 interface QueuedMessageEditActionCopy {
@@ -676,8 +690,17 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onAbortSteer,
     onSteerNow,
   } = props;
+  const stages = use(QueuedMessageStagesContext);
+  const inFlight = stages.inFlight.get(item.queueItemId) ?? null;
+  const optimisticActionId = optimisticQueuedItemClientActionId(
+    item.queueItemId,
+  );
+  const deliveryUnconfirmed =
+    optimisticActionId !== null &&
+    stages.unconfirmedSendActionIds.has(optimisticActionId);
   const actionState = queuedMessageRowActionState({
     item,
+    inFlight,
     queueStatus,
     canReorder,
     canAct,
@@ -725,9 +748,12 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   const statusLabel = queuedMessageStatusLabel(
     item,
     pausedAfterErrorTooltip !== null,
+    { inFlight, deliveryUnconfirmed },
   );
-  const statusTooltip =
-    item.status === "paused" ? pausedAfterErrorTooltip : null;
+  const statusTooltip = queuedMessageStatusTooltip(item, {
+    inFlight,
+    pausedAfterErrorTooltip,
+  });
   const showDropIndicatorBefore = dropPreview?.index === index;
   const showDropIndicatorAfter = shouldShowDropIndicatorAfter({
     dropPreview,
@@ -740,6 +766,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     readOnly,
     canAct,
     isLocked: actionState.isLocked,
+    mutationInFlight: inFlight !== null,
   });
 
   return (
@@ -769,7 +796,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       data-editing={editing ? "true" : "false"}
       data-dragging={rowSortable.isDragSource ? "true" : "false"}
       data-drop-target={rowSortable.isDropTarget ? "true" : "false"}
-      aria-busy={actionState.isSteering}
+      aria-busy={actionState.isSteering || inFlight !== null}
     >
       <QueuedMessageDropIndicator
         visible={showDropIndicatorBefore}
@@ -1192,9 +1219,31 @@ function queuedMessageRowChrome(
       userOwned &&
       !readOnly &&
       canAct &&
+      // An abort already on the wire is not offered again: the host would
+      // answer the repeat against a row the first one has since changed.
+      !input.mutationInFlight &&
       promptItem.status === "steer_requested" &&
       promptItem.steerRequest?.mode === "safe_point",
   };
+}
+
+/**
+ * Whether the row's own controls are withheld. One unanswered mutation locks
+ * it exactly as a host-side steer does: until its ack (or a reconnect) settles
+ * it, a second click could only send a second frame against a state this client
+ * has not seen yet.
+ */
+function queuedMessageRowLocked(
+  item: ChatQueuedItem,
+  inFlight: QueueItemInFlight | null,
+): boolean {
+  return (
+    isOptimisticQueuedItem(item) ||
+    item.status === "steering" ||
+    item.status === "injected" ||
+    item.status === "steer_requested" ||
+    inFlight !== null
+  );
 }
 
 function queuedMessageRowActionState(
@@ -1203,8 +1252,7 @@ function queuedMessageRowActionState(
   const isOptimistic = isOptimisticQueuedItem(input.item);
   const isSteering = input.item.status === "steering";
   const isTransient = isSteering || input.item.status === "injected";
-  const isLocked =
-    isOptimistic || isTransient || input.item.status === "steer_requested";
+  const isLocked = queuedMessageRowLocked(input.item, input.inFlight);
   return {
     canReorder:
       input.canReorder && input.canAct && !input.readOnly && !isLocked,
@@ -1231,14 +1279,51 @@ function queuedMessageRowActionState(
  * (`queuePausedNoticeHidden`), so this pill is where it is said (user ruling,
  * 2026-09-26). Any other pause keeps today's "Paused".
  */
+export const QUEUED_MESSAGE_SENDING_LABEL = "Sending to host";
+export const QUEUED_MESSAGE_UNCONFIRMED_LABEL = "Delivery not confirmed";
+export const QUEUED_MESSAGE_NEXT_TURN_LABEL = "Queued for next turn";
+export const QUEUED_MESSAGE_WAITING_FOR_PROVIDER_LABEL = "Waiting for provider";
+
+/**
+ * The row's status pill, in three tiers that never borrow each other's words.
+ *
+ * LOCAL: an optimistic row is this client's own dispatch and nothing more -
+ * "Sending to host", or "Delivery not confirmed" once it has gone unanswered
+ * past the display deadline. Neither claims the host has it.
+ *
+ * IN FLIGHT: a host-confirmed row with a mutation of its own still unanswered
+ * names that mutation, ahead of whatever status the host last reported, because
+ * that status is the one the mutation is about to change.
+ *
+ * HOST-CONFIRMED: everything below, read off the host's item. A plain pending
+ * prompt says "Queued for next turn" rather than nothing, so the absence of a
+ * pill is never what distinguishes confirmed from local.
+ */
 function queuedMessageStatusLabel(
   item: ChatQueuedItem,
   pausedAfterError: boolean,
+  local: {
+    readonly inFlight: QueueItemInFlight | null;
+    readonly deliveryUnconfirmed: boolean;
+  },
 ): string | null {
   const pausedLabel = pausedAfterError
     ? QUEUE_PAUSED_AFTER_ERROR_LABEL
     : "Paused";
-  if (isOptimisticQueuedItem(item)) return "Queuing";
+  if (isOptimisticQueuedItem(item)) {
+    return local.deliveryUnconfirmed
+      ? QUEUED_MESSAGE_UNCONFIRMED_LABEL
+      : QUEUED_MESSAGE_SENDING_LABEL;
+  }
+  if (local.inFlight !== null) return queueItemInFlightLabel(local.inFlight);
+  return hostConfirmedStatusLabel(item, pausedLabel);
+}
+
+/** The host's own account of a row, read off its item and nothing else. */
+function hostConfirmedStatusLabel(
+  item: ChatQueuedItem,
+  pausedLabel: string,
+): string | null {
   if (item.kind !== "prompt") {
     // Both host-authored kinds (a shell's output, a forward's interruption)
     // speak the DELIVERY vocabulary: nobody steers them, they are delivered.
@@ -1255,9 +1340,12 @@ function queuedMessageStatusLabel(
     return item.delivery === "same_turn" ? "Will deliver" : null;
   }
   if (item.status === "steer_requested") {
+    // The host has taken the steer and is waiting on the provider's next safe
+    // point to admit it. Queue acceptance is not provider admission, and the
+    // pill says which of the two this row has.
     return item.steerRequest?.mode === "interrupt_restart"
       ? "Restart pending"
-      : "Waiting for steer";
+      : QUEUED_MESSAGE_WAITING_FOR_PROVIDER_LABEL;
   }
   if (item.status === "steering") return "Steering";
   if (item.status === "injected") return "Embedding";
@@ -1269,6 +1357,38 @@ function queuedMessageStatusLabel(
     // reorder them, never hand-steer. "Can steer" reads as a user affordance, so
     // name the automatic behavior instead for received responses.
     return isReceivedAgentResponse(item) ? "Will steer" : "Can steer";
+  }
+  return QUEUED_MESSAGE_NEXT_TURN_LABEL;
+}
+
+/**
+ * When the row reached the stage its pill names, and whose clock says so.
+ *
+ * A host-confirmed stage is dated from the host's own item (`createdAt`, or the
+ * steer request's `requestedAt`). A local stage is dated from this client's
+ * dispatch and SAYS it is local, so a time on an unconfirmed row can never be
+ * read as the moment the host accepted it.
+ */
+function queuedMessageStatusTooltip(
+  item: ChatQueuedItem,
+  input: {
+    readonly inFlight: QueueItemInFlight | null;
+    readonly pausedAfterErrorTooltip: string | null;
+  },
+): string | null {
+  if (item.status === "paused") return input.pausedAfterErrorTooltip;
+  if (item.kind !== "prompt") return null;
+  if (isOptimisticQueuedItem(item)) {
+    return `Sent from this device at ${formatClockTime(item.createdAt)}. The host has not confirmed it yet.`;
+  }
+  if (input.inFlight !== null) {
+    return "Sent from this device. Waiting for the host to answer.";
+  }
+  if (item.status === "steer_requested" && item.steerRequest !== null) {
+    return `The host requested the steer at ${formatClockTime(item.steerRequest.requestedAt)}.`;
+  }
+  if (item.status === "pending" && item.delivery === "next_turn") {
+    return `Queued on the host at ${formatClockTime(item.createdAt)}.`;
   }
   return null;
 }

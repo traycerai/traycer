@@ -65,6 +65,17 @@ import {
   type ImageWitnessStore,
 } from "@/stores/chats/image-witness-store";
 import { createRecoveryLedger } from "@/stores/chats/recovery-ledger";
+import {
+  UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS,
+  foldQueueEditAck,
+  queueEditRecordForAction,
+  settleQueueEditsForSnapshot,
+  withQueueEditRecord,
+  type QueueEditFold,
+  type QueueEditIntent,
+  type QueueEditRecords,
+  type QueueEditSettlement,
+} from "@/stores/chats/queue-edit-custody";
 import { nextTurnLifecycleRevision } from "@/stores/chats/chat-turn-lifecycle";
 import {
   thinkingTokensAfterFrame,
@@ -552,6 +563,17 @@ export interface PendingCancelRestoration {
   readonly restore: ChatSendRestore;
 }
 
+/** One edited queued prompt, as the composer submitted it. */
+export interface SubmitQueueEditInput {
+  readonly queueItemId: string;
+  /** The document that goes on the wire in the `queueEdit` frame. */
+  readonly content: JsonContent;
+  /** The composer's own document and annotation cards - what a hand-back returns. */
+  readonly restore: ChatSendRestore;
+  readonly settings: ChatRunSettings;
+  readonly intent: QueueEditIntent;
+}
+
 export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
@@ -609,7 +631,13 @@ export interface InterviewDeliveryRetryIdentity {
 export interface PendingChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
-  /** Queue row targeted by a queue mutation; populated for queueCancel. */
+  /**
+   * Queue row targeted by a queue mutation - edit, cancel, reorder, steer,
+   * abort-steer, settings update - and `null` for every other action. The
+   * row's own in-flight state is derived from it (`queueItemsInFlight`), which
+   * is what stops a second click from sending a second frame before the first
+   * is answered. Only `queueCancel` is read for the cancel projection.
+   */
   readonly queueItemId: string | null;
   /**
    * Checkpoint targeted by a `restoreCheckpoint`; `null` for every other
@@ -1756,6 +1784,23 @@ export interface ChatSessionState {
   >;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /**
+   * Edited queued prompts whose two frames the host has not both answered,
+   * keyed by the `queueEdit` action's id. See {@link QueueEditRecord}: between
+   * the composer clearing and those answers this is the only copy of what the
+   * user typed, so the image-root sources read it and both the ack and the
+   * reconnect snapshot account for it before its action ids go.
+   */
+  readonly queueEditRecords: QueueEditRecords;
+  /**
+   * Sends that have gone {@link UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS} on an
+   * open stream without an ack. A DISPLAY fact and nothing else: the pending
+   * action is untouched, so a late ack or a later snapshot settles the send
+   * exactly as it would have. Read through
+   * {@link unconfirmedSendActionIdsOf}, which drops ids whose send has since
+   * been answered.
+   */
+  readonly unconfirmedSendActionIds: ReadonlySet<string>;
+  /**
    * Refused hash-only sends this client is quietly re-inlining and resending,
    * keyed by the SETTLED action id each replaces.
    *
@@ -1976,6 +2021,21 @@ export interface ChatSessionState {
     readonly expectedRevision: number;
   }) => string | null;
   queueEdit: (queueItemId: string, content: JsonContent) => string | null;
+  /**
+   * Submit an edited queued prompt as the two frames it travels in, holding the
+   * whole submission in a {@link QueueEditRecord} until the host has answered
+   * for both. Returns the `queueEdit` action id, or `null` when nothing was
+   * dispatched - in which case the caller must leave the draft in the composer.
+   */
+  submitQueueEdit: (input: SubmitQueueEditInput) => string | null;
+  /**
+   * Ask the host what became of a send it has not acknowledged, through the
+   * recovery this stream already has: a resnapshot while the stream is live,
+   * a re-subscribe when the transport itself reports silence (or the line has
+   * no resnapshot). Never retransmits, and never reads a relay pong as
+   * acceptance - only a snapshot naming the message, or its ack, confirms it.
+   */
+  checkSendDelivery: () => void;
   queueCancel: (queueItemId: string) => string | null;
   queueReorder: (
     queueItemId: string,
@@ -2771,8 +2831,15 @@ function rejectionSurfaces(input: {
 > {
   const { state, pending, frame, account } = input;
   if (
-    pending?.action === "send" &&
-    messageDeliveryNames(state.messageDelivery, pending.messageId)
+    (pending?.action === "send" &&
+      messageDeliveryNames(state.messageDelivery, pending.messageId)) ||
+    // A refused frame of a queue-edit submission is stated by its record
+    // (`queueEditSurfacesForAck`), which knows what the bare refusal cannot:
+    // whether the edited text is coming back, or was saved with only the
+    // settings or the steer left out. The generic notice here would say "the
+    // queued prompt is no longer pending" once per frame and neither.
+    queueEditRecordForAction(state.queueEditRecords, frame.clientActionId) !==
+      null
   ) {
     return {
       failedSendRestoration: state.failedSendRestoration,
@@ -3102,6 +3169,12 @@ function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
       if (entry === undefined) continue;
       records.push(...entry.restore.browserAnnotations);
     }
+    // An edited queued prompt between the composer clearing and the host
+    // answering for it: the record is the only thing naming these crops.
+    for (const entry of Object.values(state.queueEditRecords)) {
+      if (entry === undefined) continue;
+      records.push(...entry.restore.browserAnnotations);
+    }
     // A queued prompt is re-derived from this payload at DRAIN time, so its
     // sidecar has to outlive every slot above. This is also what covers the
     // queued-blob repair: the repair only runs for an item still IN the
@@ -3189,6 +3262,15 @@ function collectPendingRestoreContentImageHashes(): ReadonlyArray<string> {
     for (const entry of Object.values(state.pendingCancelRestorations)) {
       if (entry === undefined) continue;
       hashes.push(...blobHashesFromContent(entry.restore.content));
+    }
+    // The same gap for an edited queued prompt: the composer cleared on
+    // dispatch, and if the host refuses the edit this document is what comes
+    // back. Both documents, as for a pending user message - the one that
+    // returns and the one that went out.
+    for (const entry of Object.values(state.queueEditRecords)) {
+      if (entry === undefined) continue;
+      hashes.push(...blobHashesFromContent(entry.restore.content));
+      hashes.push(...blobHashesFromContent(entry.wireContent));
     }
     // A queued prompt is re-derived from THIS payload at drain time, so its
     // bytes have to outlive every slot above - and no other root names them,
@@ -3524,6 +3606,69 @@ export function createChatSessionStoreWithNotificationDependencies(
   const worktreePartition: WorktreePartitionFn = (intent) =>
     partitionSweptIntent(ownerStagingKey, intent);
 
+  /** The second frame of a queue-edit submission: the steer, or the settings. */
+  const sendQueueEditFollowUpFrame = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly clientActionId: string;
+    readonly queueItemId: string;
+    readonly settings: ChatRunSettings;
+    readonly intent: QueueEditIntent;
+  }): string | null =>
+    input.intent === "steer"
+      ? sendQueueSteerNowFrame({
+          set: input.set,
+          get: input.get,
+          clientActionId: input.clientActionId,
+          queueItemId: input.queueItemId,
+          newSettings: input.settings,
+        })
+      : sendQueueSettingsUpdateFrame({
+          set: input.set,
+          get: input.get,
+          clientActionId: input.clientActionId,
+          queueItemId: input.queueItemId,
+          settings: input.settings,
+        });
+
+  /**
+   * One timer per dispatched send, each firing once at the display deadline.
+   * It changes what the row SAYS and nothing else: the pending action stays
+   * exactly as dispatched, so a late ack or a later snapshot still settles the
+   * send, and nothing here rejects it or sends it again.
+   */
+  const unconfirmedSendTimers = new Set<number>();
+  const clearUnconfirmedSendTimers = (): void => {
+    for (const timer of unconfirmedSendTimers) window.clearTimeout(timer);
+    unconfirmedSendTimers.clear();
+  };
+  const armUnconfirmedSendDeadline = (
+    input: Pick<SendActionInput, "set" | "get">,
+    clientActionId: string,
+  ): void => {
+    const timer = window.setTimeout(() => {
+      unconfirmedSendTimers.delete(timer);
+      if (disposed) return;
+      const pending = pendingActionForId(
+        input.get().pendingActions,
+        clientActionId,
+      );
+      if (pending === null || pending.action !== "send") return;
+      // A send from an earlier connection is the reconnect's to settle: its
+      // snapshot either names the message or hands the prompt back. Saying
+      // "not confirmed" over a stream already known to be down would only
+      // restate what the reconnect state beside the composer is showing.
+      if (pending.connectionEpoch !== connectionEpoch) return;
+      input.set((state) => ({
+        unconfirmedSendActionIds: new Set([
+          ...state.unconfirmedSendActionIds,
+          clientActionId,
+        ]),
+      }));
+    }, UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS);
+    unconfirmedSendTimers.add(timer);
+  };
+
   const canSendAction = (get: () => ChatSessionState): boolean => {
     if (disposed) return false;
     if (streamClient === null) return false;
@@ -3567,8 +3712,96 @@ export function createChatSessionStoreWithNotificationDependencies(
     client.sendAction(input.frame);
     if (input.frame.kind === "send") {
       sendTimings.mark(input.frame.messageId, "dispatched");
+      armUnconfirmedSendDeadline(input, input.frame.clientActionId);
     }
     return input.pending.clientActionId;
+  };
+
+  // The three frames a queue-edit submission is made of, each taking the
+  // action id it goes out under. `submitQueueEdit` mints both ids first so its
+  // custody record exists BEFORE either frame is on the wire: an ack can then
+  // never arrive for an action the record does not yet name.
+  const sendQueueEditFrame = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly clientActionId: string;
+    readonly queueItemId: string;
+    readonly content: JsonContent;
+  }): string | null => {
+    const frame: ChatOwnerActionFrame = {
+      kind: "queueEdit",
+      hasBinaryPayload: false,
+      epicId: options.epicId,
+      chatId: options.chatId,
+      clientActionId: input.clientActionId,
+      queueItemId: input.queueItemId,
+      content: input.content,
+    };
+    return sendAction({
+      set: input.set,
+      get: input.get,
+      frame,
+      pending: {
+        ...basicPending(input.clientActionId, "queueEdit"),
+        queueItemId: input.queueItemId,
+      },
+      pendingUserMessage: null,
+    });
+  };
+  const sendQueueSteerNowFrame = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly clientActionId: string;
+    readonly queueItemId: string;
+    readonly newSettings: ChatRunSettings | null;
+  }): string | null => {
+    const frame: ChatOwnerActionFrame = {
+      kind: "queueSteerNow",
+      hasBinaryPayload: false,
+      epicId: options.epicId,
+      chatId: options.chatId,
+      clientActionId: input.clientActionId,
+      queueItemId: input.queueItemId,
+      newSettings: input.newSettings,
+    };
+    return sendAction({
+      set: input.set,
+      get: input.get,
+      frame,
+      pending: {
+        ...basicPending(input.clientActionId, "queueSteerNow"),
+        queueItemId: input.queueItemId,
+      },
+      pendingUserMessage: null,
+    });
+  };
+  const sendQueueSettingsUpdateFrame = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly clientActionId: string;
+    readonly queueItemId: string;
+    readonly settings: ChatRunSettings;
+  }): string | null => {
+    const frame: ChatOwnerActionFrame = {
+      kind: "queueSettingsUpdate",
+      hasBinaryPayload: false,
+      epicId: options.epicId,
+      chatId: options.chatId,
+      clientActionId: input.clientActionId,
+      queueItemId: input.queueItemId,
+      settings: input.settings,
+      accountContext: useAccountContextStore.getState().accountContext,
+    };
+    return sendAction({
+      set: input.set,
+      get: input.get,
+      frame,
+      pending: {
+        ...basicPending(input.clientActionId, "queueSettingsUpdate"),
+        queueItemId: input.queueItemId,
+      },
+      pendingUserMessage: null,
+    });
   };
 
   // Phase two of the session-scoped background stop: the actual frame. Split
@@ -4111,6 +4344,17 @@ export function createChatSessionStoreWithNotificationDependencies(
       for (const honoured of cancelSettlement.honoured) {
         forgetRefusedContentBlobAcks(options.hostId, honoured.restore.content);
       }
+      // The queue-edit records whose acks died with that connection, accounted
+      // for BEFORE the sweep's ids are dropped: this snapshot's queue and
+      // transcript say whether each edit landed, and an edit they do not
+      // confirm hands its text back rather than vanishing with its action.
+      const queueEditSettlement = settleQueueEditsForSnapshot({
+        records: get().queueEditRecords,
+        sweptActionIds: sweep.sweptActionIds,
+        queue: frame.snapshot.queue,
+        messages: frame.snapshot.chat.messages,
+        settingsEqual: chatRunSettingsEqual,
+      });
       // Filled by the updater, sent after it: the frames go out only once the
       // records are re-stamped, so a re-entrant snapshot cannot send them twice.
       let retransmitRestoreActions: ReadonlyArray<AcceptedChatAction> = [];
@@ -4251,6 +4495,12 @@ export function createChatSessionStoreWithNotificationDependencies(
             appendedLastCopyPrompts: [],
           },
         );
+        // The returned edits join that same contest last, behind the sends and
+        // the cancels that were already waiting on this reconnect.
+        const handBacksForSnapshot = foldQueueEditSettlementsForSnapshot(
+          cancelRestorationsForSnapshot,
+          queueEditSettlement,
+        );
         const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
           pending.pendingActions,
           messages,
@@ -4361,7 +4611,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingUserMessages: settled.pendingUserMessages,
             queue,
             hashOnlyRecoveries: state.hashOnlyRecoveries,
-            failedSendRestoration: cancelRestorationsForSnapshot.slot,
+            failedSendRestoration: handBacksForSnapshot.slot,
           },
           snapshotDelivery,
         );
@@ -4465,7 +4715,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.pendingCancelRestorations,
             cancelSettlement.settledActionIds,
           ),
-          failedSendRestoration: cancelRestorationsForSnapshot.slot,
+          failedSendRestoration: handBacksForSnapshot.slot,
+          queueEditRecords: queueEditSettlement.records,
+          // Whatever this snapshot settled is no longer unconfirmed.
+          unconfirmedSendActionIds: unconfirmedSendActionIdsOf({
+            unconfirmedSendActionIds: state.unconfirmedSendActionIds,
+            pendingActions,
+          }),
           // Statements both reconcile passes owe the user: a send whose
           // restoration lost the single-slot race on reconnect, and a
           // stranded send the settled pass dropped without the slot.
@@ -4477,7 +4733,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             [
               ...pending.appendedErrorNotices,
               ...settled.appendedErrorNotices,
-              ...cancelRestorationsForSnapshot.notices,
+              ...handBacksForSnapshot.notices,
             ],
             state.deliveredNoticeActionIds,
           ),
@@ -4487,7 +4743,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           lastCopyPrompts: withLastCopyPrompts(state.lastCopyPrompts, [
             ...pending.appendedLastCopyPrompts,
             ...settled.appendedLastCopyPrompts,
-            ...cancelRestorationsForSnapshot.appendedLastCopyPrompts,
+            ...handBacksForSnapshot.appendedLastCopyPrompts,
           ]),
           restore: restoreSettlement.restore,
           settledRestoreCompletions:
@@ -4795,8 +5051,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * generation whose count had been rewound to zero as a finished one.
      */
     let assemblingSummaries:
-      | readonly ChatAccumulatedFileChangeSummary[]
-      | null = null;
+      readonly ChatAccumulatedFileChangeSummary[] | null = null;
     const accountSummaryAssembly = (
       assembly: readonly ChatAccumulatedFileChangeSummary[] | null,
     ): void => {
@@ -7372,6 +7627,21 @@ export function createChatSessionStoreWithNotificationDependencies(
           rejectedPending.sentContentHashes,
         );
       }
+      // A REFUSED content edit hands its text back as well, so whatever it is
+      // sent as next must re-upload its bytes for the same reason.
+      const refusedQueueEdit =
+        frame.status === "rejected"
+          ? queueEditRecordForAction(
+              get().queueEditRecords,
+              frame.clientActionId,
+            )
+          : null;
+      if (refusedQueueEdit?.editActionId === frame.clientActionId) {
+        forgetRefusedContentBlobAcks(
+          options.hostId,
+          refusedQueueEdit.restore.content,
+        );
+      }
       // Arm 4 of the same class: an ACCEPTED cancel of a setup-failed row hands
       // its prompt back, so the resend must re-upload its bytes for the same
       // reason a refused send must.
@@ -8299,10 +8569,20 @@ export function createChatSessionStoreWithNotificationDependencies(
             failedSendRestoration: nextFailedSendRestoration,
             errorNotices: nextErrorNotices,
             lastCopyPrompts: nextLastCopyPrompts,
-          } = cancelRestorationSettlementForAck(
+            queueEditRecords: nextQueueEditRecords,
+          } = queueEditSurfacesForAck(
             state,
+            frame,
+            cancelRestorationSettlementForAck(
+              state,
+              frame.clientActionId,
+              cancelRestoration,
+            ),
+          );
+          // An answered send is no longer unconfirmed, whichever way it went.
+          const nextUnconfirmedSends = withoutUnconfirmedSend(
+            state.unconfirmedSendActionIds,
             frame.clientActionId,
-            cancelRestoration,
           );
           if (frame.status === "accepted") {
             if (pending === null) {
@@ -8317,6 +8597,8 @@ export function createChatSessionStoreWithNotificationDependencies(
                 failedSendRestoration: nextFailedSendRestoration,
                 errorNotices: nextErrorNotices,
                 lastCopyPrompts: nextLastCopyPrompts,
+                queueEditRecords: nextQueueEditRecords,
+                unconfirmedSendActionIds: nextUnconfirmedSends,
               };
             }
             return {
@@ -8324,6 +8606,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               failedSendRestoration: nextFailedSendRestoration,
               errorNotices: nextErrorNotices,
               lastCopyPrompts: nextLastCopyPrompts,
+              queueEditRecords: nextQueueEditRecords,
+              unconfirmedSendActionIds: nextUnconfirmedSends,
               pendingActions: nextPending,
               acceptedActions: addAcceptedAction(
                 state.acceptedActions,
@@ -8392,12 +8676,20 @@ export function createChatSessionStoreWithNotificationDependencies(
               [{ clientActionId: frame.clientActionId, kind: "refusal" }],
               connectionEpoch,
             ),
-            ...rejectionSurfaces({
+            unconfirmedSendActionIds: nextUnconfirmedSends,
+            // The rejection's own surfaces first, then whatever this refusal
+            // settles of a queue-edit submission laid over them - one slot,
+            // one contest, in the order the two were decided.
+            ...queueEditSurfacesForAck(
               state,
-              pending,
               frame,
-              account: rejectionAccountForFrame,
-            }),
+              rejectionSurfaces({
+                state,
+                pending,
+                frame,
+                account: rejectionAccountForFrame,
+              }),
+            ),
           };
         });
         // `queue` is one of the six, and this handler removes an optimistic
@@ -9715,6 +10007,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       openedSubagentCardBlockIds: new Set<string>(),
       pendingCancelRestorations: {},
       failedSendRestoration: null,
+      queueEditRecords: {},
+      unconfirmedSendActionIds: EMPTY_UNCONFIRMED_SEND_ACTION_IDS,
       hashOnlyRecoveries: {},
       currentComposerSettings: null,
       liveAssistantMessage: null,
@@ -10674,24 +10968,95 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         return flushUnacknowledgedDeliveryRestore(set, get);
       },
-      queueEdit: (queueItemId, content) => {
-        const clientActionId = uuidv4();
-        const frame: ChatOwnerActionFrame = {
-          kind: "queueEdit",
-          hasBinaryPayload: false,
-          epicId: options.epicId,
-          chatId: options.chatId,
-          clientActionId,
-          queueItemId,
-          content,
-        };
-        return sendAction({
+      queueEdit: (queueItemId, content) =>
+        sendQueueEditFrame({
           set,
           get,
-          frame,
-          pending: basicPending(clientActionId, "queueEdit"),
-          pendingUserMessage: null,
+          clientActionId: uuidv4(),
+          queueItemId,
+          content,
+        }),
+      submitQueueEdit: (input) => {
+        if (!canSendAction(get)) return null;
+        const row = get().queue.items.find(
+          (item) => item.queueItemId === input.queueItemId,
+        );
+        // Nothing to edit: the row has already left this client's queue. The
+        // caller keeps the draft in the composer, which is where it is safe.
+        if (row === undefined || row.kind !== "prompt") return null;
+        const editActionId = uuidv4();
+        const followUpActionId = uuidv4();
+        // The record FIRST. Once the composer clears it is the only copy of
+        // the edited text, and an ack must never find an action it does not
+        // name yet.
+        set((state) => ({
+          queueEditRecords: withQueueEditRecord(state.queueEditRecords, {
+            queueItemId: input.queueItemId,
+            messageId: row.messageId,
+            intent: input.intent,
+            restore: input.restore,
+            wireContent: input.content,
+            settings: input.settings,
+            editActionId,
+            followUpActionId,
+            edit: "pending",
+            followUp: "pending",
+            contentReturned: false,
+            dispatchedAt: Date.now(),
+          }),
+        }));
+        const editSent = sendQueueEditFrame({
+          set,
+          get,
+          clientActionId: editActionId,
+          queueItemId: input.queueItemId,
+          content: input.content,
         });
+        // Save-and-steer (decision 14): the steer carries the settings and the
+        // host picks safe-point vs interrupt-restart. A plain save restamps
+        // them. Either way it is a SECOND frame, sent without waiting for the
+        // first one's ack, so the two can be answered differently.
+        const followUpSent =
+          editSent === null
+            ? null
+            : sendQueueEditFollowUpFrame({
+                set,
+                get,
+                clientActionId: followUpActionId,
+                queueItemId: input.queueItemId,
+                settings: input.settings,
+                intent: input.intent,
+              });
+        if (editSent === null || followUpSent === null) {
+          // The submission did not go out whole, so the composer is not
+          // cleared and the draft there is still the copy. Dropping the record
+          // is what keeps the text from being handed back a second time.
+          set((state) => ({
+            queueEditRecords: Object.fromEntries(
+              Object.entries(state.queueEditRecords).filter(
+                ([id]) => id !== editActionId,
+              ),
+            ),
+          }));
+          return null;
+        }
+        return editActionId;
+      },
+      checkSendDelivery: () => {
+        if (disposed || get().connectionStatus !== "open") return;
+        // A line with no resnapshot, or a transport that itself reports
+        // silence, has only the re-subscribe - the same call the pane's Retry
+        // makes. On a live windowed stream the resnapshot asks without a
+        // connection boundary, so a host that is merely slow cannot have its
+        // unanswered send read as absent and handed back while it still runs.
+        if (
+          !windowedLine ||
+          options.transportSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true
+        ) {
+          get().retryFromUser();
+          return;
+        }
+        requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
       },
       queueCancel: (queueItemId) => {
         const clientActionId = uuidv4();
@@ -10763,29 +11128,21 @@ export function createChatSessionStoreWithNotificationDependencies(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "queueReorder"),
+          pending: {
+            ...basicPending(clientActionId, "queueReorder"),
+            queueItemId,
+          },
           pendingUserMessage: null,
         });
       },
-      queueSteerNow: (queueItemId, newSettings) => {
-        const clientActionId = uuidv4();
-        const frame: ChatOwnerActionFrame = {
-          kind: "queueSteerNow",
-          hasBinaryPayload: false,
-          epicId: options.epicId,
-          chatId: options.chatId,
-          clientActionId,
-          queueItemId,
-          newSettings,
-        };
-        return sendAction({
+      queueSteerNow: (queueItemId, newSettings) =>
+        sendQueueSteerNowFrame({
           set,
           get,
-          frame,
-          pending: basicPending(clientActionId, "queueSteerNow"),
-          pendingUserMessage: null,
-        });
-      },
+          clientActionId: uuidv4(),
+          queueItemId,
+          newSettings,
+        }),
       queueAbortSteer: (queueItemId) => {
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
@@ -10800,7 +11157,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "queueAbortSteer"),
+          pending: {
+            ...basicPending(clientActionId, "queueAbortSteer"),
+            queueItemId,
+          },
           pendingUserMessage: null,
         });
       },
@@ -10843,26 +11203,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
       },
-      queueSettingsUpdate: (queueItemId, settings) => {
-        const clientActionId = uuidv4();
-        const frame: ChatOwnerActionFrame = {
-          kind: "queueSettingsUpdate",
-          hasBinaryPayload: false,
-          epicId: options.epicId,
-          chatId: options.chatId,
-          clientActionId,
-          queueItemId,
-          settings,
-          accountContext: useAccountContextStore.getState().accountContext,
-        };
-        return sendAction({
+      queueSettingsUpdate: (queueItemId, settings) =>
+        sendQueueSettingsUpdateFrame({
           set,
           get,
-          frame,
-          pending: basicPending(clientActionId, "queueSettingsUpdate"),
-          pendingUserMessage: null,
-        });
-      },
+          clientActionId: uuidv4(),
+          queueItemId,
+          settings,
+        }),
       updateActivePermissionMode: (permissionMode) => {
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
@@ -11421,6 +11769,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         hydrationRequestMarks.clear();
         forgetCatchUpBudget();
         clearResnapshotRequestTimer();
+        clearUnconfirmedSendTimers();
         clearStreamCompletionWatchdog();
         legacyTranscriptAdapter.detach("disposed");
         unsubscribeOwnedState();
@@ -11668,17 +12017,55 @@ function awardCancelRestorationSlot(
   current: FailedSendRestorationState | null,
   clientActionId: string,
   restore: ChatSendRestore,
-): {
+): HandBackSlotAward {
+  return awardHandBackSlot(
+    current,
+    clientActionId,
+    restore,
+    CANCELLED_AFTER_SETUP_FAILED_COPY,
+  );
+}
+
+/** The three ways one hand-back is told, depending on where the prompt lands. */
+interface HandBackCopy {
+  /** Said when the prompt lands in the composer. */
+  readonly reason: string;
+  /** Said when a newer draft kept it out - stops at the loss. */
+  readonly displacedReason: string;
+  /** Opens the last-copy statement - no trailing period. */
+  readonly circumstance: string;
+}
+
+interface HandBackSlotAward {
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly notice: ChatErrorNotice | null;
   readonly lastCopy: UnrecoverableSend | null;
-} {
+}
+
+const CANCELLED_AFTER_SETUP_FAILED_COPY: HandBackCopy = {
+  reason: CANCELLED_AFTER_SETUP_FAILED_REASON,
+  displacedReason: CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON,
+  circumstance: CANCELLED_AFTER_SETUP_FAILED_CIRCUMSTANCE,
+};
+
+/**
+ * The single-slot rule itself, for any prompt that is the user's own gesture
+ * coming back rather than a message the host's delivery view could name: a
+ * cancelled setup-failed row, and an edit to a queued prompt the host did not
+ * save. First writer wins, and the loser keeps its document.
+ */
+function awardHandBackSlot(
+  current: FailedSendRestorationState | null,
+  clientActionId: string,
+  restore: ChatSendRestore,
+  copy: HandBackCopy,
+): HandBackSlotAward {
   if (current !== null) {
     const lastCopy: UnrecoverableSend = {
       clientActionId,
       content: restore.content,
       browserAnnotations: restore.browserAnnotations,
-      circumstance: CANCELLED_AFTER_SETUP_FAILED_CIRCUMSTANCE,
+      circumstance: copy.circumstance,
       // This path composed no account and must not invent one: the cancel is
       // the user's own gesture on a row whose worktree never materialized, so
       // there is no surviving binding to go re-pick and no settings drift to
@@ -11702,8 +12089,8 @@ function awardCancelRestorationSlot(
       messageId: null,
       content: restore.content,
       browserAnnotations: restore.browserAnnotations,
-      reason: CANCELLED_AFTER_SETUP_FAILED_REASON,
-      displacedReason: CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON,
+      reason: copy.reason,
+      displacedReason: copy.displacedReason,
       // No notice of its own - this path is a direct answer to the user's own
       // Cancel, so `ackFailedSendRestoration` speaks once when the draft lands
       // rather than narrating a failure they just acted on.
@@ -11770,6 +12157,207 @@ function cancelRestorationSettlementForAck(
       awarded.lastCopy,
     ),
   };
+}
+
+/**
+ * Notice code for a queue-edit submission whose text the host saved and whose
+ * second frame - the settings, or the steer - it did not apply.
+ */
+export const QUEUE_EDIT_PARTIAL_NOTICE_CODE = "QUEUE_EDIT_PARTIAL";
+
+/** The host's refusal as a parenthesis, or nothing when a reconnect settled it. */
+function hostReasonClause(hostReason: string | null): string {
+  if (hostReason === null) return "";
+  return ` (${hostReason.replace(/\.$/, "")})`;
+}
+
+/**
+ * How a returned edit is told. With a host refusal it is a fact ("was not
+ * saved"); after a reconnect it is only what this client can know ("could not
+ * be confirmed"), because the ack that would have said died with the
+ * connection. Neither says what became of the ORIGINAL prompt: that is the
+ * host's to show, in the queue or the transcript, and it is never re-sent.
+ */
+function queueEditHandBackCopy(hostReason: string | null): HandBackCopy {
+  const what =
+    hostReason === null
+      ? "could not be confirmed after reconnecting"
+      : `was not saved${hostReasonClause(hostReason)}`;
+  return {
+    reason: `Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
+    displacedReason: `Your edit to a queued message ${what}.`,
+    circumstance: `An edit to a queued message ${what}`,
+  };
+}
+
+function queueEditPartialNotice(
+  settlement: Extract<QueueEditSettlement, { readonly kind: "partial" }>,
+): ChatErrorNotice {
+  return {
+    code: QUEUE_EDIT_PARTIAL_NOTICE_CODE,
+    message:
+      settlement.hostReason === null
+        ? "Text saved; settings/steering were not confirmed after reconnecting."
+        : `Text saved; settings/steering were not applied${hostReasonClause(settlement.hostReason)}.`,
+    severity: "warning",
+    clientActionId: settlement.clientActionId,
+  };
+}
+
+interface SnapshotHandBacks {
+  readonly slot: FailedSendRestorationState | null;
+  readonly notices: ReadonlyArray<ChatErrorNotice>;
+  readonly appendedLastCopyPrompts: ReadonlyArray<UnrecoverableSendPrompt>;
+}
+
+/**
+ * The reconnect's settled queue edits, folded onto the hand-backs the snapshot
+ * has already decided. Same contest and same rule as the ack path
+ * ({@link withQueueEditSettlements}); a separate function only because the
+ * snapshot accumulates notices and documents as deltas for its own patch.
+ */
+function foldQueueEditSettlementsForSnapshot(
+  carried: SnapshotHandBacks,
+  fold: QueueEditFold,
+): SnapshotHandBacks {
+  return fold.settlements.reduce<SnapshotHandBacks>((next, settlement) => {
+    if (settlement.kind === "partial") {
+      return {
+        ...next,
+        notices: [...next.notices, queueEditPartialNotice(settlement)],
+      };
+    }
+    const awarded = awardHandBackSlot(
+      next.slot,
+      settlement.clientActionId,
+      settlement.restore,
+      queueEditHandBackCopy(settlement.hostReason),
+    );
+    return {
+      slot: awarded.failedSendRestoration,
+      notices:
+        awarded.notice === null
+          ? next.notices
+          : [...next.notices, awarded.notice],
+      appendedLastCopyPrompts:
+        awarded.lastCopy === null
+          ? next.appendedLastCopyPrompts
+          : [
+              ...next.appendedLastCopyPrompts,
+              unrecoverableSendPrompt(awarded.lastCopy),
+            ],
+    };
+  }, carried);
+}
+
+type HandBackSurfaces = Pick<
+  ChatSessionState,
+  "failedSendRestoration" | "errorNotices" | "lastCopyPrompts"
+>;
+
+/**
+ * What settled queue-edit records owe the user, folded onto the three slices
+ * every hand-back shares.
+ *
+ * A returned edit joins the SAME single-slot contest a rejected send and a
+ * cancelled setup-failed row run: it takes the composer when the slot is free,
+ * and keeps its document as a last-copy prompt when it is not. So the composer
+ * handoff driver needs nothing new - an empty composer takes the text as an
+ * unsent draft, and a newer draft there keeps the composer while the edit is
+ * stated with its text quoted.
+ */
+function withQueueEditSettlements(
+  surfaces: HandBackSurfaces,
+  settlements: ReadonlyArray<QueueEditSettlement>,
+  delivered: ReadonlySet<string>,
+): HandBackSurfaces {
+  return settlements.reduce<HandBackSurfaces>((carried, settlement) => {
+    if (settlement.kind === "partial") {
+      return {
+        ...carried,
+        errorNotices: appendErrorNotice(
+          carried.errorNotices,
+          queueEditPartialNotice(settlement),
+          delivered,
+        ),
+      };
+    }
+    const awarded = awardHandBackSlot(
+      carried.failedSendRestoration,
+      settlement.clientActionId,
+      settlement.restore,
+      queueEditHandBackCopy(settlement.hostReason),
+    );
+    return {
+      failedSendRestoration: awarded.failedSendRestoration,
+      errorNotices:
+        awarded.notice === null
+          ? carried.errorNotices
+          : appendErrorNotice(carried.errorNotices, awarded.notice, delivered),
+      lastCopyPrompts: recordLastCopyPrompt(
+        carried.lastCopyPrompts,
+        awarded.lastCopy,
+      ),
+    };
+  }, surfaces);
+}
+
+/**
+ * One `actionAck` folded into the queue-edit records, with whatever that
+ * settles laid over `surfaces` - the slices the ack's own arm already decided.
+ */
+function queueEditSurfacesForAck(
+  state: ChatSessionState,
+  frame: ChatActionAckFrame,
+  surfaces: HandBackSurfaces,
+): HandBackSurfaces & Pick<ChatSessionState, "queueEditRecords"> {
+  const fold = foldQueueEditAck(state.queueEditRecords, {
+    clientActionId: frame.clientActionId,
+    status: frame.status,
+    reason: frame.reason ?? null,
+  });
+  return {
+    queueEditRecords: fold.records,
+    ...withQueueEditSettlements(
+      surfaces,
+      fold.settlements,
+      state.deliveredNoticeActionIds,
+    ),
+  };
+}
+
+/** No send has passed its display deadline - shared so the slice stays stable. */
+const EMPTY_UNCONFIRMED_SEND_ACTION_IDS: ReadonlySet<string> = new Set();
+
+/** The set minus one answered send; the same set when it never held it. */
+function withoutUnconfirmedSend(
+  ids: ReadonlySet<string>,
+  clientActionId: string,
+): ReadonlySet<string> {
+  if (!ids.has(clientActionId)) return ids;
+  const next = new Set(ids);
+  next.delete(clientActionId);
+  return next.size === 0 ? EMPTY_UNCONFIRMED_SEND_ACTION_IDS : next;
+}
+
+/**
+ * The sends still unanswered past the display deadline: the recorded ids that
+ * are STILL pending sends. Filtered on read, so every path that settles a send
+ * - ack, snapshot, turn-settled, withdrawal - clears its uncertainty without
+ * each having to remember this slice.
+ */
+export function unconfirmedSendActionIdsOf(
+  state: Pick<ChatSessionState, "unconfirmedSendActionIds" | "pendingActions">,
+): ReadonlySet<string> {
+  if (state.unconfirmedSendActionIds.size === 0) {
+    return EMPTY_UNCONFIRMED_SEND_ACTION_IDS;
+  }
+  const live = [...state.unconfirmedSendActionIds].filter(
+    (clientActionId) =>
+      pendingActionForId(state.pendingActions, clientActionId)?.action ===
+      "send",
+  );
+  return live.length === 0 ? EMPTY_UNCONFIRMED_SEND_ACTION_IDS : new Set(live);
 }
 
 /**

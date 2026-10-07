@@ -60,6 +60,10 @@ import {
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_STREAM_RECONNECTING_COPY,
+  ChatComposerDeliveryStatus,
+} from "@/components/chat/composer/chat-composer-delivery-status";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -155,7 +159,7 @@ function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
   if (access.readOnlyNotice !== null) return access.readOnlyNotice;
   if (access.isViewer) return "You have view-only access to this chat";
-  return "Reconnecting to the host — sending is paused";
+  return CHAT_STREAM_RECONNECTING_COPY;
 }
 
 export interface ChatLowerTurnState {
@@ -927,7 +931,9 @@ function LiveChatComposer(props: {
       workspaceAvailability={model.composer.workspaceAvailability}
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
-      topSlot={null}
+      // This chat's own stream and delivery state, held beside the composer
+      // for as long as it is true rather than behind a tooltip.
+      topSlot={<ChatComposerDeliveryStatus />}
       suggestedPrompt={model.composer.suggestedPrompt}
     />
   );
