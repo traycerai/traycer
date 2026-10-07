@@ -1,5 +1,5 @@
 import { BrowserDebugSession } from "../debug/browser-debug-session";
-import { isEntryViewed, type BrowserViewEntry } from "./browser-view-entry";
+import type { BrowserViewEntry } from "./browser-view-entry";
 
 interface BrowserViewDebugSessionsOptions {
   /**
@@ -12,6 +12,8 @@ interface BrowserViewDebugSessionsOptions {
     webContentsId: number,
     reason: string,
   ) => void;
+  /** Whether a person is in front of the entry's tab right now. */
+  readonly isOnScreen: (entry: BrowserViewEntry) => boolean;
 }
 
 /**
@@ -27,8 +29,11 @@ export class BrowserViewDebugSessions {
     reason: string,
   ) => void;
 
+  private readonly isOnScreen: (entry: BrowserViewEntry) => boolean;
+
   constructor(options: BrowserViewDebugSessionsOptions) {
     this.onDetached = options.onDetached;
+    this.isOnScreen = options.isOnScreen;
   }
 
   ensure(entry: BrowserViewEntry): BrowserDebugSession {
@@ -39,7 +44,7 @@ export class BrowserViewDebugSessions {
       onDetached: (reason) => {
         this.onDetached(entry, webContents.id, reason);
       },
-      interceptFileChooser: () => !isEntryViewed(entry),
+      interceptFileChooser: () => !this.isOnScreen(entry),
     });
     entry.debugSession = session;
     return session;

@@ -6,8 +6,6 @@ import {
   type WebPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { rename, rm } from "node:fs/promises";
 import type {
   BrowserCookieKey,
   BrowserPrimaryProfileDelta,
@@ -24,6 +22,7 @@ import {
   type BrowserDownloadWebContents,
   type BrowserSessionDownloadChange,
 } from "./browser-download";
+import { nodeBrowserDownloadFiles } from "./browser-download-files";
 import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
 import { releaseHeadlessOriginCookieKeys } from "./storage/browser-forget-ledger";
 import {
@@ -167,17 +166,7 @@ const browserCertificateListeners = new Set<
 let browserViewOnScreenProbe: (webContentsId: number) => boolean = () => false;
 const browserViewDownloads = new BrowserViewDownloads({
   downloadsDirectory: () => app.getPath("downloads"),
-  files: {
-    exists: (path) => existsSync(path),
-    ensureDirectory: (path) => {
-      mkdirSync(path, { recursive: true });
-    },
-    rename: (from, to) => rename(from, to),
-    remove: (path) => rm(path, { force: true }),
-    removeSync: (path) => {
-      rmSync(path, { force: true });
-    },
-  },
+  files: nodeBrowserDownloadFiles,
   confirm: confirmDestructiveInMain,
   isOnScreen: (webContentsId) => browserViewOnScreenProbe(webContentsId),
   emit: (change) => {

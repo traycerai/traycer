@@ -1,5 +1,11 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Certificate, CertificatePrincipal, Cookie } from "electron";
@@ -702,15 +708,26 @@ describe("browser view session policy", () => {
     listener({}, completedItem, webContents);
 
     const expectedPath = join(electronState.downloadsDirectory, "file.txt");
-    expect(completedItem.savePath).toBe(expectedPath);
+    // Held under a name of the download's own until it completes.
+    expect(dirname(completedItem.savePath)).toBe(
+      electronState.downloadsDirectory,
+    );
+    expect(basename(completedItem.savePath)).toMatch(
+      /^Unconfirmed .*\.traycer-download$/,
+    );
     expect(electronState.messageBoxCalls).toBe(0);
     expect(changes.map((change) => change.state)).toEqual(["progressing"]);
     completedItem.emitUpdated("progressing", 50);
-    completedItem.emitDone("completed", 100);
-    expect(changes.at(-2)).toMatchObject({
+    expect(changes.at(-1)).toMatchObject({
       state: "progressing",
       receivedBytes: 50,
       canCancel: true,
+      savePath: null,
+    });
+    writeFileSync(completedItem.savePath, "file bytes");
+    completedItem.emitDone("completed", 100);
+    await vi.waitFor(() => {
+      expect(changes.at(-1)?.state).toBe("completed");
     });
     expect(changes.at(-1)).toMatchObject({
       state: "completed",
@@ -718,6 +735,8 @@ describe("browser view session policy", () => {
       canCancel: false,
       savePath: expectedPath,
     });
+    expect(readFileSync(expectedPath, "utf8")).toBe("file bytes");
+    expect(existsSync(completedItem.savePath)).toBe(false);
 
     const cancellableItem = new FakeDownloadItem(
       "https://app.test/large.bin",
@@ -734,11 +753,13 @@ describe("browser view session policy", () => {
 
     expect(mod.cancelBrowserViewDownload(cancellableDownloadId)).toBe(true);
     expect(cancellableItem.cancelCalls).toBe(1);
+    writeFileSync(cancellableItem.savePath, "partial");
     cancellableItem.emitDone("cancelled", 25);
-    expect(changes.at(-1)).toMatchObject({
-      state: "cancelled",
-      canCancel: false,
+    await vi.waitFor(() => {
+      expect(changes.at(-1)?.state).toBe("cancelled");
     });
+    expect(changes.at(-1)).toMatchObject({ canCancel: false });
+    expect(existsSync(cancellableItem.savePath)).toBe(false);
 
     offDownloadChange();
   });

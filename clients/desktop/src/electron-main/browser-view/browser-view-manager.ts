@@ -93,6 +93,14 @@ interface BrowserViewManagerOptions {
     windowId: string,
   ) => void;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
+  /**
+   * Whether a host window is actually in front of a person: open, not hidden
+   * to the tray and not minimized. A tile in a window that is not shown keeps
+   * its surface and stays `viewed`, and nobody is looking at it.
+   */
+  readonly isWindowShown: (windowId: string) => boolean;
+  /** Fires on every edge `isWindowShown` can change on. */
+  readonly onWindowShownChange: (listener: () => void) => () => void;
   readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
   readonly createPopupWindow: (input: {
     readonly windowOptions: BrowserWindowConstructorOptions;
@@ -184,6 +192,8 @@ export class BrowserViewManager {
   private readonly releasedIsolatedSessionKeys = new Set<string>();
   private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
+  private readonly offWindowShownChange: () => void;
+  private readonly isWindowShown: (windowId: string) => boolean;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
@@ -213,10 +223,12 @@ export class BrowserViewManager {
     this.releaseRendererGuest = options.releaseRendererGuest;
     this.releaseSessionStorage = options.releaseSessionStorage;
     this.localHostId = options.localHostId;
+    this.isWindowShown = options.isWindowShown;
     this.debugSessions = new BrowserViewDebugSessions({
       onDetached: (entry, webContentsId, reason) => {
         this.handleDebugSessionDetached(entry, webContentsId, reason);
       },
+      isOnScreen: (entry) => this.isEntryOnScreen(entry),
     });
     this.annotations = new BrowserViewAnnotationHost({
       entries: this.entries,
@@ -342,6 +354,13 @@ export class BrowserViewManager {
     });
     this.offWindowChange = options.onWindowChange(() => {
       this.windows.reconcileBoundWindows();
+    });
+    // A window hidden to the tray or minimized changes no entry, so nothing
+    // reaches `emitStatus`: the chooser interception follows the window here.
+    this.offWindowShownChange = options.onWindowShownChange(() => {
+      for (const entry of this.entries.guestValues()) {
+        entry.debugSession?.syncFileChooserInterception();
+      }
     });
     this.offDownloadChange = options.onDownloadChange((change) => {
       this.handleDownloadChange(change);
@@ -619,6 +638,7 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
+    this.offWindowShownChange();
     this.windows.dispose();
     this.offDownloadChange();
     this.offCertificateError();
@@ -953,13 +973,28 @@ export class BrowserViewManager {
 
   /**
    * Whether a person can see the tab this WebContents belongs to: a guest a
-   * tile is showing, or a popup window. Anything else - a guest kept with no
-   * tile, a WebContents this manager never knew - is not on screen.
+   * tile is showing in a window that is itself shown, or a popup window.
+   * Anything else - a guest kept with no tile, a tile in a window hidden to
+   * the tray, a WebContents this manager never knew - is not on screen.
    */
   isWebContentsOnScreen(webContentsId: number): boolean {
     const entry = this.findEntryByWebContentsId(webContentsId);
-    if (entry !== null) return isEntryViewed(entry);
+    if (entry !== null) return this.isEntryOnScreen(entry);
     return this.popups.ownsOpenWindow(webContentsId);
+  }
+
+  /**
+   * The reading behind the file-chooser interception and the dangerous
+   * download question: is a person in front of this tab right now. Narrower
+   * than `viewed`, which is the host's record that a tile holds the tab and
+   * says nothing about the window around it.
+   */
+  private isEntryOnScreen(entry: BrowserViewEntry): boolean {
+    return (
+      entry.surface !== null &&
+      isEntryViewed(entry) &&
+      this.isWindowShown(entry.surface.windowId)
+    );
   }
 
   private findEntryByWebContentsId(
@@ -1017,8 +1052,9 @@ export class BrowserViewManager {
 
   private emitStatus(entry: BrowserViewEntry): void {
     // Every edge of `viewed` ends in this call, so the chooser interception
-    // that follows the same reading is brought in line here, ahead of the
-    // returns below: those suppress a report, not the reading.
+    // that reads it is brought in line here, ahead of the returns below:
+    // those suppress a report, not the reading. The window's own edges arrive
+    // through `onWindowShownChange`.
     entry.debugSession?.syncFileChooserInterception();
     if (entry.internalNavigation) return;
     const webContents = this.readLiveWebContents(entry);

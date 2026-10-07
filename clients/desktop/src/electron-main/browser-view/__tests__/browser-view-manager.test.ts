@@ -671,6 +671,8 @@ interface Harness {
   emitDownload(change: BrowserSessionDownloadChange): void;
   emitCertificateError(change: BrowserSessionCertificateErrorChange): void;
   emitWindowChange(): void;
+  /** Shows or hides a host window and fires the shown-change listeners. */
+  setWindowShown(windowId: string, shown: boolean): void;
   /** Hold `onAttached` until the test resolves the latch. */
   holdNextGuestAttach(): PromiseWithResolvers<void>;
   /** Hold `seedStorageState` until the test resolves the latch. */
@@ -755,6 +757,8 @@ function createHarnessWithOptions(
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const createdPopupWindows: CreatedPopupWindow[] = [];
   const windowListeners = new Set<() => void>();
+  const hiddenWindowIds = new Set<string>();
+  const windowShownListeners = new Set<() => void>();
   const downloadListeners = new Set<
     (change: BrowserSessionDownloadChange) => void
   >();
@@ -836,6 +840,13 @@ function createHarnessWithOptions(
     attachRendererGuest,
     releaseRendererGuest,
     getWindow: (windowId) => windows.get(windowId) ?? null,
+    isWindowShown: (windowId) => !hiddenWindowIds.has(windowId),
+    onWindowShownChange: (listener) => {
+      windowShownListeners.add(listener);
+      return () => {
+        windowShownListeners.delete(listener);
+      };
+    },
     localHostId: () =>
       harnessOptions?.localHostId === undefined
         ? "host-1"
@@ -960,6 +971,11 @@ function createHarnessWithOptions(
     },
     emitWindowChange: () => {
       for (const listener of windowListeners) listener();
+    },
+    setWindowShown: (windowId, shown) => {
+      if (shown) hiddenWindowIds.delete(windowId);
+      else hiddenWindowIds.add(windowId);
+      for (const listener of windowShownListeners) listener();
     },
     holdNextGuestAttach: () => {
       const latch = Promise.withResolvers<void>();
@@ -1365,6 +1381,66 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ]);
     expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
     expect(harness.manager.isWebContentsOnScreen(view.id + 9999)).toBe(false);
+  });
+
+  it("treats a viewed tile in a window that is not shown as off screen", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    const interceptions = () =>
+      view.debugger.commands
+        .filter(({ method }) => method === "Page.setInterceptFileChooserDialog")
+        .map(({ params }) => params);
+
+    harness.setWindowShown("window-1", false);
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile" },
+      }),
+    ).toBe(true);
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+
+    // The tile holds the tab, so the host-facing report says viewed; the
+    // window around it is hidden, so nobody can see it.
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+    expect(interceptions()).toEqual([{ enabled: true }]);
+
+    harness.setWindowShown("window-1", true);
+    await Promise.resolve();
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(true);
+    expect(interceptions()).toEqual([{ enabled: true }, { enabled: false }]);
+
+    harness.setWindowShown("window-1", false);
+    await Promise.resolve();
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+    expect(interceptions()).toEqual([
+      { enabled: true },
+      { enabled: false },
+      { enabled: true },
+    ]);
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
   });
 
   it("sends nothing on an unleased tab's navigation, and recovers a leased one", async () => {

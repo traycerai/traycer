@@ -65,7 +65,8 @@ function parseTable(raw: string): ParsedTable {
   const dangerous: string[] = [];
   for (const block of blocks) {
     const extension = /extension:\s*"([^"]+)"/.exec(block)?.[1];
-    if (extension === undefined) throw new Error("file_types without extension");
+    if (extension === undefined)
+      throw new Error("file_types without extension");
     const isDangerous = blocksNamed(block, "platform_settings").some(
       (setting) => {
         const platform =
@@ -131,7 +132,14 @@ describe("Chromium download file types", () => {
   });
 
   it("includes the types the hand list missed and excludes plain data", () => {
-    for (const extension of [".pif", ".scf", ".lnk", ".msix", ".deb", ".desktop"]) {
+    for (const extension of [
+      ".pif",
+      ".scf",
+      ".lnk",
+      ".msix",
+      ".deb",
+      ".desktop",
+    ]) {
       expect(CHROMIUM_DANGEROUS_DOWNLOAD_EXTENSIONS.has(extension)).toBe(true);
     }
     for (const extension of [".txt", ".pdf", ".zip", ".png", ".csv"]) {

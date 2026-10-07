@@ -13,6 +13,13 @@ vi.mock("../../app/logger", () => ({
   describeLogError: (err: unknown) => String(err),
 }));
 
+/** Lets every in-flight command settle and the helper apply what moved. */
+async function settle(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 const INTERCEPT = "Page.setInterceptFileChooserDialog";
 
 function interceptCommands(
@@ -112,16 +119,19 @@ describe("BrowserDebugSession file chooser interception", () => {
 
     reading.value = false;
     harness.session.syncFileChooserInterception();
+    await settle();
     expect(interceptCommands(harness).map((c) => c.params)).toEqual([
       { enabled: true },
       { enabled: false },
     ]);
 
     harness.session.syncFileChooserInterception();
+    await settle();
     expect(interceptCommands(harness)).toHaveLength(2);
 
     reading.value = true;
     harness.session.syncFileChooserInterception();
+    await settle();
     expect(interceptCommands(harness).map((c) => c.params)).toEqual([
       { enabled: true },
       { enabled: false },
@@ -239,5 +249,82 @@ describe("BrowserDebugSession file chooser interception", () => {
     expect(commandsForSession(harness, "child-1")).toEqual([
       { method: INTERCEPT, params: { enabled: true }, sessionId: "child-1" },
     ]);
+  });
+  it("keeps one command in flight per child session and ends on the latest reading", async () => {
+    const reading = { value: true };
+    const harness = createHarnessWith({
+      interceptFileChooser: () => reading.value,
+    });
+    const browserDebugger = harness.webContents.debugger;
+    await harness.session.acquire().ready();
+    await recordRootFrame(harness);
+    // Hold the child's enable-batch interception command in flight.
+    browserDebugger.deferResponse(INTERCEPT, "child-1");
+    const reached = reachChild(harness);
+    for (let turn = 0; turn < 50; turn += 1) {
+      if (commandsForSession(harness, "child-1").length > 0) break;
+      await settle();
+    }
+    expect(commandsForSession(harness, "child-1").map((c) => c.params)).toEqual(
+      [{ enabled: true }],
+    );
+
+    reading.value = false;
+    harness.session.syncFileChooserInterception();
+    harness.session.syncFileChooserInterception();
+    await settle();
+    // The first is still unanswered: nothing overlaps it.
+    expect(commandsForSession(harness, "child-1").map((c) => c.params)).toEqual(
+      [{ enabled: true }],
+    );
+
+    browserDebugger.resolveResponse(INTERCEPT, "child-1", {});
+    await reached;
+    await settle();
+
+    expect(commandsForSession(harness, "child-1").map((c) => c.params)).toEqual(
+      [{ enabled: true }, { enabled: false }],
+    );
+  });
+
+  it("hands a debugger it did not attach back with interception off, and does not detach it", async () => {
+    const reading = { value: true };
+    const harness = createHarnessWith({
+      interceptFileChooser: () => reading.value,
+    });
+    const browserDebugger = harness.webContents.debugger;
+    browserDebugger.attached = true;
+
+    const first = harness.session.acquire();
+    await first.ready();
+    expect(interceptCommands(harness).map((c) => c.params)).toEqual([
+      { enabled: true },
+    ]);
+
+    first.release();
+    await settle();
+    expect(interceptCommands(harness).map((c) => c.params)).toEqual([
+      { enabled: true },
+      { enabled: false },
+    ]);
+    expect(browserDebugger.attached).toBe(true);
+
+    // An on-screen lease holds a debugger that already intercepts nothing.
+    reading.value = false;
+    const second = harness.session.acquire();
+    await second.ready();
+    second.release();
+    await settle();
+    expect(interceptCommands(harness)).toHaveLength(2);
+
+    reading.value = true;
+    const third = harness.session.acquire();
+    await third.ready();
+    expect(interceptCommands(harness).map((c) => c.params)).toEqual([
+      { enabled: true },
+      { enabled: false },
+      { enabled: true },
+    ]);
+    expect(browserDebugger.attached).toBe(true);
   });
 });

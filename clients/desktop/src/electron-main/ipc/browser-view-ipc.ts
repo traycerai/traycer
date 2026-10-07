@@ -361,6 +361,25 @@ export function registerBrowserViewIpc(
         bridge.windowRegistry.off("change", listener);
       };
     },
+    isWindowShown: (windowId) => {
+      const window = bridge.windowRegistry.getRecordById(windowId)?.window;
+      return (
+        isElectronBrowserWindow(window) &&
+        !window.isDestroyed() &&
+        window.isVisible() &&
+        !window.isMinimized()
+      );
+    },
+    // The registry reports show and hide as `change`, minimize and restore as
+    // `geometry`.
+    onWindowShownChange: (listener) => {
+      bridge.windowRegistry.on("change", listener);
+      bridge.windowRegistry.on("geometry", listener);
+      return () => {
+        bridge.windowRegistry.off("change", listener);
+        bridge.windowRegistry.off("geometry", listener);
+      };
+    },
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
       // The renderer's tab bindings die with it, so the host-side rebind is

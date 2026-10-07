@@ -13,9 +13,10 @@ import { CHROMIUM_DANGEROUS_DOWNLOAD_EXTENSIONS } from "./chromium-download-file
  * dialog left open for 60 s dropped every task's native browser on the machine
  * (traycerai/traycer#2420), and an agent cannot answer a native dialog at all.
  * So a download is decided in the `will-download` turn from facts main already
- * has - the OS Downloads folder and a name made unique - and the one question
- * that needs a person is asked asynchronously, and only where a person is
- * looking.
+ * has - the OS Downloads folder and the download's own id - with no question
+ * to a person and none to the disk. The one question that needs a person is
+ * asked asynchronously, and only where a person is looking; the file's own
+ * name is taken asynchronously too, once the file is complete.
  */
 
 export interface BrowserDownloadItem {
@@ -57,11 +58,20 @@ export interface BrowserSessionDownloadChange {
   readonly canCancel: boolean;
 }
 
-/** The filesystem the download decisions touch, injected so suites need none. */
+/**
+ * The filesystem the download decisions touch, injected so suites need none.
+ * Nothing here is synchronous except the removal at quit: the `will-download`
+ * turn itself touches no file.
+ */
 export interface BrowserDownloadFiles {
-  exists(path: string): boolean;
-  ensureDirectory(path: string): void;
-  rename(from: string, to: string): Promise<void>;
+  /**
+   * Moves `from` to `to` only if nothing is at `to`. `exists` leaves both
+   * files as they were; it is the filesystem's own answer, so a file another
+   * process created a moment ago, or a name the volume treats as the same
+   * one (case, or a composed against a decomposed character), is never
+   * replaced.
+   */
+  publish(from: string, to: string): Promise<"published" | "exists">;
   remove(path: string): Promise<void>;
   removeSync(path: string): void;
 }
@@ -78,31 +88,41 @@ export interface BrowserViewDownloadsOptions {
 }
 
 /**
- * What a dangerous download is saved as until its question is answered.
+ * What every download is saved as until it is published under its own name.
  *
- * Electron writes a download straight to its save path, and `pause()` in the
- * `will-download` turn only stops reading the network: a body that has already
- * arrived is written out and the item completes regardless (measured on
- * Electron 42.11.10: 1 KB, 200 KB and 3 MB bodies all complete on disk while
- * `isPaused()` is true, and `cancel()` afterwards removes nothing). So the file
- * waits under a name no OS hands to a runner and that never carries the real
+ * Two facts make this the only name the `will-download` turn can hand out.
+ * Choosing the real name there means asking the disk which names are taken,
+ * and a synchronous question to a Downloads folder on a stalled network share
+ * holds main's event loop exactly as the dialog did; the held name is built
+ * from the download's own id, so nothing is asked. And Electron writes a
+ * download straight to its save path: `pause()` in the turn only stops reading
+ * the network, a body that has already arrived is written out and the item
+ * completes regardless (measured on Electron 42.11.10: 1 KB, 200 KB and 3 MB
+ * bodies all complete on disk while `isPaused()` is true, and `cancel()`
+ * afterwards removes nothing). So a file whose question is still open waits
+ * under a name no OS hands to a runner and that never carries the real
  * extension, the pattern Chromium's own `Unconfirmed NNNN.crdownload` uses.
+ *
+ * Chromium creates a missing save directory itself, off the main thread
+ * (measured on the same build, two missing levels), so the folder is not
+ * prepared here either.
  */
 export const HELD_DOWNLOAD_EXTENSION = ".traycer-download";
 
 const MAX_NUMBERED_DOWNLOAD_NAMES = 1000;
 
 /**
- * The person's decision about a held download. The dialog answers ONCE
- * (`pending` to `save` or `cancel`); a Cancel can still arrive after "Save
- * anyway" while the transfer runs, from the tile's own Cancel, and `cancel` is
- * final: nothing turns it back into a save.
+ * Whether the file may be published. A plain download starts at `save`. A
+ * dangerous one starts at `pending` and its dialog answers ONCE (`save` or
+ * `cancel`); a Cancel can still arrive after "Save anyway" while the transfer
+ * runs, from the tile's own Cancel, and `cancel` is final: nothing turns it
+ * back into a save.
  */
 type HeldAnswer = "pending" | "save" | "cancel";
 
 /**
  * What has been done with the held file. `publishing` and `removing` are the
- * rename and the unlink in flight; once either starts, no later event acts on
+ * move and the unlink in flight; once either starts, no later event acts on
  * the file again.
  */
 type HeldSettlement = "open" | "publishing" | "removing";
@@ -140,11 +160,6 @@ export class BrowserViewDownloads {
   private readonly emit: (change: BrowserSessionDownloadChange) => void;
   private readonly cancelById = new Map<string, () => void>();
   private readonly heldById = new Map<string, HeldDownload>();
-  /**
-   * Save paths chosen but possibly not on disk yet, so two downloads of one
-   * name started together cannot both be handed `file.txt`.
-   */
-  private readonly reservedPaths = new Set<string>();
 
   constructor(options: BrowserViewDownloadsOptions) {
     this.downloadsDirectory = options.downloadsDirectory;
@@ -157,7 +172,8 @@ export class BrowserViewDownloads {
   /**
    * The `will-download` listener. Everything the item needs from this turn -
    * its save path, or its cancellation - is settled before it returns, which
-   * is all Electron's same-turn rule for `setSavePath` requires.
+   * is all Electron's same-turn rule for `setSavePath` requires, and none of
+   * it waits on a person or on a disk.
    */
   handle(
     item: BrowserDownloadItem,
@@ -177,11 +193,10 @@ export class BrowserViewDownloads {
       this.emitChange(identity, snapshotOf(item), "cancelled", null, false);
       return;
     }
-    if (identity.dangerType === null) {
-      this.saveDirectly(item, webContents, identity, directory, filename);
-      return;
-    }
-    if (!this.isOnScreen(identity.webContentsId)) {
+    if (
+      identity.dangerType !== null &&
+      !this.isOnScreen(identity.webContentsId)
+    ) {
       // Nobody can answer, and an unattended agent must not save a file that
       // can run code.
       item.cancel();
@@ -193,7 +208,7 @@ export class BrowserViewDownloads {
       this.emitChange(identity, snapshotOf(item), "cancelled", null, false);
       return;
     }
-    this.holdForAnswer(item, webContents, identity, directory, filename);
+    this.hold(item, webContents, identity, directory, filename);
   }
 
   cancel(downloadId: string): boolean {
@@ -205,10 +220,11 @@ export class BrowserViewDownloads {
 
   /**
    * The app is going away: every download still under its held name is
-   * discarded as if its question had been answered Cancel. Synchronous,
-   * because nothing awaited here would run before the process exits - which
-   * is also why an unlink that is already in flight is done again here rather
-   * than trusted to finish. Only a rename the person asked for is left alone.
+   * discarded - an unfinished transfer, and a question nobody answered, which
+   * is a Cancel. Synchronous, because nothing awaited here would run before
+   * the process exits - which is also why an unlink that is already in flight
+   * is done again here rather than trusted to finish. Only a move to the
+   * file's own name that is already under way is left alone.
    */
   discardHeld(): void {
     for (const [downloadId, held] of this.heldById) {
@@ -228,73 +244,28 @@ export class BrowserViewDownloads {
     this.heldById.clear();
   }
 
-  private saveDirectly(
-    item: BrowserDownloadItem,
-    webContents: BrowserDownloadWebContents,
-    identity: DownloadIdentity,
-    directory: string,
-    filename: string,
-  ): void {
-    const savePath = this.reserveUniquePath(directory, filename);
-    item.setSavePath(savePath);
-    this.cancelById.set(identity.downloadId, () => {
-      item.cancel();
-    });
-    log.info("[browser-view] download accepted", {
-      url: item.getURL(),
-      filename,
-      mimeType: item.getMimeType(),
-      totalBytes: item.getTotalBytes(),
-      initiatedBy: webContents.getURL(),
-    });
-    this.emitChange(identity, snapshotOf(item), "progressing", savePath, true);
-    item.on("updated", (_updatedEvent, state) => {
-      this.emitChange(
-        identity,
-        snapshotOf(item),
-        state === "interrupted" ? "interrupted" : "progressing",
-        savePath,
-        true,
-      );
-    });
-    item.on("done", (_doneEvent, state) => {
-      this.cancelById.delete(identity.downloadId);
-      this.reservedPaths.delete(reservationKey(savePath));
-      log.info("[browser-view] download finished", {
-        url: item.getURL(),
-        state,
-        receivedBytes: item.getReceivedBytes(),
-      });
-      this.emitChange(
-        identity,
-        snapshotOf(item),
-        terminalDownloadState(state),
-        savePath,
-        false,
-      );
-    });
-  }
-
   /**
-   * A dangerous type on a tab a person is looking at: saved under the held
-   * name while the question is open, then renamed or removed by the answer.
-   * A question that is never answered - the dialog dismissed, the tab gone,
-   * the app quitting - is a Cancel.
+   * Saves under the held name, then publishes or removes. A plain file is
+   * published as soon as it completes. A dangerous type on a tab a person is
+   * looking at waits for the answer as well; a question that is never
+   * answered - the dialog dismissed, the tab gone, the app quitting - is a
+   * Cancel.
    */
-  private holdForAnswer(
+  private hold(
     item: BrowserDownloadItem,
     webContents: BrowserDownloadWebContents,
     identity: DownloadIdentity,
     directory: string,
     filename: string,
   ): void {
+    const asks = identity.dangerType !== null;
     const held: HeldDownload = {
       item,
       heldPath: join(
         directory,
         `Unconfirmed ${identity.downloadId}${HELD_DOWNLOAD_EXTENSION}`,
       ),
-      answer: "pending",
+      answer: asks ? "pending" : "save",
       done: null,
       settlement: "open",
     };
@@ -304,8 +275,9 @@ export class BrowserViewDownloads {
     const settle = (): void => {
       void this.settleHeld(identity, held, directory, filename, latest);
     };
-    // Allowed until the file is being renamed or removed, whatever the dialog
-    // said: a download that still offers Cancel must still be cancellable.
+    // Allowed until the file is being published or removed, whatever the
+    // dialog said: a download that still offers Cancel must still be
+    // cancellable.
     const cancelHeld = (): void => {
       if (held.answer === "cancel" || held.settlement !== "open") return;
       held.answer = "cancel";
@@ -314,22 +286,23 @@ export class BrowserViewDownloads {
       if (held.done === null) item.cancel();
       settle();
     };
-    // The dialog's answer, taken once. A late "Save anyway" after any Cancel
-    // changes nothing.
-    const answerQuestion = (confirmed: boolean): void => {
-      if (held.answer !== "pending") return;
-      if (!confirmed) {
-        cancelHeld();
-        return;
-      }
-      held.answer = "save";
-      if (held.done === null) {
-        this.emitChange(identity, latest, "progressing", null, true);
-      }
-      settle();
-    };
     this.cancelById.set(identity.downloadId, cancelHeld);
-    this.emitChange(identity, latest, "prompting", null, true);
+    if (!asks) {
+      log.info("[browser-view] download accepted", {
+        url: latest.url,
+        filename,
+        mimeType: latest.mimeType,
+        totalBytes: latest.totalBytes,
+        initiatedBy: webContents.getURL(),
+      });
+    }
+    this.emitChange(
+      identity,
+      latest,
+      asks ? "prompting" : "progressing",
+      null,
+      true,
+    );
     item.on("updated", (_updatedEvent, state) => {
       latest = snapshotOf(item);
       if (held.answer === "cancel") return;
@@ -350,6 +323,21 @@ export class BrowserViewDownloads {
       held.done = state;
       settle();
     });
+    if (!asks) return;
+    // The dialog's answer, taken once. A late "Save anyway" after any Cancel
+    // changes nothing.
+    const answerQuestion = (confirmed: boolean): void => {
+      if (held.answer !== "pending") return;
+      if (!confirmed) {
+        cancelHeld();
+        return;
+      }
+      held.answer = "save";
+      if (held.done === null) {
+        this.emitChange(identity, latest, "progressing", null, true);
+      }
+      settle();
+    };
     // An unanswered question dies with its tab. A download the person already
     // confirmed carries on, as any other download outlives its tab.
     webContents.once("destroyed", () => {
@@ -370,8 +358,8 @@ export class BrowserViewDownloads {
 
   /**
    * Runs once, when BOTH the answer and the item's terminal state are known.
-   * The rename waits for `completed` so a half-written file never appears
-   * under a name that can run.
+   * The file takes its own name only after `completed`, so a half-written
+   * file never appears under a name that can run.
    */
   private async settleHeld(
     identity: DownloadIdentity,
@@ -390,9 +378,8 @@ export class BrowserViewDownloads {
     this.cancelById.delete(identity.downloadId);
     if (held.answer === "save" && held.done === "completed") {
       held.settlement = "publishing";
-      const savePath = this.reserveUniquePath(directory, filename);
       try {
-        await this.files.rename(held.heldPath, savePath);
+        const savePath = await this.publish(held.heldPath, directory, filename);
         log.info("[browser-view] download finished", {
           url: snapshot.url,
           state: held.done,
@@ -400,14 +387,13 @@ export class BrowserViewDownloads {
         });
         this.emitChange(identity, snapshot, "completed", savePath, false);
       } catch (error) {
-        log.warn("[browser-view] confirmed download could not be saved", {
+        log.warn("[browser-view] completed download could not be saved", {
           error: describeLogError(error),
         });
         held.settlement = "removing";
         await this.removeHeld(held);
         this.emitChange(identity, snapshot, "interrupted", null, false);
       } finally {
-        this.reservedPaths.delete(reservationKey(savePath));
         this.heldById.delete(identity.downloadId);
       }
       return;
@@ -415,6 +401,11 @@ export class BrowserViewDownloads {
     held.settlement = "removing";
     await this.removeHeld(held);
     this.heldById.delete(identity.downloadId);
+    log.info("[browser-view] download finished", {
+      url: snapshot.url,
+      state: held.answer === "cancel" ? "cancelled" : held.done,
+      receivedBytes: snapshot.receivedBytes,
+    });
     this.emitChange(
       identity,
       snapshot,
@@ -422,6 +413,36 @@ export class BrowserViewDownloads {
       null,
       false,
     );
+  }
+
+  /**
+   * `name.ext`, then `name (1).ext`, `name (2).ext`, ... and never an
+   * overwrite: each candidate is claimed by the move itself, so there is no
+   * gap between finding a name free and taking it for another download, or
+   * another program, to land in.
+   */
+  private async publish(
+    heldPath: string,
+    directory: string,
+    filename: string,
+  ): Promise<string> {
+    const extension = extname(filename);
+    const stem =
+      extension === "" ? filename : filename.slice(0, -extension.length);
+    for (let index = 0; index < MAX_NUMBERED_DOWNLOAD_NAMES; index += 1) {
+      const candidate = join(
+        directory,
+        index === 0 ? filename : `${stem} (${index})${extension}`,
+      );
+      if ((await this.files.publish(heldPath, candidate)) === "published") {
+        return candidate;
+      }
+    }
+    const fallback = join(directory, `${stem} (${randomUUID()})${extension}`);
+    if ((await this.files.publish(heldPath, fallback)) === "published") {
+      return fallback;
+    }
+    throw new Error("No free name for the download in the Downloads folder");
   }
 
   private async removeHeld(held: HeldDownload): Promise<void> {
@@ -436,41 +457,13 @@ export class BrowserViewDownloads {
 
   private readDownloadsDirectory(): string | null {
     try {
-      const directory = this.downloadsDirectory();
-      this.files.ensureDirectory(directory);
-      return directory;
+      return this.downloadsDirectory();
     } catch (error) {
       log.warn("[browser-view] download refused: no Downloads folder", {
         error: describeLogError(error),
       });
       return null;
     }
-  }
-
-  /** `name.ext`, then `name (1).ext`, `name (2).ext`, ... never an overwrite. */
-  private reserveUniquePath(directory: string, filename: string): string {
-    const extension = extname(filename);
-    const stem =
-      extension === "" ? filename : filename.slice(0, -extension.length);
-    for (let index = 0; index < MAX_NUMBERED_DOWNLOAD_NAMES; index += 1) {
-      const candidate = join(
-        directory,
-        index === 0 ? filename : `${stem} (${index})${extension}`,
-      );
-      if (this.reserve(candidate)) return candidate;
-    }
-    const fallback = join(directory, `${stem} (${randomUUID()})${extension}`);
-    this.reservedPaths.add(reservationKey(fallback));
-    return fallback;
-  }
-
-  private reserve(candidate: string): boolean {
-    const key = reservationKey(candidate);
-    if (this.reservedPaths.has(key) || this.files.exists(candidate)) {
-      return false;
-    }
-    this.reservedPaths.add(key);
-    return true;
   }
 
   private emitChange(
@@ -515,16 +508,6 @@ function safeDownloadFilename(suggested: string): string {
   const name = basename(suggested.replaceAll("\\", "/")).trim();
   if (name === "" || name === "." || name === "..") return "download";
   return name;
-}
-
-/**
- * Two names the filesystem may treat as one must reserve as one. The default
- * macOS and Windows volumes do not tell case apart, and macOS does not tell a
- * composed character from its decomposed spelling either (`é` against `e`
- * plus a combining accent).
- */
-function reservationKey(path: string): string {
-  return path.normalize("NFC").toLowerCase();
 }
 
 function terminalDownloadState(state: string): BrowserViewDownloadState {

@@ -11,6 +11,7 @@ import type {
 import { describeLogError, log } from "../../app/logger";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
 import { BrowserFrameRoutes } from "./browser-frame-routes";
+import { FileChooserInterception } from "./file-chooser-interception";
 import { isRecord, recordValue } from "../guards";
 
 interface BrowserDebugSessionOptions {
@@ -44,11 +45,7 @@ export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
   private readonly interceptFileChooser: () => boolean;
-  /**
-   * What the attached debugger holds. A fresh attachment intercepts nothing,
-   * so an on-screen tab costs no command at all.
-   */
-  private appliedFileChooserInterception = false;
+  private readonly fileChooser: FileChooserInterception;
   private readonly frameRoutes: BrowserFrameRoutes;
   private readonly bindingCalledListeners = new Set<
     (params: Record<string, unknown>) => void
@@ -73,6 +70,16 @@ export class BrowserDebugSession {
     this.webContents = options.webContents;
     this.onDetached = options.onDetached;
     this.interceptFileChooser = options.interceptFileChooser;
+    this.fileChooser = new FileChooserInterception({
+      live: () => this.isAttached(),
+      desired: () => this.interceptsFileChooser(),
+      send: (enabled) =>
+        this.webContents.debugger.sendCommand(
+          "Page.setInterceptFileChooserDialog",
+          { enabled },
+          undefined,
+        ),
+    });
     this.frameRoutes = new BrowserFrameRoutes({
       browserDebugger: () => this.webContents.debugger,
       isAttached: () => this.isAttached(),
@@ -83,8 +90,17 @@ export class BrowserDebugSession {
       raceWithSessionEnd: <T>(work: Promise<T>, message: string) =>
         this.raceWithDebugSessionEnd(work, message),
       attachmentEnded: () => this.attachmentEnd.promise,
-      interceptFileChooser: () => this.interceptFileChooser(),
+      interceptFileChooser: () => this.interceptsFileChooser(),
     });
+  }
+
+  /**
+   * Only while someone drives the tab through this session: with no lease
+   * left the setting comes off, which is what hands a debugger another
+   * consumer attached back the way it was found.
+   */
+  private interceptsFileChooser(): boolean {
+    return this.leases > 0 && this.interceptFileChooser();
   }
 
   isAttached(): boolean {
@@ -125,7 +141,7 @@ export class BrowserDebugSession {
    */
   syncFileChooserInterception(): void {
     if (!this.isReady()) return;
-    void this.applyFileChooserInterception(this.webContents.debugger);
+    void this.fileChooser.sync();
     // Per target: an out-of-process iframe's session needs its own.
     this.frameRoutes.syncFileChooserInterception();
   }
@@ -265,7 +281,7 @@ export class BrowserDebugSession {
         browserDebugger.sendCommand("Network.enable", {}, undefined),
         // DOM.describeNode requires its domain to be enabled first.
         browserDebugger.sendCommand("DOM.enable", {}, undefined),
-        this.applyFileChooserInterception(browserDebugger),
+        this.fileChooser.sync(),
       ]).then(() => undefined),
       "Browser debugger detached while enabling",
     )
@@ -368,6 +384,8 @@ export class BrowserDebugSession {
       .find((value) => value !== null);
     this.stopListening();
     this.resetDetachedState();
+    // The detached debugger took its interception with it.
+    this.fileChooser.reset();
     this.onDetached(reason ?? "Debugger detached");
   }
 
@@ -376,6 +394,8 @@ export class BrowserDebugSession {
     const browserDebugger = this.webContents.debugger;
     if (!browserDebugger.isAttached()) {
       this.resetDetachedState();
+      // A fresh attachment intercepts nothing, whatever the last one held.
+      this.fileChooser.reset();
       browserDebugger.attach("1.3");
       this.attachedBySession = true;
     }
@@ -386,15 +406,21 @@ export class BrowserDebugSession {
     if (this.leases > 0 || this.disposed) return;
     const browserDebugger = this.liveDebugger();
     const attachedBySession = this.attachedBySession;
+    const attached = browserDebugger !== null && browserDebugger.isAttached();
+    // Someone else attached this debugger and keeps it. The interception this
+    // session put on it comes off with the last lease; left on, it would
+    // outlive every record of it and swallow the person's picker. The iframe
+    // sessions go first: the reset below forgets them.
+    if (attached && !attachedBySession) {
+      this.frameRoutes.syncFileChooserInterception();
+    }
     // Listeners off first: this detach is deliberate, and the detach listener
     // exists to report the ones we did not ask for.
     this.stopListening();
     this.resetDetachedState();
-    if (
-      !attachedBySession ||
-      browserDebugger === null ||
-      !browserDebugger.isAttached()
-    ) {
+    if (browserDebugger === null || !attached) return;
+    if (!attachedBySession) {
+      void this.fileChooser.sync();
       return;
     }
     try {
@@ -406,37 +432,7 @@ export class BrowserDebugSession {
     }
   }
 
-  /**
-   * Never rejects: a debugger that refuses the command still drives the tab,
-   * and the cost of the refusal is the picker this exists to prevent.
-   */
-  private applyFileChooserInterception(
-    browserDebugger: BrowserViewDebugger,
-  ): Promise<void> {
-    const enabled = this.interceptFileChooser();
-    if (this.appliedFileChooserInterception === enabled) {
-      return Promise.resolve();
-    }
-    this.appliedFileChooserInterception = enabled;
-    return browserDebugger
-      .sendCommand("Page.setInterceptFileChooserDialog", { enabled }, undefined)
-      .then(
-        () => undefined,
-        (err: unknown) => {
-          if (this.appliedFileChooserInterception === enabled) {
-            this.appliedFileChooserInterception = !enabled;
-          }
-          log.warn("[browser-view] file chooser interception failed", {
-            enabled,
-            error: describeLogError(err),
-          });
-        },
-      );
-  }
-
   private resetDetachedState(): void {
-    // A detached debugger took its interception with it.
-    this.appliedFileChooserInterception = false;
     this.frameRoutes.rejectPending("Browser debugger detached while enabling");
     this.attachmentEnd.resolve();
     this.attachmentEnd = Promise.withResolvers<void>();
