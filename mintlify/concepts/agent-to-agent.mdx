@@ -115,7 +115,7 @@ Read this by interface, not by product:
 A message can go to any of **your own** agents that can receive:
 
 - **In the same Task**, or in **another Task** you can edit, including a Task someone shared with you as an editor.
-- **On any of your hosts.** The message is sent from the host the sending agent runs on. If the receiver runs on another of your hosts, Traycer delivers the message through the cloud, and the receiving host picks it up from there. The send succeeds once the cloud has accepted the message.
+- **On any of your hosts.** The message is sent from the host the sending agent runs on. If the receiver runs on another of your hosts, Traycer delivers the message through the cloud, and the receiving host picks it up from there. The send returns **queued** once the cloud has accepted the message; this does not confirm delivery to the receiving agent. The receiving host can collect it when it comes back online. If it has not collected the message within **24 hours**, the message expires without notifying the sender.
 
 A message is rejected, not queued, when:
 
