@@ -12362,6 +12362,24 @@ function partialQueueEditLastCopy(
   };
 }
 
+/**
+ * What the saved-after-all notice says of the second frame: nothing when it
+ * applied, the host's refusal and its reason when that is known, and "not
+ * confirmed" only when nothing answered for it.
+ */
+function savedAfterReturnSecondFrameClause(
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "saved_after_return" }
+  >,
+): string {
+  if (settlement.followUpApplied) return "";
+  if (settlement.followUpRefused) {
+    return ` Its settings/steering were not applied${hostReasonClause(settlement.hostReason)}.`;
+  }
+  return " Its settings/steering were not confirmed.";
+}
+
 /** Told once, when an edit handed back as unconfirmed turns out to be saved. */
 function queueEditSavedAfterReturnNotice(
   settlement: Extract<
@@ -12369,9 +12387,7 @@ function queueEditSavedAfterReturnNotice(
     { readonly kind: "saved_after_return" }
   >,
 ): ChatErrorNotice {
-  const secondFrame = settlement.followUpApplied
-    ? ""
-    : " Its settings/steering were not confirmed.";
+  const secondFrame = savedAfterReturnSecondFrameClause(settlement);
   return {
     code: QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
     message: `Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,

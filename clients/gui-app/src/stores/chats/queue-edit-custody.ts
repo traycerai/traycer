@@ -171,6 +171,14 @@ export type QueueEditSettlement =
       readonly clientActionId: string;
       readonly intent: QueueEditIntent;
       readonly followUpApplied: boolean;
+      /**
+       * `true` when the host is KNOWN to have refused the second frame: its
+       * ack arrived before the connection that lost the text's. That is an
+       * answer, with a reason, and is not told as "not confirmed".
+       */
+      readonly followUpRefused: boolean;
+      /** The host's refusal of the second frame. `null` unless refused. */
+      readonly hostReason: string | null;
     }
   /**
    * The mirror of `partial`: the host refused the text and then took the
@@ -496,9 +504,10 @@ type QueueEditVerdict = "applied" | "not_applied" | "unknown";
  * - The edited document on the row, or on the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
  *   refuses an edit to a prompt that has started, so nothing can change it now.
- *   Only for a sent document that CAN be compared: one carrying an image
- *   inline has no hash to compare by, and a comparison that cannot be made is
- *   not a mismatch.
+ *   Only when BOTH documents can be compared: one carrying an image with no
+ *   hash (a sent document that went out with the bytes inline, or a held one
+ *   that names none) has nothing to compare by, and a comparison that cannot
+ *   be made is not a mismatch.
  * - Anything else is unknown, and stays unknown until one of the two above is
  *   seen. A row still showing other text may be about to change (the host
  *   finishes a handler it had already started when the connection dropped). A
@@ -527,9 +536,14 @@ function queueEditVerdict(
     }
     // A document that went out with an image inline names no hash for it (the
     // bytes travel in the hash's place), so it can match nothing the host
-    // holds. Failing to match is then no evidence that the prompt ran as
-    // something else: it stays unknown, and is never told as "not saved".
-    return everyImageIsHashed(record.wireContent) ? "not_applied" : "unknown";
+    // holds; a held document with an image that names no hash can be matched
+    // by nothing either. Failing to match is then no evidence that the prompt
+    // ran as something else: it stays unknown, and is never told as "not
+    // saved".
+    return everyImageIsHashed(record.wireContent) &&
+      everyImageIsHashed(message.message.content)
+      ? "not_applied"
+      : "unknown";
   }
   return "unknown";
 }
@@ -599,6 +613,9 @@ function accountForUnconfirmedRecord(
           clientActionId: record.followUpActionId,
           intent: record.intent,
           followUpApplied,
+          followUpRefused: record.followUp === "rejected",
+          hostReason:
+            record.followUp === "rejected" ? record.followUpReason : null,
         },
       ],
     };

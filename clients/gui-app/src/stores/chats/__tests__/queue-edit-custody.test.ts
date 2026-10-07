@@ -641,6 +641,8 @@ describe("second-frame evidence kept while the text is unknown", () => {
         clientActionId: FOLLOW_UP_ACTION_ID,
         intent: "save",
         followUpApplied: true,
+        followUpRefused: false,
+        hostReason: null,
       },
     ]);
     expect(second.records).toEqual({});
@@ -713,6 +715,89 @@ describe("a sent document that cannot be compared (inlined image, no hash)", () 
       cause: "not_applied",
     });
     expect(fold.records).toEqual({});
+  });
+});
+
+describe("a message that cannot be compared on either side", () => {
+  it("reads a hashed sent document against a message carrying an unhashed image as unconfirmed, and retains the record", () => {
+    const messageWithInlinedImage: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "something else entirely" },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "img-1",
+                fileName: "shot.png",
+                mimeType: "image/png",
+                size: 4,
+                b64content: "AQIDBA==",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const fold = accountForQueueEdits({
+      records: recordsOf(record({ wireContent: hashedImages(HASH_A) }, "save")),
+      sweptActionIds: BOTH_SWEPT,
+      evidence: evidence({
+        items: [],
+        messages: [userMessage(MESSAGE_ID, messageWithInlinedImage)],
+      }),
+    });
+    expect(fold.settlements).toHaveLength(1);
+    expect(fold.settlements[0]).toMatchObject({
+      kind: "content_returned",
+      cause: "unconfirmed",
+    });
+    expect(fold.records[EDIT_ACTION_ID]?.edit).toBe("unconfirmed");
+    expect(fold.records[EDIT_ACTION_ID]?.contentReturned).toBe(true);
+  });
+});
+
+describe("saved after return with a follow-up the host refused", () => {
+  it("carries the refusal and its reason when the follow-up was refused before the edit became unconfirmed", () => {
+    const refused = foldQueueEditAck(recordsOf(record({}, "save")), {
+      clientActionId: FOLLOW_UP_ACTION_ID,
+      status: "rejected",
+      reason: "The queued prompt is already being submitted.",
+    });
+    expect(refused.settlements).toEqual([]);
+
+    const handedBack = accountForQueueEdits({
+      records: refused.records,
+      sweptActionIds: new Set([EDIT_ACTION_ID]),
+      evidence: evidence({ items: [row({})], messages: [] }),
+    });
+    expect(handedBack.settlements).toHaveLength(1);
+    expect(handedBack.settlements[0]).toMatchObject({
+      kind: "content_returned",
+      cause: "unconfirmed",
+    });
+    const kept = handedBack.records[EDIT_ACTION_ID];
+    expect(kept?.followUp).toBe("rejected");
+    expect(kept?.edit).toBe("unconfirmed");
+
+    const saved = accountForQueueEdits({
+      records: handedBack.records,
+      sweptActionIds: NONE_SWEPT,
+      evidence: evidence({ items: [rowHolding(EDITED, {})], messages: [] }),
+    });
+    expect(saved.settlements).toEqual([
+      {
+        kind: "saved_after_return",
+        clientActionId: FOLLOW_UP_ACTION_ID,
+        intent: "save",
+        followUpApplied: false,
+        followUpRefused: true,
+        hostReason: "The queued prompt is already being submitted.",
+      },
+    ]);
+    expect(saved.records).toEqual({});
   });
 });
 
@@ -827,6 +912,8 @@ describe("accountForQueueEdits", () => {
         clientActionId: FOLLOW_UP_ACTION_ID,
         intent: "save",
         followUpApplied: true,
+        followUpRefused: false,
+        hostReason: null,
       },
     ]);
     expect(review.records).toEqual({});
@@ -887,6 +974,8 @@ describe("accountForQueueEdits", () => {
           intent: "save",
           // The row is gone and the follow-up was not a no-op: nothing shows it.
           followUpApplied: false,
+          followUpRefused: false,
+          hostReason: null,
         },
       ]);
       expect(review.records).toEqual({});

@@ -1099,6 +1099,48 @@ describe("a row that drains after the settings frame was seen applied", () => {
   });
 });
 
+describe("a saved-after-return notice for a follow-up the host refused", () => {
+  it("says the settings were not applied and why, and never 'not confirmed'", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "save",
+      OTHER_SETTINGS,
+      [],
+    );
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+      reason: "The queued prompt is already being submitted.",
+      code: "QUEUE_ITEM_NOT_FOUND",
+      backgroundStopTaskIds: [],
+      token: null,
+    });
+    hostNotice(harness, followUpActionId);
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+    const kept = harness.handle.store.getState().queueEditRecords[editActionId];
+    expect(kept?.followUp).toBe("rejected");
+    expect(kept?.contentReturned).toBe(true);
+
+    emitQueue(harness, [queuedRow(EDITED)]);
+
+    const told = savedAfterReturnNotices(harness);
+    expect(told).toHaveLength(1);
+    expect(told[0].message).toContain("were not applied");
+    expect(told[0].message).toContain(
+      "The queued prompt is already being submitted",
+    );
+    expect(told[0].message).not.toContain("not confirmed");
+    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+  });
+});
+
 describe("the saved-after-return notice survives the ordinary ring until delivered", () => {
   function floodOrdinaryNotices(target: Harness): void {
     for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {
