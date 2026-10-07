@@ -1607,6 +1607,9 @@ describe("BrowserViewManager native tab lifecycle", () => {
       once: (event: "destroyed", listener: () => void) => {
         popup.webContents.once(event, listener);
       },
+      removeListener: (event: "destroyed", listener: () => void) => {
+        popup.webContents.removeListener(event, listener);
+      },
     };
     const startSetup = (): FakeDownloadItem => {
       const item = new FakeDownloadItem("setup.exe");

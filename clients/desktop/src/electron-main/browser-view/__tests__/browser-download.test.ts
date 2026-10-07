@@ -91,8 +91,19 @@ class FakeWebContents implements BrowserDownloadWebContents {
     return "https://app.test/";
   }
 
+  removeListenerCalls = 0;
+
   once(event: "destroyed", listener: () => void): void {
     this.emitter.once(event, listener);
+  }
+
+  removeListener(event: "destroyed", listener: () => void): void {
+    this.removeListenerCalls += 1;
+    this.emitter.removeListener(event, listener);
+  }
+
+  destroyedListenerCount(): number {
+    return this.emitter.listenerCount("destroyed");
   }
 
   fireDestroyed(): void {
@@ -786,5 +797,122 @@ describe("BrowserViewDownloads dangerous downloads", () => {
     const fold = (path: string): string => path.normalize("NFC").toLowerCase();
     expect(fold(one)).not.toBe(fold(two));
     expect(h.disk.size).toBe(2);
+  });
+});
+
+describe("BrowserViewDownloads tab watching", () => {
+  it("registers no listener for a plain download", () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+
+    start(h, webContents, "file.txt");
+
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+
+  it("watches the tab while the question is open and stops once it is answered Save anyway", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    start(h, webContents, "install.sh");
+    expect(webContents.destroyedListenerCount()).toBe(1);
+
+    pendingConfirmation(h, 0).resolve(true);
+    await flush();
+
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+
+  it("stops watching the tab after the dialog answers Cancel", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    start(h, webContents, "install.sh");
+    expect(webContents.destroyedListenerCount()).toBe(1);
+
+    pendingConfirmation(h, 0).resolve(false);
+    await flush();
+
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+
+  it("stops watching the tab after the dialog rejects", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    start(h, webContents, "install.sh");
+
+    pendingConfirmation(h, 0).reject(new Error("dialog failed"));
+    await flush();
+
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+
+  it("stops watching the tab after the tile's Cancel while the question is open", () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    start(h, webContents, "install.sh");
+    expect(webContents.destroyedListenerCount()).toBe(1);
+
+    expect(h.downloads.cancel(firstDownloadId(h))).toBe(true);
+
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+
+  it("leaves no listener behind after eleven confirmed downloads on one tab", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+
+    for (let index = 0; index < 11; index += 1) {
+      start(h, webContents, `install-${index}.sh`);
+      pendingConfirmation(h, index).resolve(true);
+      await flush();
+    }
+
+    expect(h.confirmCalls).toHaveLength(11);
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+
+  it("cancels on a destroyed tab without touching the destroyed web contents again", async () => {
+    const h = harness();
+    const webContents = new FakeWebContents(1);
+    const item = start(h, webContents, "install.sh");
+    h.disk.set(item.savePath, "partial");
+
+    webContents.fireDestroyed();
+    await flush();
+
+    expect(item.cancelCalls).toBe(1);
+    expect(webContents.removeListenerCalls).toBe(0);
+    expect(webContents.destroyedListenerCount()).toBe(0);
+  });
+});
+
+describe("BrowserViewDownloads publishing", () => {
+  it("tells the tile Cancel is gone before a slow publish, then reports completed", async () => {
+    const h = harness();
+    h.state.publishGate = Promise.withResolvers<void>();
+    const item = start(h, new FakeWebContents(1), "file.txt");
+    const downloadId = firstDownloadId(h);
+
+    complete(h, item);
+    await flush();
+
+    expect(h.publishCalls).toHaveLength(1);
+    expect(lastChange(h)).toMatchObject({
+      state: "progressing",
+      canCancel: false,
+      savePath: null,
+    });
+    expect(h.downloads.cancel(downloadId)).toBe(false);
+    expect(item.cancelCalls).toBe(0);
+    expect(h.removeCalls).toHaveLength(0);
+
+    h.state.publishGate.resolve();
+    await flush();
+
+    expect(lastChange(h)).toMatchObject({
+      state: "completed",
+      savePath: join(DIRECTORY, "file.txt"),
+      canCancel: false,
+    });
+    expect(h.disk.get(join(DIRECTORY, "file.txt"))).toBe("bytes of file.txt");
   });
 });

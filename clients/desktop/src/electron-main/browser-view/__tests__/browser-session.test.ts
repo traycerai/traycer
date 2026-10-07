@@ -331,6 +331,8 @@ class FakeDownloadWebContents {
 
   once(_event: "destroyed", _listener: () => void): void {}
 
+  removeListener(_event: "destroyed", _listener: () => void): void {}
+
   getURL(): string {
     return this.url;
   }

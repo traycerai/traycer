@@ -42,6 +42,7 @@ export interface BrowserDownloadWebContents {
   readonly id: number;
   getURL(): string;
   once(event: "destroyed", listener: () => void): void;
+  removeListener(event: "destroyed", listener: () => void): void;
 }
 
 export interface BrowserSessionDownloadChange {
@@ -275,11 +276,16 @@ export class BrowserViewDownloads {
     const settle = (): void => {
       void this.settleHeld(identity, held, directory, filename, latest);
     };
+    // Set below for a download that asks: the tab is watched only while its
+    // question is open, so a long-lived tab does not collect one listener,
+    // and one retained download, per question it ever raised.
+    let stopWatchingTab = (): void => {};
     // Allowed until the file is being published or removed, whatever the
     // dialog said: a download that still offers Cancel must still be
     // cancellable.
     const cancelHeld = (): void => {
       if (held.answer === "cancel" || held.settlement !== "open") return;
+      stopWatchingTab();
       held.answer = "cancel";
       // A no-op on an item that already completed, which is why the held
       // file is unlinked at settlement instead of trusting this to remove it.
@@ -328,6 +334,7 @@ export class BrowserViewDownloads {
     // changes nothing.
     const answerQuestion = (confirmed: boolean): void => {
       if (held.answer !== "pending") return;
+      stopWatchingTab();
       if (!confirmed) {
         cancelHeld();
         return;
@@ -340,9 +347,18 @@ export class BrowserViewDownloads {
     };
     // An unanswered question dies with its tab. A download the person already
     // confirmed carries on, as any other download outlives its tab.
-    webContents.once("destroyed", () => {
+    let watchingTab = true;
+    const onTabDestroyed = (): void => {
+      // `once` has already removed it, and a destroyed tab is not touched.
+      watchingTab = false;
       if (held.answer === "pending") cancelHeld();
-    });
+    };
+    stopWatchingTab = (): void => {
+      if (!watchingTab) return;
+      watchingTab = false;
+      webContents.removeListener("destroyed", onTabDestroyed);
+    };
+    webContents.once("destroyed", onTabDestroyed);
     void this.confirm({
       title: "Confirm download",
       message: `Save ${filename}?`,
@@ -378,6 +394,10 @@ export class BrowserViewDownloads {
     this.cancelById.delete(identity.downloadId);
     if (held.answer === "save" && held.done === "completed") {
       held.settlement = "publishing";
+      // Cancel stops working here, so the tile is told before the move: on a
+      // volume with no hard links the move is a copy, and a Cancel button
+      // left up for its whole length would be one that does nothing.
+      this.emitChange(identity, snapshot, "progressing", null, false);
       try {
         const savePath = await this.publish(held.heldPath, directory, filename);
         log.info("[browser-view] download finished", {
