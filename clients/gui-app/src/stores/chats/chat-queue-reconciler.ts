@@ -73,8 +73,22 @@ export const SEND_RESTORED_NOTICE_CODE = "SEND_RESTORED";
  * is exactly when the user is likely to be looking somewhere else.
  */
 export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
+  return noticeCarriesOnlyCopy(notice) || noticeIsHeldUntilDelivered(notice);
+}
+
+/**
+ * Whether this notice is kept in the ring until the toast layer has shown it,
+ * and ages like any other warning after that.
+ *
+ * Not a last-copy notice - the text it is about is safe somewhere the user can
+ * see - but it is the only telling of something they have to know before they
+ * act on that text: what a restored prompt will resend under, or that a draft
+ * handed back to them duplicates a prompt the host already saved. The ring is
+ * the only replay source, so one that could be evicted by ordinary history
+ * before an unfocused pane came back would never be told at all.
+ */
+export function noticeIsHeldUntilDelivered(notice: ChatErrorNotice): boolean {
   return (
-    noticeCarriesOnlyCopy(notice) ||
     notice.code === SEND_RESTORED_NOTICE_CODE ||
     notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE
   );

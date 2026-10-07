@@ -9,6 +9,7 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
 import { QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
 import {
+  MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
@@ -549,7 +550,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
   it("tells the user ONCE that an unconfirmed edit was saved after all, drops the record, and does not award the slot again (finding 2)", () => {
     harness = openWithQueuedRow();
-    const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+    const { followUpActionId } = submitEdit(harness, "save", SETTINGS, []);
     reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
     const slotBefore = harness.handle.store.getState().failedSendRestoration;
     expect(slotBefore?.content).toEqual(EDITED);
@@ -568,7 +569,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
       (notice) => notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
     );
     expect(told).toHaveLength(1);
-    expect(told[0].clientActionId).toBe(editActionId);
+    expect(told[0].clientActionId).toBe(followUpActionId);
     expect(state.queueEditRecords).toEqual({});
     expect(state.failedSendRestoration).toBe(slotBefore);
     expect(sendFrameCount(harness)).toBe(0);
@@ -698,6 +699,151 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     expect(result).toBeNull();
     expect(harness.sent.length).toBe(framesBefore);
     expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+  });
+});
+
+function acceptQueuedMessage(harness: Harness, content: JsonContent): void {
+  harness.callbacks().onMessageAccepted({
+    kind: "messageAccepted",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    message: {
+      role: "user",
+      messageId: MESSAGE_ID,
+      sender: { type: "user", userId: OWNER_ID },
+      message: { kind: "user", content, browserAnnotations: [] },
+      timestamp: 2,
+      sessionAnchor: null,
+    },
+  });
+}
+
+function emitQueue(
+  harness: Harness,
+  items: ReadonlyArray<ChatQueuedPromptItem>,
+): void {
+  harness.callbacks().onQueueChanged({
+    kind: "queueChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    queue: { status: "idle", items: [...items] },
+  });
+}
+
+function savedAfterReturnNotices(harness: Harness) {
+  return harness.handle.store
+    .getState()
+    .errorNotices.filter(
+      (notice) => notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+    );
+}
+
+describe("a row that drains before its message arrives (legacy line)", () => {
+  function reconnectedWithUnconfirmedEdit(): {
+    readonly harness: Harness;
+    readonly editActionId: string;
+  } {
+    const opened = openWithQueuedRow();
+    const { editActionId } = submitEdit(opened, "save", SETTINGS, []);
+    reconnectWithItems(opened, [queuedRow(ORIGINAL)]);
+    const kept = opened.handle.store.getState().queueEditRecords[editActionId];
+    expect(kept?.edit).toBe("unconfirmed");
+    expect(kept?.contentReturned).toBe(true);
+    return { harness: opened, editActionId };
+  }
+
+  it("keeps the record, says nothing and sends nothing when the row is removed with no message yet; the message then settles it as saved_after_return", () => {
+    const started = reconnectedWithUnconfirmedEdit();
+    harness = started.harness;
+    const { editActionId } = started;
+    const noticesBefore = harness.handle.store.getState().errorNotices;
+
+    emitQueue(harness, []);
+
+    // The queue change really landed (the row is gone)...
+    expect(harness.handle.store.getState().queue.items).toEqual([]);
+    // ...and absence was not read as an answer.
+    const afterDrain = harness.handle.store.getState();
+    expect(afterDrain.queueEditRecords[editActionId]?.edit).toBe("unconfirmed");
+    expect(afterDrain.errorNotices).toEqual(noticesBefore);
+    expect(sendFrameCount(harness)).toBe(0);
+
+    acceptQueuedMessage(harness, EDITED);
+
+    const told = savedAfterReturnNotices(harness);
+    expect(told).toHaveLength(1);
+    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+    expect(sendFrameCount(harness)).toBe(0);
+  });
+
+  it("drops the record with no saved-after-return notice when the message that arrives holds the ORIGINAL", () => {
+    const started = reconnectedWithUnconfirmedEdit();
+    harness = started.harness;
+    emitQueue(harness, []);
+    expect(
+      harness.handle.store.getState().queueEditRecords[started.editActionId],
+    ).toBeDefined();
+
+    acceptQueuedMessage(harness, ORIGINAL);
+
+    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+    expect(savedAfterReturnNotices(harness)).toHaveLength(0);
+    expect(sendFrameCount(harness)).toBe(0);
+  });
+});
+
+describe("the saved-after-return notice survives the ordinary ring until delivered", () => {
+  function floodOrdinaryNotices(target: Harness): void {
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {
+      target.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `The approval request is no longer pending (${index}).`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+  }
+
+  it("keeps the undelivered notice while an ordinary warning in the same position is evicted", () => {
+    harness = openWithQueuedRow();
+    submitEdit(harness, "save", SETTINGS, []);
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+    emitQueue(harness, [queuedRow(EDITED)]);
+    expect(savedAfterReturnNotices(harness)).toHaveLength(1);
+    // An ordinary warning appended right behind it: the positive control.
+    harness.callbacks().onErrorNotice({
+      kind: "errorNotice",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      notice: {
+        code: "APPROVAL_NOT_PENDING",
+        message: "control",
+        severity: "warning",
+        clientActionId: "ordinary-control",
+      },
+    });
+
+    floodOrdinaryNotices(harness);
+
+    const notices = harness.handle.store.getState().errorNotices;
+    // The ring did rotate ordinary history...
+    expect(
+      notices.some((notice) => notice.clientActionId === "ordinary-control"),
+    ).toBe(false);
+    expect(
+      notices.filter((notice) => notice.code === "APPROVAL_NOT_PENDING").length,
+    ).toBeLessThanOrEqual(MAX_ERROR_NOTICE_RECORDS);
+    // ...and left the undelivered saved-after-return notice alone.
+    expect(savedAfterReturnNotices(harness)).toHaveLength(1);
   });
 });
 

@@ -4,6 +4,7 @@ import {
   addAcceptedAction,
   confirmAcceptedSendByMessageId,
   noticeCarriesOnlyCopy,
+  noticeIsHeldUntilDelivered,
   keptQueueEditSubmissionNotice,
   namedSettingsChanges,
   QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
@@ -74,7 +75,7 @@ import {
   foldQueueEditAck,
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
-  queueEditRecordsHoldingOnlyCopy,
+  queueEditRecordsInCustody,
   withQueueEditRecord,
   withoutQueueEditRecord,
   type QueueEditEvidence,
@@ -108,7 +109,6 @@ import {
   isTailHydrated,
   mapWindowMessages,
   planTranscriptHydration,
-  unhydratedRowCount,
   activeTurnOrdinalsOf,
   rangeRecordsInstalled,
   rangeSeatsActiveTurn,
@@ -2510,9 +2510,10 @@ function appendErrorNotice(
   // silently deleted it before the pane ever came back. It is not a last-copy
   // notice (the draft is safe in the composer, so no permanent pin) - the
   // axis is different: survive EVICTION until DELIVERED, then age normally
-  // like any other warning.
+  // like any other warning. The same holds for the warning that a handed-back
+  // queue edit was saved after all - see `noticeIsHeldUntilDelivered`.
   if (
-    next.code === SEND_RESTORED_NOTICE_CODE &&
+    noticeIsHeldUntilDelivered(next) &&
     next.clientActionId !== null &&
     !delivered.has(next.clientActionId)
   ) {
@@ -2525,7 +2526,7 @@ function appendErrorNotice(
   // protects drafts; it must not quietly shrink everything else.
   const isProtected = (notice: ChatErrorNotice): boolean =>
     noticeCarriesOnlyCopy(notice) ||
-    (notice.code === SEND_RESTORED_NOTICE_CODE &&
+    (noticeIsHeldUntilDelivered(notice) &&
       notice.clientActionId !== null &&
       !delivered.has(notice.clientActionId));
   const ordinaryCount = notices.filter((notice) => !isProtected(notice)).length;
@@ -4368,19 +4369,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       // landed, and an edit nothing confirms hands its text back while its
       // record keeps watching, rather than vanishing with its action.
       //
-      // The window, when the caller hands one over, is the windowed line's: the
-      // messages beside it are then only its loaded rows, and a message that is
-      // not among them may simply not be loaded.
-      const snapshotWindow = extra?.transcriptWindow;
       const queueEditSettlement = accountForQueueEdits({
         records: get().queueEditRecords,
         sweptActionIds: sweep.sweptActionIds,
         evidence: queueEditEvidence({
           queue: frame.snapshot.queue,
           messages: frame.snapshot.chat.messages,
-          transcriptComplete:
-            snapshotWindow === undefined ||
-            unhydratedRowCount(snapshotWindow) === 0,
         }),
       });
       forgetReturnedQueueEditBlobAcks(
@@ -6243,8 +6237,9 @@ export function createChatSessionStoreWithNotificationDependencies(
      * rather than guessing. This is where the later evidence reaches it: a
      * queue change that shows the edited text on the row (a host that was
      * still installing the edit when the connection dropped), or a transcript
-     * body arriving that shows what the prompt ran as. The snapshot handler
-     * does the same accounting itself, inside its own update.
+     * body arriving - loaded on the windowed line, accepted on the legacy one -
+     * that shows what the prompt ran as. The snapshot handler does the same
+     * accounting itself, inside its own update.
      *
      * A no-op without such a record, which is every chat almost all the time.
      */
@@ -6257,8 +6252,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         evidence: queueEditEvidence({
           queue: state.queue,
           messages: state.messages,
-          transcriptComplete:
-            !windowedLine || unhydratedRowCount(state.transcriptWindow) === 0,
         }),
       });
       if (fold.records === state.queueEditRecords) return;
@@ -6877,9 +6870,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // exactly the prompt this handoff exists to save. One mechanism,
         // stated where it lives: the map holds what still needs stashing.
         lastCopies: Object.values(state.lastCopyPrompts),
-        // An edit to a queued prompt still in custody: neither handed back
-        // nor known saved, so this store is the only holder of its text.
-        queueEdits: queueEditRecordsHoldingOnlyCopy(state.queueEditRecords),
+        // An edit to a queued prompt still in custody: not handed back, and
+        // not yet answered for both frames, so this store is the only holder
+        // of the submission.
+        queueEdits: queueEditRecordsInCustody(state.queueEditRecords),
         accountForRetry: retryHandoffAccountFor,
       })) {
         const captureId = uuidv4();
@@ -8862,6 +8856,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // message landing means the same thing on either line.
         commitLegacyTranscriptBudget();
         sendTimings.mark(frame.message.messageId, "acceptance_applied");
+        // The windowed arm reaches this through `publishWindowedTranscript`.
+        // Here the message is the evidence itself: the row a queue edit was
+        // aimed at has just become this message, and what it holds says
+        // whether an unconfirmed edit landed first.
+        reviewUnconfirmedQueueEdits();
       },
       onMessageDeliveryChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId))
@@ -12263,7 +12262,7 @@ function queueEditReturnedBecause(
     case "refused":
       return `was not saved${hostReasonClause(hostReason)}`;
     case "not_applied":
-      return "was not saved: the queued message had already started or been removed when this chat reconnected";
+      return "was not saved: the queued message had already started with its earlier text";
     case "unconfirmed":
       return "could not be confirmed after reconnecting, and may still have been saved - check the queued message before sending this again";
   }
@@ -12289,6 +12288,32 @@ function queueEditHandBackCopy(
   };
 }
 
+/** What was asked for, as a sentence tail - or nothing when nothing was. */
+function requestedChangesClause(
+  requestedChanges: ReadonlyArray<string>,
+): string {
+  return requestedChanges.length === 0
+    ? ""
+    : `. You asked for ${requestedChanges.join(", ")}`;
+}
+
+/**
+ * What a stashed queue edit says about itself, as what this client knew when
+ * its session closed and no more.
+ *
+ * Two states reach the stash and they must not read alike. With the text's own
+ * frame unanswered the edit may or may not have been saved. With it accepted
+ * the text IS saved and only the second frame is open - so the copy is kept
+ * for what else the submission carried, and sending it again would duplicate a
+ * prompt the host already holds.
+ */
+function queueEditHandoffReason(record: QueueEditRecord): string {
+  if (record.edit === "accepted") {
+    return `Text saved; settings/steering were not confirmed before the chat closed${requestedChangesClause(record.requestedChanges)}. It is already saved on the queued message, so do not send it again.`;
+  }
+  return "The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.";
+}
+
 /**
  * The submission a partial result keeps for the user, as a last-copy record.
  *
@@ -12304,10 +12329,7 @@ function partialQueueEditLastCopy(
     : "Text saved; settings/steering were not confirmed after reconnecting";
   // What was asked for, said here because nothing else still holds it: the
   // composer's picker has moved on, and the row may have left the queue.
-  const asked =
-    settlement.requestedChanges.length === 0
-      ? ""
-      : `. You asked for ${settlement.requestedChanges.join(", ")}`;
+  const asked = requestedChangesClause(settlement.requestedChanges);
   return {
     clientActionId: settlement.clientActionId,
     content: settlement.restore.content,
@@ -12485,20 +12507,14 @@ function queueEditSurfacesForAck(
   };
 }
 
-/**
- * What the host can be seen to hold, as the queue-edit accounting reads it.
- * `transcriptComplete` is the caller's to answer: only it knows whether the
- * messages it is passing are the whole transcript or the loaded part of one.
- */
+/** What the host can be seen to hold, as the queue-edit accounting reads it. */
 function queueEditEvidence(input: {
   readonly queue: ChatQueueState;
   readonly messages: ReadonlyArray<Message>;
-  readonly transcriptComplete: boolean;
 }): QueueEditEvidence {
   return {
     queue: input.queue,
     messages: input.messages,
-    transcriptComplete: input.transcriptComplete,
     settingsEqual: chatRunSettingsEqual,
     accountContextEqual: accountContextsEqual,
   };
@@ -13243,10 +13259,7 @@ function unrecordedPromptSources(sources: {
       clientActionId: record.editActionId,
       content: record.restore.content,
       browserAnnotations: record.restore.browserAnnotations,
-      // Said as what this client knows and no more: the edit may have been
-      // saved, and the stash is where the text waits either way.
-      reason:
-        "The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.",
+      reason: queueEditHandoffReason(record),
     });
   }
   return [...byAction.values()];

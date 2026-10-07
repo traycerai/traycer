@@ -16,7 +16,7 @@ import {
   foldQueueEditAck,
   hasUnconfirmedQueueEdit,
   queueEditContentMatches,
-  queueEditRecordsHoldingOnlyCopy,
+  queueEditRecordsInCustody,
   queueItemsInFlight,
   type QueueEditEvidence,
   type QueueEditIntent,
@@ -180,12 +180,10 @@ function userMessage(messageId: string, content: JsonContent): Message {
 function evidence(input: {
   readonly items: ReadonlyArray<ChatQueuedPromptItem>;
   readonly messages: ReadonlyArray<Message>;
-  readonly transcriptComplete: boolean;
 }): QueueEditEvidence {
   return {
     queue: queueOf(input.items),
     messages: input.messages,
-    transcriptComplete: input.transcriptComplete,
     settingsEqual: (a, b) => a.model === b.model,
     accountContextEqual: (a, b) =>
       a.type === b.type &&
@@ -337,19 +335,25 @@ describe("foldQueueEditAck", () => {
 });
 
 describe("queue-edit record predicates", () => {
-  it("queueEditRecordsHoldingOnlyCopy names a record whose text is held nowhere else, and not one already returned or already saved", () => {
+  it("queueEditRecordsInCustody names every record whose text has not been handed back, including saved text with a pending follow-up, and not a returned one", () => {
     const pending = record({ editActionId: "pending" }, "save");
     const returned = record(
       { editActionId: "returned", edit: "unconfirmed", contentReturned: true },
       "save",
     );
-    const saved = record({ editActionId: "saved", edit: "accepted" }, "save");
-    const holding = queueEditRecordsHoldingOnlyCopy({
+    const savedAwaitingFollowUp = record(
+      { editActionId: "saved", edit: "accepted", followUp: "pending" },
+      "save",
+    );
+    const holding = queueEditRecordsInCustody({
       pending,
       returned,
-      saved,
+      saved: savedAwaitingFollowUp,
     });
-    expect(holding.map((entry) => entry.editActionId)).toEqual(["pending"]);
+    expect(holding.map((entry) => entry.editActionId).sort()).toEqual([
+      "pending",
+      "saved",
+    ]);
   });
 
   it("hasUnconfirmedQueueEdit is true only for a record with an unconfirmed frame", () => {
@@ -373,7 +377,7 @@ describe("accountForQueueEdits", () => {
     const fold = accountForQueueEdits({
       records,
       sweptActionIds: new Set(["some-other-action"]),
-      evidence: evidence({ items: [], messages: [], transcriptComplete: true }),
+      evidence: evidence({ items: [], messages: [] }),
     });
     expect(fold.records).toBe(records);
     expect(fold.settlements).toEqual([]);
@@ -386,7 +390,6 @@ describe("accountForQueueEdits", () => {
       evidence: evidence({
         items: [rowHolding(EDITED, {})],
         messages: [],
-        transcriptComplete: true,
       }),
     });
     expect(fold.settlements).toEqual([]);
@@ -400,7 +403,6 @@ describe("accountForQueueEdits", () => {
       evidence: evidence({
         items: [row({})],
         messages: [],
-        transcriptComplete: true,
       }),
     });
     expect(fold.settlements).toEqual([
@@ -425,7 +427,6 @@ describe("accountForQueueEdits", () => {
       evidence: evidence({
         items: [row({})],
         messages: [],
-        transcriptComplete: true,
       }),
     });
     expect(first.settlements).toHaveLength(1);
@@ -436,13 +437,12 @@ describe("accountForQueueEdits", () => {
       evidence: evidence({
         items: [rowHolding(EDITED, {})],
         messages: [],
-        transcriptComplete: true,
       }),
     });
     expect(review.settlements).toEqual([
       {
         kind: "saved_after_return",
-        clientActionId: EDIT_ACTION_ID,
+        clientActionId: FOLLOW_UP_ACTION_ID,
         intent: "save",
         followUpApplied: true,
       },
@@ -456,21 +456,19 @@ describe("accountForQueueEdits", () => {
       evidence: evidence({
         items: [rowHolding(EDITED, {})],
         messages: [],
-        transcriptComplete: true,
       }),
     });
     expect(again.settlements).toEqual([]);
   });
 
   describe("a transcript body this client has not loaded (finding 3)", () => {
-    it("reads an absent message on an INCOMPLETE transcript as unknown: hand-back as unconfirmed, record retained", () => {
+    it("reads an absent message on an row that is gone as unknown: hand-back as unconfirmed, record retained", () => {
       const fold = accountForQueueEdits({
         records: recordsOf(record({}, "save")),
         sweptActionIds: BOTH_SWEPT,
         evidence: evidence({
           items: [],
           messages: [],
-          transcriptComplete: false,
         }),
       });
       expect(fold.settlements).toHaveLength(1);
@@ -490,7 +488,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [],
           messages: [],
-          transcriptComplete: false,
         }),
       });
       const review = accountForQueueEdits({
@@ -499,13 +496,12 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [],
           messages: [userMessage(MESSAGE_ID, EDITED)],
-          transcriptComplete: false,
         }),
       });
       expect(review.settlements).toEqual([
         {
           kind: "saved_after_return",
-          clientActionId: EDIT_ACTION_ID,
+          clientActionId: FOLLOW_UP_ACTION_ID,
           intent: "save",
           // The row is gone and the follow-up was not a no-op: nothing shows it.
           followUpApplied: false,
@@ -521,7 +517,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [],
           messages: [],
-          transcriptComplete: false,
         }),
       });
       expect(Object.keys(first.records)).toEqual([EDIT_ACTION_ID]);
@@ -531,21 +526,37 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [],
           messages: [userMessage(MESSAGE_ID, ORIGINAL)],
-          transcriptComplete: false,
         }),
       });
       expect(review.settlements).toEqual([]);
       expect(review.records).toEqual({});
     });
 
-    it("reads an absent message on a COMPLETE transcript as not_applied", () => {
+    it("never reads an absent message as an answer: a message for another id leaves the verdict unknown and the record retained", () => {
       const fold = accountForQueueEdits({
         records: recordsOf(record({}, "save")),
         sweptActionIds: BOTH_SWEPT,
         evidence: evidence({
           items: [],
           messages: [userMessage("a-different-message", EDITED)],
-          transcriptComplete: true,
+        }),
+      });
+      expect(fold.settlements).toHaveLength(1);
+      expect(fold.settlements[0]).toMatchObject({
+        kind: "content_returned",
+        cause: "unconfirmed",
+      });
+      expect(fold.records[EDIT_ACTION_ID]?.edit).toBe("unconfirmed");
+      expect(fold.records[EDIT_ACTION_ID]?.contentReturned).toBe(true);
+    });
+
+    it("reads not_applied only from a message for the record's id that holds something else", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(record({}, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [],
+          messages: [userMessage(MESSAGE_ID, ORIGINAL)],
         }),
       });
       expect(fold.settlements).toEqual([
@@ -572,7 +583,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [],
           messages: [userMessage(MESSAGE_ID, EDITED)],
-          transcriptComplete: true,
         }),
       });
       expect(fold.settlements).toEqual([
@@ -596,7 +606,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [rowHolding(EDITED, { status: "paused" })],
           messages: [],
-          transcriptComplete: true,
         }),
       });
       expect(paused.settlements).toHaveLength(1);
@@ -623,7 +632,6 @@ describe("accountForQueueEdits", () => {
             }),
           ],
           messages: [],
-          transcriptComplete: true,
         }),
       });
       expect(taken.settlements).toEqual([]);
@@ -637,7 +645,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [rowHolding(EDITED, { accountContext: TEAM })],
           messages: [],
-          transcriptComplete: true,
         }),
       });
       expect(differentAccount.settlements).toHaveLength(1);
@@ -652,7 +659,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [rowHolding(EDITED, { accountContext: PERSONAL })],
           messages: [],
-          transcriptComplete: true,
         }),
       });
       expect(sameAccount.settlements).toEqual([]);
@@ -666,7 +672,44 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [],
           messages: [userMessage(MESSAGE_ID, EDITED)],
-          transcriptComplete: true,
+        }),
+      });
+      expect(fold.settlements).toEqual([]);
+      expect(fold.records).toEqual({});
+    });
+  });
+
+  describe("a stale no-op flag (round 4)", () => {
+    it("does not honour followUpIsNoOp before the row is read: edited text with DIFFERENT settings is a partial", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(record({ followUpIsNoOp: true }, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(EDITED, { settings: OTHER_SETTINGS })],
+          messages: [],
+        }),
+      });
+      expect(fold.settlements).toEqual([
+        {
+          kind: "partial",
+          clientActionId: FOLLOW_UP_ACTION_ID,
+          intent: "save",
+          restore: RESTORE,
+          requestedChanges: [],
+          refused: false,
+          hostReason: null,
+        },
+      ]);
+      expect(fold.records).toEqual({});
+    });
+
+    it("control: the same record with the row's settings equal to the record's settles silently", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(record({ followUpIsNoOp: true }, "save")),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(EDITED, { settings: SETTINGS })],
+          messages: [],
         }),
       });
       expect(fold.settlements).toEqual([]);
@@ -686,7 +729,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [rowHolding(held, {})],
           messages: [],
-          transcriptComplete: true,
         }),
       });
       expect(fold.settlements).toHaveLength(1);
@@ -705,7 +747,6 @@ describe("accountForQueueEdits", () => {
         evidence: evidence({
           items: [rowHolding(sent, {})],
           messages: [],
-          transcriptComplete: true,
         }),
       });
       expect(matched.settlements).toEqual([]);

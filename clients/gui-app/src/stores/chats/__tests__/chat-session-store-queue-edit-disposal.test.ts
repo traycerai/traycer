@@ -193,7 +193,12 @@ function openWithQueuedRow(): Harness {
   return harness;
 }
 
-function submitEdit(harness: Harness): {
+const OTHER_SETTINGS: ChatRunSettings = { ...SETTINGS, model: "gpt-5-mini" };
+
+function submitEdit(
+  harness: Harness,
+  settings: ChatRunSettings,
+): {
   readonly editActionId: string;
   readonly followUpActionId: string;
 } {
@@ -201,7 +206,7 @@ function submitEdit(harness: Harness): {
     queueItemId: QUEUE_ITEM_ID,
     content: EDITED,
     restore: { content: EDITED, browserAnnotations: [ANNOTATION] },
-    settings: SETTINGS,
+    settings,
     intent: "save",
   });
   if (editActionId === null) throw new Error("expected the edit to dispatch");
@@ -249,7 +254,7 @@ afterEach(() => {
 describe("an edited queued prompt in custody at disposal (finding 1)", () => {
   it("hands the edited text and its annotation to the draft handoff, with the 'closed before the host confirmed your edit' reason", async () => {
     harness = openWithQueuedRow();
-    submitEdit(harness);
+    submitEdit(harness, SETTINGS);
 
     harness.handle.dispose();
 
@@ -264,7 +269,7 @@ describe("an edited queued prompt in custody at disposal (finding 1)", () => {
 
   it("does not hand the text off a second time once it was already returned to the user", async () => {
     harness = openWithQueuedRow();
-    const { editActionId } = submitEdit(harness);
+    const { editActionId } = submitEdit(harness, SETTINGS);
     // The connection dies with the edit unanswered; the reconnect snapshot
     // still shows the original, so the text is handed back and the record is
     // retained to watch for the host.
@@ -296,7 +301,7 @@ describe("eviction waits for an edited queued prompt held only by this store (fi
     harness = openWithQueuedRow();
     expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
 
-    const { editActionId, followUpActionId } = submitEdit(harness);
+    const { editActionId, followUpActionId } = submitEdit(harness, SETTINGS);
     expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
 
     ackAccepted(harness, editActionId, "queueEdit");
@@ -307,7 +312,7 @@ describe("eviction waits for an edited queued prompt held only by this store (fi
 
   it("does not hold the session for a record whose text was already returned and taken", () => {
     harness = openWithQueuedRow();
-    const { editActionId } = submitEdit(harness);
+    const { editActionId } = submitEdit(harness, SETTINGS);
     harness.callbacks().onConnectionStatus("closed", null, null);
     harness.callbacks().onConnectionStatus("open", null, null);
     emitSnapshot(harness, [queuedRow(ORIGINAL)]);
@@ -321,6 +326,47 @@ describe("eviction waits for an edited queued prompt held only by this store (fi
       harness.handle.store.getState().queueEditRecords[editActionId]
         ?.contentReturned,
     ).toBe(true);
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
+  });
+});
+
+describe("disposal between the two acks (round 4)", () => {
+  it("hands off the submitted content and annotation with a reason saying the text is saved, what was asked for, and not to send it again", async () => {
+    harness = openWithQueuedRow();
+    const { editActionId } = submitEdit(harness, OTHER_SETTINGS);
+    ackAccepted(harness, editActionId, "queueEdit");
+    const state = harness.handle.store.getState();
+    // The text is saved, the follow-up is still unanswered.
+    expect(state.queueEditRecords[editActionId]?.edit).toBe("accepted");
+    expect(state.queueEditRecords[editActionId]?.followUp).toBe("pending");
+
+    harness.handle.dispose();
+
+    const installed = await waitForHandedOffDraft(EDITED_TEXT, HANDOFF_WAIT_MS);
+    expect(installed).toContain(
+      "Text saved; settings/steering were not confirmed before the chat closed",
+    );
+    expect(installed).toContain("You asked for");
+    expect(installed).toContain("gpt-5-mini");
+    expect(installed).toContain("do not send it again");
+    expect(installed).toContain("A browser annotation was not saved with it.");
+  });
+
+  it("holds the session with the edit accepted and the follow-up pending, and releases it after the follow-up ack", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      OTHER_SETTINGS,
+    );
+    ackAccepted(harness, editActionId, "queueEdit");
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId],
+    ).toBeDefined();
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
+
+    ackAccepted(harness, followUpActionId, "queueSettingsUpdate");
+
+    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
     expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
   });
 });

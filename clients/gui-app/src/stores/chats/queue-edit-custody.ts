@@ -115,9 +115,9 @@ export type QueueEditRecords = Readonly<
  * Why an edited text is going back to the user.
  *
  * - `refused`: the host said no, on this connection, with a reason.
- * - `not_applied`: no ack, but the host shows the prompt ran - or left the
- *   queue - as something else. An edit cannot land on a prompt that has
- *   started, so this is settled.
+ * - `not_applied`: no ack, but the host shows the prompt ran as something
+ *   else. An edit cannot land on a prompt that has started, so this is
+ *   settled.
  * - `unconfirmed`: no ack and nothing the host shows settles it. The text goes
  *   back so it is not held out of sight, and it may still have been saved.
  */
@@ -214,18 +214,22 @@ export function withoutQueueEditRecord(
 }
 
 /**
- * The records whose edited text is held NOWHERE else: not yet handed back, and
- * not yet known saved. These are what a disposing session must hand off and
- * what an eviction must wait for.
+ * The records still holding a submission nothing else holds: every record
+ * whose text has not been handed back. These are what a disposing session must
+ * hand off and what an eviction must wait for.
+ *
+ * That includes one whose text the host has ALREADY saved while its second
+ * frame is unanswered. The text is safe, but the submission is not: the
+ * settings that were asked for and the annotation cards captured with it are
+ * held by this record alone until that frame is accounted for, and a session
+ * disposed in between would take them with it.
  */
-export function queueEditRecordsHoldingOnlyCopy(
+export function queueEditRecordsInCustody(
   records: QueueEditRecords,
 ): ReadonlyArray<QueueEditRecord> {
   return Object.values(records).filter(
     (record): record is QueueEditRecord =>
-      record !== undefined &&
-      !record.contentReturned &&
-      record.edit !== "accepted",
+      record !== undefined && !record.contentReturned,
   );
 }
 
@@ -401,14 +405,13 @@ export function queueEditContentMatches(
 /** What the host can be seen to hold, at the moment a record is accounted for. */
 export interface QueueEditEvidence {
   readonly queue: ChatQueueState;
-  /** The transcript messages whose bodies this client holds. */
-  readonly messages: ReadonlyArray<Message>;
   /**
-   * Whether `messages` is the WHOLE transcript. Only then does a message that
-   * is not in it not exist; on a windowed transcript with rows still unloaded,
-   * "not found" means "not loaded".
+   * The transcript messages whose bodies this client holds. Never the whole
+   * story: a windowed transcript holds only its loaded rows, and on any line a
+   * row can leave the queue a frame before the message it became arrives. So
+   * a message that is not here is not evidence of anything.
    */
-  readonly transcriptComplete: boolean;
+  readonly messages: ReadonlyArray<Message>;
   readonly settingsEqual: (a: ChatRunSettings, b: ChatRunSettings) => boolean;
   readonly accountContextEqual: (
     a: AccountContext,
@@ -424,11 +427,12 @@ type QueueEditVerdict = "applied" | "not_applied" | "unknown";
  * - The edited document on the row, or on the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
  *   refuses an edit to a prompt that has started, so nothing can change it now.
- * - The row gone from a transcript held whole, with no such message: not
- *   applied - the prompt was removed without running.
- * - Anything else is unknown. A row still showing other text may be about to
- *   change (the host finishes a handler it had already started when the
- *   connection dropped), and a body this client has not loaded says nothing.
+ * - Anything else is unknown, and stays unknown until one of the two above is
+ *   seen. A row still showing other text may be about to change (the host
+ *   finishes a handler it had already started when the connection dropped). A
+ *   row that is gone with no message in hand may be a body not loaded, or a
+ *   message one frame behind the queue change that removed the row. Absence is
+ *   never read as an answer.
  */
 function queueEditVerdict(
   record: QueueEditRecord,
@@ -450,22 +454,29 @@ function queueEditVerdict(
       ? "applied"
       : "not_applied";
   }
-  return evidence.transcriptComplete ? "not_applied" : "unknown";
+  return "unknown";
 }
 
 /**
  * Whether the host can be SEEN to hold what the second frame asked for. Only a
  * still-queued row can show it: the settings and account it carries, or a
- * steer the host has taken. A row that has left the queue, or one that is
- * merely paused, shows nothing either way.
+ * steer the host has taken. A row that is merely paused shows nothing.
+ *
+ * The row is read FIRST, ahead of what this client believed at dispatch. A
+ * save that looked like a no-op then (the row already held those settings) is
+ * not one if the row now shows others - another device changed them in
+ * between - and saying "applied" over a row that visibly disagrees would be
+ * the one claim this accounting exists not to make. Only once the row is gone,
+ * and with it anything that could contradict, does that dispatch-time fact
+ * stand: the submission asked the row to change nothing.
  */
 function followUpShownApplied(
   record: QueueEditRecord,
   row: ChatQueuedItem | null,
   evidence: QueueEditEvidence,
 ): boolean {
-  if (record.followUpIsNoOp) return true;
-  if (row === null || row.kind !== "prompt") return false;
+  if (row === null) return record.followUpIsNoOp;
+  if (row.kind !== "prompt") return false;
   if (record.intent === "save") {
     return (
       evidence.settingsEqual(row.settings, record.settings) &&
@@ -505,7 +516,10 @@ function accountForUnconfirmedRecord(
       settlements: [
         {
           kind: "saved_after_return",
-          clientActionId: record.editActionId,
+          // The second frame's id, not the edit's: the hand-back this follows
+          // was stated under the edit's id, and a notice that shared it would
+          // be counted as already delivered the moment that one was shown.
+          clientActionId: record.followUpActionId,
           intent: record.intent,
           followUpApplied,
         },
@@ -598,6 +612,10 @@ function withSweptFramesUnconfirmed(
 /** What a queued row's own control is doing while its frame is unanswered. */
 export type QueueItemInFlight = "saving" | "requesting_steer" | "cancelling";
 
+// `queueCancel` is listed for completeness of the derivation, but the chat tile
+// never draws it: a row whose cancel is pending is hidden outright
+// (`projectQueueWithPendingCancellations`) and comes back if the host refuses.
+// "Cancelling" is therefore what an aborted steer shows, on a row that stays.
 const IN_FLIGHT_BY_ACTION: Partial<
   Record<PendingChatAction["action"], QueueItemInFlight>
 > = {
