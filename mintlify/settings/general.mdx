@@ -3,7 +3,7 @@ title: "General"
 description: "Composer behavior, keeping the computer awake while agents run, the worktree branch prefix, experimental features, and resetting this device's app state."
 ---
 
-**General** holds app behavior that doesn't belong to a provider, a host, or one part of the app. It sits in the **Application** group of [Settings](/settings), so its settings apply to the app on this device, whichever host you are looking at.
+**General** holds app behavior that doesn't belong to a provider, a host, or one part of the app. It sits in the **Application** group of [Settings](/settings). Most settings apply to the app on this device, whichever host you are looking at; automatic chat archiving applies to your account across hosts.
 
 ## Chat & Composer
 
@@ -18,6 +18,14 @@ To hide the mic button but keep the dictation shortcut, set **Microphone** to **
 ## Running Agents
 
 **Prevent sleep while running** keeps the computer awake while an agent is running, so work continues when you step away. It is off by default.
+
+## Automatically Archive Idle Chats
+
+In **General › Agents**, enable **Archive idle agents automatically** and enter an idle threshold in seconds. It is off by default. The setting applies across your hosts and initially includes only chats created by agents.
+
+Turn on **Also archive chats I created** to include your own chats. Terminal agents count as yours, so they are included only with this option enabled.
+
+The host skips chats that are being viewed or still have work running. Archiving is applied when a host next looks at the chat's Task, rather than at an exact deadline. Sending a new message unarchives the chat.
 
 ## When You Quit Traycer
 
