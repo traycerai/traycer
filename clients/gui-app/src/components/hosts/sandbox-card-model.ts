@@ -142,6 +142,26 @@ export function sandboxIdleLine(summary: SandboxSummary): string {
 }
 
 /**
+ * What a suspend keeps on this sandbox's provider (core flows, flows 1 and
+ * 4), from the catalogue's `suspendFidelity`, or `null` for a value this
+ * build does not know.
+ */
+export function sandboxSuspendKeepsLine(
+  suspendFidelity: string,
+): string | null {
+  switch (suspendFidelity) {
+    case "memory":
+      return "Suspend keeps memory: processes are still running on resume";
+    case "disk":
+      return "Suspend keeps the disk only: processes restart on resume";
+    case "none":
+      return "Suspend keeps nothing: it restarts from its image";
+    default:
+      return null;
+  }
+}
+
+/**
  * The guest configuration failure the heartbeat reported, or `null` when the
  * guest is configured or has not reported. The reason is guest-authored
  * text: the card renders it as plain text only.

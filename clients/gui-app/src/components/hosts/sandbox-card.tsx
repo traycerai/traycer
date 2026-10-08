@@ -30,12 +30,14 @@ import {
   sandboxGuestConfigFailure,
   sandboxIdleLine,
   sandboxStateLine,
+  sandboxSuspendKeepsLine,
   type SandboxCardAction,
 } from "@/components/hosts/sandbox-card-model";
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxStateWord } from "@/components/settings/host-scope/host-option-model";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
@@ -117,6 +119,14 @@ export function SandboxCard(props: {
 function SandboxFacts(props: { readonly summary: SandboxSummary }): ReactNode {
   const { summary } = props;
   const now = useSampledNow();
+  const provider =
+    useSandboxCatalogue(true).data?.providers.find(
+      (p) => p.provider === summary.provider,
+    ) ?? null;
+  const keeps =
+    provider === null
+      ? null
+      : sandboxSuspendKeepsLine(provider.suspendFidelity);
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
@@ -131,6 +141,12 @@ function SandboxFacts(props: { readonly summary: SandboxSummary }): ReactNode {
       </dd>
       <dt className="text-muted-foreground">Idle</dt>
       <dd data-testid="sandbox-card-idle">{sandboxIdleLine(summary)}</dd>
+      {keeps === null || summary.burst ? null : (
+        <>
+          <dt className="text-muted-foreground">Suspend</dt>
+          <dd data-testid="sandbox-card-suspend-keeps">{keeps}</dd>
+        </>
+      )}
       <dt className="text-muted-foreground">Last active</dt>
       <dd data-testid="sandbox-card-last-active">
         {summary.lastActivityAt === null

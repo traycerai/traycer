@@ -41,7 +41,8 @@ function sandboxCatalogueQueryOptions(
 
 /**
  * `GET /api/sandboxes/catalogue`: shapes, regions, prices and the nearest
- * region, for the create form. Only the open form reads it (`enabled`).
+ * region, for the create form, and each provider's suspend fidelity, for
+ * the sandbox card. Only an open form or a mounted card reads it (`enabled`).
  */
 export function useSandboxCatalogue(
   enabled: boolean,
