@@ -340,11 +340,12 @@ describe("<SandboxCard /> verbs", () => {
   });
 
   it("disables the other verbs while one runs but leaves Destroy usable", async () => {
-    let finish: (() => void) | null = null;
+    // Held in an object: TS narrows a `let` assigned only in a callback to `never`.
+    const gate: { finish: (() => void) | null } = { finish: null };
     mocks.binding?.auth.runSandboxVerb.mockImplementation(
       () =>
         new Promise((resolve) => {
-          finish = () => resolve({ kind: "ok", settled: true });
+          gate.finish = () => resolve({ kind: "ok", settled: true });
         }),
     );
     renderCard(sandboxOf("awake", false, {}));
@@ -363,7 +364,7 @@ describe("<SandboxCard /> verbs", () => {
       screen.getByTestId("sandbox-card-destroy").hasAttribute("disabled"),
     ).toBe(false);
 
-    finish?.();
+    gate.finish?.();
     await waitFor(() => {
       expect(
         screen.getByTestId("sandbox-card-stop").hasAttribute("disabled"),

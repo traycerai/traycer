@@ -90,7 +90,13 @@ function useSandboxEntry(
   );
   mocks.list = {
     sandboxes: [
-      sandboxSummaryFixture({ id: "sbx_1", hostId: HOST_ID, state, frozen }),
+      sandboxSummaryFixture({
+        id: "sbx_1",
+        hostId: HOST_ID,
+        frozen,
+        // A state the registry has not reported leaves the fixture's own.
+        ...(state === null ? {} : { state }),
+      }),
     ],
   };
 }

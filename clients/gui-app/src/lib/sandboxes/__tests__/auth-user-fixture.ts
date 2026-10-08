@@ -35,6 +35,10 @@ export function userSubscription(plan: {
     isInTrial: false,
     totalPlanCredits: plan.totalPlanCredits,
     credit: {
+      id: "credit-1",
+      userId: "u1",
+      customerId: "cus",
+      lastResetAt: EPOCH,
       consumedFromPlan: plan.consumedFromPlan,
       bonusCredits: plan.bonusCredits,
       consumedFromBonus: plan.consumedFromBonus,
