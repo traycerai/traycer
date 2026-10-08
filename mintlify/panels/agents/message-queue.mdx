@@ -29,14 +29,18 @@ Turn the shortcut on or off with **Steer with ⌘+Enter** (**Steer with Ctrl+Ent
 
 | Row label             | Meaning                                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Queuing**           | The message is on its way to the host.                                                                                   |
+| **Sending to host** | The message has been sent, but the host has not confirmed it yet. |
+| **Delivery not confirmed** | The host has not acknowledged the message after a wait. This does not mean it failed. |
+| **Queued for next turn** | The host has confirmed the message is queued for the next turn. |
 | **Can steer**         | The message is set to go into the running turn.                                                                          |
-| **Waiting for steer** | The message waits for the turn's next safe point. **Cancel steer** returns it to the queue.                              |
+| **Waiting for provider** | The message waits for the turn's next safe point. **Cancel steer** returns it to the queue.                              |
 | **Restart pending**   | The turn will end and restart with this message.                                                                          |
 | **Steering**          | The message is going into the turn now.                                                                                  |
 | **After turn**        | This coding agent can't take a message mid-turn, so it is sent when the turn ends. The reason shows under the row.       |
 | **Paused**            | The message is held until you resume the queue.                                                                          |
 | **Paused after an error** | The last turn failed, so the queue is holding this message. Resume the queue to send it; retrying or switching the failed turn doesn't send it. See [Usage limits and model routing](/agents-and-models/usage-limits-and-routing#when-a-turn-fails). |
+
+If **Delivery not confirmed** appears beside the composer, click **Check delivery** to check with the host. This does not send the message again. While the chat is reconnecting to the host, sending is paused.
 
 ### Coding Agents That Can't Steer
 
