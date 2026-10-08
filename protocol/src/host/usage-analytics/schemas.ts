@@ -186,11 +186,16 @@ export const usageSummarySchema = lazySchema(() =>
     totals: usageSummaryTotalsSchema,
     buckets: z.array(usageSummaryBucketSchema),
     /**
-     * Sorted by `chatId`. Populated only for an epic- or chat-scoped read
-     * (`epicId` or `chatId` set), where it groups BY chat regardless of
-     * whether the request filtered to one chat. Always empty for an
-     * account-wide read (neither set): the summary keeps no per-chat state
-     * there. `distinctEpicCount`/`distinctChatCount` are filled on every read.
+     * Sorted by `chatId`. The contract on every version of this line: it is
+     * guaranteed only for an epic- or chat-scoped read (`epicId` or `chatId`
+     * set), where it groups BY chat regardless of whether the request
+     * filtered to one chat. On an account-wide read (neither set) its content
+     * is unspecified and consumers must not read it: the cloud plane and
+     * current hosts return it empty, keeping no per-chat state there, while
+     * a host whose local plane predates that may still fill it. No released
+     * client reads it on such a read; the only renderer is the epic-scoped
+     * usage dialog. `distinctEpicCount`/`distinctChatCount` are filled on
+     * every read.
      */
     chatBuckets: z.array(usageSummaryChatBucketSchema),
     /**
