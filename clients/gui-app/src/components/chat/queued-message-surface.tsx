@@ -1040,6 +1040,16 @@ function QueuedMessageRowText(props: {
   );
 }
 
+/** Whether a click inside `toggle` landed on a link or button within it. */
+function clickFromNestedControl(
+  target: EventTarget,
+  toggle: HTMLElement,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest("a, button, [role='button']");
+  return control !== null && control !== toggle;
+}
+
 /**
  * The click target that folds and unfolds a received agent row's text, or the
  * text alone for every other row.
@@ -1062,8 +1072,17 @@ function QueuedMessageAgentFoldToggle(props: {
       aria-expanded={fold.expanded}
       className="cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       data-testid="queued-message-agent-fold"
-      onClick={fold.onToggle}
+      onClick={(event) => {
+        // A link in the message is its own control: following it must not
+        // also fold or unfold the row it sits in.
+        if (clickFromNestedControl(event.target, event.currentTarget)) return;
+        fold.onToggle();
+      }}
       onKeyDown={(event) => {
+        // Only keys aimed at the toggle itself, once per press: Enter on a
+        // focused link inside belongs to the link, and a held key would
+        // otherwise flicker the row.
+        if (event.target !== event.currentTarget || event.repeat) return;
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         fold.onToggle();

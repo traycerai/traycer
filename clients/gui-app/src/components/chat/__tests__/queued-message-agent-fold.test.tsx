@@ -45,6 +45,12 @@ vi.mock("@dnd-kit/sortable", () => ({
   }),
 }));
 
+const openLinkSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkSpy,
+}));
+
 const SETTINGS: ChatRunSettings = {
   harnessId: "codex",
   model: "codex-test",
@@ -99,6 +105,31 @@ function agentItem(
       inReplyTo: null,
     },
     delivery: "same_turn",
+  };
+}
+
+/** An agent reply whose text carries a Markdown link ("see the PR for details"). */
+function linkedAgentItem(queueItemId: string): OpenChatQueuedPromptItem {
+  const linkedContent: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "see " },
+          {
+            type: "text",
+            text: "the PR",
+            marks: [{ type: "link", attrs: { href: "https://example.com" } }],
+          },
+          { type: "text", text: " for details" },
+        ],
+      },
+    ],
+  };
+  return {
+    ...agentItem(queueItemId, queueItemId),
+    message: { kind: "user", content: linkedContent, browserAnnotations: [] },
   };
 }
 
@@ -177,6 +208,7 @@ function expectThreeLine(row: HTMLElement): void {
 
 afterEach(() => {
   cleanup();
+  openLinkSpy.mockClear();
 });
 
 describe("a received agent row in the queue panel (#2441)", () => {
@@ -240,6 +272,65 @@ describe("a received agent row in the queue panel (#2441)", () => {
     expect(
       within(rowFor("q-agent")).getByTestId("queued-message-agent-fold"),
     ).not.toBeNull();
+  });
+});
+
+describe("the agent fold's nested controls and key repeat (#2441)", () => {
+  function linkOf(row: HTMLElement): HTMLElement {
+    return within(row).getByRole("link", { name: "the PR" });
+  }
+
+  it("does not toggle when a Markdown link inside the message is clicked", () => {
+    renderPanel([linkedAgentItem("q-link")]);
+    const row = screen.getByTestId("queued-message-row");
+    const fold = within(row).getByTestId("queued-message-agent-fold");
+
+    fireEvent.click(linkOf(row));
+
+    expect(openLinkSpy).toHaveBeenCalledTimes(1);
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(scrollOf(row).getAttribute("data-compact")).toBe("true");
+  });
+
+  it("does not toggle, or swallow the key, when Enter is pressed on the link", () => {
+    renderPanel([linkedAgentItem("q-link")]);
+    const row = screen.getByTestId("queued-message-row");
+    const fold = within(row).getByTestId("queued-message-agent-fold");
+
+    const notPrevented = fireEvent.keyDown(linkOf(row), { key: "Enter" });
+
+    expect(notPrevented).toBe(true);
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(scrollOf(row).getAttribute("data-compact")).toBe("true");
+  });
+
+  it("still unfolds when the message's plain text is clicked", () => {
+    renderPanel([linkedAgentItem("q-link")]);
+    const row = screen.getByTestId("queued-message-row");
+    const fold = within(row).getByTestId("queued-message-agent-fold");
+
+    fireEvent.click(within(row).getByText("see", { exact: false }));
+
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(scrollOf(row).getAttribute("data-compact")).toBe("false");
+    expect(openLinkSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores an auto-repeated Enter or Space and toggles on the first press", () => {
+    renderPanel([agentItem("q-agent", "agent reply q-agent")]);
+    const fold = within(rowFor("q-agent")).getByTestId(
+      "queued-message-agent-fold",
+    );
+
+    fireEvent.keyDown(fold, { key: "Enter", repeat: true });
+    fireEvent.keyDown(fold, { key: " ", repeat: true });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.keyDown(fold, { key: "Enter", repeat: false });
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.keyDown(fold, { key: "Enter", repeat: true });
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
   });
 });
 
