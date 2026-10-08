@@ -55,7 +55,6 @@ const SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
-const COMPACT_CLASS = "max-h-[calc(1lh+--spacing(1))]";
 const THREE_LINE_CLASS = "max-h-[calc(3lh+--spacing(1))]";
 
 function content(text: string): JsonContent {
@@ -142,6 +141,40 @@ function scrollOf(row: HTMLElement): HTMLElement {
   return within(row).getByTestId("queued-message-content-scroll");
 }
 
+function classesOf(element: HTMLElement): ReadonlyArray<string> {
+  return element.className.split(" ");
+}
+
+function previewOf(row: HTMLElement): HTMLElement {
+  return within(row).getByTestId("queued-message-content-preview");
+}
+
+/** Folded: the box is unclipped (its chrome floats in it) and the PROSE is one line. */
+function expectCompact(row: HTMLElement): void {
+  const scroll = scrollOf(row);
+  expect(scroll.getAttribute("data-compact")).toBe("true");
+  expect(classesOf(scroll)).toContain("flow-root");
+  expect(scroll.className).not.toContain(THREE_LINE_CLASS);
+  expect(classesOf(scroll)).not.toContain("overflow-hidden");
+  expect(classesOf(scroll)).not.toContain("overflow-y-auto");
+  expect(classesOf(previewOf(row))).toEqual(
+    expect.arrayContaining(["line-clamp-1", "max-h-[1lh]", "min-w-24"]),
+  );
+}
+
+/** Unfolded (or never foldable): the usual three-line scroll, no clamp. */
+function expectThreeLine(row: HTMLElement): void {
+  const scroll = scrollOf(row);
+  expect(scroll.getAttribute("data-compact")).toBe("false");
+  expect(classesOf(scroll)).toContain("overflow-y-auto");
+  expect(scroll.className).toContain(THREE_LINE_CLASS);
+  expect(classesOf(scroll)).not.toContain("flow-root");
+  const preview = classesOf(previewOf(row));
+  for (const clamp of ["line-clamp-1", "max-h-[1lh]", "min-w-24"]) {
+    expect(preview).not.toContain(clamp);
+  }
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -152,32 +185,17 @@ describe("a received agent row in the queue panel (#2441)", () => {
     const row = rowFor("q-agent");
     const fold = within(row).getByTestId("queued-message-agent-fold");
 
-    expect(scrollOf(row).getAttribute("data-compact")).toBe("true");
-    expect(scrollOf(row).className).toContain(COMPACT_CLASS);
-    expect(scrollOf(row).className).not.toContain(THREE_LINE_CLASS);
-    expect(
-      within(row)
-        .getByTestId("queued-message-content-preview")
-        .className.split(" "),
-    ).toContain("line-clamp-1");
+    expectCompact(row);
     expect(fold.getAttribute("role")).toBe("button");
     expect(fold.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(fold);
     expect(fold.getAttribute("aria-expanded")).toBe("true");
-    expect(scrollOf(row).getAttribute("data-compact")).toBe("false");
-    expect(scrollOf(row).className).toContain(THREE_LINE_CLASS);
-    expect(scrollOf(row).className).not.toContain(COMPACT_CLASS);
-    expect(
-      within(row)
-        .getByTestId("queued-message-content-preview")
-        .className.split(" "),
-    ).not.toContain("line-clamp-1");
+    expectThreeLine(row);
 
     fireEvent.click(fold);
     expect(fold.getAttribute("aria-expanded")).toBe("false");
-    expect(scrollOf(row).getAttribute("data-compact")).toBe("true");
-    expect(scrollOf(row).className).toContain(COMPACT_CLASS);
+    expectCompact(row);
   });
 
   it("toggles from the keyboard with Enter and Space, and ignores other keys", () => {
@@ -218,14 +236,7 @@ describe("a received agent row in the queue panel (#2441)", () => {
     expect(
       within(userRow).queryByTestId("queued-message-agent-fold"),
     ).toBeNull();
-    expect(scrollOf(userRow).getAttribute("data-compact")).toBe("false");
-    expect(scrollOf(userRow).className).toContain(THREE_LINE_CLASS);
-    expect(scrollOf(userRow).className).not.toContain(COMPACT_CLASS);
-    expect(
-      within(userRow)
-        .getByTestId("queued-message-content-preview")
-        .className.split(" "),
-    ).not.toContain("line-clamp-1");
+    expectThreeLine(userRow);
     expect(
       within(rowFor("q-agent")).getByTestId("queued-message-agent-fold"),
     ).not.toBeNull();

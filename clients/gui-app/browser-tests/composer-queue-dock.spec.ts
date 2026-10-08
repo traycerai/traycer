@@ -395,3 +395,159 @@ test("compact preset: a lone pill arrives fully drawn, starting at the composer'
     `${step}: the pill row starts at ${String(reading.firstPillLeft)}px, the composer at ${String(reading.composer.left)}px`,
   ).toBeLessThanOrEqual(ROW_EPSILON);
 });
+
+// A folded agent row clips its PROSE to one line and never its chrome (#2441
+// review F1): the sender chip and the status toolbar float in the row, are
+// taller than a text line, and wrap below it in a narrow pane. 239px is the
+// canvas's documented minimum pane width.
+interface Rect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+interface FoldedRowReading {
+  readonly scroll: Rect;
+  readonly row: Rect;
+  readonly list: Rect;
+  readonly sender: Rect | null;
+  readonly toolbar: Rect | null;
+  readonly status: Rect | null;
+  readonly preview: Rect & { readonly width: number; readonly height: number };
+  readonly previewLineHeight: number;
+  readonly previewLineClamp: string;
+  readonly hitInsideFold: boolean;
+  readonly foldExpanded: string | null;
+}
+
+async function readFoldedRow(page: Page): Promise<FoldedRowReading> {
+  return page.evaluate((): FoldedRowReading => {
+    const rectOf = (element: Element): Rect => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    };
+    const find = (testId: string): Element | null =>
+      document.querySelector(`[data-testid="${testId}"]`);
+    const require = (testId: string): Element => {
+      const element = find(testId);
+      if (element === null) throw new Error(`no ${testId} is drawn`);
+      return element;
+    };
+    const optional = (testId: string): Rect | null => {
+      const element = find(testId);
+      return element === null ? null : rectOf(element);
+    };
+    const preview = require("queued-message-content-preview");
+    const box = preview.getBoundingClientRect();
+    const style = getComputedStyle(preview);
+    const hit = document.elementFromPoint(
+      box.left + box.width / 2,
+      box.top + box.height / 2,
+    );
+    const fold = require("queued-message-agent-fold");
+    return {
+      scroll: rectOf(require("queued-message-content-scroll")),
+      row: rectOf(require("queued-message-row")),
+      list: rectOf(require("queued-message-list")),
+      sender: optional("queued-message-sender-badge"),
+      toolbar: optional("queued-message-row-toolbar"),
+      status: optional("queued-message-status-badge"),
+      preview: {
+        left: box.left,
+        top: box.top,
+        right: box.right,
+        bottom: box.bottom,
+        width: box.width,
+        height: box.height,
+      },
+      previewLineHeight: Number.parseFloat(style.lineHeight),
+      previewLineClamp: style.getPropertyValue("-webkit-line-clamp"),
+      hitInsideFold: hit !== null && fold.contains(hit),
+      foldExpanded: fold.getAttribute("aria-expanded"),
+    };
+  });
+}
+
+function insideRect(inner: Rect, outer: Rect): boolean {
+  return (
+    inner.left >= outer.left - ROW_EPSILON &&
+    inner.top >= outer.top - ROW_EPSILON &&
+    inner.right <= outer.right + ROW_EPSILON &&
+    inner.bottom <= outer.bottom + ROW_EPSILON
+  );
+}
+
+for (const width of [900, 320, 239] as const) {
+  test(`a folded agent reply keeps its badge, status and a readable one-line preview at ${String(width)}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 700 });
+    await openDock(page, "default");
+    await page.evaluate(
+      `window.__probeQueueAgentReply(${JSON.stringify(
+        "A long reply to review with plenty of words that runs past one line so the clamp becomes visible. Additional details at the end.",
+      )})`,
+    );
+    await expect(page.getByTestId("queued-message-row")).toHaveCount(1);
+    await settledReading(page);
+    const reading = await readFoldedRow(page);
+    const step = `${String(width)}px, folded`;
+
+    expect(reading.foldExpanded, `${step}: the row is folded`).toBe("false");
+    expect(reading.sender, `${step}: no sender badge is drawn`).not.toBeNull();
+    for (const [name, chrome] of [
+      ["sender badge", reading.sender],
+      ["status toolbar", reading.toolbar],
+      ["status badge", reading.status],
+    ] as const) {
+      if (chrome === null) continue;
+      expect(
+        insideRect(chrome, reading.scroll),
+        `${step}: the ${name} ${JSON.stringify(chrome)} is outside the content box ${JSON.stringify(reading.scroll)}`,
+      ).toBe(true);
+      expect(
+        insideRect(chrome, reading.row),
+        `${step}: the ${name} ${JSON.stringify(chrome)} is outside the row ${JSON.stringify(reading.row)}`,
+      ).toBe(true);
+      expect(
+        insideRect(chrome, reading.list),
+        `${step}: the ${name} ${JSON.stringify(chrome)} is outside the list ${JSON.stringify(reading.list)}`,
+      ).toBe(true);
+    }
+
+    expect(
+      reading.preview.width,
+      `${step}: the preview is ${String(reading.preview.width)}px wide`,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      reading.preview.height,
+      `${step}: the preview is ${String(reading.preview.height)}px high`,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      insideRect(reading.preview, reading.scroll),
+      `${step}: the preview ${JSON.stringify(reading.preview)} is outside the content box ${JSON.stringify(reading.scroll)}`,
+    ).toBe(true);
+    expect(
+      reading.previewLineClamp,
+      `${step}: the preview is not clamped`,
+    ).toBe("1");
+    expect(
+      reading.preview.height,
+      `${step}: the preview is ${String(reading.preview.height)}px high, more than one ${String(reading.previewLineHeight)}px line`,
+    ).toBeLessThanOrEqual(reading.previewLineHeight + ROW_EPSILON);
+    expect(
+      reading.hitInsideFold,
+      `${step}: a click at the preview's centre does not land in the fold control`,
+    ).toBe(true);
+
+    if (width === 900) {
+      const metric = await rowMetric(page);
+      const settled = await settledReading(page);
+      expect(
+        Math.abs((settled.rowHeights[0] ?? Number.NaN) - metric),
+        `${step}: the folded row measures ${String(settled.rowHeights[0])}px, not the ${String(metric)}px row metric`,
+      ).toBeLessThanOrEqual(ROW_EPSILON);
+    }
+  });
+}

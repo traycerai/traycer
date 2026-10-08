@@ -994,10 +994,21 @@ function QueuedMessageRowContent(props: {
 /** A row's text at its usual three-line cap. */
 const CONTENT_SCROLL_FULL = "max-h-[calc(3lh+--spacing(1))] overflow-y-auto";
 /**
- * A folded agent row's text, clipped to its one line; the preview inside
- * ellipsizes that line (`line-clamp-1`) rather than cutting it mid-glyph.
+ * A folded agent row's box. NOT clipped (#2441 review F1): the sender chip
+ * and the status toolbar float in this box and are taller than a text line,
+ * so a one-line cap here cropped them, and at a narrow width wrapped them out
+ * of sight altogether. `flow-root` contains the floats instead, and the one
+ * line is the PROSE's limit (`COMPACT_PREVIEW`), so a row the width can hold
+ * on one line measures exactly what a three-line row with one line does.
  */
-const CONTENT_SCROLL_COMPACT = "max-h-[calc(1lh+--spacing(1))] overflow-hidden";
+const CONTENT_SCROLL_COMPACT = "flow-root";
+/**
+ * The folded prose: one line, ellipsized, never taller than that line. It is
+ * a formatting context of its own, so it sits BESIDE the floats; `min-w-24`
+ * is what sends it below them, at full width, once the space beside them is
+ * too narrow to read (a 239px pane), rather than shrinking it to nothing.
+ */
+const COMPACT_PREVIEW = "line-clamp-1 max-h-[1lh] min-w-24";
 
 function agentFoldCompact(
   fold: QueuedMessageRowContentAgentFold | null,
@@ -1022,7 +1033,7 @@ function QueuedMessageRowText(props: {
         emptyLabel="Queued message"
         testId="queued-message-content-preview"
         className={
-          agentFoldCompact(props.agentFold) ? "line-clamp-1" : undefined
+          agentFoldCompact(props.agentFold) ? COMPACT_PREVIEW : undefined
         }
       />
     </QueuedMessageAgentFoldToggle>
@@ -1301,7 +1312,9 @@ function QueuedMessageFloatingChrome(props: {
   return (
     <div
       className={cn(
-        "sticky top-0 z-10 float-right ml-2 flex shrink-0 items-center",
+        // `max-w-full`: never wider than the row's text box, so a narrow pane
+        // ellipsizes the status pill rather than pushing it out of the row.
+        "sticky top-0 z-10 float-right ml-2 flex max-w-full shrink-0 items-center",
         // `gap-1` rather than `gap-0.5`: the buttons are `size-6`, which is
         // 22.5px at this root, so 3.75px between them puts their centres
         // 26.25px apart and the undersized-target spacing exception is not
@@ -1560,7 +1573,11 @@ function QueuedMessageStatusBadge(props: {
         // reach the tooltip without every pill becoming a tab stop.
         tabIndex={props.tooltip === null ? undefined : 0}
         className={cn(
-          "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
+          // `min-w-0` with the label's `truncate`: in a pane narrower than
+          // the label ("Queued for next turn" is about 127px, a 239px pane
+          // leaves the row about 117px) the pill ellipsizes inside the row
+          // instead of running past its edge (#2441 review F1).
+          "inline-flex min-w-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
           props.embedded ? null : "border border-border/60 bg-background/70",
         )}
       >
@@ -1572,7 +1589,7 @@ function QueuedMessageStatusBadge(props: {
             className={undefined}
           />
         ) : null}
-        {props.label}
+        <span className="min-w-0 truncate">{props.label}</span>
       </span>
     </TooltipWrapper>
   );
