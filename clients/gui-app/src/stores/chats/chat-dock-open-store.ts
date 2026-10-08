@@ -15,6 +15,12 @@ import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
  * on this machine is the failure the per-chat reveal exists to avoid.
  *
  * Nothing ever auto-opens: a chat with no entry here has no panel attached.
+ *
+ * The Message queue's fold lives here too (#2441), for the same reason and one
+ * more: the queue panel unmounts whenever the queue drains, so a fold kept in
+ * the panel came back open with the next queued message - in a busy chat, all
+ * the time. A chat with no entry has its queue OPEN, which is what it always
+ * was; only a fold the user made is remembered.
  */
 const MAX_REMEMBERED_CHATS = 64;
 
@@ -24,22 +30,25 @@ interface ChatDockOpenState {
   readonly toggleSection: (chatId: string, section: ChatDockSection) => void;
   /** Closes whatever this chat had open - a section that went empty. */
   readonly closeSection: (chatId: string) => void;
+  /** Chats whose Message queue the user folded; absent means open. */
+  readonly queueCollapsedByChatId: ReadonlyMap<string, boolean>;
+  readonly setQueueCollapsed: (chatId: string, collapsed: boolean) => void;
 }
 
 /**
  * Insertion-ordered and bounded: a long-lived window can visit thousands of
  * chats, and the oldest entry is the one nobody is looking at.
  */
-function withBoundedEntry(
-  current: ReadonlyMap<string, ChatDockSection>,
+function withBoundedEntry<T>(
+  current: ReadonlyMap<string, T>,
   chatId: string,
-  section: ChatDockSection,
-): ReadonlyMap<string, ChatDockSection> {
+  value: T,
+): ReadonlyMap<string, T> {
   const next = new Map(current);
   // Delete first so a re-opened chat moves to the END of the insertion order
   // and cannot be evicted while it is the one on screen.
   next.delete(chatId);
-  next.set(chatId, section);
+  next.set(chatId, value);
   while (next.size > MAX_REMEMBERED_CHATS) {
     const oldest = next.keys().next();
     if (oldest.done === true) break;
@@ -70,10 +79,36 @@ export const useChatDockOpenStore = create<ChatDockOpenState>((set) => ({
       return { openByChatId: next };
     });
   },
+  queueCollapsedByChatId: new Map<string, boolean>(),
+  setQueueCollapsed: (chatId, collapsed) => {
+    set((state) => {
+      if (collapsed) {
+        return {
+          queueCollapsedByChatId: withBoundedEntry(
+            state.queueCollapsedByChatId,
+            chatId,
+            true,
+          ),
+        };
+      }
+      // Open is the default, so an opened queue drops its entry rather than
+      // holding a slot in the bound.
+      if (!state.queueCollapsedByChatId.has(chatId)) return state;
+      const next = new Map(state.queueCollapsedByChatId);
+      next.delete(chatId);
+      return { queueCollapsedByChatId: next };
+    });
+  },
 }));
 
 export function useChatDockOpenSection(chatId: string): ChatDockSection | null {
   return useChatDockOpenStore(
     (state) => state.openByChatId.get(chatId) ?? null,
+  );
+}
+
+export function useChatQueueCollapsed(chatId: string): boolean {
+  return useChatDockOpenStore(
+    (state) => state.queueCollapsedByChatId.get(chatId) === true,
   );
 }

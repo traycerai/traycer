@@ -17,6 +17,10 @@ import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import {
+  useChatDockOpenStore,
+  useChatQueueCollapsed,
+} from "@/stores/chats/chat-dock-open-store";
 
 import {
   ChatDockCompactStrip,
@@ -210,6 +214,20 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   // never reordered. Whenever it holds anything it is the frame's LAST child,
   // so it sits directly on the composer under every row and attached panel.
   const queueVisible = props.queue.items.length > 0;
+  // The queue's fold is per CHAT and outlives the panel (#2441): the panel
+  // unmounts every time the queue drains, and a fold it kept itself came back
+  // open with the next queued message.
+  const queueCollapsed = useChatQueueCollapsed(props.chatId);
+  const setQueueCollapsed = useChatDockOpenStore(
+    (state) => state.setQueueCollapsed,
+  );
+  const chatId = props.chatId;
+  const onQueueOpenChange = useCallback(
+    (open: boolean) => {
+      setQueueCollapsed(chatId, !open);
+    },
+    [chatId, setQueueCollapsed],
+  );
   // The attached panel is built ONCE, here, and everything that claims a panel
   // is open follows THE NODE rather than the pill that asked for it.
   //
@@ -350,7 +368,12 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
                     data-layout-passive
                     data-layout-cue="Message queue · Always here"
                   >
-                    {queuePanel(props, anyRowVisible)}
+                    {queuePanel({
+                      dock: props,
+                      separated: anyRowVisible,
+                      open: !queueCollapsed,
+                      onOpenChange: onQueueOpenChange,
+                    })}
                   </div>
                 ) : null}
               </div>
@@ -494,7 +517,13 @@ function dockPanelContent(
   );
 }
 
-function queuePanel(dock: ChatLowerDockProps, separated: boolean): ReactNode {
+function queuePanel(props: {
+  readonly dock: ChatLowerDockProps;
+  readonly separated: boolean;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const { dock } = props;
   return (
     <QueuedMessagePanel
       queue={dock.queue}
@@ -505,7 +534,9 @@ function queuePanel(dock: ChatLowerDockProps, separated: boolean): ReactNode {
       readOnly={dock.readOnly}
       editingQueueItemId={dock.editingQueueItemId}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
-      separated={separated}
+      separated={props.separated}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
       onPause={dock.onQueuePause}
       onResume={dock.onQueueResume}
       onEdit={dock.onQueueEdit}

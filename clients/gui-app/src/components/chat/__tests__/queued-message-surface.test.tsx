@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   OpenChatQueuedItem,
@@ -1566,25 +1566,36 @@ interface PanelInput {
 function renderPanel(input: PanelInput) {
   return render(
     <TooltipProvider delayDuration={0}>
-      <QueuedMessagePanel
-        queue={input.queue}
-        activeTurnStatus="running"
-        canAct={input.canAct}
-        resumeRequested={input.resumeRequested ?? false}
-        keepPausedRequested={input.keepPausedRequested ?? false}
-        readOnly={input.readOnly}
-        editingQueueItemId={null}
-        scrollRegionMaxHeightClass="max-h-96"
-        separated={false}
-        onPause={input.onPause ?? (() => null)}
-        onResume={input.onResume ?? (() => null)}
-        onEdit={vi.fn()}
-        onCancel={onCancelSpy}
-        onAbortSteer={onAbortSteerSpy}
-        onReorder={input.onReorder ?? vi.fn()}
-        onSteerNow={vi.fn()}
-      />
+      <StatefulQueuePanel input={input} />
     </TooltipProvider>,
+  );
+}
+
+/** The dock owns the fold in production; this holds it the same way. */
+function StatefulQueuePanel(props: { readonly input: PanelInput }) {
+  const { input } = props;
+  const [open, setOpen] = useState<boolean>(true);
+  return (
+    <QueuedMessagePanel
+      queue={input.queue}
+      activeTurnStatus="running"
+      canAct={input.canAct}
+      resumeRequested={input.resumeRequested ?? false}
+      keepPausedRequested={input.keepPausedRequested ?? false}
+      readOnly={input.readOnly}
+      editingQueueItemId={null}
+      scrollRegionMaxHeightClass="max-h-96"
+      separated={false}
+      open={open}
+      onOpenChange={setOpen}
+      onPause={input.onPause ?? (() => null)}
+      onResume={input.onResume ?? (() => null)}
+      onEdit={vi.fn()}
+      onCancel={onCancelSpy}
+      onAbortSteer={onAbortSteerSpy}
+      onReorder={input.onReorder ?? vi.fn()}
+      onSteerNow={vi.fn()}
+    />
   );
 }
 

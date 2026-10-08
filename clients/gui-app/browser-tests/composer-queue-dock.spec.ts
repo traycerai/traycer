@@ -232,6 +232,64 @@ for (const preset of PRESETS) {
       ).toBeLessThanOrEqual(ROW_EPSILON);
     });
 
+    test(`twenty long agent replies are twenty one-line rows inside the list's cap, and a click unfolds one`, async ({
+      page,
+    }) => {
+      await openDock(page, preset);
+      const metric = await rowMetric(page);
+      const reply = (index: number): string =>
+        `Reply ${String(index)}: I read the diff and the failing test, and the cause is the retry path re-queuing the same job. ` +
+        `Nothing else in the module touches it, so the fix is one guard. I checked the callers too, and none of them depend on the old order. ` +
+        `Happy to walk through the trace if that helps, otherwise this is safe to merge as written.`;
+      for (let index = 0; index < 20; index += 1) {
+        await page.evaluate(
+          `window.__probeQueueAgentReply(${JSON.stringify(reply(index))})`,
+        );
+      }
+      await expect(page.getByTestId("queued-message-row")).toHaveCount(20);
+      const reading = await settledReading(page);
+      const step = `${preset} with twenty agent replies`;
+
+      expect(reading.rowHeights, `${step}: rows drawn`).toHaveLength(20);
+      for (const height of reading.rowHeights) {
+        expect(
+          Math.abs(height - metric),
+          `${step}: a folded reply measures ${String(height)}px, not the ${String(metric)}px row metric`,
+        ).toBeLessThanOrEqual(ROW_EPSILON);
+      }
+
+      const list = page.getByTestId("queued-message-list");
+      const cap = await list.evaluate((element) => ({
+        client: element.clientHeight,
+        scroll: element.scrollHeight,
+        bottom: element.getBoundingClientRect().bottom,
+      }));
+      expect(
+        cap.scroll,
+        `${step}: the list does not scroll, so twenty rows were not held to its cap`,
+      ).toBeGreaterThan(cap.client);
+      expect(
+        cap.bottom,
+        `${step}: the list ends at ${String(cap.bottom)}, below the composer's top ${String(reading.composer.top)}`,
+      ).toBeLessThanOrEqual(reading.composer.top + EPSILON);
+
+      const fold = page.getByTestId("queued-message-agent-fold").first();
+      await expect(fold).toHaveAttribute("aria-expanded", "false");
+      await fold.click();
+      await expect(fold).toHaveAttribute("aria-expanded", "true");
+      const unfolded = await settledReading(page);
+      expect(
+        (unfolded.rowHeights[0] ?? Number.NaN) - metric,
+        `${step}: the clicked row did not grow past the ${String(metric)}px row metric`,
+      ).toBeGreaterThan(ROW_EPSILON);
+      for (const height of unfolded.rowHeights.slice(1)) {
+        expect(
+          Math.abs(height - metric),
+          `${step}: an unclicked row grew to ${String(height)}px`,
+        ).toBeLessThanOrEqual(ROW_EPSILON);
+      }
+    });
+
     test(`the queue sits attached directly above the composer`, async ({
       page,
     }) => {

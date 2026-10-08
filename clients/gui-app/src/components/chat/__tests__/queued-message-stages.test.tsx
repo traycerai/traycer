@@ -133,6 +133,8 @@ function renderPanelWithQueue(
         editingQueueItemId={null}
         scrollRegionMaxHeightClass="max-h-96"
         separated={false}
+        open
+        onOpenChange={vi.fn()}
         onPause={() => null}
         onResume={() => null}
         onEdit={vi.fn()}
