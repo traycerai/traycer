@@ -349,7 +349,6 @@ afterEach(() => {
   bindingRef.value = null;
 });
 
-
 const SETTINGS: ChatRunSettings = {
   harnessId: "codex",
   model: "codex-test",
@@ -392,7 +391,10 @@ function tileFor(
   queryClient: QueryClient,
 ): ReactElement {
   const props = surfacesProps(() => null);
-  const queue: ChatSessionState["queue"] = { status: "idle", items: [...items] };
+  const queue: ChatSessionState["queue"] = {
+    status: "idle",
+    items: [...items],
+  };
   return tile(
     {
       ...props,
@@ -407,9 +409,7 @@ function tileFor(
 describe("the Message queue fold survives the queue emptying (#2441)", () => {
   it("keeps a folded queue folded when the next message arrives after the panel unmounted", () => {
     const queryClient = new QueryClient();
-    const view = render(
-      tileFor(CHAT_ID, [queuedPrompt("first")], queryClient),
-    );
+    const view = render(tileFor(CHAT_ID, [queuedPrompt("first")], queryClient));
     expect(screen.getByTestId("queued-message-list")).not.toBeNull();
 
     fireEvent.click(screen.getByTestId("queued-message-header-toggle"));
@@ -432,9 +432,7 @@ describe("the Message queue fold survives the queue emptying (#2441)", () => {
 
   it("reopens from the header after a remount and forgets the fold", () => {
     const queryClient = new QueryClient();
-    const view = render(
-      tileFor(CHAT_ID, [queuedPrompt("first")], queryClient),
-    );
+    const view = render(tileFor(CHAT_ID, [queuedPrompt("first")], queryClient));
     fireEvent.click(screen.getByTestId("queued-message-header-toggle"));
     view.rerender(tileFor(CHAT_ID, [], queryClient));
     view.rerender(tileFor(CHAT_ID, [queuedPrompt("second")], queryClient));

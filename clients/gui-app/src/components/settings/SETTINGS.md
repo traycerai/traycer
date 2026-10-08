@@ -1993,7 +1993,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     the panel came back open with the next queued message. A received agent
     row is one line (its sender chip and the message, ellipsized) until its
     text is clicked, and the header splits the count: `2 messages · 12 from
-    agents`.
+agents`.
   - **Received A2A queue rows follow the Running agents mode**, and fold into
     the same chip with their own count. That is also why the chip exists
     whenever those rows do, even with no sub-agent running: without it, folding

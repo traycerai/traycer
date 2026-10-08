@@ -439,7 +439,9 @@ function queueHeaderSummary(input: {
     return messageCount(input.count);
   }
   const fromAgents =
-    input.agentCount === 1 ? "1 from an agent" : `${input.agentCount} from agents`;
+    input.agentCount === 1
+      ? "1 from an agent"
+      : `${input.agentCount} from agents`;
   if (input.agentCount === input.count) {
     return `${messageCount(input.count)} from ${input.count === 1 ? "an agent" : "agents"}`;
   }
@@ -1019,7 +1021,9 @@ function QueuedMessageRowText(props: {
         content={item.message.content}
         emptyLabel="Queued message"
         testId="queued-message-content-preview"
-        className={agentFoldCompact(props.agentFold) ? "line-clamp-1" : undefined}
+        className={
+          agentFoldCompact(props.agentFold) ? "line-clamp-1" : undefined
+        }
       />
     </QueuedMessageAgentFoldToggle>
   );

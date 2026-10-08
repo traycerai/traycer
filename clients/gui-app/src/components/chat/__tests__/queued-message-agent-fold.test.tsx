@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -79,7 +85,10 @@ function userItem(queueItemId: string, text: string): OpenChatQueuedPromptItem {
   };
 }
 
-function agentItem(queueItemId: string, text: string): OpenChatQueuedPromptItem {
+function agentItem(
+  queueItemId: string,
+  text: string,
+): OpenChatQueuedPromptItem {
   return {
     ...userItem(queueItemId, text),
     sender: {
@@ -124,7 +133,7 @@ function renderPanel(items: ReadonlyArray<OpenChatQueuedItem>) {
 function rowFor(queueItemId: string): HTMLElement {
   const row = screen
     .getAllByTestId("queued-message-row")
-    .find((candidate) => candidate.textContent?.includes(queueItemId) === true);
+    .find((candidate) => candidate.textContent.includes(queueItemId));
   if (row === undefined) throw new Error(`no row carries ${queueItemId}`);
   return row;
 }
@@ -193,7 +202,9 @@ describe("a received agent row in the queue panel (#2441)", () => {
       within(rowFor("q-one")).getByTestId("queued-message-agent-fold"),
     );
 
-    expect(scrollOf(rowFor("q-one")).getAttribute("data-compact")).toBe("false");
+    expect(scrollOf(rowFor("q-one")).getAttribute("data-compact")).toBe(
+      "false",
+    );
     expect(scrollOf(rowFor("q-two")).getAttribute("data-compact")).toBe("true");
   });
 
@@ -204,7 +215,9 @@ describe("a received agent row in the queue panel (#2441)", () => {
     ]);
     const userRow = rowFor("q-user");
 
-    expect(within(userRow).queryByTestId("queued-message-agent-fold")).toBeNull();
+    expect(
+      within(userRow).queryByTestId("queued-message-agent-fold"),
+    ).toBeNull();
     expect(scrollOf(userRow).getAttribute("data-compact")).toBe("false");
     expect(scrollOf(userRow).className).toContain(THREE_LINE_CLASS);
     expect(scrollOf(userRow).className).not.toContain(COMPACT_CLASS);
@@ -221,7 +234,7 @@ describe("a received agent row in the queue panel (#2441)", () => {
 
 describe("the queue header summary (#2441)", () => {
   function summary(): string {
-    return screen.getByTestId("queued-message-header").textContent ?? "";
+    return screen.getByTestId("queued-message-header").textContent;
   }
 
   it("says 'N messages' / '1 message' when no agent is queued", () => {
