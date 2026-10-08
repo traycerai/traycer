@@ -1,0 +1,437 @@
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  SANDBOX_REFUSAL_CODE_FROZEN,
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDITS,
+  SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
+  sandboxCatalogueSchema,
+  sandboxCreateAcceptedSchema,
+  sandboxListResponseSchema,
+  sandboxRefusalBodySchema,
+  type SandboxCatalogue,
+  type SandboxCreateAccepted,
+  type SandboxCreateRequest,
+  type SandboxListResponse,
+} from "@traycer/protocol/host/sandbox-control";
+
+/**
+ * The raw calls to traycer-server's sandbox control plane (`/api/sandboxes`)
+ * with the user bearer. Transport-only, a sibling of
+ * `fetchRegisteredHostsViaHttp`, and it runs where that runs: desktop calls it
+ * from Electron main (traycer-server's CORS allow-list is the web dashboard
+ * origin, not the app renderer), mobile calls it through the native HTTP
+ * layer, browser/dev shells call it directly.
+ *
+ * Every function here never throws: transport failures, non-2xx answers and
+ * malformed bodies collapse into a discriminated, structured-clone-safe result
+ * so it crosses the Electron IPC boundary unchanged.
+ */
+
+/** Per-request budget, mirrors `HOST_LIST_FETCH_TIMEOUT_MS`. */
+const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * A non-`ok` answer:
+ *  - `unauthorized`  — the bearer was rejected (401/403).
+ *  - `refused`       — the control plane answered with its typed refusal body
+ *                      (`{ code, ... }`); `code` is the server's word (see
+ *                      `SandboxRefusalBody` for the known ones).
+ *  - `network-error` — transport/timeout, a 5xx without a typed body, or a
+ *                      body this build cannot parse. `detail` is a stable
+ *                      classification, never a raw server body.
+ */
+export type SandboxControlFailure =
+  | { readonly kind: "unauthorized" }
+  | {
+      readonly kind: "refused";
+      readonly status: number;
+      readonly code: string;
+      readonly message: string | null;
+      readonly shortfallMc: number | null;
+      readonly burnMcPerHour: number | null;
+    }
+  | { readonly kind: "network-error"; readonly detail: string };
+
+export type SandboxListFetchResult =
+  | { readonly kind: "ok"; readonly response: SandboxListResponse }
+  | SandboxControlFailure;
+
+export type SandboxCatalogueFetchResult =
+  | { readonly kind: "ok"; readonly catalogue: SandboxCatalogue }
+  | SandboxControlFailure;
+
+export type SandboxCreateFetchResult =
+  | { readonly kind: "ok"; readonly accepted: SandboxCreateAccepted }
+  | SandboxControlFailure;
+
+/** `destroy` and the wake verbs answer with no body the client reads. */
+export type SandboxVerbFetchResult =
+  | { readonly kind: "ok" }
+  | SandboxControlFailure;
+
+/** The two lifecycle verbs a client calls to wake a sandbox before dialing. */
+export type SandboxWakeVerb = "resume" | "start";
+
+function sandboxesUrl(serverBaseUrl: string, path: string): string {
+  const base = serverBaseUrl.endsWith("/") ? serverBaseUrl : `${serverBaseUrl}/`;
+  return new URL(`api/sandboxes${path}`, base).toString();
+}
+
+type RawCall =
+  | { readonly kind: "response"; readonly status: number; readonly body: unknown }
+  | { readonly kind: "network-error"; readonly detail: string };
+
+async function call(
+  url: string,
+  init: { readonly method: string; readonly body: string | null },
+  bearerToken: string,
+): Promise<RawCall> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: init.method,
+      headers:
+        init.body === null
+          ? {
+              Authorization: `Bearer ${bearerToken}`,
+              Accept: "application/json",
+            }
+          : {
+              Authorization: `Bearer ${bearerToken}`,
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+      body: init.body,
+      signal: AbortSignal.timeout(SANDBOX_CONTROL_FETCH_TIMEOUT_MS),
+    });
+  } catch (error: unknown) {
+    return {
+      kind: "network-error",
+      detail:
+        error instanceof Error
+          ? `the request never completed (${error.name})`
+          : "the request never completed",
+    };
+  }
+  let body: unknown = null;
+  try {
+    // An empty or non-JSON body (a proxy's HTML page, a 204) reads as `null`
+    // rather than throwing before the status is classified.
+    const text = await response.text();
+    body = text.length === 0 ? null : JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  return { kind: "response", status: response.status, body };
+}
+
+/** Classifies a non-2xx answer. */
+function failureOf(status: number, body: unknown): SandboxControlFailure {
+  if (status === 401 || status === 403) {
+    return { kind: "unauthorized" };
+  }
+  const refusal = sandboxRefusalBodySchema.safeParse(body);
+  if (refusal.success) {
+    return {
+      kind: "refused",
+      status,
+      code: refusal.data.code,
+      message: refusal.data.message ?? null,
+      shortfallMc: refusal.data.shortfallMc ?? null,
+      burnMcPerHour: refusal.data.burnMcPerHour ?? null,
+    };
+  }
+  return {
+    kind: "network-error",
+    detail: `the control plane answered HTTP ${status} without a typed refusal`,
+  };
+}
+
+function isSuccess(status: number): boolean {
+  return status >= 200 && status < 300;
+}
+
+/** `GET /api/sandboxes`: the signed-in user's sandboxes. */
+export async function listSandboxesViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+): Promise<SandboxListFetchResult> {
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, ""),
+    { method: "GET", body: null },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  const parsed = sandboxListResponseSchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the sandbox list did not match the contract",
+    };
+  }
+  return { kind: "ok", response: parsed.data };
+}
+
+/** `GET /api/sandboxes/catalogue`: providers, shape bounds, regions, prices. */
+export async function fetchSandboxCatalogueViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+): Promise<SandboxCatalogueFetchResult> {
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, "/catalogue"),
+    { method: "GET", body: null },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  const parsed = sandboxCatalogueSchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the sandbox catalogue did not match the contract",
+    };
+  }
+  return { kind: "ok", catalogue: parsed.data };
+}
+
+/** `POST /api/sandboxes`: `202` with the sandbox and host ids. */
+export async function createSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  request: SandboxCreateRequest,
+): Promise<SandboxCreateFetchResult> {
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, ""),
+    { method: "POST", body: JSON.stringify(request) },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  const parsed = sandboxCreateAcceptedSchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the create answer did not match the contract",
+    };
+  }
+  return { kind: "ok", accepted: parsed.data };
+}
+
+/** `DELETE /api/sandboxes/:id`. */
+export async function destroySandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  sandboxId: string,
+): Promise<SandboxVerbFetchResult> {
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}`),
+    { method: "DELETE", body: null },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  return { kind: "ok" };
+}
+
+/**
+ * `POST /api/sandboxes/:id/resume` or `/start`. The server answers once the
+ * transition is under way (or joins one in flight); the caller waits for the
+ * host list to say `awake` (see {@link ensureSandboxAwake}).
+ */
+export async function wakeSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  sandboxId: string,
+  verb: SandboxWakeVerb,
+): Promise<SandboxVerbFetchResult> {
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}/${verb}`),
+    { method: "POST", body: null },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  return { kind: "ok" };
+}
+
+// -----------------------------------------------------------------------------
+// Wake before dial
+// -----------------------------------------------------------------------------
+
+/** What the host list says about one sandbox right now. */
+export interface SandboxDialFacts {
+  readonly sandboxId: string;
+  readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
+}
+
+/**
+ * The outcome of {@link ensureSandboxAwake}:
+ *  - `awake`              — dial it.
+ *  - `refused`            — the typed `SANDBOX_FROZEN` refusal: frozen for lack
+ *                           of credits, so a dial would only wait out relay
+ *                           timeouts against a host that is down on purpose.
+ *  - `credit-gate`        — the wake gate refused for lack of credits.
+ *  - `wake-not-available` — this control plane does not serve the lifecycle
+ *                           verbs yet (`501 verb_not_available`).
+ *  - `not-wakeable`       — the sandbox is destroyed, failed or released.
+ *  - `failed`             — anything else, with a stable `detail`.
+ */
+export type SandboxWakeOutcome =
+  | { readonly kind: "awake" }
+  | {
+      readonly kind: "refused";
+      readonly code: "SANDBOX_FROZEN";
+      readonly message: string;
+    }
+  | {
+      readonly kind: "credit-gate";
+      readonly shortfallMc: number | null;
+      readonly burnMcPerHour: number | null;
+    }
+  | { readonly kind: "wake-not-available" }
+  | { readonly kind: "not-wakeable"; readonly state: HostSandboxState | null }
+  | { readonly kind: "failed"; readonly detail: string };
+
+export interface EnsureSandboxAwakeDeps {
+  /** The facts the caller dialed from (its host list row joined to the sandbox id). */
+  readonly initial: SandboxDialFacts;
+  /** Calls the wake verb; the runner host's `wakeSandbox`. */
+  readonly wake: (
+    sandboxId: string,
+    verb: SandboxWakeVerb,
+  ) => Promise<SandboxVerbFetchResult>;
+  /** Re-reads the facts (a fresh host list read); `null` when the row is gone. */
+  readonly readFacts: () => Promise<SandboxDialFacts | null>;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
+  /** How often the facts are re-read while waiting for `awake`. */
+  readonly pollIntervalMs: number;
+  /** How long a wake may take before the caller is told it failed. */
+  readonly timeoutMs: number;
+}
+
+export const SANDBOX_FROZEN_MESSAGE =
+  "This sandbox is paused because your credits ran out. Add credits to wake it.";
+
+/**
+ * Wakes a sandbox before a tab dials it: resume a suspended (or suspending)
+ * one, start a stopped (or stopping) one, then wait until the host list says
+ * `awake`. Called at tab open only, never from a session's reconnect loop -
+ * a reconnect that woke sandboxes would keep a forgotten tab's metered
+ * machine awake for as long as the tab exists.
+ */
+export async function ensureSandboxAwake(
+  deps: EnsureSandboxAwakeDeps,
+): Promise<SandboxWakeOutcome> {
+  const settled = settledOutcome(deps.initial);
+  if (settled !== null) return settled;
+
+  const verb = wakeVerbFor(deps.initial.state);
+  if (verb !== null) {
+    const result = await deps.wake(deps.initial.sandboxId, verb);
+    if (result.kind !== "ok") return outcomeOfWakeFailure(result);
+  }
+
+  const deadline = deps.now() + deps.timeoutMs;
+  while (deps.now() < deadline) {
+    await deps.sleep(deps.pollIntervalMs);
+    const facts = await deps.readFacts();
+    if (facts === null) {
+      return { kind: "not-wakeable", state: null };
+    }
+    const outcome = settledOutcome(facts);
+    if (outcome !== null) return outcome;
+  }
+  return {
+    kind: "failed",
+    detail: "the sandbox did not report awake in time",
+  };
+}
+
+/** A final answer from facts alone, or `null` while the sandbox is on its way. */
+function settledOutcome(facts: SandboxDialFacts): SandboxWakeOutcome | null {
+  if (facts.frozen) {
+    return {
+      kind: "refused",
+      code: "SANDBOX_FROZEN",
+      message: SANDBOX_FROZEN_MESSAGE,
+    };
+  }
+  switch (facts.state) {
+    case "awake":
+      return { kind: "awake" };
+    case "destroying":
+    case "destroyed":
+    case "failed":
+    case "released":
+      return { kind: "not-wakeable", state: facts.state };
+    case "creating":
+    case "suspending":
+    case "suspended":
+    case "resuming":
+    case "stopping":
+    case "stopped":
+    case "starting":
+    case null:
+      return null;
+  }
+}
+
+/**
+ * The verb that wakes a sandbox from this state, or `null` when the control
+ * plane is already bringing it up (a wake arriving mid-suspend is resumed by
+ * the server once the suspend lands, so `suspending` takes `resume` too).
+ */
+function wakeVerbFor(state: HostSandboxState | null): SandboxWakeVerb | null {
+  switch (state) {
+    case "suspending":
+    case "suspended":
+      return "resume";
+    case "stopping":
+    case "stopped":
+      return "start";
+    case "creating":
+    case "resuming":
+    case "starting":
+    case "awake":
+    case "destroying":
+    case "destroyed":
+    case "failed":
+    case "released":
+    case null:
+      return null;
+  }
+}
+
+function outcomeOfWakeFailure(
+  failure: SandboxControlFailure,
+): SandboxWakeOutcome {
+  if (failure.kind === "unauthorized") {
+    return { kind: "failed", detail: "the control plane refused the bearer" };
+  }
+  if (failure.kind === "network-error") {
+    return { kind: "failed", detail: failure.detail };
+  }
+  if (failure.code === SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE) {
+    return { kind: "wake-not-available" };
+  }
+  if (failure.code === SANDBOX_REFUSAL_CODE_FROZEN) {
+    return {
+      kind: "refused",
+      code: "SANDBOX_FROZEN",
+      message: SANDBOX_FROZEN_MESSAGE,
+    };
+  }
+  if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDITS) {
+    return {
+      kind: "credit-gate",
+      shortfallMc: failure.shortfallMc,
+      burnMcPerHour: failure.burnMcPerHour,
+    };
+  }
+  return {
+    kind: "failed",
+    detail: `the control plane refused the wake (${failure.code})`,
+  };
+}

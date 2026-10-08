@@ -31,6 +31,7 @@ describe("mintAttachGrantViaHttp", () => {
     expect(result).toEqual({
       kind: "ok",
       grant: { grant: "jws-abc", expiresInSeconds: 120 },
+      sessionGrant: null,
     });
 
     // POST with the user bearer + a role:"client" body to the T9 endpoint.

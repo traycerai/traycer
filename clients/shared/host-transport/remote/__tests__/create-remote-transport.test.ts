@@ -39,6 +39,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     authnBaseUrl: "https://authn.invalid",
     hostPublicKey: VALID_PUBLIC_KEY,
     bearer: () => bearerSource,
+    openAuth: "user-bearer",
     // This suite is about the BUILD-TIME bearer gate, which runs before any
     // mint closure is constructed, so `cloudAuthorized` is not consulted by
     // anything here. `true` keeps it out of the way: were it `false`, a later
@@ -205,6 +206,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         authnBaseUrl: "https://authn.invalid",
         hostPublicKey: VALID_PUBLIC_KEY,
         bearer: () => bearerSource,
+    openAuth: "user-bearer",
         cloudAuthorized,
         auth: null,
         clock: null,
@@ -317,6 +319,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         authnBaseUrl: "https://authn.invalid",
         hostPublicKey: VALID_PUBLIC_KEY,
         bearer: () => bearerSource,
+    openAuth: "user-bearer",
         cloudAuthorized,
         auth: null,
         clock: null,

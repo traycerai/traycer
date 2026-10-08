@@ -107,6 +107,26 @@ function buildFakeBridge(
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
+    listSandboxes: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxCatalogue: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    createSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    destroySandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    wakeSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {

@@ -26,6 +26,14 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+  SandboxWakeVerb,
+} from "../host-client/sandbox-control";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type {
@@ -342,6 +350,33 @@ export interface IRunnerHost {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+
+  /**
+   * The sandbox control plane (traycer-server `/api/sandboxes`) with the user
+   * bearer: the user's sandboxes, the catalogue the create form prices from,
+   * create, destroy, and the wake verbs a tab open calls before dialing a
+   * suspended or stopped sandbox. Each shell owns its traycer-server base URL
+   * the way it owns `authnBaseUrl`. Desktop runs these in Electron main
+   * (traycer-server's CORS allow-list is the web dashboard origin); mobile
+   * goes through the native HTTP layer; browser/dev shells call the shared
+   * helpers in `host-client/sandbox-control.ts` directly. Never throw:
+   * failures collapse into the discriminated results.
+   */
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCatalogue(bearerToken: string): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  wakeSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxWakeVerb,
+  ): Promise<SandboxVerbFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 

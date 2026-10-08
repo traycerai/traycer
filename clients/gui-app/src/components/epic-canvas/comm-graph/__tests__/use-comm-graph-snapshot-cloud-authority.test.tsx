@@ -833,6 +833,7 @@ function directoryEntry(
     version: null,
     publicKey: "public-key-a",
     relayFuseGrace: false,
+    sandbox: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

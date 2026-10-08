@@ -82,6 +82,7 @@ describe("hostAppVersionFromDirectoryEntry", () => {
       transportDialability: "dialable",
       publicKey: "pk",
       relayFuseGrace: false,
+      sandbox: null,
       remoteStatus: {
         connectivity: "connectable",
         viewerReachability: "unknown",

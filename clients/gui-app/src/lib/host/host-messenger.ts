@@ -18,6 +18,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
+  remoteOpenAuthFor,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -132,6 +133,7 @@ export function buildRawHostMessengerForTarget<
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      openAuth: remoteOpenAuthFor(params.target),
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
       // MUST match what `buildHostStreamClient` passes, and this is not a

@@ -113,6 +113,7 @@ describe("useHostDirectoryEntry", () => {
       transportDialability: "dialable",
       publicKey: "pubkey-a",
       relayFuseGrace: false,
+      sandbox: null,
       remoteStatus: {
         connectivity: "connectable",
         viewerReachability: "ok",
@@ -159,6 +160,7 @@ describe("useHostDirectoryEntry", () => {
       transportDialability: "not-dialable",
       publicKey: "pubkey-fuse",
       relayFuseGrace: true,
+      sandbox: null,
       remoteStatus: {
         connectivity: "offline",
         viewerReachability: "unknown",

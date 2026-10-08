@@ -15,6 +15,14 @@ import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/aut
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { updateHostVersionPolicyViaHttp } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import { deregisterHostViaHttp } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import {
+  createSandboxViaHttp,
+  destroySandboxViaHttp,
+  fetchSandboxCatalogueViaHttp,
+  listSandboxesViaHttp,
+  wakeSandboxViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import { config } from "../../config";
 import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
@@ -25,6 +33,8 @@ import {
   assertString,
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
+  parseSandboxCreateRequest,
+  parseSandboxWakeVerb,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
@@ -197,6 +207,66 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         hostId,
+      );
+    },
+  );
+
+  // The sandbox control plane. traycer-server's base URL is read from the
+  // baked config rather than the bridge options: it is a build constant (with
+  // the same dev-only loopback override as `authnBaseUrl`), and nothing in main
+  // needs to vary it per window.
+  bridge.handleInvoke(
+    RunnerHostInvoke.listSandboxes,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "listSandboxes.bearerToken");
+      return listSandboxesViaHttp(config.serverBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxCatalogue,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getSandboxCatalogue.bearerToken");
+      return fetchSandboxCatalogueViaHttp(config.serverBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.createSandbox,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "createSandbox.bearerToken");
+      return createSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        parseSandboxCreateRequest(request),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.destroySandbox,
+    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+      assertString(bearerToken, "destroySandbox.bearerToken");
+      assertString(sandboxId, "destroySandbox.sandboxId");
+      return destroySandboxViaHttp(config.serverBaseUrl, bearerToken, sandboxId);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.wakeSandbox,
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      verb: unknown,
+    ) => {
+      assertString(bearerToken, "wakeSandbox.bearerToken");
+      assertString(sandboxId, "wakeSandbox.sandboxId");
+      return wakeSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        sandboxId,
+        parseSandboxWakeVerb(verb),
       );
     },
   );

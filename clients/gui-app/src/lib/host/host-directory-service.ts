@@ -1458,8 +1458,20 @@ function hostDirectoryEntriesEqual(
     // every consumer kept a `relayFuseGrace: true` entry forever - recovery
     // dials permitted indefinitely past the documented 4h cap.
     isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
-    remotePublicKeyOf(a) === remotePublicKeyOf(b)
+    remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
+    // A sandbox's lifecycle word and frozen flag. Most state moves also move
+    // connectivity, but not all (a frozen flag set on an already-suspended
+    // row moves nothing else), and a surface deciding whether a tab open may
+    // wake the sandbox must see the move.
+    sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
   );
+}
+
+function sandboxStateKeyOf(entry: HostDirectoryEntry): string | null {
+  if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
+    return null;
+  }
+  return `${entry.sandbox.state ?? "none"}:${entry.sandbox.frozen ? "frozen" : "thawed"}`;
 }
 
 function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {

@@ -120,6 +120,7 @@ const OFFLINE_REMOTE_TARGET: RemoteHostDirectoryEntry = {
   transportDialability: "not-dialable",
   publicKey: "public-key",
   relayFuseGrace: false,
+  sandbox: null,
   remoteStatus: {
     connectivity: "offline",
     viewerReachability: "unknown",

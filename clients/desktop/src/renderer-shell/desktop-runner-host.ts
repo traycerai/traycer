@@ -137,6 +137,14 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+  SandboxWakeVerb,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -199,6 +207,21 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCatalogue(bearerToken: string): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  wakeSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxWakeVerb,
+  ): Promise<SandboxVerbFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
@@ -1086,6 +1109,38 @@ export class DesktopRunnerHost implements IRunnerHost {
     hostId: string,
   ): Promise<DeregisterHostFetchResult> {
     return this.bridge.deregisterHostFromAccount(bearerToken, hostId);
+  }
+
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
+    return this.bridge.listSandboxes(bearerToken);
+  }
+
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return this.bridge.getSandboxCatalogue(bearerToken);
+  }
+
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    return this.bridge.createSandbox(bearerToken, request);
+  }
+
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.destroySandbox(bearerToken, sandboxId);
+  }
+
+  wakeSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxWakeVerb,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.wakeSandbox(bearerToken, sandboxId, verb);
   }
 
   beginAuthAttempt(): void {

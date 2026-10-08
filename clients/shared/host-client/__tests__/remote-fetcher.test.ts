@@ -80,7 +80,9 @@ describe("fetchRegisteredHostsViaHttp", () => {
       expect(result.response.hosts[0].hostId).toBe("host-1");
     }
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://authn.example.test/api/v3/hosts");
+    expect(url).toBe(
+      "https://authn.example.test/api/v3/hosts?include=sandboxState",
+    );
     expect(init?.method).toBe("GET");
     expect((init?.headers as Record<string, string>).Authorization).toBe(
       "Bearer jwt-abc",

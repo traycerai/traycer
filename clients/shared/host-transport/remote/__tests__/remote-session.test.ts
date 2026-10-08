@@ -1169,6 +1169,7 @@ function buildSessionOptions(
       }),
     bearer: () => lease,
     auth,
+    sessionGrant: null,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,

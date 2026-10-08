@@ -48,7 +48,17 @@ const GRANT_FETCH_TIMEOUT_MS = 10_000;
  * fault (DNS? 401? 500 body?) survives into the session's `DialFailureLog`.
  */
 export type AttachGrantResult =
-  | { readonly kind: "ok"; readonly grant: AttachGrant }
+  | {
+      readonly kind: "ok";
+      readonly grant: AttachGrant;
+      /**
+       * The host-bound session grant authn mints beside the attach grant for a
+       * `kind: sandbox` target, or `null` for every other target. Presented in
+       * `OPEN.authz` v2 instead of the user bearer; see
+       * {@link createSandboxAttachGrantProvider}.
+       */
+      readonly sessionGrant: string | null;
+    }
   | ({ readonly kind: "unauthorized" } & AttachGrantFailure)
   | ({ readonly kind: "network-error" } & AttachGrantFailure);
 
@@ -291,6 +301,7 @@ export async function mintAttachGrantViaHttp(
       grant: parsed.data.grant,
       expiresInSeconds: parsed.data.expires_in,
     },
+    sessionGrant: parsed.data.session_grant ?? null,
   };
 }
 
@@ -329,5 +340,78 @@ export function createAttachGrantProvider(deps: {
       detail: result.detail,
       context: result.context,
     };
+  };
+}
+
+/** A sandbox target's grant provider plus the session grant it last minted. */
+export interface SandboxAttachGrantSource {
+  readonly provider: AttachGrantProvider;
+  /**
+   * The session grant minted with the most recent attach grant, or `null`
+   * before the first successful mint. The session calls the provider on every
+   * attach and resume and only then builds its `OPEN`, so the grant read here
+   * is always the one minted for the attach in progress.
+   */
+  readonly readSessionGrant: () => string | null;
+}
+
+/**
+ * The attach-grant provider for a `kind: sandbox` target (seam C1).
+ *
+ * Differs from {@link createAttachGrantProvider} in two ways, both about
+ * keeping the user's credential off a machine whose kernel the user does not
+ * own:
+ *
+ *  1. The mint must come back with a session grant. A 2xx without one fails
+ *     closed (`unavailable`) rather than falling back to the user bearer.
+ *  2. The session grant, not the user bearer, is what `OPEN` presents (see
+ *     `RemoteSessionOptions.sessionGrant`).
+ *
+ * Waking a suspended or stopped sandbox is NOT this provider's job: such a
+ * host reads `offline` in the directory and is never dialed, so the wake runs
+ * at tab open (`ensureSandboxAwake` in `host-client/sandbox-control.ts`) and
+ * the dial follows once the host list says `awake`. A reconnect loop that
+ * woke sandboxes would keep a forgotten tab's metered machine awake forever.
+ */
+export function createSandboxAttachGrantProvider(deps: {
+  readonly authnBaseUrl: string;
+  readonly hostId: string;
+  readonly getBearerToken: () => string | null;
+}): SandboxAttachGrantSource {
+  let latestSessionGrant: string | null = null;
+  const provider: AttachGrantProvider = async () => {
+    const bearerToken = deps.getBearerToken();
+    if (bearerToken === null) {
+      return {
+        kind: "unavailable",
+        detail: "no user bearer available (signed out?)",
+        context: "",
+      };
+    }
+    const result = await mintAttachGrantViaHttp(
+      deps.authnBaseUrl,
+      deps.hostId,
+      bearerToken,
+    );
+    if (result.kind !== "ok") {
+      return {
+        kind: "unavailable",
+        detail: result.detail,
+        context: result.context,
+      };
+    }
+    if (result.sessionGrant === null) {
+      return {
+        kind: "unavailable",
+        detail: "authn minted no session grant for a sandbox target",
+        context: "",
+      };
+    }
+    latestSessionGrant = result.sessionGrant;
+    return { kind: "ok", grant: result.grant };
+  };
+  return {
+    provider,
+    readSessionGrant: () => latestSessionGrant,
   };
 }

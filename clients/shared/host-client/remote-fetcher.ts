@@ -2,6 +2,8 @@ import {
   hostListResponseSchema,
   type HostListItem,
   type HostListResponse,
+  type HostProfile,
+  type HostSandboxState,
   type HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
 import type { CloudBearerSource } from "../auth/bearer-source";
@@ -45,11 +47,19 @@ export type HostListFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
+/**
+ * Every OSS reader of the registry opts into `include=sandboxState`: without
+ * it authn returns no `kind: sandbox` rows at all, and with it every row
+ * carries `sandboxState`, `sandboxFrozen` and `profile` (nullable). A released
+ * client never sends it, so it keeps the row set and shape it parses.
+ */
 function hostsApiUrl(authnBaseUrl: string): string {
-  return new URL(
+  const url = new URL(
     "api/v3/hosts",
     authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`,
-  ).toString();
+  );
+  url.searchParams.set("include", "sandboxState");
+  return url.toString();
 }
 
 /**
@@ -139,7 +149,23 @@ export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
    * Always `false` for any connectivity other than `offline`.
    */
   readonly relayFuseGrace: boolean;
+  /**
+   * The registry's sandbox facts for a `kind: sandbox` host, `null` for a
+   * personal one. Decides what the session's `OPEN` presents (a session
+   * grant, never the user bearer: `remoteOpenAuthFor`) and whether a tab open
+   * must wake the sandbox before it can be dialed.
+   */
+  readonly sandbox: RemoteHostSandboxFacts | null;
 };
+
+/** A sandbox host's lifecycle facts, as `GET /api/v3/hosts` reported them. */
+export interface RemoteHostSandboxFacts {
+  /** `null` before the control plane's first state post. */
+  readonly state: HostSandboxState | null;
+  /** Frozen for lack of credits; only ever true on a suspended or stopped row. */
+  readonly frozen: boolean;
+  readonly profile: HostProfile | null;
+}
 
 /**
  * Narrows a directory entry to a remote one carrying its status DTO + public
@@ -451,6 +477,14 @@ export function hostListItemToDirectoryEntry(
     // Reconciled once here (fetch time, not render) so the render-time
     // dialability/death gates stay pure - see isWithinRelayFuseGrace.
     relayFuseGrace: isWithinRelayFuseGrace(item.status, nowMs),
+    sandbox:
+      item.kind === "sandbox"
+        ? {
+            state: item.sandboxState ?? null,
+            frozen: item.sandboxFrozen === true,
+            profile: item.profile ?? null,
+          }
+        : null,
   };
 }
 

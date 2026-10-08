@@ -35,6 +35,8 @@ export {
 } from "../../ipc-contracts/window-state-parsers";
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
 import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import type { SandboxWakeVerb } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 
 export function assertString(
   value: unknown,
@@ -494,6 +496,84 @@ export function parseUpdateHostVersionPolicyInput(
         : undefined;
   const force = typeof obj.force === "boolean" ? obj.force : undefined;
   return { updatePolicy, desiredVersion, force };
+}
+
+/**
+ * Parses the renderer-supplied `POST /api/sandboxes` body. Unlike the version
+ * policy above there is no safe degrade for a malformed create - a guessed
+ * shape would provision a machine nobody asked for - so a bad value throws,
+ * which the invoke surfaces to the renderer as a rejected call.
+ */
+export function parseSandboxCreateRequest(value: unknown): SandboxCreateRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("createSandbox.request must be an object");
+  }
+  const obj = value as Record<string, unknown>;
+  const os = obj.os;
+  if (os !== "linux" && os !== "windows") {
+    throw new Error('createSandbox.request.os must be "linux" or "windows"');
+  }
+  const burst = obj.burst;
+  if (typeof burst !== "boolean") {
+    throw new Error("createSandbox.request.burst must be a boolean");
+  }
+  const cpus = obj.cpus;
+  if (typeof cpus !== "number" || !(cpus > 0)) {
+    throw new Error("createSandbox.request.cpus must be a positive number");
+  }
+  return {
+    name: requireNonEmptyString(obj.name, "createSandbox.request.name"),
+    os,
+    cpus,
+    memoryMb: requirePositiveInteger(
+      obj.memoryMb,
+      "createSandbox.request.memoryMb",
+    ),
+    region: requireNonEmptyString(obj.region, "createSandbox.request.region"),
+    idleMinutes:
+      obj.idleMinutes === null
+        ? null
+        : requirePositiveInteger(
+            obj.idleMinutes,
+            "createSandbox.request.idleMinutes",
+          ),
+    burst,
+    createdByHostId:
+      obj.createdByHostId === null
+        ? null
+        : requireNonEmptyString(
+            obj.createdByHostId,
+            "createSandbox.request.createdByHostId",
+          ),
+    createdByAgentId:
+      obj.createdByAgentId === null
+        ? null
+        : requireNonEmptyString(
+            obj.createdByAgentId,
+            "createSandbox.request.createdByAgentId",
+          ),
+  };
+}
+
+function requireNonEmptyString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+export function parseSandboxWakeVerb(value: unknown): SandboxWakeVerb {
+  if (value === "resume" || value === "start") {
+    return value;
+  }
+  throw new Error('wakeSandbox.verb must be "resume" or "start"');
 }
 
 export function readSenderWebContentsId(

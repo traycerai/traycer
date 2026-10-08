@@ -18,7 +18,11 @@ import {
 } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
-import { createAttachGrantProvider } from "./grant-client";
+import {
+  createAttachGrantProvider,
+  createSandboxAttachGrantProvider,
+} from "./grant-client";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { decodeHostPublicKey } from "./noise-channel";
 import {
   acquireRemoteSession,
@@ -57,6 +61,19 @@ export interface CreateRemoteTransportOptions<
   readonly hostPublicKey: string;
   /** Serves the in-channel bearer AND (derived) the grant-mint user bearer. */
   readonly bearer: BearerSourceProvider;
+  /**
+   * What `OPEN` presents. `user-bearer` for a personal host. `session-grant`
+   * for a `kind: sandbox` host (seam C1): the attach-grant mint must also
+   * return a host-bound session grant, `OPEN` carries it in `authz` v2 with an
+   * empty bearer, and the user bearer never leaves this client - it only
+   * authorizes the mint at authn. Read it off the directory entry with
+   * {@link remoteOpenAuthFor}.
+   *
+   * Not part of the session cache identity: a host id's kind is fixed for the
+   * host's life (a sandbox's id is chosen by the control plane at create), so
+   * two consumers of one host id can never disagree about it.
+   */
+  readonly openAuth: RemoteOpenAuth;
   /**
    * Whether this client currently holds a CLOUD capability - a session the
    * account's authn has confirmed - read live, per attach.
@@ -166,6 +183,16 @@ export interface CreateRemoteTransportOptions<
   readonly proactiveWakeEligible: boolean;
 }
 
+/** See {@link CreateRemoteTransportOptions.openAuth}. */
+export type RemoteOpenAuth = "user-bearer" | "session-grant";
+
+/** The `OPEN` credential a remote directory entry's host takes. */
+export function remoteOpenAuthFor(
+  entry: RemoteHostDirectoryEntry,
+): RemoteOpenAuth {
+  return entry.sandbox === null ? "user-bearer" : "session-grant";
+}
+
 export interface RemoteHostTransport<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -236,23 +263,37 @@ export function createRemoteHostTransport<
     identity,
     { proactiveWakeEligible: options.proactiveWakeEligible },
     () => {
-      const grantProvider = createAttachGrantProvider({
-        authnBaseUrl: options.authnBaseUrl,
-        hostId: options.hostId,
-        // The mint's permission check. `null` is a value the grant client
-        // already handles (it is the signed-out channel), so this refuses
-        // through an existing, tested path rather than inventing a failure
-        // mode. See `cloudAuthorized` for why the check lives in here and not
-        // at build time.
-        getBearerToken: () =>
-          options.cloudAuthorized() ? deriveBearerToken(options.bearer) : null,
-      });
+      // The mint's permission check. `null` is a value the grant client
+      // already handles (it is the signed-out channel), so this refuses
+      // through an existing, tested path rather than inventing a failure
+      // mode. See `cloudAuthorized` for why the check lives in here and not
+      // at build time.
+      const getBearerToken = (): string | null =>
+        options.cloudAuthorized() ? deriveBearerToken(options.bearer) : null;
+      const sandboxGrants =
+        options.openAuth === "session-grant"
+          ? createSandboxAttachGrantProvider({
+              authnBaseUrl: options.authnBaseUrl,
+              hostId: options.hostId,
+              getBearerToken,
+            })
+          : null;
+      const grantProvider =
+        sandboxGrants === null
+          ? createAttachGrantProvider({
+              authnBaseUrl: options.authnBaseUrl,
+              hostId: options.hostId,
+              getBearerToken,
+            })
+          : sandboxGrants.provider;
       return new RemoteSession<RpcRegistry, StreamRegistry>({
         hostId: options.hostId,
         attachBaseUrl: options.relayAttachUrl,
         hostStaticPublicKey,
         grantProvider,
         bearer: options.bearer,
+        sessionGrant:
+          sandboxGrants === null ? null : sandboxGrants.readSessionGrant,
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may

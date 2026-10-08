@@ -80,6 +80,7 @@ if (process.argv.includes("--restore")) {
 const production = {
   cloud: {
     authnApiUrl: "https://authn.traycer.ai",
+    traycerServerBaseUrl: "https://server.traycer.ai",
     cloudUiBaseUrl: "https://traycer.ai",
     relayAttachUrl: "wss://relay.traycer.ai/attach",
   },
@@ -114,6 +115,12 @@ runConfigTargetCli({
       dev: production.cloud.authnApiUrl,
       staging: targetInput === null ? "" : targetInput.cloud.authnApiUrl,
       production: production.cloud.authnApiUrl,
+    },
+    serverBaseUrl: {
+      dev: production.cloud.traycerServerBaseUrl,
+      staging:
+        targetInput === null ? "" : targetInput.cloud.traycerServerBaseUrl,
+      production: production.cloud.traycerServerBaseUrl,
     },
     cloudUiBaseUrl: {
       dev: production.cloud.cloudUiBaseUrl,

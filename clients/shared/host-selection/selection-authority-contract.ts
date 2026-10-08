@@ -1142,10 +1142,19 @@ export interface SelectionAuthorityClient {
   ): SelectionSubscription;
 }
 
-/** One registered host as the authority's engine sees it. */
+/**
+ * One registered host as the authority's engine sees it.
+ *
+ * `sandbox` is a remote host the control plane runs on the user's behalf
+ * (registry `kind: sandbox`). It is a full fleet member - surface pins name
+ * it, leases are derived for it, a session on it is evidence like any other -
+ * but the engine never CHOOSES it: the automatic failover arm skips it, so a
+ * metered machine never becomes the app's effective host because another one
+ * went away.
+ */
 export interface HostFleetEntry {
   hostId: string;
-  kind: "local" | "remote";
+  kind: "local" | "remote" | "sandbox";
 }
 
 /** An atomic fleet observation: identity and membership from one read. */

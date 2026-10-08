@@ -285,6 +285,7 @@ async function mount(input: {
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
+    serverBaseUrl: config.serverBaseUrl,
     hostLabel: config.hostLabel,
     relayBaseUrl: config.relayBaseUrl,
     pushRegistration,
