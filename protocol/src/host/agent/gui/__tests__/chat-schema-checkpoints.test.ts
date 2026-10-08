@@ -28,6 +28,7 @@ import {
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -158,6 +159,14 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.20 is captured LATE, from our own render: on the harness axis it cannot
 // match the bytes main shipped, since main's 1.20 predates the id. 1.21 is the
 // live line, the first that may name `commandcode`.
+//
+// 1.21 is captured ON TIME, from the tree before the tool-call `page` /
+// `mcpApp` stamps took 1.22 above it, and re-verified after that freeze:
+// identical, as is every line below it. The stamps first reached 1.13-1.21 by
+// reference, through the live tool-call block and `tool_call.completed`
+// event; the hand-frozen `toolCallBlockSchemaPrePage` /
+// `toolCallCompletedEventSchemaPrePage` leaves, swapped into every historical
+// union, are what keep them off. 1.22 is the live line.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -247,6 +256,10 @@ const SERVER_FRAME_DIGESTS = {
     "95eb83c260fa3524bcf2a276bcc7b3e21f36da417803d484580aad803eab4c8d",
     "df9bbe86f245826e18b231b0266dc27364e9cf82d825f3672f48633febd3825a",
   ],
+  22: [
+    "cfc6dd2f989898b5bb4d766455bf39c41845a28180b04ae2a51f3eac77e61446",
+    "ed79be0ec9bf4c50cb736b9f1ab8049585d9fccd8d49caff8d6573ab3a4994a6",
+  ],
 } as const;
 
 const contracts = [
@@ -272,10 +285,11 @@ const contracts = [
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.21 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.22 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

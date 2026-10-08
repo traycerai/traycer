@@ -83,7 +83,7 @@ const MODEL_ROUTING_NEEDLES = ['"receipt":', '"pausedReason":'];
 const CLAUDE_PARITY_MINOR = 20;
 // `1.21` is the Command Code line: it adds no key, only which harnesses the
 // shapes may name, so every threshold above still reads `>=` against it.
-const LIVE_MINOR = 21;
+const LIVE_MINOR = 22;
 // Object keys carry their colon so a needle cannot hit an enum value or a
 // description that merely mentions the name; the two literals (`thinkingTokens`
 // frame kind, `cron` background kind) are matched with both quotes, which
@@ -223,13 +223,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.21 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.22 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21,
+      21, 22,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });

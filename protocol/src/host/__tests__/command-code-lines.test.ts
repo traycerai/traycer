@@ -25,6 +25,7 @@ import {
 import {
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   chatFallbackListTargetsResponseSchema,
@@ -288,7 +289,8 @@ describe("every new head is the registry's canonical line", () => {
 
   it("stream heads are the new minors, with the released minors still installed", () => {
     const chat = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(chat.latestMinor).toBe(21);
+    expect(chat.latestMinor).toBe(22);
+    expect(chat.versions[22].contract).toBe(chatSubscribeV122);
     expect(chat.versions[21].contract).toBe(chatSubscribeV121);
     expect(chat.versions[20].contract).toBe(chatSubscribeV120);
     expect(hostStreamRpcRegistry["sessionImport.scan"][1].latestMinor).toBe(3);

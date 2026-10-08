@@ -84,6 +84,7 @@ import {
   runtimeEventSchemaPreFallback,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
+  runtimeEventSchemaPrePage,
   runtimeEventSchemaPreSettlement,
   runtimeEventSchemaV12PreInReplyTo,
   runtimeInterviewAnswerSchema,
@@ -126,6 +127,7 @@ import {
   chatRangeResponseSchemaPreBrowser,
   chatRangeResponseSchemaPreCommandCode,
   chatRangeResponseSchemaPreFallback,
+  chatRangeResponseSchemaPrePage,
   chatRangeResponseSchemaPreReceipt,
   chatRangeResponseSchemaPreShellHost,
   chatRecordSchema,
@@ -137,6 +139,7 @@ import {
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreCommandCode,
   chatTranscriptWindowSchemaPreFallback,
+  chatTranscriptWindowSchemaPrePage,
   chatTranscriptWindowSchemaPreReceipt,
   chatTranscriptWindowSchemaPreShellHost,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -3253,6 +3256,14 @@ const chatSubscribeSharedServerFrameSchemasV118 = [
   ...chatSubscribeCommonServerFrameSchemasV118,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
+// `chat.subscribe@1.20`/`@1.21`'s shared frames: the live list with the
+// pre-page `blockDelta`, whose `tool_call.completed` carries no `page` /
+// `mcpApp` stamp (`1.22`).
+const chatSubscribeSharedServerFrameSchemasV121 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemas,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPrePage),
+];
 const chatSubscribeSharedServerFrameSchemas = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemas,
@@ -5407,11 +5418,19 @@ const chatWindowedSnapshotSchemaV120 = lazySchema(() =>
     thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.21`): `1.20` with the live
-// tail, whose row context may carry the session anchor of a harness added
-// after 1.5.0. An existing key, so `.extend` keeps its position.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.21` ships it: `1.20` with a tail
+// whose row context may carry the session anchor of a harness added after
+// 1.5.0, and whose bodies are the pre-page ones. An existing key, so `.extend`
+// keeps its position.
+const chatWindowedSnapshotSchemaV121 = lazySchema(() =>
   chatWindowedSnapshotSchemaV120.extend({
+    tail: chatTranscriptWindowSchemaPrePage,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.22`): `1.21` with the live
+// tail, whose tool calls may carry `page` / `mcpApp` stamps.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV121.extend({
     tail: chatTranscriptWindowSchema,
   }),
 );
@@ -5526,6 +5545,18 @@ const chatSubscribeRangeServerFrameSchema = lazySchema(() =>
     ...textFrameFields,
     ...chatReferenceFields,
     range: chatRangeResponseSchema,
+  }),
+);
+
+// The same frame as `1.21` ships it: a scrolled-back row is the second channel
+// a tool call's `page` / `mcpApp` stamp could reach that line on, frozen for
+// the reason the snapshot's `tail` is.
+const chatSubscribeRangeServerFrameSchemaPrePage = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPrePage,
   }),
 );
 
@@ -5760,7 +5791,31 @@ const chatSubscribeServerFrameSchemaV120 = lazySchema(() =>
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemas,
+    ...chatSubscribeSharedServerFrameSchemasV121,
+  ]),
+);
+
+/**
+ * `chat.subscribe@1.21`'s server frames, frozen when `1.22` opened above it:
+ * arm for arm the live union below, except that the message bodies - on the
+ * snapshot's tail, on a `range` response and on `blockDelta`'s
+ * `tool_call.completed` - carry no `page` / `mcpApp` stamp.
+ */
+const chatSubscribeServerFrameSchemaV121 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV121,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPrePage,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV121,
   ]),
 );
 
@@ -6571,10 +6626,43 @@ export const chatSubscribeV120 = defineStreamRpcContract({
  * anchor inside an otherwise servable chat has the anchor withheld.
  *
  * The open request and the client frames are `1.20`'s, unchanged.
+ *
+ * Frozen at the pre-page message bodies since `1.22` opened above it
+ * (`chatSubscribeServerFrameSchemaV121`).
  */
 export const chatSubscribeV121 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 21 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV121,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The agent-page and MCP App line.
+ *
+ * `1.22` adds two keys and no frame, no union member and no enum value:
+ * `page` and `mcpApp` on a `tool_call` block (`toolCallPageStampSchema`,
+ * `toolCallMcpAppStampSchema`) and on its `tool_call.completed` event. A page
+ * an agent showed with `traycer_show_page` and an MCP App a tool rendered
+ * both arrive as a stamp on the call that produced them.
+ *
+ * PROJECTION, not tolerance, like `1.20`'s surfaces: every line below `1.22`
+ * binds the hand-frozen `toolCallBlockSchemaPrePage` /
+ * `toolCallCompletedEventSchemaPrePage` on every body channel (the tail, a
+ * `range` response and `blockDelta`), and the host deletes both keys by name
+ * for every peer below `1.22` (`chat-frame-projection.ts`). A peer below it
+ * renders the call as the plain tool row it always did.
+ *
+ * Defaulted `null` on the block and optional on the event: a block persisted
+ * before the keys reads as "no stamp", and an adapter that never stamps simply
+ * omits them from the event.
+ *
+ * The open request and the client frames are `1.21`'s, unchanged.
+ */
+export const chatSubscribeV122 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 22 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
