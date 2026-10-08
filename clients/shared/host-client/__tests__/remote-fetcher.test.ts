@@ -195,6 +195,28 @@ describe("hostListItemToDirectoryEntry", () => {
       "host-1",
     );
   });
+
+  it("projects a sandbox row's frozen flag folded with its state: a terminal row never reads frozen", () => {
+    // The registry keeps a destroyed row's last `sandboxFrozen`.
+    const sandboxItem = (
+      sandboxState: HostListItem["sandboxState"],
+    ): HostListItem => ({
+      ...onlineItem(),
+      kind: "sandbox",
+      sandboxState,
+      sandboxFrozen: true,
+      profile: "agent",
+    });
+
+    expect(
+      hostListItemToDirectoryEntry(sandboxItem("destroyed"), RELAY_BASE_URL)
+        .sandbox?.frozen,
+    ).toBe(false);
+    expect(
+      hostListItemToDirectoryEntry(sandboxItem("suspended"), RELAY_BASE_URL)
+        .sandbox?.frozen,
+    ).toBe(true);
+  });
 });
 
 describe("createRemoteHostFetcher", () => {

@@ -14,7 +14,9 @@ import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionStatusWord,
   isHostOptionSelectable,
+  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { usePaletteLiveQuery } from "@/lib/commands/palette-query-context";
 import {
@@ -62,27 +64,34 @@ function useBrowserHostItems(
         ? `Selected · ${followingHostName}`
         : followingHostName,
   };
-  const hosts = options.hosts.map((host) => {
-    const status = hostChoiceStatus(
-      hostPin.selection === host.hostId,
-      host.isActive,
-      hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
-    );
-    const item = {
-      ...openerActionLeaf({
-        id: `open:browser:host:${host.hostId}`,
-        label: host.name,
-        keywords: ["browser", "host", host.name],
-        run: () => hostPin.setSelection(host.hostId),
-      }),
-      disabled: !isHostOptionSelectable(
-        host,
-        "pin",
-        AVAILABLE_HOST_ROW_SURFACE_STATE,
-      ),
-    };
-    return status === undefined ? item : { ...item, statusBadge: status };
-  });
+  // A picker: no burst sandbox and no Automations pod (see
+  // `pickableHostOptions`); the pinned host always keeps its row.
+  const hosts = pickableHostOptions(options.hosts, hostPin.selection).map(
+    (host) => {
+      const status = hostChoiceStatus(
+        hostPin.selection === host.hostId,
+        host.isActive,
+        hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
+      );
+      const item = {
+        ...openerActionLeaf({
+          id: `open:browser:host:${host.hostId}`,
+          label: host.name,
+          keywords: ["browser", "host", host.name],
+          run: () => {
+            wakeSandboxOnPick(host);
+            hostPin.setSelection(host.hostId);
+          },
+        }),
+        disabled: !isHostOptionSelectable(
+          host,
+          "pin",
+          AVAILABLE_HOST_ROW_SURFACE_STATE,
+        ),
+      };
+      return status === undefined ? item : { ...item, statusBadge: status };
+    },
+  );
   const loading = options.isLoading
     ? [
         {

@@ -247,6 +247,30 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
   });
 
+  it("reports the outcome once when two tiles open on one suspended host while its wake is in flight", async () => {
+    mocks.entry = entryFor("sandbox", "suspended", false);
+    const auth = mocks.binding?.auth;
+    auth?.listSandboxes.mockImplementation(listOf({ state: "suspended" }));
+    auth?.runSandboxVerb.mockResolvedValue(refusal(402, "insufficient_credit"));
+    const Wrapper = wrapper();
+
+    // The second tile mounts while the first one's wake is still in flight, so
+    // it joins that wake; only the starter reports the shared outcome.
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      wrapper: Wrapper,
+    });
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      wrapper: Wrapper,
+    });
+    await settleWake();
+
+    expect(auth?.runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
+    expect(mocks.toastWarning.mock.calls[0][0]).toBe(
+      "Not enough credits to wake this sandbox",
+    );
+  });
+
   it("says the wake is not available yet when the control plane does not serve the verb", async () => {
     mocks.entry = entryFor("sandbox", "suspended", false);
     const auth = mocks.binding?.auth;
@@ -282,7 +306,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       "Not enough credits to wake this sandbox",
     );
     expect(mocks.toastWarning.mock.calls[0][1]).toEqual({
-      description: "Add 7.00 credits, then open the tab again.",
+      description: "Add 7.00 credits, then try again.",
     });
   });
 

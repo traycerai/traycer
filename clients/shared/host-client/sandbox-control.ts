@@ -56,9 +56,11 @@ const SANDBOX_VERB_FETCH_TIMEOUT_MS = 370_000;
  *  - `refused`       — the control plane answered with its typed refusal body
  *                      (`{ code, ... }`); `code` is the server's word (see
  *                      `SandboxRefusalBody` for the known ones).
- *  - `network-error` — transport/timeout, a 5xx without a typed body, or a
- *                      body this build cannot parse. `detail` is a stable
- *                      classification, never a raw server body.
+ *  - `network-error` — transport/timeout, a 5xx without a typed body, a
+ *                      body this build cannot parse, or a sandbox id that is
+ *                      not one path segment (refused before any request).
+ *                      `detail` is a stable classification, never a raw
+ *                      server body.
  */
 export type SandboxControlFailure =
   | { readonly kind: "unauthorized" }
@@ -102,6 +104,21 @@ export type SandboxVerbFetchResult =
 
 /** The two lifecycle verbs a client calls to wake a sandbox before dialing. */
 export type SandboxWakeVerb = Extract<SandboxLifecycleVerb, "resume" | "start">;
+
+/**
+ * A sandbox id as the URL may carry it: one plain path segment. The server
+ * mints lowercase ULIDs; anything else (empty, `.`, `..`, a separator or an
+ * escape) is refused before a URL is built, because `encodeURIComponent`
+ * leaves `.` and `..` alone and `new URL` resolves them as dot segments, so
+ * `..` with `/resume` would `POST /api/resume` under the user's bearer and an
+ * empty id on destroy would `DELETE` the collection.
+ */
+const SANDBOX_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+const INVALID_SANDBOX_ID: SandboxControlFailure = {
+  kind: "network-error",
+  detail: "the sandbox id is not one the control plane mints",
+};
 
 function sandboxesUrl(serverBaseUrl: string, path: string): string {
   const base = serverBaseUrl.endsWith("/")
@@ -299,8 +316,9 @@ export async function destroySandboxViaHttp(
   bearerToken: string,
   sandboxId: string,
 ): Promise<SandboxVerbFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
-    sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}`),
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
     {
       method: "DELETE",
       body: null,
@@ -325,8 +343,9 @@ export async function runSandboxVerbViaHttp(
   sandboxId: string,
   verb: SandboxLifecycleVerb,
 ): Promise<SandboxVerbFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
-    sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}/${verb}`),
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}/${verb}`),
     {
       method: "POST",
       body: null,
@@ -342,6 +361,28 @@ export async function runSandboxVerbViaHttp(
 // -----------------------------------------------------------------------------
 // Wake before dial
 // -----------------------------------------------------------------------------
+
+/** States a sandbox does not come back from: its disk is gone or going. */
+const SANDBOX_TERMINAL_STATES: ReadonlySet<HostSandboxState> = new Set([
+  "destroying",
+  "destroyed",
+  "failed",
+  "released",
+]);
+
+/**
+ * Whether a row's stored out-of-credits flag is in effect. The registry and
+ * the sandbox list keep a row's last `frozen` value after it is destroyed, so
+ * a terminal state wins: a destroyed sandbox is destroyed, not "frozen, add
+ * credits". Every reader that turns the flag into words, actions or a wake
+ * reads it through this.
+ */
+export function isSandboxFrozenInEffect(
+  state: HostSandboxState | null,
+  frozen: boolean,
+): boolean {
+  return frozen && (state === null || !SANDBOX_TERMINAL_STATES.has(state));
+}
 
 /** What the host list says about one sandbox right now. */
 export interface SandboxDialFacts {
@@ -437,7 +478,7 @@ export async function ensureSandboxAwake(
 
 /** A final answer from facts alone, or `null` while the sandbox is on its way. */
 function settledOutcome(facts: SandboxDialFacts): SandboxWakeOutcome | null {
-  if (facts.frozen) {
+  if (isSandboxFrozenInEffect(facts.state, facts.frozen)) {
     return {
       kind: "refused",
       code: "SANDBOX_FROZEN",
@@ -462,6 +503,14 @@ function settledOutcome(facts: SandboxDialFacts): SandboxWakeOutcome | null {
     case null:
       return null;
   }
+}
+
+/**
+ * Whether a sandbox in this state is asleep: suspended or stopped, or on its
+ * way there. A wake (a tab open, a pick in a host picker) brings it back.
+ */
+export function isSandboxAsleep(state: HostSandboxState | null): boolean {
+  return wakeVerbFor(state) !== null;
 }
 
 /**

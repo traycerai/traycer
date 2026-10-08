@@ -6,6 +6,8 @@ import {
   ensureSandboxAwake,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  isSandboxAsleep,
+  isSandboxFrozenInEffect,
   listSandboxesViaHttp,
   runSandboxVerbViaHttp,
   type EnsureSandboxAwakeDeps,
@@ -15,6 +17,14 @@ import {
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
+/** A real-shaped sandbox id: the server mints lowercase ULIDs. */
+const ULID = "01jbz8k3m4n5p6q7r8s9t0vwxy";
+/** Ids that are not one plain path segment, so no URL is built from them. */
+const UNSAFE_IDS = ["", ".", "..", "a/b", "a%2Fb", "odd id"] as const;
+const INVALID_ID_RESULT = {
+  kind: "network-error",
+  detail: "the sandbox id is not one the control plane mints",
+};
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -76,15 +86,27 @@ describe("runSandboxVerbViaHttp", () => {
       jsonResponse(200, { sandbox: SUMMARY }),
     );
 
-    await runSandboxVerbViaHttp(BASE, BEARER, "sbx/odd id", "resume");
+    await runSandboxVerbViaHttp(BASE, BEARER, ULID, "resume");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx%2Fodd%20id/resume`);
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/${ULID}/resume`);
     expect(init?.method).toBe("POST");
     expect(init?.headers).toMatchObject({
       Authorization: `Bearer ${BEARER}`,
     });
+  });
+
+  it("refuses an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandbox: SUMMARY }),
+    );
+    for (const id of UNSAFE_IDS) {
+      expect(await runSandboxVerbViaHttp(BASE, BEARER, id, "resume")).toEqual(
+        INVALID_ID_RESULT,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reads 200 as settled", async () => {
@@ -205,6 +227,17 @@ describe("destroySandboxViaHttp", () => {
     });
   });
 
+  it("refuses an id that is not one plain path segment before any request", async () => {
+    // An empty id would otherwise DELETE the collection.
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    for (const id of UNSAFE_IDS) {
+      expect(await destroySandboxViaHttp(BASE, BEARER, id)).toEqual(
+        INVALID_ID_RESULT,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("hands a 404 sandbox_not_found to the caller as a typed refusal", async () => {
     stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
     expect(await destroySandboxViaHttp(BASE, BEARER, "sbx_1")).toMatchObject({
@@ -317,6 +350,76 @@ describe("the other sandbox routes parse or fail the same way", () => {
       code: "shape_not_offered",
       reason: "cpus-out-of-range",
     });
+  });
+});
+
+describe("isSandboxFrozenInEffect", () => {
+  it("lets a terminal state win over the stored frozen flag", () => {
+    for (const state of [
+      "destroying",
+      "destroyed",
+      "failed",
+      "released",
+    ] as const) {
+      expect(isSandboxFrozenInEffect(state, true)).toBe(false);
+    }
+  });
+
+  it("keeps a stored frozen flag in effect for every other state, and for an unknown one", () => {
+    for (const state of [
+      "creating",
+      "awake",
+      "suspending",
+      "suspended",
+      "resuming",
+      "stopping",
+      "stopped",
+      "starting",
+      null,
+    ] as const) {
+      expect(isSandboxFrozenInEffect(state, true)).toBe(true);
+    }
+  });
+
+  it("is never in effect for a row that is not frozen", () => {
+    for (const state of [
+      "awake",
+      "suspended",
+      "stopped",
+      "destroyed",
+      null,
+    ] as const) {
+      expect(isSandboxFrozenInEffect(state, false)).toBe(false);
+    }
+  });
+});
+
+describe("isSandboxAsleep", () => {
+  it("is true for a sandbox suspended or stopped, or on its way there", () => {
+    for (const state of [
+      "suspending",
+      "suspended",
+      "stopping",
+      "stopped",
+    ] as const) {
+      expect(isSandboxAsleep(state)).toBe(true);
+    }
+  });
+
+  it("is false for a sandbox that is up, coming up, gone or unknown", () => {
+    for (const state of [
+      "creating",
+      "awake",
+      "resuming",
+      "starting",
+      "destroying",
+      "destroyed",
+      "failed",
+      "released",
+      null,
+    ] as const) {
+      expect(isSandboxAsleep(state)).toBe(false);
+    }
   });
 });
 
@@ -529,6 +632,19 @@ describe("ensureSandboxAwake", () => {
         deps({ initial: suspended, wake: async () => ok, reads: [null] }),
       ),
     ).toEqual({ kind: "not-wakeable", state: null });
+  });
+
+  it("answers not-wakeable, not frozen, for a destroyed row whose stored frozen flag is still set", async () => {
+    const wake = vi.fn(async () => ok);
+    const outcome = await ensureSandboxAwake(
+      deps({
+        initial: { ...suspended, state: "destroyed", frozen: true },
+        wake,
+        reads: [awake],
+      }),
+    );
+    expect(outcome).toEqual({ kind: "not-wakeable", state: "destroyed" });
+    expect(wake).not.toHaveBeenCalled();
   });
 
   it("gives up after the timeout when the row never reports awake", async () => {

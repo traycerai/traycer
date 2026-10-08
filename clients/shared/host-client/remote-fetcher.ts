@@ -9,6 +9,7 @@ import {
 import type { CloudBearerSource } from "../auth/bearer-source";
 import type { AuthEra } from "../auth/request-context-provider";
 import { applyHostKeyPins } from "./host-key-pin";
+import { isSandboxFrozenInEffect } from "./sandbox-control";
 import type { HostDirectoryEntry } from "./host-directory";
 
 /**
@@ -163,8 +164,9 @@ export interface RemoteHostSandboxFacts {
   /** `null` before the control plane's first state post. */
   readonly state: HostSandboxState | null;
   /**
-   * Frozen for lack of credits: the stored flag, meaningful on a row at rest;
-   * a destroyed row keeps its last value.
+   * Frozen for lack of credits, in effect: the registry's stored flag, which
+   * a destroyed row keeps, folded with `state` at fetch time
+   * (`isSandboxFrozenInEffect`), so a terminal row never reads frozen.
    */
   readonly frozen: boolean;
   readonly profile: HostProfile | null;
@@ -484,7 +486,10 @@ export function hostListItemToDirectoryEntry(
       item.kind === "sandbox"
         ? {
             state: item.sandboxState ?? null,
-            frozen: item.sandboxFrozen === true,
+            frozen: isSandboxFrozenInEffect(
+              item.sandboxState ?? null,
+              item.sandboxFrozen === true,
+            ),
             profile: item.profile ?? null,
           }
         : null,

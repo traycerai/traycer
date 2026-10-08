@@ -32,6 +32,7 @@ import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog"
 import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
 import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
 import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { Button } from "@/components/ui/button";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
@@ -174,6 +175,7 @@ function SettingsSidebarHostPicker(props: {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
@@ -207,17 +209,20 @@ function SettingsSidebarHostPicker(props: {
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
       />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="justify-start"
-        data-testid="settings-new-sandbox"
-        onClick={openCreateSandbox}
-      >
-        <Plus className="size-3.5 shrink-0" aria-hidden />
-        New sandbox…
-      </Button>
+      {/* A sandbox is an account's machine: nothing to create signed out. */}
+      {signedIn ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="justify-start"
+          data-testid="settings-new-sandbox"
+          onClick={openCreateSandbox}
+        >
+          <Plus className="size-3.5 shrink-0" aria-hidden />
+          New sandbox…
+        </Button>
+      ) : null}
       {/* The host list's balance banner: the two-hour and thirty-minute
           warnings for the account's awake sandboxes. Nothing for a user with
           none. */}

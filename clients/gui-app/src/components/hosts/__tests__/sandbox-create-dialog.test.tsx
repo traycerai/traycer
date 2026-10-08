@@ -44,6 +44,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
 }));
 
 import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 
 const SHAPE = {
@@ -119,6 +120,8 @@ function submit(): HTMLElement {
 }
 
 beforeEach(() => {
+  // The form loads its catalogue only for a signed-in user.
+  useAuthStore.setState({ status: "signed-in" });
   mocks.binding = createFakeSandboxBinding();
   mocks.catalogue = loaded(CATALOGUE);
   mocks.toastSuccess.mockClear();
@@ -129,6 +132,7 @@ afterEach(() => {
   act(() => {
     useSandboxCreateDialogStore.getState().closeDialog();
   });
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 describe("<SandboxCreateDialog />", () => {
@@ -280,6 +284,24 @@ describe("<SandboxCreateDialog />", () => {
     expect(
       screen.getByText("Sandboxes aren't offered right now."),
     ).toBeDefined();
+    expect(screen.queryByTestId("sandbox-create-submit")).toBeNull();
+  });
+
+  it("says to sign in, with no spinner, when the user is signed out", async () => {
+    useAuthStore.setState({ status: "signed-out" });
+    // A signed-out catalogue query is disabled and stays pending forever.
+    mocks.catalogue = {
+      isPending: true,
+      isError: false,
+      data: undefined,
+      error: null,
+      refetch: () => Promise.resolve(),
+    };
+    renderDialog();
+
+    const line = await screen.findByTestId("sandbox-create-signed-out");
+    expect(line.textContent).toBe("Sign in to create a sandbox.");
+    expect(screen.queryByTestId("sandbox-create-loading")).toBeNull();
     expect(screen.queryByTestId("sandbox-create-submit")).toBeNull();
   });
 

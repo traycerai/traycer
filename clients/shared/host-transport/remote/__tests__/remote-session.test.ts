@@ -4428,6 +4428,7 @@ describe("RemoteSession wake", () => {
       relayAttachUrl: "wss://relay.test/attach",
       authRecovery: "revalidate",
       authEpoch: "epoch-1",
+      openAuth: "user-bearer",
     };
     const view = acquireRemoteSession(
       identity,

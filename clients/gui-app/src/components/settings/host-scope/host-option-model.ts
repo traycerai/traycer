@@ -1,5 +1,6 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   HostScopeOption,
   HostScopeSandbox,
@@ -105,7 +106,27 @@ export function isHostOptionSelectable(
   surfaceState: HostRowSurfaceState,
 ): boolean {
   if (surfaceState.kind !== "available") return false;
-  return intent === "view" || host.connectable;
+  if (intent === "view") return true;
+  if (host.sandbox !== null && host.sandbox.frozen) return false;
+  return host.connectable || isSleepingSandboxPick(host);
+}
+
+/**
+ * A sandbox that is asleep (suspended or stopped, or on its way there) and
+ * not frozen. Picking it in a `pin` or `bind` picker is the user's next
+ * action, which wakes it (`wakeSandboxOnPick`), so the row is offered
+ * whatever its route says: a sleeping sandbox reads `offline`, and past the
+ * relay fuse's grace it has no route at all. The pin or preference is stored
+ * at once; the surface resolves to its fallback while the sandbox's lease
+ * reads dead, so nothing lands on it before it answers, and returns to it
+ * when it does. A frozen sandbox is never offered: a wake would only refuse.
+ */
+export function isSleepingSandboxPick(host: HostScopeOption): boolean {
+  return (
+    host.sandbox !== null &&
+    !host.sandbox.frozen &&
+    isSandboxAsleep(host.sandbox.state)
+  );
 }
 
 /**
@@ -366,7 +387,8 @@ export function hostOptionKindLabel(host: HostScopeOption): string {
  * included: a sandbox is billed by state, so "awake" is information a person
  * scanning the list acts on, where a personal host's "online" is not.
  * `frozen` leads, because it is why a suspended or stopped sandbox will not
- * wake.
+ * wake; a destroyed or failed row never reads frozen (the flag is folded with
+ * the state upstream, `isSandboxFrozenInEffect`).
  */
 const SANDBOX_STATE_WORD: Record<HostSandboxState, string> = {
   creating: "creating",
@@ -398,6 +420,10 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  *   where starting work on it would outlive the task it was made for.
  * - `hidden`: left out of this list.
  *
+ * The Automations pod (`kind: "automation"`) is a slim host for scheduled
+ * runs: the host list shows it with the user's sandboxes, and no picker offers
+ * it as a target for full-host work.
+ *
  * `listsAgentSandboxes` is the host list (Settings), every other surface is a
  * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
  * answered (`summary === null`): until `GET /api/sandboxes` says it is not
@@ -416,6 +442,9 @@ export function hostOptionPickerGroup(
   if (host.sandbox === null) return "personal";
   const summary = host.sandbox.summary;
   if (summary === null) return listsAgentSandboxes ? "sandbox" : "hidden";
+  if (summary.kind === "automation") {
+    return listsAgentSandboxes ? "sandbox" : "hidden";
+  }
   if (summary.burst) return listsAgentSandboxes ? "agent-sandbox" : "hidden";
   return "sandbox";
 }

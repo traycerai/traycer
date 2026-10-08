@@ -51,6 +51,7 @@ import {
   usePanelHeaderMenuOpen,
   usePanelHeaderMenuStore,
 } from "@/stores/epics/panel-header-menu-store";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 export const BROWSERS_PANEL_ID = "browsers";
 const FOLLOW_TASK_HOST_VALUE = "browser-follow-task-host";
@@ -234,6 +235,7 @@ export function BrowserHostFilterChoices(props: {
             }
             onSelect={(event) => {
               event.preventDefault();
+              wakeSandboxOnPick(host);
               hostPin.setSelection(host.hostId);
             }}
           >

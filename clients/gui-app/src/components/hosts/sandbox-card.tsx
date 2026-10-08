@@ -7,6 +7,7 @@ import type {
   SandboxLifecycleVerb,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import { isSandboxFrozenInEffect } from "@traycer-clients/shared/host-client/sandbox-control";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,8 +68,11 @@ export function SandboxCard(props: {
 }): ReactNode {
   const { summary } = props.sandbox;
   const state = props.sandbox.state ?? summary?.state ?? null;
-  const frozen = props.sandbox.frozen || summary?.frozen === true;
-  const word = sandboxStateWord(props.sandbox);
+  const frozen = isSandboxFrozenInEffect(
+    state,
+    props.sandbox.frozen || summary?.frozen === true,
+  );
+  const word = sandboxStateWord({ ...props.sandbox, state, frozen });
   const actions = summary === null ? [] : sandboxCardActions(state, frozen);
   return (
     <Card

@@ -10,6 +10,7 @@ import {
   isRemoteHostDirectoryEntry,
   type RemoteHostSandboxFacts,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { isSandboxFrozenInEffect } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
@@ -200,11 +201,15 @@ function sandboxFactsOf(
   }
   const listed = item === null ? null : listedSandboxFacts(item);
   const known = listed ?? entryFacts;
+  const state = known?.state ?? summary?.state ?? null;
   return {
     kind,
     sandbox: {
-      state: known?.state ?? summary?.state ?? null,
-      frozen: known?.frozen ?? summary?.frozen ?? false,
+      state,
+      frozen: isSandboxFrozenInEffect(
+        state,
+        known?.frozen ?? summary?.frozen ?? false,
+      ),
       summary,
     },
   };

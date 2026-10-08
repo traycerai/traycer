@@ -7,9 +7,11 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
   groupHostOptions,
   hostOptionKindLabel,
   hostOptionPickerGroup,
+  isHostOptionSelectable,
   pickableHostOptions,
   sandboxStateWord,
 } from "@/components/settings/host-scope/host-option-model";
@@ -95,6 +97,26 @@ describe("buildHostScopeOptions sandbox facts", () => {
     expect(options.get("other-host")?.sandbox?.summary).toBeNull();
   });
 
+  it("never reads a destroyed sandbox as frozen, whatever flag the registry kept", () => {
+    const option = build({
+      registry: [
+        item({
+          hostId: "sbx-host",
+          kind: "sandbox",
+          sandboxState: "destroyed",
+          sandboxFrozen: true,
+          profile: "agent",
+        }),
+      ],
+      sandboxes: null,
+    }).get("sbx-host");
+    expect(option?.sandbox?.state).toBe("destroyed");
+    expect(option?.sandbox?.frozen).toBe(false);
+    expect(option?.sandbox ? sandboxStateWord(option.sandbox) : null).toBe(
+      "destroyed",
+    );
+  });
+
   it("keeps every sandbox's summary unknown until the control plane's list has answered", () => {
     const option = build({
       registry: [
@@ -178,6 +200,79 @@ describe("sandbox grouping predicates", () => {
         (h) => h.hostId,
       ),
     ).toEqual(["p", "n"]);
+  });
+});
+
+describe("sleeping sandbox picks", () => {
+  function sandboxOption(input: {
+    readonly state: NonNullable<HostListItem["sandboxState"]>;
+    readonly frozen: boolean;
+    readonly connectable: boolean;
+    readonly kind: SandboxSummary["kind"];
+  }): HostScopeOption {
+    return hostScopeOptionFixture({
+      hostId: "s",
+      kind: "sandbox",
+      connectable: input.connectable,
+      sandbox: {
+        state: input.state,
+        frozen: input.frozen,
+        summary: sandboxSummaryFixture({
+          hostId: "s",
+          state: input.state,
+          frozen: input.frozen,
+          kind: input.kind,
+        }),
+      },
+    });
+  }
+  const available = AVAILABLE_HOST_ROW_SURFACE_STATE;
+
+  it("offers a suspended or stopped, not frozen sandbox to pin and bind although its route is down", () => {
+    for (const state of ["suspended", "stopped"] as const) {
+      const host = sandboxOption({
+        state,
+        frozen: false,
+        connectable: false,
+        kind: "agent",
+      });
+      expect(isHostOptionSelectable(host, "pin", available)).toBe(true);
+      expect(isHostOptionSelectable(host, "bind", available)).toBe(true);
+    }
+  });
+
+  it("never offers a frozen sandbox to pin or bind, even one that still dials, but still lets it be viewed", () => {
+    const host = sandboxOption({
+      state: "suspended",
+      frozen: true,
+      connectable: true,
+      kind: "agent",
+    });
+    expect(isHostOptionSelectable(host, "pin", available)).toBe(false);
+    expect(isHostOptionSelectable(host, "bind", available)).toBe(false);
+    expect(isHostOptionSelectable(host, "view", available)).toBe(true);
+  });
+
+  it("still needs a route for a sandbox that is not asleep", () => {
+    const host = sandboxOption({
+      state: "awake",
+      frozen: false,
+      connectable: false,
+      kind: "agent",
+    });
+    expect(isHostOptionSelectable(host, "pin", available)).toBe(false);
+  });
+
+  it("lists the Automations pod with the user's sandboxes and offers it to no picker", () => {
+    const pod = sandboxOption({
+      state: "awake",
+      frozen: false,
+      connectable: true,
+      kind: "automation",
+    });
+    expect(hostOptionPickerGroup(pod, false)).toBe("hidden");
+    expect(hostOptionPickerGroup(pod, true)).toBe("sandbox");
+    expect(pickableHostOptions([pod], null)).toEqual([]);
   });
 });
 

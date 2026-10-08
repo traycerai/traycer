@@ -342,9 +342,11 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
     "TRAYCER_DEV_CLOUD_UI_BASE_URL",
     requiredEnv("TRAYCER_DEV_CLOUD_UI_BASE_URL"),
   );
-  // Not required, unlike the two above: the dev run record carries no
-  // traycer-server address, and only the sandbox surfaces read it. Falls back
-  // to the host's own dev default (`traycer-host/src/config.ts`).
+  // Not required, unlike the two above: only the sandbox surfaces read it.
+  // The dev run sets it to its own traycer-server (`ports.server` in
+  // `run.json`, which `dev-android.ts` tunnels with every other run port);
+  // outside a run it falls back to the host's own dev default
+  // (`traycer-host/src/config.ts`).
   const serverBaseUrlRaw = process.env.TRAYCER_DEV_SERVER_BASE_URL;
   const serverBaseUrl = parseHttpBaseUrl(
     "TRAYCER_DEV_SERVER_BASE_URL",

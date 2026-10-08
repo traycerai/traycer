@@ -69,9 +69,10 @@ export interface CreateRemoteTransportOptions<
    * authorizes the mint at authn. Read it off the directory entry with
    * {@link remoteOpenAuthFor}.
    *
-   * Not part of the session cache identity: a host id's kind is fixed for the
-   * host's life (a sandbox's id is chosen by the control plane at create), so
-   * two consumers of one host id can never disagree about it.
+   * Part of the session cache identity (`RemoteSessionIdentity.openAuth`): a
+   * host's kind is fixed for its life, but a stale directory read can project
+   * a sandbox row as a personal host, and a session built from that read must
+   * never be adopted by a consumer that knows the host is a sandbox.
    */
   readonly openAuth: RemoteOpenAuth;
   /**
@@ -258,6 +259,7 @@ export function createRemoteHostTransport<
     // Same reasoning applied to WHICH auth context wired those closures, not
     // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
     authEpoch: authEpochFor(bearerSource),
+    openAuth: options.openAuth,
   };
   const session = acquireRemoteSession(
     identity,

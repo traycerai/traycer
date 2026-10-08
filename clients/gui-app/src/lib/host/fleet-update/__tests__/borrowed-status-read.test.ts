@@ -237,6 +237,7 @@ function remoteIdentity(hostId: string): RemoteSessionIdentity {
     relayAttachUrl: `wss://relay.test/attach-${hostId}`,
     authRecovery: "revalidate",
     authEpoch: "lease-1",
+    openAuth: "user-bearer",
   };
 }
 

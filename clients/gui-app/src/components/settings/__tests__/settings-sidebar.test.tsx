@@ -10,6 +10,7 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -78,6 +79,14 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
     await import("@/lib/host/fleet-update/fleet-update-view");
   return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
 });
+
+// The host picker's balance banner reads the sandbox list through a
+// `useQuery`, which needs a query client this navigation suite deliberately
+// does not mount. It is irrelevant to navigation (it renders nothing for an
+// account with no sandboxes), and has its own suite.
+vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
+  SandboxBalanceBanner: () => null,
+}));
 
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
@@ -491,5 +500,41 @@ describe("<SettingsSidebar /> search", () => {
     view.unmount();
 
     expect(useSettingsSearchStore.getState().query).toBe("");
+  });
+});
+
+describe("<SettingsSidebar /> new sandbox entry", () => {
+  beforeEach(() => {
+    cleanup();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.setState({ status: "signed-out" });
+  });
+
+  function renderSidebar(): void {
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+  }
+
+  it("offers New sandbox… to a signed-in user", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    renderSidebar();
+
+    expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
+  });
+
+  it("offers no New sandbox… when signed out", async () => {
+    useAuthStore.setState({ status: "signed-out" });
+    renderSidebar();
+
+    // The rest of the rail rendered, so the entry's absence is the assertion.
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 });

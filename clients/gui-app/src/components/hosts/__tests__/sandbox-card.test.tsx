@@ -178,6 +178,29 @@ describe("<SandboxCard /> per state", () => {
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 
+  it("shows a destroyed row its destroyed copy and badge, not the frozen line, when its summary kept the frozen flag", () => {
+    renderCard(sandboxOf("destroyed", false, {}));
+    const destroyedLine = screen.getByTestId(
+      "sandbox-card-state-line",
+    ).textContent;
+    cleanup();
+
+    // The scope folds the registry's flag with the state; the control plane's
+    // summary row keeps its last `frozen` value after a destroy.
+    renderCard(sandboxOf("destroyed", false, { frozen: true }));
+    const card = screen.getByTestId("sandbox-card");
+    expect(card.getAttribute("data-state")).toBe("destroyed");
+    expect(card.getAttribute("data-frozen")).toBe("false");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Destroyed",
+    );
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
+      destroyedLine,
+    );
+    expect(destroyedLine).not.toMatch(/Frozen/);
+    expect(actionTestIds()).toEqual([]);
+  });
+
   it("offers a frozen-but-awake row Destroy as well: the meter freezes before it suspends", () => {
     renderCard(sandboxOf("awake", true, {}));
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);

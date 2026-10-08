@@ -15,8 +15,19 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => null,
 }));
+// The wake is the sandbox-wake suite's concern; here only that a pick asks.
+vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
+  wakeSandboxOnPick: vi.fn(),
+}));
 
-afterEach(cleanup);
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+
+const onSelect = vi.fn<(hostId: string) => void>();
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 function sandboxOption(input: {
   readonly hostId: string;
@@ -112,7 +123,7 @@ function renderSwitcher(input: {
       hosts={input.hosts}
       selected={input.selected}
       activeHostId={PERSONAL.hostId}
-      onSelect={() => undefined}
+      onSelect={onSelect}
       action={input.action}
       surface="field"
       intent={input.intent}
@@ -243,5 +254,68 @@ describe("<HostSwitcher /> sandbox rows", () => {
       intent: "bind",
     });
     expect(row("sbx-awake").textContent).toContain("Sandbox");
+  });
+});
+
+describe("<HostSwitcher /> picking a sleeping sandbox", () => {
+  it("offers a suspended sandbox to pin and bind although it cannot be dialed", () => {
+    for (const intent of ["pin", "bind"] as const) {
+      renderSwitcher({
+        hosts: [PERSONAL, SUSPENDED],
+        selected: PERSONAL,
+        action: PICKER_ACTION,
+        intent,
+      });
+      expect(row("sbx-suspended").getAttribute("aria-disabled")).not.toBe(
+        "true",
+      );
+      cleanup();
+    }
+  });
+
+  it("wakes the sandbox on a pin or bind pick and hands its id to the surface", () => {
+    for (const intent of ["pin", "bind"] as const) {
+      vi.clearAllMocks();
+      renderSwitcher({
+        hosts: [PERSONAL, SUSPENDED],
+        selected: PERSONAL,
+        action: PICKER_ACTION,
+        intent,
+      });
+      fireEvent.click(row("sbx-suspended"));
+
+      expect(wakeSandboxOnPick).toHaveBeenCalledTimes(1);
+      expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(onSelect).toHaveBeenCalledWith("sbx-suspended");
+      cleanup();
+    }
+  });
+
+  it("does not wake on a view pick: looking at a sandbox is not using it", () => {
+    renderSwitcher({
+      hosts: [PERSONAL, SUSPENDED],
+      selected: PERSONAL,
+      action: HOST_LIST_ACTION,
+      intent: "view",
+    });
+    fireEvent.click(row("sbx-suspended"));
+
+    expect(onSelect).toHaveBeenCalledWith("sbx-suspended");
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+  });
+
+  it("keeps a frozen suspended sandbox disabled under pin, and neither wakes nor selects it", () => {
+    renderSwitcher({
+      hosts: [PERSONAL, FROZEN],
+      selected: PERSONAL,
+      action: PICKER_ACTION,
+      intent: "pin",
+    });
+    expect(row("sbx-frozen").getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(row("sbx-frozen"));
+
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

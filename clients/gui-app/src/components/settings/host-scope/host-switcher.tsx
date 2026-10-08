@@ -45,6 +45,7 @@ import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-ope
 import { useHostBinding } from "@/lib/host";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 /**
  * Search stops being decoration and starts being necessary somewhere around a
@@ -421,6 +422,8 @@ export function HostSwitcher(props: {
                   }
                   updateView={props.updateViewForHost?.(host.hostId) ?? null}
                   onSelect={() => {
+                    // A `pin` or `bind` pick of a sleeping sandbox wakes it.
+                    if (props.intent !== "view") wakeSandboxOnPick(host);
                     props.onSelect(host.hostId);
                     setOpen(false);
                   }}

@@ -32,13 +32,14 @@ import {
   roundSandboxShape,
   sandboxShapeProblem,
 } from "@/lib/sandboxes/sandbox-pricing";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 
 const MB_PER_GIB = 1024;
 const NAME_MAX_LENGTH = 191;
 
 /**
- * Idle periods the form offers, in minutes. The server takes 1 minute to one
+ * Idle periods the form offers, in minutes. The server takes 2 minutes to one
  * week; these are the core flows' choices inside that range. The server has
  * no "never" yet (`null` means its 30-minute default), so neither does the
  * form.
@@ -95,7 +96,20 @@ export function SandboxCreateDialog(): ReactNode {
 function SandboxCreateDialogBody(props: {
   readonly onDone: () => void;
 }): ReactNode {
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
   const catalogue = useSandboxCatalogue(true);
+  // Signed out, the catalogue query is disabled and stays pending with no
+  // fetch behind it: say why instead of spinning.
+  if (!signedIn) {
+    return (
+      <p
+        className="text-ui-sm text-muted-foreground"
+        data-testid="sandbox-create-signed-out"
+      >
+        Sign in to create a sandbox.
+      </p>
+    );
+  }
   if (catalogue.isPending) {
     return (
       <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">

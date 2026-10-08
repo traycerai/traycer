@@ -448,6 +448,7 @@ function remoteIdentity(publicKey: string): RemoteSessionIdentity {
     // One signed-in context for the whole fixture, so sharing is decided by
     // the fields under test rather than by an auth-context transition.
     authEpoch: FIXTURE_AUTH_EPOCH,
+    openAuth: "user-bearer",
   };
 }
 
@@ -473,6 +474,7 @@ function installRemoteTransport(sessionsByKey: {
           relayAttachUrl: options.relayAttachUrl,
           authRecovery: "revalidate",
           authEpoch: FIXTURE_AUTH_EPOCH,
+          openAuth: "user-bearer",
         },
         { proactiveWakeEligible: true },
         () => sessionsByKey[options.hostPublicKey] ?? fakeRemoteSession(),
