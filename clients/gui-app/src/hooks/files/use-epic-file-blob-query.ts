@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import {
   queryOptions,
   useQuery,
+  useQueryClient,
   type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -14,10 +16,9 @@ import {
 } from "@/lib/files/byte-source";
 import { useEpicFileRpc, type EpicFileRpc } from "@/lib/files/epic-file-rpc";
 import type { EpicFileAddress } from "@/hooks/files/use-epic-file-text-query";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { hostQueryKeys } from "@/lib/query-keys";
-
-/** How often a not-yet-available answer is asked again (see the text query). */
-const UNAVAILABLE_RECHECK_MS = 15_000;
 
 /**
  * A finished Blob stays warm a minute after its viewer unmounts - long enough
@@ -53,12 +54,12 @@ export function epicFileBlobQueryOptions(
         onProgress: null,
         signal,
       }),
-    // Content-addressed: a sha's bytes never change.
+    meta: stampHostRpcMethod(undefined, "epic.readFile"),
+    // Content-addressed: a sha's bytes never change. An unavailable answer is
+    // asked again on the table's `epic.readFile` lanes.
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: BLOB_GC_MS,
     retry: false,
-    refetchInterval: (query) =>
-      query.state.data?.kind === "unavailable" ? UNAVAILABLE_RECHECK_MS : false,
   });
 }
 
@@ -69,7 +70,11 @@ export function useEpicFileBlobQuery(
   maxBytes: number | null,
 ): UseQueryResult<ByteSourceResult, HostRpcError> {
   const rpc = useEpicFileRpc();
-  return useQuery(epicFileBlobQueryOptions(hostId, rpc, address, maxBytes));
+  const poll = getConditionPollEpisodeCoordinator(useQueryClient());
+  return useQuery({
+    ...epicFileBlobQueryOptions(hostId, rpc, address, maxBytes),
+    refetchInterval: poll.refetchIntervalFor("epic.readFile"),
+  });
 }
 
 export interface SignedUrlAnswer {
@@ -104,18 +109,13 @@ export function epicFileSignedUrlQueryOptions(
       ),
       receivedAt: Date.now(),
     }),
+    meta: stampHostRpcMethod(undefined, "epic.readFile"),
     enabled,
-    // A signed URL is only good for its lifetime. Renewal is the interval
-    // below; `staleTime: 0` keeps a remount from serving a lapsed one.
+    // A signed URL is only good for its lifetime. Renewal is the hook's timer;
+    // `staleTime: 0` keeps a remount from serving a lapsed one.
     staleTime: 0,
     gcTime: 0,
     retry: false,
-    refetchInterval: (query) => {
-      const answer = query.state.data;
-      if (answer === undefined) return false;
-      if (answer.result.kind === "unavailable") return UNAVAILABLE_RECHECK_MS;
-      return urlRenewalDelayMs(answer.result.expiresAt, answer.receivedAt);
-    },
   });
 }
 
@@ -130,7 +130,24 @@ export function useEpicFileSignedUrl(
   enabled: boolean,
 ): UseQueryResult<SignedUrlAnswer, HostRpcError> {
   const rpc = useEpicFileRpc();
-  return useQuery(epicFileSignedUrlQueryOptions(hostId, rpc, address, enabled));
+  const poll = getConditionPollEpisodeCoordinator(useQueryClient());
+  const query = useQuery({
+    ...epicFileSignedUrlQueryOptions(hostId, rpc, address, enabled),
+    // Only the unavailable recheck: renewal is not a condition poll.
+    refetchInterval: poll.refetchIntervalFor("epic.readFile"),
+  });
+  const { data: answer, refetch } = query;
+  useEffect(() => {
+    if (!enabled || answer === undefined || answer.result.kind !== "url") {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => void refetch(),
+      urlRenewalDelayMs(answer.result.expiresAt, answer.receivedAt),
+    );
+    return () => window.clearTimeout(timer);
+  }, [enabled, answer, refetch]);
+  return query;
 }
 
 /**

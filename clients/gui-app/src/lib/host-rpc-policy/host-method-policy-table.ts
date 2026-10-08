@@ -82,6 +82,18 @@ export function defineConditionPolicy<
   };
 }
 
+/** An epic file the host cannot serve yet; it usually lands on its own. */
+const EPIC_FILE_UNAVAILABLE_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.unavailable",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: 15 * SECOND_MS,
+};
+const EPIC_FILE_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.error",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
+
 export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   id: "providers.pending",
   initialDelayMs: 800,
@@ -1409,8 +1421,31 @@ export const HOST_METHOD_POLL_TABLE = {
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Epic files are content-addressed too: a read names its sha. Download
-  // progress rides the files lane's `localState`, never a poll.
-  "epic.readFile": { ...LATEST_SCHEDULING, poll: null },
+  // progress rides the files lane's `localState`, never a poll; only an
+  // unavailable answer is asked again, since an upload landing on another
+  // host reaches no lane here.
+  "epic.readFile": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readFile", {
+      // Three caches share this method: the text and blob reads keep a
+      // `kind` at the top, the signed-URL read keeps it under `result`.
+      classify: (data) => {
+        if (data === undefined) return false;
+        if (data.kind === "unavailable") return EPIC_FILE_UNAVAILABLE_POLL_LANE;
+        if (!("result" in data)) return false;
+        const result = data.result;
+        return typeof result === "object" &&
+          result !== null &&
+          "kind" in result &&
+          result.kind === "unavailable"
+          ? EPIC_FILE_UNAVAILABLE_POLL_LANE
+          : false;
+      },
+      initialErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      staleDataErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
   "epic.fetchFile": { ...LATEST_SCHEDULING, poll: null },
   // User actions: each one runs, in order.
   "epic.cancelFetchFile": {

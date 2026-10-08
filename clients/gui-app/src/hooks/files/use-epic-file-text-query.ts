@@ -1,6 +1,7 @@
 import {
   queryOptions,
   useQuery,
+  useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -10,6 +11,8 @@ import type {
   EpicReadFileResponse,
 } from "@traycer/protocol/host/epic/files";
 import { useEpicFileRpc, type EpicFileRpc } from "@/lib/files/epic-file-rpc";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /** One file version, and the transcript row it is opened from (if any). */
@@ -20,13 +23,6 @@ export interface EpicFileAddress {
   /** The row the host decides the page's network policy from (§2.3). */
   readonly via: EpicFileVia | null;
 }
-
-/**
- * How often an unavailable answer is asked again. The bytes usually arrive on
- * their own (an upload landing, the eager mirror finishing), and the row
- * promises to show the page when they do.
- */
-const UNAVAILABLE_RECHECK_MS = 15_000;
 
 export function epicFileTextQueryOptions(
   hostId: string,
@@ -43,12 +39,13 @@ export function epicFileTextQueryOptions(
   return queryOptions<EpicReadFileResponse, HostRpcError>({
     queryKey: [...hostQueryKeys.methodScope(hostId, "epic.readFile"), params],
     queryFn: ({ signal }) => rpc.readFile(params, signal),
+    meta: stampHostRpcMethod(undefined, "epic.readFile"),
     // Content-addressed: a sha's bytes never change, so a hit never goes
-    // stale. Only an unavailable answer is worth asking again.
+    // stale. Only an unavailable answer is worth asking again (the table's
+    // `epic.readFile` lanes): the bytes usually arrive on their own, and the
+    // row promises to show the page when they do.
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
-    refetchInterval: (query) =>
-      query.state.data?.kind === "unavailable" ? UNAVAILABLE_RECHECK_MS : false,
   });
 }
 
@@ -58,7 +55,11 @@ export function useEpicFileTextQuery(
   address: EpicFileAddress,
 ): UseQueryResult<EpicReadFileResponse, HostRpcError> {
   const rpc = useEpicFileRpc();
-  return useQuery(epicFileTextQueryOptions(hostId, rpc, address));
+  const poll = getConditionPollEpisodeCoordinator(useQueryClient());
+  return useQuery({
+    ...epicFileTextQueryOptions(hostId, rpc, address),
+    refetchInterval: poll.refetchIntervalFor("epic.readFile"),
+  });
 }
 
 /** The line under a file the host cannot serve yet, per reason. */
