@@ -419,6 +419,8 @@ interface FoldedRowReading {
   readonly previewLineClamp: string;
   readonly hitInsideFold: boolean;
   readonly foldExpanded: string | null;
+  readonly listScrollWidth: number;
+  readonly listClientWidth: number;
 }
 
 async function readFoldedRow(page: Page): Promise<FoldedRowReading> {
@@ -465,6 +467,8 @@ async function readFoldedRow(page: Page): Promise<FoldedRowReading> {
       previewLineClamp: style.getPropertyValue("-webkit-line-clamp"),
       hitInsideFold: hit !== null && fold.contains(hit),
       foldExpanded: fold.getAttribute("aria-expanded"),
+      listScrollWidth: require("queued-message-list").scrollWidth,
+      listClientWidth: require("queued-message-list").clientWidth,
     };
   });
 }
@@ -478,21 +482,33 @@ function insideRect(inner: Rect, outer: Rect): boolean {
   );
 }
 
-for (const width of [900, 320, 239] as const) {
-  test(`a folded agent reply keeps its badge, status and a readable one-line preview at ${String(width)}px`, async ({
+// A sender's name is a chat title, so it can be long (review F2).
+const LONG_SENDER = "Fix #2441 compact queued-message panel";
+
+for (const [width, sender] of [
+  [900, null],
+  [320, null],
+  [239, null],
+  [320, LONG_SENDER],
+  [239, LONG_SENDER],
+] as const) {
+  test(`a folded agent reply keeps its badge, status and a readable one-line preview at ${String(width)}px, ${sender === null ? "short sender" : "long sender title"}`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 700 });
     await openDock(page, "default");
+    const replyText = JSON.stringify(
+      "A long reply to review with plenty of words that runs past one line so the clamp becomes visible. Additional details at the end.",
+    );
     await page.evaluate(
-      `window.__probeQueueAgentReply(${JSON.stringify(
-        "A long reply to review with plenty of words that runs past one line so the clamp becomes visible. Additional details at the end.",
-      )})`,
+      sender === null
+        ? `window.__probeQueueAgentReply(${replyText})`
+        : `window.__probeQueueAgentReplyFrom(${replyText}, ${JSON.stringify(sender)})`,
     );
     await expect(page.getByTestId("queued-message-row")).toHaveCount(1);
     await settledReading(page);
     const reading = await readFoldedRow(page);
-    const step = `${String(width)}px, folded`;
+    const step = `${String(width)}px, folded, ${sender === null ? "short sender" : "long sender title"}`;
 
     expect(reading.foldExpanded, `${step}: the row is folded`).toBe("false");
     expect(reading.sender, `${step}: no sender badge is drawn`).not.toBeNull();
@@ -516,6 +532,10 @@ for (const width of [900, 320, 239] as const) {
       ).toBe(true);
     }
 
+    expect(
+      reading.listScrollWidth,
+      `${step}: the list scrolls sideways (scrollWidth ${String(reading.listScrollWidth)} > clientWidth ${String(reading.listClientWidth)})`,
+    ).toBeLessThanOrEqual(reading.listClientWidth);
     expect(
       reading.preview.width,
       `${step}: the preview is ${String(reading.preview.width)}px wide`,

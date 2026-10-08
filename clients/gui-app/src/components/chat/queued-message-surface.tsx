@@ -1177,7 +1177,10 @@ function QueuedMessageProvenanceChip(props: {
   if (badge === null) return null;
   return (
     <span
-      className="float-left mr-1 inline-flex"
+      // `max-w-full`: a sender's name is a chat title and can be wider than a
+      // narrow row, so the chip is held to the row and its name truncates
+      // rather than scrolling the whole list sideways (#2441 review F2).
+      className="float-left mr-1 inline-flex max-w-full"
       data-testid="queued-message-provenance-chip"
     >
       {badge}
@@ -1618,11 +1621,11 @@ function ReceivedAgentBadge(props: {
       align={undefined}
     >
       <span
-        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-ui-xs font-medium text-primary"
+        className="inline-flex min-w-0 items-center gap-1 rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-ui-xs font-medium text-primary"
         data-testid="queued-message-sender-badge"
       >
-        <Inbox className="size-3" aria-hidden />
-        <span className="max-w-[8rem] truncate">{name}</span>
+        <Inbox className="size-3 shrink-0" aria-hidden />
+        <span className="min-w-0 max-w-[8rem] truncate">{name}</span>
       </span>
     </TooltipWrapper>
   );
