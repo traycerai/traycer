@@ -15,11 +15,14 @@ import { isMac } from "@/lib/keybindings/platform";
 import { useOpenLink } from "@/lib/links/open-link";
 import { isMobileApp } from "@/lib/mobile-app";
 import {
+  SANDBOX_SCROLL_GESTURE_EVENT,
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
   type SandboxDisplayMode,
   type SandboxHostContext,
   type SandboxKind,
+  type SandboxScrollDirection,
+  type SandboxWheel,
   type SandboxShortcutPress,
   type SandboxSize,
   type SandboxStatus,
@@ -94,6 +97,23 @@ const APP_DISPLAY_MODES: readonly SandboxDisplayMode[] = [
   "inline",
   "fullscreen",
 ];
+
+/** The nearest ancestor that scrolls: where a wheel the page gave up goes. */
+function scrollContainerOf(element: Element): Element | null {
+  const view = element.ownerDocument.defaultView;
+  let node = element.parentElement;
+  while (node !== null && view !== null) {
+    const { overflowY, overflowX } = view.getComputedStyle(node);
+    const scrolls =
+      (/auto|scroll|overlay/.test(overflowY) &&
+        node.scrollHeight > node.clientHeight) ||
+      (/auto|scroll|overlay/.test(overflowX) &&
+        node.scrollWidth > node.clientWidth);
+    if (scrolls) return node;
+    node = node.parentElement;
+  }
+  return element.ownerDocument.scrollingElement;
+}
 
 function hostContextFor(
   theme: SandboxTheme,
@@ -260,6 +280,30 @@ export function SandboxFrame(props: SandboxFrameProps) {
     if (iframe.ownerDocument.activeElement !== iframe) return;
     replayShortcut(iframe, press);
   });
+  const onScrollGesture = useEffectEvent(
+    (direction: SandboxScrollDirection) => {
+      frameRef.current?.dispatchEvent(
+        new CustomEvent(SANDBOX_SCROLL_GESTURE_EVENT, {
+          bubbles: true,
+          detail: direction,
+        }),
+      );
+    },
+  );
+  // The gesture is published before the scroll, so the container's follow
+  // logic reads the move as the reader's and never corrects it back.
+  const onWheel = useEffectEvent((wheel: SandboxWheel) => {
+    const iframe = frameRef.current;
+    if (iframe === null) return;
+    if (wheel.deltaY !== 0) {
+      onScrollGesture(wheel.deltaY > 0 ? "toward-end" : "away-from-end");
+    }
+    scrollContainerOf(iframe)?.scrollBy({
+      left: wheel.deltaX,
+      top: wheel.deltaY,
+      behavior: "instant",
+    });
+  });
   const initialInputs = useEffectEvent(() => ({
     html,
     kind,
@@ -314,6 +358,8 @@ export function SandboxFrame(props: SandboxFrameProps) {
         onOpenLink,
         onShortcut,
         onRequestTeardown,
+        onScrollGesture,
+        onWheel,
       },
       appRequests: inputs.appRequests,
     });

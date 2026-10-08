@@ -124,6 +124,8 @@ function detachedBridge(): SandboxBridgeHost {
       onOpenLink: () => Promise.resolve(false),
       onShortcut: ignore,
       onRequestTeardown: ignore,
+      onScrollGesture: ignore,
+      onWheel: ignore,
     },
     appRequests: null,
   });

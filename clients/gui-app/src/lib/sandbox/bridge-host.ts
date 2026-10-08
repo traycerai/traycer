@@ -60,6 +60,27 @@ export interface SandboxShortcutPress extends ForwardedShortcut {
   readonly key: string;
 }
 
+/** Which way a wheel or swipe inside the frame moved the reader. */
+export type SandboxScrollDirection = "toward-end" | "away-from-end";
+
+/**
+ * Dispatched (bubbling) on the frame element for each wheel or swipe inside
+ * the frame, with a {@link SandboxScrollDirection} as `detail`. Input in the
+ * frame's own document never reaches the listeners around the frame, so a
+ * scroll container that tells reader scrolling from layout listens for this.
+ */
+export const SANDBOX_SCROLL_GESTURE_EVENT = "traycer:sandbox-scroll-gesture";
+
+/** A wheel the page could not use, in CSS pixels, for the app to scroll by. */
+export interface SandboxWheel {
+  readonly deltaX: number;
+  readonly deltaY: number;
+}
+
+/** One wheel event never moves the app further than this, whatever a page sends. */
+const MAX_WHEEL_DELTA_PX = 4000;
+const WHEEL_LINE_PX = 16;
+
 export interface SandboxBridgeEvents {
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onSize: (size: SandboxSize) => void;
@@ -75,6 +96,8 @@ export interface SandboxBridgeEvents {
   /** Only presses that match a forwarded chord are reported. */
   readonly onShortcut: (press: SandboxShortcutPress) => void;
   readonly onRequestTeardown: () => void;
+  readonly onScrollGesture: (direction: SandboxScrollDirection) => void;
+  readonly onWheel: (wheel: SandboxWheel) => void;
 }
 
 /**
@@ -446,6 +469,23 @@ export class SandboxBridgeHost {
     });
   }
 
+  /** A wheel the page gave up, or the direction of a swipe it left to chain. */
+  private relayScroll(method: string, params: unknown): void {
+    if (method === "traycer/notifications/wheel") {
+      const wheel = parseWheel(params);
+      if (wheel !== null) this.options.events.onWheel(wheel);
+      return;
+    }
+    if (
+      method === "traycer/notifications/scroll-gesture" &&
+      isRecord(params) &&
+      (params.direction === "toward-end" ||
+        params.direction === "away-from-end")
+    ) {
+      this.options.events.onScrollGesture(params.direction);
+    }
+  }
+
   private dispatch(message: InboundMessage): void {
     const { method, id, params } = message;
     switch (method) {
@@ -486,7 +526,11 @@ export class SandboxBridgeHost {
       default:
         break;
     }
-    if (id === null || method === null) return;
+    if (method === null) return;
+    if (id === null) {
+      this.relayScroll(method, params);
+      return;
+    }
     this.handleRequest(id, method, params);
   }
 
@@ -672,4 +716,24 @@ export class SandboxBridgeHost {
     if (this.phase === "disposed") return;
     this.options.post(message);
   }
+}
+
+/** `deltaMode` 1 is lines and 2 is pages; a page is read as a few lines. */
+function parseWheel(params: unknown): SandboxWheel | null {
+  if (!isRecord(params)) return null;
+  const { deltaX, deltaY, deltaMode } = params;
+  if (
+    typeof deltaX !== "number" ||
+    typeof deltaY !== "number" ||
+    !Number.isFinite(deltaX) ||
+    !Number.isFinite(deltaY)
+  ) {
+    return null;
+  }
+  let scale = 1;
+  if (deltaMode === 1) scale = WHEEL_LINE_PX;
+  if (deltaMode === 2) scale = WHEEL_LINE_PX * 20;
+  const clamp = (delta: number): number =>
+    Math.max(-MAX_WHEEL_DELTA_PX, Math.min(MAX_WHEEL_DELTA_PX, delta * scale));
+  return { deltaX: clamp(deltaX), deltaY: clamp(deltaY) };
 }

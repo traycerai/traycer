@@ -177,6 +177,90 @@ function bootstrapMain(config: BootstrapConfig): void {
     true,
   );
 
+  // A wheel or swipe the page cannot use chains to the transcript that holds
+  // the frame, but the transcript cannot see input in another document and
+  // would take that move for layout and pull back to the latest message.
+  // A wheel nothing in the page can scroll by is cancelled and handed to the
+  // app, which notes the reader's gesture before it scrolls: a relayed note
+  // alone can lose the race to the chained scroll. A page that handled the
+  // wheel itself (`preventDefault`) keeps it.
+  const canScrollInside = (
+    target: EventTarget | null,
+    vertical: boolean,
+    delta: number,
+  ): boolean => {
+    let element = target instanceof Element ? target : null;
+    while (element !== null) {
+      const style = window.getComputedStyle(element);
+      const overflow = vertical ? style.overflowY : style.overflowX;
+      if (
+        element === document.scrollingElement ||
+        /auto|scroll|overlay/.test(overflow)
+      ) {
+        const position = vertical ? element.scrollTop : element.scrollLeft;
+        const room = vertical
+          ? element.scrollHeight - element.clientHeight
+          : element.scrollWidth - element.clientWidth;
+        if (delta < 0 ? position > 0 : position < room - 1) return true;
+      }
+      element = element.parentElement;
+    }
+    return false;
+  };
+  window.addEventListener(
+    "wheel",
+    (event) => {
+      if (event.defaultPrevented || event.ctrlKey) return;
+      const vertical = Math.abs(event.deltaY) >= Math.abs(event.deltaX);
+      const delta = vertical ? event.deltaY : event.deltaX;
+      if (delta === 0 || canScrollInside(event.target, vertical, delta)) {
+        return;
+      }
+      event.preventDefault();
+      notify("traycer/notifications/wheel", {
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaMode: event.deltaMode,
+      });
+    },
+    { passive: false },
+  );
+  // A swipe cannot be handed over without losing its momentum, so it chains
+  // natively and only its direction is reported.
+  let touchY: number | null = null;
+  window.addEventListener(
+    "touchstart",
+    (event) => {
+      touchY = event.touches.item(0)?.clientY ?? null;
+    },
+    { capture: true, passive: true },
+  );
+  window.addEventListener(
+    "touchmove",
+    (event) => {
+      const clientY = event.touches.item(0)?.clientY;
+      const previous = touchY;
+      if (clientY === undefined || previous === null) return;
+      touchY = clientY;
+      if (clientY === previous) return;
+      notify("traycer/notifications/scroll-gesture", {
+        direction: clientY < previous ? "toward-end" : "away-from-end",
+      });
+    },
+    { capture: true, passive: true },
+  );
+  const clearTouch = (): void => {
+    touchY = null;
+  };
+  window.addEventListener("touchend", clearTouch, {
+    capture: true,
+    passive: true,
+  });
+  window.addEventListener("touchcancel", clearTouch, {
+    capture: true,
+    passive: true,
+  });
+
   // Bubble phase on window, so a page that handles its own clicks (and calls
   // preventDefault) keeps them.
   window.addEventListener("click", (event) => {

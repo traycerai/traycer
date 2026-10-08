@@ -18,9 +18,11 @@ import {
   TEARDOWN_GRACE_MS,
   type SandboxAppRequestHandler,
   type SandboxHostContext,
+  type SandboxScrollDirection,
   type SandboxShortcutPress,
   type SandboxSize,
   type SandboxStatus,
+  type SandboxWheel,
 } from "../bridge-host";
 
 const NONCE = "nonce-1";
@@ -49,6 +51,8 @@ interface Harness {
   readonly onOpenLink: Mock<OpenLink>;
   readonly onRequestTeardown: Mock<() => void>;
   readonly onShortcut: Mock<(press: SandboxShortcutPress) => void>;
+  readonly onScrollGesture: Mock<(direction: SandboxScrollDirection) => void>;
+  readonly onWheel: Mock<(wheel: SandboxWheel) => void>;
   /** Everything posted with this method. */
   readonly all: (method: string) => Sent[];
   /** The response posted for a request id. */
@@ -74,6 +78,8 @@ function createHarness(options: {
   const onOpenLink = vi.fn<OpenLink>(options.openLink);
   const onRequestTeardown = vi.fn<() => void>();
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
+  const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
+  const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
   const host = new SandboxBridgeHost({
     resource: {
       html: "<p>hi</p>",
@@ -101,6 +107,8 @@ function createHarness(options: {
       onOpenLink,
       onShortcut,
       onRequestTeardown,
+      onScrollGesture,
+      onWheel,
     },
     appRequests: options.appRequests,
   });
@@ -114,6 +122,8 @@ function createHarness(options: {
     onOpenLink,
     onRequestTeardown,
     onShortcut,
+    onScrollGesture,
+    onWheel,
     all: (method) => sent.filter((message) => message.method === method),
     responseTo: (id) => sent.find((message) => message.id === id),
   };
@@ -489,6 +499,54 @@ describe("page requests", () => {
     harness.host.receive(press("KeyK", false));
     harness.host.receive(press("KeyJ", true));
     expect(harness.onShortcut).toHaveBeenCalledTimes(1);
+  });
+
+  it("scales a wheel the page gave up to pixels and caps it", () => {
+    const harness = ready(null, OPENS);
+    const wheel = (deltaX: number, deltaY: number, deltaMode: number): Sent =>
+      notification("traycer/notifications/wheel", {
+        deltaX,
+        deltaY,
+        deltaMode,
+      });
+    harness.host.receive(wheel(0, 40, 0));
+    harness.host.receive(wheel(2, -3, 1));
+    harness.host.receive(wheel(0, 1, 2));
+    harness.host.receive(wheel(0, 1e9, 0));
+    expect(harness.onWheel.mock.calls).toEqual([
+      [{ deltaX: 0, deltaY: 40 }],
+      [{ deltaX: 32, deltaY: -48 }],
+      [{ deltaX: 0, deltaY: 320 }],
+      [{ deltaX: 0, deltaY: 4000 }],
+    ]);
+  });
+
+  it("drops a wheel whose payload is not two finite numbers", () => {
+    const harness = ready(null, OPENS);
+    harness.host.receive(notification("traycer/notifications/wheel", null));
+    harness.host.receive(
+      notification("traycer/notifications/wheel", { deltaX: 0, deltaY: "9" }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/wheel", {
+        deltaX: Number.NaN,
+        deltaY: 1,
+      }),
+    );
+    expect(harness.onWheel).not.toHaveBeenCalled();
+  });
+
+  it("relays a scroll gesture only with a known direction", () => {
+    const harness = ready(null, OPENS);
+    const gesture = (direction: unknown): Sent =>
+      notification("traycer/notifications/scroll-gesture", { direction });
+    harness.host.receive(gesture("toward-end"));
+    harness.host.receive(gesture("sideways"));
+    harness.host.receive(gesture("away-from-end"));
+    expect(harness.onScrollGesture.mock.calls).toEqual([
+      ["toward-end"],
+      ["away-from-end"],
+    ]);
   });
 
   it("takes bare Escape only from the proven page while fullscreen", () => {
