@@ -126,6 +126,65 @@ export const worktreesOnlyConfigSchema = lazySchema(() =>
   }),
 );
 
+/**
+ * Bounds of `catalog.probeTimeoutSeconds`, in whole seconds. The default is
+ * the bound the host used before the setting existed, so an install that has
+ * never touched Settings behaves as before; it is also the floor, because a
+ * shorter bound only makes honest catalog reads fail (and would undercut an
+ * adapter's own discovery deadline). The ceiling covers the slowest read an
+ * adapter can make on its own (OpenCode: a 30 s server start plus a 120 s
+ * request) - a longer bound buys nothing and holds a shared probe slot longer.
+ * They travel on the wire as data (`config.catalog.get`), so the GUI never
+ * offers a value the host refuses and they can move without a protocol change.
+ */
+export const CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS = 60;
+export const CATALOG_PROBE_TIMEOUT_MIN_SECONDS = 60;
+export const CATALOG_PROBE_TIMEOUT_MAX_SECONDS = 180;
+
+/**
+ * Clamps a stored catalog probe timeout into the supported range. A
+ * hand-edited value outside it is clamped on read, never rejected: the setting
+ * only tunes a wait, and refusing the whole file over it would be worse.
+ */
+export function clampCatalogProbeTimeoutSeconds(seconds: number): number {
+  return Math.min(
+    CATALOG_PROBE_TIMEOUT_MAX_SECONDS,
+    Math.max(CATALOG_PROBE_TIMEOUT_MIN_SECONDS, seconds),
+  );
+}
+
+/**
+ * The `catalog` block in `~/.traycer/cli/config.json`: how long the host waits
+ * for a provider to list its models or commands, machine-wide. Additive and
+ * `.default()`-ed like every other block, so older config files keep
+ * validating without a `CLI_CONFIG_VERSION` bump. Any positive whole number
+ * parses; the range is applied by `clampCatalogProbeTimeoutSeconds` on read
+ * and enforced by the host on write.
+ */
+export const catalogConfigSchema = lazySchema(() =>
+  z
+    .object({
+      probeTimeoutSeconds: z
+        .number()
+        .int()
+        .positive()
+        .default(CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS),
+    })
+    .default({ probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS }),
+);
+export type CatalogConfig = z.infer<typeof catalogConfigSchema>;
+
+/**
+ * The `catalog` block read on its own, ignoring every other key - for the
+ * same reason as `worktreesOnlyConfigSchema`: an unrelated defect elsewhere in
+ * the document must not hide the timeout the file plainly sets.
+ */
+export const catalogOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    catalog: catalogConfigSchema,
+  }),
+);
+
 export const featureSettingsSchema = lazySchema(() =>
   z
     .object({
@@ -205,6 +264,7 @@ export const cliConfigSchema = lazySchema(() =>
       features: featureSettingsSchema,
       browser: browserConfigSchema,
       worktrees: worktreesConfigSchema,
+      catalog: catalogConfigSchema,
     })
     // Top-level only: an unknown BLOCK survives a read-modify-write instead of
     // being stripped. Two binaries share this file - an older CLI or host that
@@ -275,4 +335,5 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
   worktrees: { agentCreate: "allow" },
+  catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
 };

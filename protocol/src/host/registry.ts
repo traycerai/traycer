@@ -490,6 +490,8 @@ import {
   configShellSetV10,
   configWorktreesGetV10,
   configWorktreesSetV10,
+  configCatalogGetV10,
+  configCatalogSetV10,
 } from "@traycer/protocol/host/config/contracts";
 import {
   diagnosticsLogsListV10,
@@ -5846,6 +5848,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: configWorktreesSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.catalog.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configCatalogGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.catalog.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configCatalogSetV10,
           upgradeFromPreviousVersion: null,
         },
       },
