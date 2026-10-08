@@ -42,6 +42,7 @@ import type {
   ProviderNoticeReceipt,
   ProviderNoticeTone,
   ToolCallManagedCommand,
+  ToolCallMcpAppStamp,
   ToolCallPageStamp,
   ToolInputDetail,
   WorkflowMeta,
@@ -186,6 +187,9 @@ export interface ToolSegment {
   // call completes (`chat.subscribe@1.22`). Null for every other call, and for
   // a show-page call that is still running or failed.
   page: ToolCallPageStamp | null;
+  // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
+  // Null for every other call, and on a harness without app support.
+  mcpApp: ToolCallMcpAppStamp | null;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent

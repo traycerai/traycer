@@ -997,6 +997,7 @@ const SHARED_TOOL: ToolSegment = {
   parentId: null,
   imageResults: [],
   page: null,
+  mcpApp: null,
 };
 
 const SHARED_APPROVAL: ApprovalSegment = {

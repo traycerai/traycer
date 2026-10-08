@@ -127,6 +127,7 @@ function toolSegment(input: {
     parentId: null,
     imageResults: [],
     page: null,
+    mcpApp: null,
   };
 }
 

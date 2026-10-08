@@ -50,6 +50,8 @@ describe("<SandboxFrame /> link confirm", () => {
         onSize={() => undefined}
         onStatus={(status) => statuses.push(status)}
         onRequestTeardown={() => undefined}
+        displayMode="inline"
+        onBridge={null}
         ref={null}
       />,
     );

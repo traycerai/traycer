@@ -45,6 +45,7 @@ function inputProps(toolName: string, input: unknown) {
     inputDetail: deriveToolInputDetail(toolName, input),
     imageResults: [],
     page: null,
+    mcpApp: null,
   };
 }
 

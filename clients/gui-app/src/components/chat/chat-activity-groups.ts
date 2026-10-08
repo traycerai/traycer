@@ -23,7 +23,10 @@ import {
   derivePromotedSubagentRenderId,
 } from "./chat-collapsible-key";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
-import type { ToolCallPageStamp } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  ToolCallMcpAppStamp,
+  ToolCallPageStamp,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 
 export type ActivitySegment =
   | ToolSegment
@@ -582,6 +585,17 @@ export function isPageToolCall(call: {
   return call.page !== null || isShowPageToolName(call.toolName);
 }
 
+/**
+ * "This tool call renders as an MCP App row": the host stamped the app it
+ * rendered. Keyed on the stamp alone - a harness without app support never
+ * stamps, and its call stays an ordinary row in the group.
+ */
+export function isMcpAppToolCall(call: {
+  readonly mcpApp: ToolCallMcpAppStamp | null;
+}): boolean {
+  return call.mcpApp !== null;
+}
+
 function shouldPromoteToolSegment(
   segment: ToolSegment,
   promotedToolBlockIds: ReadonlySet<string>,
@@ -592,6 +606,8 @@ function shouldPromoteToolSegment(
   // stands where the page will land while the agent is still writing it. A
   // preview call is the agent checking its work, and stays in the group.
   if (isPageToolCall(segment)) return true;
+  // An app is the call's result, rendered where the call was made.
+  if (isMcpAppToolCall(segment)) return true;
   if (segment.agentMessageSend !== null) return true;
   // A shell the agent ran or restarted (`traycer_run_shell` /
   // `traycer_restart_shell`, host-stamped) is a background process that

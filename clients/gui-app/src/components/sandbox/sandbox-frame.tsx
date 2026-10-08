@@ -17,6 +17,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 import {
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
+  type SandboxDisplayMode,
   type SandboxHostContext,
   type SandboxKind,
   type SandboxShortcutPress,
@@ -24,6 +25,7 @@ import {
   type SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
 import { sandboxForwardedShortcuts } from "@/lib/sandbox/forwarded-shortcuts";
+import { useFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
 import {
   mcpAppContentPolicy,
   pageContentPolicy,
@@ -60,6 +62,13 @@ export interface SandboxFrameProps {
   readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onRequestTeardown: () => void;
+  /** An MCP App's mode; pages and wireframes are always `"inline"`. */
+  readonly displayMode: SandboxDisplayMode;
+  /**
+   * Hands over each bridge as it is created, and `null` once it is gone: an
+   * MCP App row sends its tool notifications and its teardown through it.
+   */
+  readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
   readonly ref: Ref<HTMLIFrameElement> | null;
 }
 
@@ -80,15 +89,23 @@ function hostPlatform(
   return isMobileApp() ? "mobile" : "web";
 }
 
+const INLINE_ONLY: readonly SandboxDisplayMode[] = ["inline"];
+const APP_DISPLAY_MODES: readonly SandboxDisplayMode[] = [
+  "inline",
+  "fullscreen",
+];
+
 function hostContextFor(
   theme: SandboxTheme,
   platform: SandboxHostContext["platform"],
+  kind: SandboxKind,
+  displayMode: SandboxDisplayMode,
 ): SandboxHostContext {
   return {
     theme: theme.colorScheme,
     styles: { variables: theme.variables },
-    displayMode: "inline",
-    availableDisplayModes: ["inline"],
+    displayMode,
+    availableDisplayModes: kind === "app" ? APP_DISPLAY_MODES : INLINE_ONLY,
     platform,
   };
 }
@@ -140,6 +157,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
     appRequests,
     className,
     height,
+    displayMode,
     ref: forwardedRef,
   } = props;
   const runnerHost = useRunnerHostOrNull();
@@ -159,6 +177,8 @@ export function SandboxFrame(props: SandboxFrameProps) {
   // answer it. The bridge allows one at a time.
   const [confirmUrl, setConfirmUrl] = useState<string | null>(null);
   const settleLinkRef = useRef<((opened: boolean) => void) | null>(null);
+  // No app takes fullscreen over the confirm while it is up.
+  useFullscreenBlocker(confirmUrl !== null);
 
   const declared = kind === "app" ? permissions : NO_PERMISSIONS;
   const baseUrl = sandboxLoaderBaseUrl(runnerHost);
@@ -216,6 +236,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
     props.onStatus(status);
   });
   const onRequestTeardown = useEffectEvent(() => props.onRequestTeardown());
+  const onBridge = useEffectEvent((bridge: SandboxBridgeHost | null) =>
+    props.onBridge?.(bridge),
+  );
   const onOpenLink = useEffectEvent(
     (url: string): Promise<boolean> =>
       new Promise((resolve) => {
@@ -245,7 +268,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
     declared,
     theme,
     forwardedShortcuts,
-    hostContext: hostContextFor(theme, platform),
+    hostContext: hostContextFor(theme, platform, kind, displayMode),
     appRequests,
   }));
 
@@ -295,6 +318,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       appRequests: inputs.appRequests,
     });
     bridgeRef.current = bridge;
+    onBridge(bridge);
     const handleMessage = (event: MessageEvent<unknown>): void => {
       if (event.source !== iframe.contentWindow) return;
       bridge.receive(event.data);
@@ -307,12 +331,15 @@ export function SandboxFrame(props: SandboxFrameProps) {
       iframe.removeEventListener("load", handleLoad);
       bridge.dispose();
       if (bridgeRef.current === bridge) bridgeRef.current = null;
+      onBridge(null);
     };
   }, [frameGeneration]);
 
   useLayoutEffect(() => {
-    bridgeRef.current?.updateHostContext(hostContextFor(theme, platform));
-  }, [theme, platform]);
+    bridgeRef.current?.updateHostContext(
+      hostContextFor(theme, platform, kind, displayMode),
+    );
+  }, [theme, platform, kind, displayMode]);
 
   if (!policy.valid) return null;
 

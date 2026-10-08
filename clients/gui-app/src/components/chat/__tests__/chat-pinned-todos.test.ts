@@ -792,6 +792,7 @@ function toolSegment(
     backgroundTask: false,
     imageResults: [],
     page: null,
+    mcpApp: null,
     startedAt: 0,
     durationMs: null,
     parentId: null,

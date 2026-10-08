@@ -188,6 +188,8 @@ export function HtmlViewer(props: HtmlViewerProps) {
       onSize={handleSize}
       onStatus={handleStatus}
       onRequestTeardown={ignoreTeardown}
+      displayMode="inline"
+      onBridge={null}
       ref={null}
     />
   );

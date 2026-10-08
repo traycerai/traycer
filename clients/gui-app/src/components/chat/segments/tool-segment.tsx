@@ -8,6 +8,7 @@ import type {
   BackgroundTaskOutput,
   ImageGenerationResult,
   ToolCallManagedCommand,
+  ToolCallMcpAppStamp,
   ToolCallPageStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
@@ -53,6 +54,7 @@ import { ManagedCommandRestartSegment } from "./managed-command-restart-segment"
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 import { isPageToolCall } from "@/components/chat/chat-activity-groups";
+import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
 
 interface ToolSegmentProps {
@@ -91,6 +93,9 @@ interface ToolSegmentProps {
   // The page a `traycer_show_page` call showed (null otherwise). With the tool
   // name, routes the call to the page row.
   page: ToolCallPageStamp | null;
+  // The MCP App the call rendered (null otherwise). Routes the call to the
+  // app row.
+  mcpApp: ToolCallMcpAppStamp | null;
   variant: "card" | "row";
   headerFindUnitId: string | null;
 }
@@ -267,6 +272,19 @@ export function ToolSegment(props: ToolSegmentProps) {
   }
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
+  }
+  // `isMcpAppToolCall`, spelled out so the stamp narrows.
+  if (props.mcpApp !== null) {
+    return (
+      <McpAppRow
+        id={props.id}
+        app={props.mcpApp}
+        // What a reader with no app to run sees, and what "Show original tool call"
+        // reveals: the ordinary row. Find skips the app row (see the page
+        // row below), so this copy carries no find anchor.
+        fallback={<GenericToolSegment {...props} headerFindUnitId={null} />}
+      />
+    );
   }
   if (isPageToolCall(props)) {
     return (

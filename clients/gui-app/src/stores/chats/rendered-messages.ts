@@ -4942,6 +4942,14 @@ function toolCallPageStamp(
   return page === undefined ? null : block.page;
 }
 
+/** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+function toolCallMcpAppStamp(
+  block: Extract<ContentBlock, { type: "tool_call" }>,
+): Extract<ContentBlock, { type: "tool_call" }>["mcpApp"] {
+  const mcpApp: unknown = block.mcpApp;
+  return mcpApp === undefined ? null : block.mcpApp;
+}
+
 const BLOCK_HANDLERS: {
   [K in ContentBlock["type"]]: (
     block: Extract<ContentBlock, { type: K }>,
@@ -5017,6 +5025,7 @@ const BLOCK_HANDLERS: {
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
     page: toolCallPageStamp(block),
+    mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",
