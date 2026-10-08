@@ -1357,7 +1357,7 @@ function LimitedProfileBanners({
     <div className="mb-3 flex flex-col gap-2">
       {shown.map((profile) => {
         const hideLabel =
-          profile.resetsAt === null ? "Hide" : "Hide until it resets";
+          profile.resetsAt === null ? "Hide for a day" : "Hide until it resets";
         return (
           <div
             key={limitedBannerKey(profile)}

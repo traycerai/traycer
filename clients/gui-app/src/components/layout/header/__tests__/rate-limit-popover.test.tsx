@@ -306,6 +306,7 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { NO_RESET_DISMISSAL_MS } from "@/lib/rate-limits/limited-profiles";
 import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
@@ -4113,13 +4114,36 @@ describe("<RateLimitPopover /> limited profiles", () => {
     expect(buttons[0].getAttribute("aria-label")).toBe("Hide until it resets");
   });
 
-  it("offers a plain Hide for a limit with no reset time", () => {
+  it("offers a day-long Hide for a limit with no reset time", () => {
     showLimited(twoLimited(null));
 
     const hide = within(
       screen.getAllByTestId("rate-limit-limited-banner")[0],
     ).getByTestId("rate-limit-limited-banner-hide");
-    expect(hide.getAttribute("aria-label")).toBe("Hide");
+    expect(hide.getAttribute("aria-label")).toBe("Hide for a day");
+  });
+
+  it("shows a no-reset limit again a day after it was hidden, and keeps it hidden within the day", () => {
+    seedDismissals({
+      [HOST_ID]: {
+        "codex:p1": {
+          resetsAt: null,
+          dismissedAt: Date.now() - NO_RESET_DISMISSAL_MS - 60_000,
+        },
+      },
+    });
+    showLimited(twoLimited(null));
+    expect(bannerTexts()).toHaveLength(2);
+    cleanup();
+
+    seedDismissals({
+      [HOST_ID]: {
+        "codex:p1": { resetsAt: null, dismissedAt: Date.now() - 60_000 },
+      },
+    });
+    renderPopover();
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
   });
 
   it("hides exactly the pressed banner on Overview and on another provider's tab, keeping the rail dot", () => {

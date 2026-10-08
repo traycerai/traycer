@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
+import { NO_RESET_DISMISSAL_MS } from "@/lib/rate-limits/limited-profiles";
 import type { LimitedBannerDismissals } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 
@@ -79,6 +80,28 @@ describe("useLimitedBannerDismissalsStore", () => {
     expect(dismissals()).toEqual({
       "host-a": { "codex:future": timed(NOW + 1) },
       "host-b": { "claude-code:future": timed(NOW + 9) },
+    });
+  });
+
+  it("prune drops a no-reset entry a day old on any host and keeps a younger one", () => {
+    const expired = {
+      resetsAt: null,
+      dismissedAt: NOW - NO_RESET_DISMISSAL_MS,
+    };
+    const young = {
+      resetsAt: null,
+      dismissedAt: NOW - NO_RESET_DISMISSAL_MS + 1,
+    };
+    seed({
+      "host-a": { "codex:expired": expired, "codex:young": young },
+      "host-b": { "codex:expired": expired, "codex:young": young },
+    });
+
+    useLimitedBannerDismissalsStore.getState().prune("host-a", new Map(), NOW);
+
+    expect(dismissals()).toEqual({
+      "host-a": { "codex:young": young },
+      "host-b": { "codex:young": young },
     });
   });
 

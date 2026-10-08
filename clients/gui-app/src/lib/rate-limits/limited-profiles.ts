@@ -143,12 +143,37 @@ export function clearedBannerReadings(
 }
 
 /**
+ * How long hiding a limit with no reset time lasts ("Hide for a day").
+ *
+ * Such a limit names no episode, so nothing can tell its next occurrence
+ * from this one: a healthy reading in between ends the dismissal early when
+ * a client sees it (`clearedBannerReadings`), but none may (the app closed,
+ * a reading with no windows). The day bounds what a missed recovery can
+ * cost, as the reset time bounds it for a timed limit.
+ */
+export const NO_RESET_DISMISSAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a dismissal has run its course by time alone: a timed one at its
+ * reset (the "Hide until it resets" promise), a no-reset one a day after it
+ * was made. A later healthy reading can end either sooner (the store's
+ * `prune`).
+ */
+export function isLimitedBannerDismissalExpired(
+  dismissal: LimitedBannerDismissal,
+  now: number,
+): boolean {
+  return dismissal.resetsAt === null
+    ? dismissal.dismissedAt + NO_RESET_DISMISSAL_MS <= now
+    : dismissal.resetsAt <= now;
+}
+
+/**
  * Whether the user hid this banner for the limit episode it shows now. The
  * episode is the reset time: a stored `resetsAt` that differs is an earlier
- * episode and hides nothing. A dismissed reset that has passed hides nothing
- * either, so a reading that lags its own reset still shows. A limit with no
- * reset time stays hidden while the account remains limited (the store drops
- * the entry once it is not).
+ * episode and hides nothing. A dismissal that has expired hides nothing
+ * either (`isLimitedBannerDismissalExpired`), so a reading that lags its own
+ * reset still shows, and a limit with no reset time shows again after a day.
  */
 export function isLimitedBannerDismissed(
   entries: Readonly<Record<string, LimitedBannerDismissal>> | undefined,
@@ -158,9 +183,9 @@ export function isLimitedBannerDismissed(
   if (entries === undefined) return false;
   const key = limitedBannerKey(profile);
   if (!Object.hasOwn(entries, key)) return false;
-  const dismissedResetsAt = entries[key].resetsAt;
-  if (dismissedResetsAt !== profile.resetsAt) return false;
-  return dismissedResetsAt === null || dismissedResetsAt > now;
+  const dismissal = entries[key];
+  if (dismissal.resetsAt !== profile.resetsAt) return false;
+  return !isLimitedBannerDismissalExpired(dismissal, now);
 }
 
 /** `Fri, Oct 9, 2:00 PM`. `hour12` is explicit so AM/PM always renders. */

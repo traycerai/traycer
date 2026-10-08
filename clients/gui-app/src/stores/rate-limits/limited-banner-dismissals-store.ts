@@ -2,7 +2,10 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { installCrossWindowRehydrate } from "@/lib/persist/cross-window-rehydrate";
-import type { LimitedBannerDismissal } from "@/lib/rate-limits/limited-profiles";
+import {
+  isLimitedBannerDismissalExpired,
+  type LimitedBannerDismissal,
+} from "@/lib/rate-limits/limited-profiles";
 
 /**
  * Dismissed limit banners, per host: `hostId` → banner key → the limit
@@ -27,8 +30,9 @@ interface LimitedBannerDismissalsState {
     now: number,
   ) => void;
   /**
-   * Drops every entry that can no longer hide anything: a timed entry whose
-   * reset has passed, on any host, and - on `hostId` only - any entry whose
+   * Drops every entry that can no longer hide anything: an expired one, on
+   * any host (a timed entry past its reset, a no-reset entry a day old -
+   * `isLimitedBannerDismissalExpired`), and - on `hostId` only - any entry whose
    * account a live reading received AFTER the dismissal shows not limited
    * (`clearedReadings`: banner key → when that reading arrived), so the next
    * limit shows its banner even when it keeps the same reset time (a reset
@@ -138,7 +142,7 @@ export const useLimitedBannerDismissalsStore =
                   : null;
               const stale =
                 (clearedAt !== null && clearedAt > dismissal.dismissedAt) ||
-                (dismissal.resetsAt !== null && dismissal.resetsAt <= now);
+                isLimitedBannerDismissalExpired(dismissal, now);
               if (stale) {
                 changed = true;
               } else {

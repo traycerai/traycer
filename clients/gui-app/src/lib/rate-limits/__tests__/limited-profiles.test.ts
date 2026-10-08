@@ -6,8 +6,10 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import {
   clearedBannerReadings,
+  isLimitedBannerDismissalExpired,
   isLimitedBannerDismissed,
   limitedBannerKey,
+  NO_RESET_DISMISSAL_MS,
   type LimitedBannerDismissal,
   type LimitedProfile,
 } from "@/lib/rate-limits/limited-profiles";
@@ -75,6 +77,24 @@ function dismissal(resetsAt: number | null): LimitedBannerDismissal {
   return { resetsAt, dismissedAt: NOW - 1000 };
 }
 
+describe("isLimitedBannerDismissalExpired", () => {
+  it("expires a no-reset dismissal exactly a day after it was made", () => {
+    const d = { resetsAt: null, dismissedAt: NOW };
+    expect(
+      isLimitedBannerDismissalExpired(d, NOW + NO_RESET_DISMISSAL_MS - 1),
+    ).toBe(false);
+    expect(
+      isLimitedBannerDismissalExpired(d, NOW + NO_RESET_DISMISSAL_MS),
+    ).toBe(true);
+  });
+
+  it("expires a timed dismissal at its reset", () => {
+    const d = { resetsAt: NOW + 500, dismissedAt: NOW };
+    expect(isLimitedBannerDismissalExpired(d, NOW + 499)).toBe(false);
+    expect(isLimitedBannerDismissalExpired(d, NOW + 500)).toBe(true);
+  });
+});
+
 describe("isLimitedBannerDismissed", () => {
   it("is true for an equal reset still in the future", () => {
     expect(
@@ -86,14 +106,24 @@ describe("isLimitedBannerDismissed", () => {
     ).toBe(true);
   });
 
-  it("is true for null equal to null, however late the clock", () => {
+  it("is true for null equal to null within the day it was made", () => {
     expect(
       isLimitedBannerDismissed(
         { "codex:p1": dismissal(null) },
         { ...profile, resetsAt: null },
-        NOW * 10,
+        NOW + NO_RESET_DISMISSAL_MS / 2,
       ),
     ).toBe(true);
+  });
+
+  it("is false for a matching null dismissal a day old", () => {
+    expect(
+      isLimitedBannerDismissed(
+        { "codex:p1": { resetsAt: null, dismissedAt: NOW - 1000 } },
+        { ...profile, resetsAt: null },
+        NOW - 1000 + NO_RESET_DISMISSAL_MS,
+      ),
+    ).toBe(false);
   });
 
   it("is false once the dismissed reset has passed", () => {
