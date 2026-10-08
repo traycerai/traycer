@@ -489,6 +489,7 @@ for (const [width, sender] of [
   [900, null],
   [320, null],
   [239, null],
+  [200, null],
   [320, LONG_SENDER],
   [239, LONG_SENDER],
 ] as const) {
@@ -508,7 +509,11 @@ for (const [width, sender] of [
     await expect(page.getByTestId("queued-message-row")).toHaveCount(1);
     await settledReading(page);
     const reading = await readFoldedRow(page);
-    const step = `${String(width)}px, folded, ${sender === null ? "short sender" : "long sender title"}`;
+    test.info().annotations.push({
+      type: "content box width",
+      description: `${String(reading.scroll.right - reading.scroll.left)}px at ${String(width)}px`,
+    });
+    const step = `${String(width)}px (content box ${String(reading.scroll.right - reading.scroll.left)}px), folded, ${sender === null ? "short sender" : "long sender title"}`;
 
     expect(reading.foldExpanded, `${step}: the row is folded`).toBe("false");
     expect(reading.sender, `${step}: no sender badge is drawn`).not.toBeNull();

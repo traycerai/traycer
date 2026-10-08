@@ -1006,11 +1006,13 @@ const CONTENT_SCROLL_COMPACT = "flow-root";
 /**
  * The folded prose (plain text): one line, ellipsized, never taller than that
  * line. It is
- * a formatting context of its own, so it sits BESIDE the floats; `min-w-24`
- * is what sends it below them, at full width, once the space beside them is
- * too narrow to read (a 239px pane), rather than shrinking it to nothing.
+ * a formatting context of its own, so it sits BESIDE the floats; its minimum
+ * width is what sends it below them, at full width, once the space beside
+ * them is too narrow to read (a 239px pane), rather than shrinking it to
+ * nothing. `min(6rem, 100%)`, never a bare `6rem`: the floor is capped at the
+ * row's own width, so no pane is narrow enough for it to push the row wider.
  */
-const COMPACT_PREVIEW = "line-clamp-1 max-h-[1lh] min-w-24";
+const COMPACT_PREVIEW = "line-clamp-1 max-h-[1lh] min-w-[min(6rem,100%)]";
 
 function agentFoldCompact(
   fold: QueuedMessageRowContentAgentFold | null,

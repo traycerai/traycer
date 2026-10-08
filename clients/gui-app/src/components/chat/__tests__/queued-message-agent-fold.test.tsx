@@ -189,7 +189,11 @@ function expectCompact(row: HTMLElement): void {
   expect(classesOf(scroll)).not.toContain("overflow-hidden");
   expect(classesOf(scroll)).not.toContain("overflow-y-auto");
   expect(classesOf(previewOf(row))).toEqual(
-    expect.arrayContaining(["line-clamp-1", "max-h-[1lh]", "min-w-24"]),
+    expect.arrayContaining([
+      "line-clamp-1",
+      "max-h-[1lh]",
+      "min-w-[min(6rem,100%)]",
+    ]),
   );
 }
 
@@ -201,7 +205,11 @@ function expectThreeLine(row: HTMLElement): void {
   expect(scroll.className).toContain(THREE_LINE_CLASS);
   expect(classesOf(scroll)).not.toContain("flow-root");
   const preview = classesOf(previewOf(row));
-  for (const clamp of ["line-clamp-1", "max-h-[1lh]", "min-w-24"]) {
+  for (const clamp of [
+    "line-clamp-1",
+    "max-h-[1lh]",
+    "min-w-[min(6rem,100%)]",
+  ]) {
     expect(preview).not.toContain(clamp);
   }
 }
