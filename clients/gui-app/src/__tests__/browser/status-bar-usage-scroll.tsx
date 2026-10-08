@@ -73,6 +73,7 @@ function accountSegment(index: number): StatusBarProviderSegmentModel {
     account: { profileId, accentColor: "#5b8def", label: profileId },
     state: "live",
     reason: null,
+    readAt: null,
     windows: [window],
     shown: [window],
     tightest: window,

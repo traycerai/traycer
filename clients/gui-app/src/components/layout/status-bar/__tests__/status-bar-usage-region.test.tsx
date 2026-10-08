@@ -48,6 +48,7 @@ function segment(
     hidden: false,
     state: "live",
     reason: null,
+    readAt: null,
     windows: [limit],
     shown: [limit],
     tightest: limit,

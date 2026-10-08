@@ -98,6 +98,7 @@ function segment(
     hidden: false,
     state,
     reason: null,
+    readAt: null,
     windows: live ? [reading] : [],
     shown: live ? [reading] : [],
     tightest: live ? reading : null,

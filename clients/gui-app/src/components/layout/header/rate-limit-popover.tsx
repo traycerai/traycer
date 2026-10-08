@@ -72,7 +72,7 @@ import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider
 import { useStatusBarRateLimitSegments } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import {
-  clearedBannerKeys,
+  clearedBannerReadings,
   isLimitedBannerDismissed,
   limitedBannerKey,
   limitedProfileBannerText,
@@ -845,9 +845,11 @@ function RateLimitPopoverScopedBody({
   });
   const limited = limitedProfiles(cluster);
   // By value: `cluster` is rebuilt on every render, and the banners prune
-  // their dismissals only when this set really changes.
+  // their dismissals only when an account clears or a newer reading arrives.
   const clearedSignature = JSON.stringify(
-    [...clearedBannerKeys(cluster)].sort(),
+    [...clearedBannerReadings(cluster)].sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
   );
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
@@ -1323,13 +1325,22 @@ function RailTab({
   );
 }
 
-/** The `clearedSignature` the scoped body builds, back to its keys. */
-function clearedKeysOf(signature: string): ReadonlySet<string> {
+/** The `clearedSignature` the scoped body builds, back to its readings. */
+function clearedReadingsOf(signature: string): ReadonlyMap<string, number> {
   const parsed: unknown = JSON.parse(signature);
-  if (!Array.isArray(parsed)) return new Set();
-  return new Set(
-    parsed.filter((key): key is string => typeof key === "string"),
-  );
+  const readings = new Map<string, number>();
+  if (!Array.isArray(parsed)) return readings;
+  const entries: ReadonlyArray<unknown> = parsed;
+  for (const entry of entries) {
+    if (!Array.isArray(entry)) continue;
+    const pair: ReadonlyArray<unknown> = entry;
+    const key = pair[0];
+    const readAt = pair[1];
+    if (typeof key === "string" && typeof readAt === "number") {
+      readings.set(key, readAt);
+    }
+  }
+  return readings;
 }
 
 /**
@@ -1352,7 +1363,7 @@ function LimitedProfileBanners({
   displayedHostId,
 }: {
   readonly limited: ReadonlyArray<LimitedProfile>;
-  /** `clearedBannerKeys` of the same reading, as a JSON list. */
+  /** `clearedBannerReadings` of the same cluster, as a JSON entry list. */
   readonly clearedSignature: string;
   readonly openTab: RateLimitPopoverTab;
   /** Dismissals are this host's; `null` remembers nothing and offers no hide. */
@@ -1366,7 +1377,7 @@ function LimitedProfileBanners({
   const prune = useLimitedBannerDismissalsStore((state) => state.prune);
   useEffect(() => {
     if (displayedHostId === null) return;
-    prune(displayedHostId, clearedKeysOf(clearedSignature), now);
+    prune(displayedHostId, clearedReadingsOf(clearedSignature), now);
   }, [clearedSignature, displayedHostId, now, prune]);
 
   const shown = limited.filter(
@@ -1413,6 +1424,7 @@ function LimitedProfileBanners({
                         displayedHostId,
                         limitedBannerKey(profile),
                         profile.resetsAt,
+                        Date.now(),
                       )
                     }
                   >

@@ -85,6 +85,17 @@ export function limitedProfiles(
 }
 
 /**
+ * One hidden banner: the limit episode it was hidden for (`resetsAt`, `null`
+ * for a limit with no reset time) and when it was hidden. `dismissedAt` is
+ * what a later reading has to postdate before it can end a no-reset
+ * dismissal (`clearedBannerReadings`).
+ */
+export interface LimitedBannerDismissal {
+  readonly resetsAt: number | null;
+  readonly dismissedAt: number;
+}
+
+/**
  * The account a banner speaks for, within one host's dismissals
  * (`limited-banner-dismissals-store.ts` buckets by host). The provider id is
  * a fixed lowercase slug, so the first `:` always ends it whatever the
@@ -97,27 +108,34 @@ export function limitedBannerKey(
 }
 
 /**
- * The accounts a live reading shows NOT limited: the evidence that ends a
- * dismissal with no reset time. A cold, failed or degraded segment says
- * nothing about the limit, so it is not here.
+ * The accounts a live reading shows NOT limited, each with when that reading
+ * arrived: the evidence that ends a dismissal with no reset time, once it
+ * postdates the dismissal. A cold, failed or degraded segment says nothing
+ * about the limit, and neither does one with no receipt time, so none of
+ * them is here.
  */
-export function clearedBannerKeys(
+export function clearedBannerReadings(
   cluster: StatusBarRateLimitCluster,
-): ReadonlySet<string> {
-  if (cluster.kind !== "segments") return new Set();
-  return new Set(
-    cluster.segments
-      .filter(
-        (segment) =>
-          segment.state === "live" && blockingWindow(segment) === null,
-      )
-      .map((segment) =>
-        limitedBannerKey({
-          providerId: segment.providerId,
-          profileId: segment.profileId,
-        }),
-      ),
-  );
+): ReadonlyMap<string, number> {
+  const readings = new Map<string, number>();
+  if (cluster.kind !== "segments") return readings;
+  for (const segment of cluster.segments) {
+    if (
+      segment.state !== "live" ||
+      segment.readAt === null ||
+      blockingWindow(segment) !== null
+    ) {
+      continue;
+    }
+    readings.set(
+      limitedBannerKey({
+        providerId: segment.providerId,
+        profileId: segment.profileId,
+      }),
+      segment.readAt,
+    );
+  }
+  return readings;
 }
 
 /**
@@ -129,14 +147,14 @@ export function clearedBannerKeys(
  * the entry once it is not).
  */
 export function isLimitedBannerDismissed(
-  entries: Readonly<Record<string, number | null>> | undefined,
+  entries: Readonly<Record<string, LimitedBannerDismissal>> | undefined,
   profile: LimitedProfile,
   now: number,
 ): boolean {
   if (entries === undefined) return false;
   const key = limitedBannerKey(profile);
   if (!Object.hasOwn(entries, key)) return false;
-  const dismissedResetsAt = entries[key];
+  const dismissedResetsAt = entries[key].resetsAt;
   if (dismissedResetsAt !== profile.resetsAt) return false;
   return dismissedResetsAt === null || dismissedResetsAt > now;
 }

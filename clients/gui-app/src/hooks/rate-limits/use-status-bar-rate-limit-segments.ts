@@ -143,6 +143,14 @@ export interface StatusBarProviderSegmentModel {
    */
   readonly reason: RateLimitUnavailableReason | null;
   /**
+   * When this window received the reading the segment draws (the envelope's
+   * `lastGoodAt`, this renderer's clock), or `null` where it drew none or
+   * the reading is the sample scene's. Each window has its own cache, so two
+   * windows can draw the same account from readings minutes apart; this is
+   * what orders them.
+   */
+  readonly readAt: number | null;
+  /**
    * Every live window in catalog order - what the provider HAS, before the
    * user's selection is applied. A `degraded` segment carries the retained
    * reading's windows - dimming them is the whole point - while `cold` and
@@ -500,6 +508,7 @@ function toSegments(
         ...(context.sample
           ? { state: "live" as const, reason: null }
           : segmentState(retained, envelope, query.isError)),
+        readAt: context.sample ? null : (envelope?.lastGoodAt ?? null),
         windows,
         shown,
         tightest: tightestRateLimitWindow(shown),

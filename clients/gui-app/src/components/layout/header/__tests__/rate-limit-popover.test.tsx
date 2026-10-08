@@ -3936,6 +3936,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
     readonly label: string | null;
     readonly severity: "healthy" | "running_low" | "limited";
     readonly kind: "session" | "weekly";
+    readonly readAt: number | null;
   }): StatusBarProviderSegmentModel {
     const window = {
       windowKey: `${input.providerId}:${input.kind}`,
@@ -3960,6 +3961,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
       hidden: false,
       state: "live",
       reason: null,
+      readAt: input.readAt,
       windows: [window],
       shown: [window],
       tightest: window,
@@ -3987,6 +3989,20 @@ describe("<RateLimitPopover /> limited profiles", () => {
 
   const DISMISSALS_KEY = "traycer-gui-app:limited-banner-dismissals";
   const HOST_ID = "host-a";
+
+  /** Seed through storage: dismiss and prune rehydrate from it first. */
+  function seedDismissals(
+    dismissals: Record<
+      string,
+      Record<string, { resetsAt: number | null; dismissedAt: number }>
+    >,
+  ): void {
+    window.localStorage.setItem(
+      DISMISSALS_KEY,
+      JSON.stringify({ state: { dismissals }, version: 1 }),
+    );
+    void useLimitedBannerDismissalsStore.persist.rehydrate();
+  }
 
   function resetDismissals(): void {
     useLimitedBannerDismissalsStore.setState({ dismissals: {} });
@@ -4021,6 +4037,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
           label: "pro20x",
           severity: "limited",
           kind: "weekly",
+          readAt: null,
         }),
         resetsAt,
       ),
@@ -4031,6 +4048,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
           label: "team",
           severity: "limited",
           kind: "session",
+          readAt: null,
         }),
         resetsAt,
       ),
@@ -4061,6 +4079,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
         label: "pro20x",
         severity: "limited",
         kind: "weekly",
+        readAt: null,
       }),
       limitedSegment({
         providerId: "codex",
@@ -4068,6 +4087,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
         label: "team",
         severity: "limited",
         kind: "session",
+        readAt: null,
       }),
       limitedSegment({
         providerId: "claude-code",
@@ -4075,6 +4095,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
         label: null,
         severity: "healthy",
         kind: "session",
+        readAt: null,
       }),
     ]);
 
@@ -4108,9 +4129,11 @@ describe("<RateLimitPopover /> limited profiles", () => {
 
     hideOn("pro20x");
 
-    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({
-      [HOST_ID]: { "codex:p1": resetsAt },
-    });
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toMatchObject(
+      {
+        [HOST_ID]: { "codex:p1": { resetsAt } },
+      },
+    );
     expect(bannerTexts()).toHaveLength(1);
     expect(bannerTexts()[0]).toContain("team hit its 5h limit");
 
@@ -4141,7 +4164,13 @@ describe("<RateLimitPopover /> limited profiles", () => {
       window.localStorage.getItem(DISMISSALS_KEY) ?? "{}",
     );
     expect(stored).toMatchObject({
-      state: { dismissals: { [HOST_ID]: { "codex:p1": resetsAt } } },
+      state: {
+        dismissals: {
+          [HOST_ID]: {
+            "codex:p1": { resetsAt },
+          },
+        },
+      },
     });
   });
 
@@ -4162,18 +4191,16 @@ describe("<RateLimitPopover /> limited profiles", () => {
 
   it("keeps a dismissal under another host from hiding this host's banner, and honours one under this host", () => {
     const resetsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
-    useLimitedBannerDismissalsStore.setState({
-      dismissals: { "host-other": { "codex:p1": resetsAt } },
+    seedDismissals({
+      "host-other": { "codex:p1": { resetsAt, dismissedAt: Date.now() } },
     });
     showLimited(twoLimited(resetsAt));
     expect(bannerTexts()).toHaveLength(2);
     cleanup();
 
-    useLimitedBannerDismissalsStore.setState({
-      dismissals: {
-        "host-other": { "codex:p1": resetsAt },
-        [HOST_ID]: { "codex:p1": resetsAt },
-      },
+    seedDismissals({
+      "host-other": { "codex:p1": { resetsAt, dismissedAt: Date.now() } },
+      [HOST_ID]: { "codex:p1": { resetsAt, dismissedAt: Date.now() } },
     });
     renderPopover();
     expect(bannerTexts()).toHaveLength(1);
@@ -4193,9 +4220,13 @@ describe("<RateLimitPopover /> limited profiles", () => {
   it("keeps a no-reset dismissal while limited, prunes it once the account reads healthy, and shows the next limit", () => {
     showLimited(twoLimited(null));
     hideOn("pro20x");
-    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({
-      [HOST_ID]: { "codex:p1": null },
-    });
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toMatchObject(
+      {
+        [HOST_ID]: {
+          "codex:p1": { resetsAt: null },
+        },
+      },
+    );
     expect(bannerTexts()).toHaveLength(1);
     cleanup();
 
@@ -4204,7 +4235,9 @@ describe("<RateLimitPopover /> limited profiles", () => {
     expect(bannerTexts()[0]).toContain("team hit its 5h limit");
     expect(
       useLimitedBannerDismissalsStore.getState().dismissals[HOST_ID],
-    ).toEqual({ "codex:p1": null });
+    ).toMatchObject({
+      "codex:p1": { resetsAt: null },
+    });
     cleanup();
 
     const [, team] = twoLimited(null);
@@ -4217,6 +4250,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
           label: "pro20x",
           severity: "healthy",
           kind: "weekly",
+          readAt: Date.now() + 60_000,
         }),
         team,
       ],
@@ -4229,6 +4263,43 @@ describe("<RateLimitPopover /> limited profiles", () => {
     expect(bannerTexts()).toHaveLength(2);
   });
 
+  it("keeps a no-reset dismissal for a healthy reading older than the dismissal, and prunes it for a newer one", () => {
+    showLimited(twoLimited(null));
+    hideOn("pro20x");
+    const dismissedAt =
+      useLimitedBannerDismissalsStore.getState().dismissals[HOST_ID]["codex:p1"]
+        .dismissedAt;
+    cleanup();
+
+    const [, team] = twoLimited(null);
+    function healthyAt(readAt: number): void {
+      segmentsState.cluster = {
+        kind: "segments",
+        segments: [
+          limitedSegment({
+            providerId: "codex",
+            profileId: "p1",
+            label: "pro20x",
+            severity: "healthy",
+            kind: "weekly",
+            readAt,
+          }),
+          team,
+        ],
+      };
+      renderPopover();
+    }
+
+    healthyAt(dismissedAt - 60_000);
+    expect(
+      useLimitedBannerDismissalsStore.getState().dismissals[HOST_ID],
+    ).toHaveProperty("codex:p1");
+    cleanup();
+
+    healthyAt(dismissedAt + 60_000);
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({});
+  });
+
   it("draws no banner while no profile is limited, even one running low", () => {
     showLimited([
       limitedSegment({
@@ -4237,6 +4308,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
         label: "pro20x",
         severity: "running_low",
         kind: "weekly",
+        readAt: null,
       }),
     ]);
 
@@ -4252,6 +4324,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
         label: "pro20x",
         severity: "limited",
         kind: "weekly",
+        readAt: null,
       }),
     ]);
 
@@ -4274,6 +4347,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
         label: "pro20x",
         severity: "limited",
         kind: "weekly",
+        readAt: null,
       }),
     ]);
 

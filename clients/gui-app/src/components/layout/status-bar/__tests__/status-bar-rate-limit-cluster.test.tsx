@@ -84,6 +84,7 @@ function segmentFixture(
     hidden: false,
     state: "live",
     reason: null,
+    readAt: null,
     windows: tightest === null ? [] : [tightest],
     shown: tightest === null ? [] : [tightest],
     tightest,
