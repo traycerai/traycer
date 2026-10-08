@@ -1,0 +1,19 @@
+<!doctype html>
+<!--
+  The sandbox loader. It is served from its own origin (desktop: the
+  traycer-sandbox: scheme; mobile: /sandbox/ under the app) and always framed
+  as an opaque `<iframe sandbox="allow-scripts allow-forms">`. The meta below
+  is the base policy; desktop also sends it as a response header. A page's
+  stricter policy is added on top by loader.js, never in place of this one.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'"
+    />
+    <script src="loader.js"></script>
+  </head>
+  <body></body>
+</html>

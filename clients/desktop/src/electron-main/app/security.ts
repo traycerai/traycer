@@ -5,6 +5,11 @@ import { confirmDestructiveInMain } from "./confirm-destructive";
 import { CONTENT_SECURITY_POLICY } from "../../shared/content-security-policy";
 import { isDevBuild } from "../../config";
 import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
+import {
+  isSandboxLoaderUrl,
+  isSandboxUrl,
+  sandboxDeclaredGrants,
+} from "./sandbox-protocol";
 
 const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "http:",
@@ -272,6 +277,60 @@ export function installNavigationGuard(webContents: WebContents): void {
     event.preventDefault();
     void safelyOpenExternal(navigationUrl);
   });
+  installSandboxFrameGuard(webContents);
+}
+
+const SANDBOX_NESTED_FRAME_SCHEMES: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+]);
+
+/**
+ * May a child frame of the app window load `url`? The app's only frames are
+ * sandbox trees: the renderer CSP's `frame-src traycer-sandbox:` already keeps
+ * a direct child on the sandbox scheme, and this is the main-process layer
+ * behind it.
+ *
+ * - A sandbox ROOT (a direct child of the app document) loads the loader
+ *   page and nothing else - not another sandbox path, not the web.
+ * - A frame deeper in a sandbox tree (a page's own iframe, which only an
+ *   `open` page can have) loads http(s), or an `about:` document.
+ * - A same-document navigation (an in-page anchor) changes no document.
+ */
+export function isAllowedAppSubframeNavigation(
+  url: string,
+  isSandboxRoot: boolean,
+): boolean {
+  if (isSandboxRoot) return isSandboxLoaderUrl(url);
+  if (url === "about:blank" || url === "about:srcdoc") return true;
+  try {
+    return SANDBOX_NESTED_FRAME_SCHEMES.has(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
+function installSandboxFrameGuard(webContents: WebContents): void {
+  webContents.on("will-frame-navigate", (event) => {
+    if (event.isMainFrame || event.isSameDocument) return;
+    const parent = event.frame?.parent ?? null;
+    // A frame that is already gone has nothing left to navigate.
+    if (parent === null) return;
+    const isSandboxRoot = parent.parent === null;
+    if (isAllowedAppSubframeNavigation(event.url, isSandboxRoot)) return;
+    // The scheme only: a page chose the rest of this URL.
+    let scheme = "<unparseable>";
+    try {
+      scheme = new URL(event.url).protocol;
+    } catch {
+      scheme = "<unparseable>";
+    }
+    log.warn("[security] sandbox frame navigation blocked", {
+      scheme,
+      isSandboxRoot,
+    });
+    event.preventDefault();
+  });
 }
 
 /**
@@ -298,9 +357,45 @@ const ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "fullscreen",
 ]);
 
+/**
+ * The permission decision for a request or check from a frame BELOW the app
+ * document. The app's only subframes are sandbox trees (agent pages,
+ * wireframes, MCP Apps), so the trusted grants above are main-frame only. A
+ * sandbox root gets exactly the permissions its loader URL declared in
+ * `?perm=` - the same list its iframe `allow` attribute was built from - and
+ * every other subframe gets nothing. `media` is granted per media type.
+ */
+export function isSandboxSubframePermissionGranted(
+  permission: string,
+  requestingUrl: string,
+  mediaTypes: readonly string[],
+): boolean {
+  if (!isSandboxUrl(requestingUrl)) return false;
+  const grants = sandboxDeclaredGrants(requestingUrl);
+  if (permission !== "media") return grants.has(permission);
+  return (
+    mediaTypes.length > 0 &&
+    mediaTypes.every((mediaType) => grants.has(`media:${mediaType}`))
+  );
+}
+
 export function installPermissionHandlers(target: Session): void {
   target.setPermissionRequestHandler(
     (_webContents, permission, callback, details) => {
+      if (!details.isMainFrame) {
+        const mediaTypes =
+          "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
+        const granted = isSandboxSubframePermissionGranted(
+          permission,
+          details.requestingUrl,
+          mediaTypes,
+        );
+        if (!granted) {
+          log.warn("[security] subframe permission denied", { permission });
+        }
+        callback(granted);
+        return;
+      }
       if (permission === "media") {
         const mediaTypes =
           "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
@@ -323,6 +418,13 @@ export function installPermissionHandlers(target: Session): void {
   );
   target.setPermissionCheckHandler(
     (_webContents, permission, _origin, details) => {
+      if (!details.isMainFrame) {
+        return isSandboxSubframePermissionGranted(
+          permission,
+          details.requestingUrl ?? "",
+          details.mediaType === undefined ? [] : [details.mediaType],
+        );
+      }
       if (permission === "media") {
         // Mic-only (dictation). Fail closed: allow ONLY audio, denying camera
         // and the optional/unknown `mediaType` (Electron types it optional, so a
@@ -352,10 +454,27 @@ export function installPermissionHandlers(target: Session): void {
  */
 const CSP_HEADER_VALUE: readonly string[] = [CONTENT_SECURITY_POLICY];
 
+/**
+ * Sandbox documents keep their own policy. Without this skip the app policy
+ * is ADDED beside the sandbox scheme's header (the hook writes a second key,
+ * and both are enforced), so `script-src 'self'` kills every CDN script a page
+ * loads. Subframe documents are skipped for the same reason: the app's only
+ * subframes are sandbox trees, and a page's own iframe (an `open` page's
+ * embed) answers for its own policy.
+ */
+export function appliesAppContentSecurityPolicy(
+  url: string,
+  resourceType: string,
+): boolean {
+  return !isSandboxUrl(url) && resourceType !== "subFrame";
+}
+
 export function installContentSecurityPolicy(target: Session): void {
   target.webRequest.onHeadersReceived((details, callback) => {
     const headers = details.responseHeaders ?? {};
-    headers["Content-Security-Policy"] = CSP_HEADER_VALUE as string[];
+    if (appliesAppContentSecurityPolicy(details.url, details.resourceType)) {
+      headers["Content-Security-Policy"] = CSP_HEADER_VALUE as string[];
+    }
     callback({ responseHeaders: headers });
   });
 }

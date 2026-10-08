@@ -29,6 +29,7 @@ import {
   removeDevicePushTokenViaHttp,
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
+import { installNativeHttpToken } from "./native-http-token";
 import { AuthSession, MobileAuthSheet } from "../auth-sheet";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { sentryInitOptions } from "../sentry";
@@ -159,6 +160,23 @@ const devHostFetch: (() => Promise<RemoteHostFetchOutcome>) | null =
 const remoteFetcher: RemoteHostFetcher | null =
   devHostFetch === null ? null : () => devHostFetch();
 
+/**
+ * Narrows the shell's static `frame-src 'self'` (index.html) to the one
+ * document the app frames, the sandbox loader, so a sandboxed page cannot
+ * navigate its own frame to another app route or to a `/_capacitor_*` native
+ * route. Added at runtime because the origin differs per shell -
+ * `capacitor://localhost` on iOS, `http://localhost` on Android, the dev
+ * server under live reload - and a meta policy only narrows: the two
+ * intersect. Spelled from protocol and host because `location.origin` can be
+ * "null" for a custom scheme. Before the first render, so before any frame.
+ */
+function restrictFramesToSandboxLoader(): void {
+  const meta = document.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = `frame-src ${location.protocol}//${location.host}/sandbox/index.html`;
+  document.head.append(meta);
+}
+
 function bootstrap(): void {
   // Crash reporting comes up before anything that can fail, so a bootstrap
   // error below is the first thing it sees rather than the one it misses.
@@ -171,7 +189,15 @@ function bootstrap(): void {
   if (sentryOptions !== null) {
     initSentry(sentryOptions);
   }
+  // Before the app's first request: Capacitor's native HTTP proxy refuses a
+  // request without the per-launch token (`native-http-token.ts`).
+  if (!installNativeHttpToken(window) && Capacitor.isNativePlatform()) {
+    console.error(
+      "[mobile] native HTTP token or server URL missing: native HTTP requests will fail",
+    );
+  }
   document.documentElement.classList.add("traycer-mobile-client");
+  restrictFramesToSandboxLoader();
   // LAYOUT policy: the installed app runs the phone layout at every width, an
   // iPad's included, while the dev browser tab described below keeps deciding
   // by width like any other window. The stylesheet has to say the same, so

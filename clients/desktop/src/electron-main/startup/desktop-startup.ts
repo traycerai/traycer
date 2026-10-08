@@ -188,6 +188,7 @@ import {
   installAppProtocolHandler,
   registerAppScheme,
 } from "../app/app-protocol";
+import { installSandboxProtocolHandler } from "../app/sandbox-protocol";
 import { applyHardwareAccelerationPreference } from "../app/gpu-acceleration";
 import { configureHostResolverDoH } from "../app/host-resolver";
 import { configureUserAgent, preconnectTraycerHosts } from "../app/network";
@@ -495,6 +496,9 @@ async function runOnReady(state: BootState): Promise<void> {
 
   await Promise.all([
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
+    timed("on-ready", "sandbox-protocol", () =>
+      installSandboxProtocolHandler(),
+    ),
     timed("on-ready", "app-identity", () =>
       configureAppIdentity(state.config.iconPath),
     ),
