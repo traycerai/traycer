@@ -10,14 +10,25 @@ afterEach(() => {
 });
 
 describe("<SandboxLinkConfirm />", () => {
+  it("names an app as an app", () => {
+    render(
+      <SandboxLinkConfirm url={URL_ASKED} kind="app" onDecide={vi.fn()} />,
+    );
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "The app wants to open:",
+    );
+  });
+
   it("shows nothing until a page asks", () => {
-    render(<SandboxLinkConfirm url={null} onDecide={vi.fn()} />);
+    render(<SandboxLinkConfirm url={null} kind="page" onDecide={vi.fn()} />);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the whole URL and opens only on Open", async () => {
     const onDecide = vi.fn<(open: boolean) => void>();
-    render(<SandboxLinkConfirm url={URL_ASKED} onDecide={onDecide} />);
+    render(
+      <SandboxLinkConfirm url={URL_ASKED} kind="page" onDecide={onDecide} />,
+    );
     expect(screen.getByRole("dialog").textContent).toContain(URL_ASKED);
     // Cancel takes focus, so a stray Enter never opens the link.
     expect(document.activeElement).toBe(
@@ -35,7 +46,9 @@ describe("<SandboxLinkConfirm />", () => {
     ["Esc", () => userEvent.keyboard("{Escape}")],
   ])("declines on %s", async (_label, act) => {
     const onDecide = vi.fn<(open: boolean) => void>();
-    render(<SandboxLinkConfirm url={URL_ASKED} onDecide={onDecide} />);
+    render(
+      <SandboxLinkConfirm url={URL_ASKED} kind="page" onDecide={onDecide} />,
+    );
     await act();
     expect(onDecide.mock.calls).toEqual([[false]]);
   });

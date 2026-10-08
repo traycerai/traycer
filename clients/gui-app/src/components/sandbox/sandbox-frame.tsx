@@ -362,7 +362,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
         )}
         style={{ height: height ?? undefined }}
       />
-      <SandboxLinkConfirm url={confirmUrl} onDecide={decideLink} />
+      <SandboxLinkConfirm url={confirmUrl} kind={kind} onDecide={decideLink} />
     </>
   );
 }

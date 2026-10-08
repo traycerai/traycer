@@ -16,6 +16,10 @@ const LONGEST_URL = BASE + "a".repeat(MAX_LINK_URL_CHARS - BASE.length);
 const container = document.getElementById("root");
 if (container !== null) {
   createRoot(container).render(
-    <SandboxLinkConfirm url={LONGEST_URL} onDecide={() => undefined} />,
+    <SandboxLinkConfirm
+      url={LONGEST_URL}
+      kind="page"
+      onDecide={() => undefined}
+    />,
   );
 }

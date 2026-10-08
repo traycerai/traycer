@@ -7,10 +7,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { SandboxKind } from "@/lib/sandbox/bridge-host";
 
 interface SandboxLinkConfirmProps {
   /** The link a page asked to open, or `null` when nothing is asked. */
   readonly url: string | null;
+  /** What asked: the line names an app as an app, anything else as a page. */
+  readonly kind: SandboxKind;
   readonly onDecide: (open: boolean) => void;
 }
 
@@ -21,7 +24,7 @@ interface SandboxLinkConfirmProps {
  * Cancel comes first, so it is what the dialog focuses; Esc cancels too.
  */
 export function SandboxLinkConfirm(props: SandboxLinkConfirmProps) {
-  const { url, onDecide } = props;
+  const { url, kind, onDecide } = props;
   return (
     <Dialog
       open={url !== null}
@@ -39,7 +42,9 @@ export function SandboxLinkConfirm(props: SandboxLinkConfirmProps) {
       >
         <DialogHeader className="shrink-0 space-y-1">
           <DialogTitle>Open this link?</DialogTitle>
-          <DialogDescription>The page wants to open:</DialogDescription>
+          <DialogDescription>
+            {kind === "app" ? "The app" : "The page"} wants to open:
+          </DialogDescription>
         </DialogHeader>
         <p
           data-testid="sandbox-link-url"
