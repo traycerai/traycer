@@ -200,7 +200,13 @@ function SandboxCreateForm(props: {
     problem === null && region !== null && name.length > 0 && !create.isPending;
 
   return (
+    // `noValidate`: the number inputs carry the catalogue's min / max / step
+    // for their spinners, and native validation would refuse an off-step
+    // value (2.1 GB, 1.5 vCPU) before `onSubmit` ran - the very value the
+    // price line says will be rounded. Range is `sandboxShapeProblem`'s to
+    // refuse; the step is `roundSandboxShape`'s to apply.
     <form
+      noValidate
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
