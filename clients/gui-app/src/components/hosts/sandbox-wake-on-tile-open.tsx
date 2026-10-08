@@ -16,7 +16,9 @@ export function SandboxWakeOnTileOpen(props: {
   return requested ? <SandboxWakeForOpenedTile hostId={props.hostId} /> : null;
 }
 
-function SandboxWakeForOpenedTile(props: { readonly hostId: string }): ReactNode {
+function SandboxWakeForOpenedTile(props: {
+  readonly hostId: string;
+}): ReactNode {
   useSandboxWakeForOpenedTile(props.hostId);
   return null;
 }

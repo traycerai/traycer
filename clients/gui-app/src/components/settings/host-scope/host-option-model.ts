@@ -403,7 +403,11 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  * answered (`summary === null`): until `GET /api/sandboxes` says it is not
  * burst, it might be, and a burst sandbox offered once is the leak.
  */
-export type HostPickerGroup = "personal" | "sandbox" | "agent-sandbox" | "hidden";
+export type HostPickerGroup =
+  | "personal"
+  | "sandbox"
+  | "agent-sandbox"
+  | "hidden";
 
 export function hostOptionPickerGroup(
   host: HostScopeOption,

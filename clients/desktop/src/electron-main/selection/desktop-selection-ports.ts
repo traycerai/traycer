@@ -661,12 +661,10 @@ export class DesktopHostFleetSource implements HostFleetSource {
       seq,
       identitySeq,
       localHostId,
-      response.hosts.map(
-        (row): FleetRow => ({
-          hostId: row.hostId,
-          sandbox: row.kind === "sandbox",
-        }),
-      ),
+      response.hosts.map((row): FleetRow => ({
+        hostId: row.hostId,
+        sandbox: row.kind === "sandbox",
+      })),
       readAtMs,
     );
   }
@@ -879,16 +877,9 @@ function composeFleetEntries(
   const entries: HostFleetEntry[] = rows.map((row) => ({
     hostId: row.hostId,
     kind:
-      row.hostId === localHostId
-        ? "local"
-        : row.sandbox
-          ? "sandbox"
-          : "remote",
+      row.hostId === localHostId ? "local" : row.sandbox ? "sandbox" : "remote",
   }));
-  if (
-    localHostId !== null &&
-    !rows.some((row) => row.hostId === localHostId)
-  ) {
+  if (localHostId !== null && !rows.some((row) => row.hostId === localHostId)) {
     entries.push({ hostId: localHostId, kind: "local" });
   }
   return entries.sort((left, right) =>

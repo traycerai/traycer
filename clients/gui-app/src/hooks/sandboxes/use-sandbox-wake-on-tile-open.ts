@@ -95,7 +95,8 @@ function toastWakeOutcome(outcome: SandboxWakeOutcome): void {
       return;
     case "wake-not-available":
       toast.warning("This sandbox can't be woken from here yet", {
-        description: "Waking a suspended or stopped sandbox isn't available yet.",
+        description:
+          "Waking a suspended or stopped sandbox isn't available yet.",
       });
       return;
     case "not-wakeable":
@@ -137,7 +138,8 @@ export function useSandboxWakeForOpenedTile(hostId: string): void {
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
   const needsWake =
     facts !== null &&
-    (facts.frozen || (facts.state !== null && WAKEABLE_STATES.has(facts.state)));
+    (facts.frozen ||
+      (facts.state !== null && WAKEABLE_STATES.has(facts.state)));
 
   const binding = useHostBinding();
   const queryClient = useQueryClient();

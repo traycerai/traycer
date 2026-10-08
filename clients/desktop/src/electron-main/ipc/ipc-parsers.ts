@@ -504,7 +504,9 @@ export function parseUpdateHostVersionPolicyInput(
  * shape would provision a machine nobody asked for - so a bad value throws,
  * which the invoke surfaces to the renderer as a rejected call.
  */
-export function parseSandboxCreateRequest(value: unknown): SandboxCreateRequest {
+export function parseSandboxCreateRequest(
+  value: unknown,
+): SandboxCreateRequest {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("createSandbox.request must be an object");
   }

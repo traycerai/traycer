@@ -3672,7 +3672,10 @@ describe("SelectionAuthorityEngineImpl - P1.3 F14 clear on identity adopt (H)", 
     readonly bPreference: string;
     readonly bFleet: {
       readonly localHostId: string | null;
-      readonly hosts: readonly { hostId: string; kind: "local" | "remote" }[];
+      readonly hosts: readonly {
+        hostId: string;
+        kind: "local" | "remote" | "sandbox";
+      }[];
     };
   }): {
     engine: SelectionAuthorityEngineImpl;

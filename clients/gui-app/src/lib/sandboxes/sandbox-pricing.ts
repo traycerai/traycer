@@ -21,7 +21,11 @@ export function formatMemory(memoryMb: number): string {
  * so the form shows the shape that will actually be created. Two decimals:
  * the server's `cpus` column is DECIMAL(6, 2).
  */
-export function roundUpToStep(value: number, step: number, min: number): number {
+export function roundUpToStep(
+  value: number,
+  step: number,
+  min: number,
+): number {
   if (step <= 0) return value;
   const steps = Math.ceil((value - min) / step - 1e-9);
   return Math.round((min + Math.max(0, steps) * step) * 100) / 100;
@@ -44,7 +48,11 @@ export function roundSandboxShape(
     ),
     memoryMb: Math.min(
       bounds.memoryMaxMb,
-      roundUpToStep(requested.memoryMb, bounds.memoryStepMb, bounds.memoryMinMb),
+      roundUpToStep(
+        requested.memoryMb,
+        bounds.memoryStepMb,
+        bounds.memoryMinMb,
+      ),
     ),
   };
 }

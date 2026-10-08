@@ -248,18 +248,17 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown, sandboxId: unknown) => {
       assertString(bearerToken, "destroySandbox.bearerToken");
       assertString(sandboxId, "destroySandbox.sandboxId");
-      return destroySandboxViaHttp(config.serverBaseUrl, bearerToken, sandboxId);
+      return destroySandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        sandboxId,
+      );
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.wakeSandbox,
-    async (
-      _event,
-      bearerToken: unknown,
-      sandboxId: unknown,
-      verb: unknown,
-    ) => {
+    async (_event, bearerToken: unknown, sandboxId: unknown, verb: unknown) => {
       assertString(bearerToken, "wakeSandbox.bearerToken");
       assertString(sandboxId, "wakeSandbox.sandboxId");
       return wakeSandboxViaHttp(

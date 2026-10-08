@@ -84,12 +84,18 @@ export type SandboxVerbFetchResult =
 export type SandboxWakeVerb = "resume" | "start";
 
 function sandboxesUrl(serverBaseUrl: string, path: string): string {
-  const base = serverBaseUrl.endsWith("/") ? serverBaseUrl : `${serverBaseUrl}/`;
+  const base = serverBaseUrl.endsWith("/")
+    ? serverBaseUrl
+    : `${serverBaseUrl}/`;
   return new URL(`api/sandboxes${path}`, base).toString();
 }
 
 type RawCall =
-  | { readonly kind: "response"; readonly status: number; readonly body: unknown }
+  | {
+      readonly kind: "response";
+      readonly status: number;
+      readonly body: unknown;
+    }
   | { readonly kind: "network-error"; readonly detail: string };
 
 async function call(

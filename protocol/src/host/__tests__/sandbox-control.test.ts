@@ -122,8 +122,10 @@ describe("sandbox control plane mirror", () => {
     expect(gate.shortfallMc).toBe(70);
     expect(gate.currentAwakeBurnMcPerHour).toBe(60);
     expect(
-      sandboxRefusalBodySchema.parse({ code: "verb_not_available", verb: "resume" })
-        .code,
+      sandboxRefusalBodySchema.parse({
+        code: "verb_not_available",
+        verb: "resume",
+      }).code,
     ).toBe("verb_not_available");
     expect(
       sandboxRefusalBodySchema.parse({

@@ -43,13 +43,15 @@ const NAME_MAX_LENGTH = 191;
  * no "never" yet (`null` means its 30-minute default), so neither does the
  * form.
  */
-const IDLE_CHOICES: readonly { readonly minutes: number; readonly label: string }[] =
-  [
-    { minutes: 5, label: "5 minutes" },
-    { minutes: 30, label: "30 minutes" },
-    { minutes: 120, label: "2 hours" },
-    { minutes: 1440, label: "24 hours" },
-  ];
+const IDLE_CHOICES: readonly {
+  readonly minutes: number;
+  readonly label: string;
+}[] = [
+  { minutes: 5, label: "5 minutes" },
+  { minutes: 30, label: "30 minutes" },
+  { minutes: 120, label: "2 hours" },
+  { minutes: 1440, label: "24 hours" },
+];
 const DEFAULT_IDLE_MINUTES = 30;
 
 const OS_LABEL: Record<SandboxOs, string> = {
@@ -303,9 +305,7 @@ function SandboxCreateForm(props: {
             value: String(choice.minutes),
             label: choice.label,
           }))}
-          onChange={(value) =>
-            setForm({ ...form, idleMinutes: Number(value) })
-          }
+          onChange={(value) => setForm({ ...form, idleMinutes: Number(value) })}
         />
       </div>
       <SandboxPriceLine
@@ -380,7 +380,10 @@ function SandboxCreateSelect(props: {
   readonly id: string;
   readonly label: string;
   readonly value: string;
-  readonly options: readonly { readonly value: string; readonly label: string }[];
+  readonly options: readonly {
+    readonly value: string;
+    readonly label: string;
+  }[];
   readonly onChange: (value: string) => void;
 }): ReactNode {
   return (

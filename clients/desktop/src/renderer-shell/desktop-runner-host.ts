@@ -208,7 +208,9 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
-  getSandboxCatalogue(bearerToken: string): Promise<SandboxCatalogueFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
