@@ -7190,7 +7190,14 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         // 31s in: the unbudgeted request has failed, the budgeted one has not.
         expect(budgetedSettled).toBe(false);
 
-        await vi.advanceTimersByTimeAsync(catalogBudgetMs);
+        // Still pending one second before its own budget: the transport
+        // honours the 210s allowance, not some shorter fixed bound.
+        await vi.advanceTimersByTimeAsync(
+          catalogBudgetMs - (UNARY_RESPONSE_TIMEOUT_MS + 1_000) - 1_000,
+        );
+        expect(budgetedSettled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(2_000);
         const budgetedError: unknown = await budgeted.then(
           () => null,
           (reason: unknown) => reason,
