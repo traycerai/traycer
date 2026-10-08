@@ -185,11 +185,17 @@ export const usageSummarySchema = lazySchema(() =>
     chatId: z.string().min(1).max(191).nullable(),
     totals: usageSummaryTotalsSchema,
     buckets: z.array(usageSummaryBucketSchema),
-    /** Sorted by `chatId`. Groups BY chat regardless of whether the request filtered to one chat. */
+    /**
+     * Sorted by `chatId`. Populated only for an epic- or chat-scoped read
+     * (`epicId` or `chatId` set), where it groups BY chat regardless of
+     * whether the request filtered to one chat. Always empty for an
+     * account-wide read (neither set): the summary keeps no per-chat state
+     * there. `distinctEpicCount`/`distinctChatCount` are filled on every read.
+     */
     chatBuckets: z.array(usageSummaryChatBucketSchema),
     /**
      * Sorted by `hostId`. Groups BY host regardless of whether the request
-     * filtered to one, exactly like `chatBuckets`. `servedBy: "local"` always
+     * filtered to one, on every read. `servedBy: "local"` always
      * answers with at most a single self-entry - that plane holds only its own
      * host's facts.
      */
