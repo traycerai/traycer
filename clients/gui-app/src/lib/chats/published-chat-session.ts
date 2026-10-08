@@ -1,8 +1,15 @@
 import { createStore, useStore } from "zustand";
 import type { UseBoundStore, StoreApi } from "zustand";
-import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
-import { messageSchema } from "@traycer/protocol/persistence/epic/messages";
-import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+// The OPEN record schemas: a published copy can carry a row from a host newer
+// than this build, naming a harness it only heard from (an agent sender, an
+// actor, a plan source). Such a row converts and renders by its raw id, the
+// same as it does off `chat.subscribe@1.22`; only a block kind this build has
+// no renderer for becomes a placeholder. Every closed record parses the same.
+import {
+  openChatEventSchema,
+  openContentBlockSchema,
+  openMessageSchema,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
@@ -96,7 +103,7 @@ export function convertPublishedChat(
     unreadableCount += rebuilt.replacedBlockCount;
   }
   for (const event of presented.events) {
-    const parsed = chatEventSchema.safeParse(event.raw);
+    const parsed = openChatEventSchema.safeParse(event.raw);
     if (parsed.success) events.push(parsed.data);
     else unreadableCount += 1;
   }
@@ -121,19 +128,19 @@ function rebuildMessage(
   presentedBlocks: PresentedChat["messages"][number]["blocks"],
 ): RebuiltMessage | null {
   if (presentedBlocks.length === 0) {
-    const parsed = messageSchema.safeParse(raw);
+    const parsed = openMessageSchema.safeParse(raw);
     return parsed.success
       ? { message: parsed.data, replacedBlockCount: 0 }
       : null;
   }
   let replacedBlockCount = 0;
   const blocks = presentedBlocks.map((block, index) => {
-    const parsed = contentBlockSchema.safeParse(block.raw);
+    const parsed = openContentBlockSchema.safeParse(block.raw);
     if (parsed.success) return block.raw;
     replacedBlockCount += 1;
     return placeholderBlockRaw(block.blockId ?? `unreadable-${index}`, index);
   });
-  const parsed = messageSchema.safeParse({ ...raw, blocks });
+  const parsed = openMessageSchema.safeParse({ ...raw, blocks });
   if (!parsed.success) return null;
   return { message: parsed.data, replacedBlockCount };
 }
@@ -190,7 +197,7 @@ export function convertReplicaChat(
   }
   const events: OpenChatEvent[] = [];
   for (const raw of rawEvents) {
-    const parsed = chatEventSchema.safeParse(raw);
+    const parsed = openChatEventSchema.safeParse(raw);
     if (parsed.success) events.push(parsed.data);
     else unreadableCount += 1;
   }
@@ -206,7 +213,7 @@ export function convertReplicaChat(
 function rebuildReplicaMessage(
   raw: Record<string, unknown>,
 ): RebuiltMessage | null {
-  const parsed = messageSchema.safeParse(raw);
+  const parsed = openMessageSchema.safeParse(raw);
   if (parsed.success) {
     return { message: parsed.data, replacedBlockCount: 0 };
   }
@@ -214,7 +221,7 @@ function rebuildReplicaMessage(
   if (!Array.isArray(rawBlocks)) return null;
   let replacedBlockCount = 0;
   const blocks = rawBlocks.map((block: unknown, index: number) => {
-    const blockParsed = contentBlockSchema.safeParse(block);
+    const blockParsed = openContentBlockSchema.safeParse(block);
     if (blockParsed.success) return block;
     replacedBlockCount += 1;
     const blockId =
@@ -225,7 +232,7 @@ function rebuildReplicaMessage(
         : `unreadable-${index}`;
     return placeholderBlockRaw(blockId, index);
   });
-  const reparsed = messageSchema.safeParse({ ...raw, blocks });
+  const reparsed = openMessageSchema.safeParse({ ...raw, blocks });
   return reparsed.success
     ? { message: reparsed.data, replacedBlockCount }
     : null;
