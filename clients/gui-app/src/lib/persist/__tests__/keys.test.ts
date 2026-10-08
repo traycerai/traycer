@@ -107,6 +107,10 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("rate-limit-popover")).toBe(
       "traycer-gui-app:rate-limit-popover",
     );
+    // Source: src/stores/rate-limits/limited-banner-dismissals-store.ts
+    expect(persistKey("limited-banner-dismissals")).toBe(
+      "traycer-gui-app:limited-banner-dismissals",
+    );
     // Source: src/stores/tabs/store.ts
     expect(persistKey("tabs")).toBe("traycer-gui-app:tabs");
     // Source: src/stores/workspace/workspace-folders-store.ts

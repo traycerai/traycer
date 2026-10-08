@@ -306,6 +306,7 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
@@ -3984,7 +3985,75 @@ describe("<RateLimitPopover /> limited profiles", () => {
     renderPopover();
   }
 
-  it("adds one banner per limited profile, with the reset time and no action", () => {
+  const DISMISSALS_KEY = "traycer-gui-app:limited-banner-dismissals";
+  const HOST_ID = "host-a";
+
+  function resetDismissals(): void {
+    useLimitedBannerDismissalsStore.setState({ dismissals: {} });
+    window.localStorage.removeItem(DISMISSALS_KEY);
+  }
+
+  beforeEach(resetDismissals);
+  afterEach(resetDismissals);
+
+  /** The same segment with its one window resetting at `resetsAt`. */
+  function withReset(
+    segment: StatusBarProviderSegmentModel,
+    resetsAt: number | null,
+  ): StatusBarProviderSegmentModel {
+    const windows = segment.windows.map((window) => ({ ...window, resetsAt }));
+    return {
+      ...segment,
+      windows,
+      shown: windows,
+      tightest: windows[0] ?? null,
+    };
+  }
+
+  function twoLimited(
+    resetsAt: number | null,
+  ): ReadonlyArray<StatusBarProviderSegmentModel> {
+    return [
+      withReset(
+        limitedSegment({
+          providerId: "codex",
+          profileId: "p1",
+          label: "pro20x",
+          severity: "limited",
+          kind: "weekly",
+        }),
+        resetsAt,
+      ),
+      withReset(
+        limitedSegment({
+          providerId: "codex",
+          profileId: "p2",
+          label: "team",
+          severity: "limited",
+          kind: "session",
+        }),
+        resetsAt,
+      ),
+    ];
+  }
+
+  function bannerTexts(): ReadonlyArray<string> {
+    return screen
+      .queryAllByTestId("rate-limit-limited-banner")
+      .map((banner) => banner.textContent);
+  }
+
+  function hideOn(bannerText: string): void {
+    const banner = screen
+      .getAllByTestId("rate-limit-limited-banner")
+      .find((candidate) => candidate.textContent.includes(bannerText));
+    if (banner === undefined) throw new Error(`no banner for ${bannerText}`);
+    fireEvent.click(
+      within(banner).getByTestId("rate-limit-limited-banner-hide"),
+    );
+  }
+
+  it("adds one banner per limited profile, with the reset time and a hide button as its one action", () => {
     showLimited([
       limitedSegment({
         providerId: "codex",
@@ -4015,7 +4084,149 @@ describe("<RateLimitPopover /> limited profiles", () => {
       /^pro20x hit its weekly limit · Resets \w{3}, \w{3} \d+, \d+:\d{2} (AM|PM)$/,
     );
     expect(banners[1].textContent).toContain("team hit its 5h limit");
-    expect(within(banners[0]).queryByRole("button")).toBeNull();
+    const buttons = within(banners[0]).getAllByRole("button");
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].getAttribute("data-testid")).toBe(
+      "rate-limit-limited-banner-hide",
+    );
+    expect(buttons[0].getAttribute("aria-label")).toBe("Hide until it resets");
+  });
+
+  it("offers a plain Hide for a limit with no reset time", () => {
+    showLimited(twoLimited(null));
+
+    const hide = within(
+      screen.getAllByTestId("rate-limit-limited-banner")[0],
+    ).getByTestId("rate-limit-limited-banner-hide");
+    expect(hide.getAttribute("aria-label")).toBe("Hide");
+  });
+
+  it("hides exactly the pressed banner on Overview and on another provider's tab, keeping the rail dot", () => {
+    const resetsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    showLimited(twoLimited(resetsAt));
+    expect(bannerTexts()).toHaveLength(2);
+
+    hideOn("pro20x");
+
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({
+      [HOST_ID]: { "codex:p1": resetsAt },
+    });
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
+
+    fireEvent.click(screen.getByRole("tab", { name: /^Claude Code/ }));
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
+
+    expect(
+      within(
+        screen.getByRole("tab", { name: "Codex, limit reached" }),
+      ).getByTestId("rate-limit-rail-limited-dot"),
+    ).toBeTruthy();
+  });
+
+  it("keeps a dismissal across a remount", async () => {
+    const resetsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    const segments = twoLimited(resetsAt);
+    showLimited(segments);
+    hideOn("pro20x");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    cleanup();
+
+    renderPopover();
+
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
+    const stored: unknown = JSON.parse(
+      window.localStorage.getItem(DISMISSALS_KEY) ?? "{}",
+    );
+    expect(stored).toMatchObject({
+      state: { dismissals: { [HOST_ID]: { "codex:p1": resetsAt } } },
+    });
+  });
+
+  it("shows the banner again when the limit's reset time changes", () => {
+    const first = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    const second = first + 7 * 24 * 60 * 60 * 1000;
+    showLimited(twoLimited(first));
+    hideOn("pro20x");
+    expect(bannerTexts()).toHaveLength(1);
+    cleanup();
+
+    segmentsState.cluster = { kind: "segments", segments: twoLimited(second) };
+    renderPopover();
+
+    expect(bannerTexts()).toHaveLength(2);
+    expect(bannerTexts()[0]).toContain("pro20x");
+  });
+
+  it("keeps a dismissal under another host from hiding this host's banner, and honours one under this host", () => {
+    const resetsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    useLimitedBannerDismissalsStore.setState({
+      dismissals: { "host-other": { "codex:p1": resetsAt } },
+    });
+    showLimited(twoLimited(resetsAt));
+    expect(bannerTexts()).toHaveLength(2);
+    cleanup();
+
+    useLimitedBannerDismissalsStore.setState({
+      dismissals: {
+        "host-other": { "codex:p1": resetsAt },
+        [HOST_ID]: { "codex:p1": resetsAt },
+      },
+    });
+    renderPopover();
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
+    cleanup();
+
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: hostScopeOptionFixture({ hostId: "host-other" }),
+      }),
+      false,
+    );
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
+  });
+
+  it("keeps a no-reset dismissal while limited, prunes it once the account reads healthy, and shows the next limit", () => {
+    showLimited(twoLimited(null));
+    hideOn("pro20x");
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({
+      [HOST_ID]: { "codex:p1": null },
+    });
+    expect(bannerTexts()).toHaveLength(1);
+    cleanup();
+
+    renderPopover();
+    expect(bannerTexts()).toHaveLength(1);
+    expect(bannerTexts()[0]).toContain("team hit its 5h limit");
+    expect(
+      useLimitedBannerDismissalsStore.getState().dismissals[HOST_ID],
+    ).toEqual({ "codex:p1": null });
+    cleanup();
+
+    const [, team] = twoLimited(null);
+    segmentsState.cluster = {
+      kind: "segments",
+      segments: [
+        limitedSegment({
+          providerId: "codex",
+          profileId: "p1",
+          label: "pro20x",
+          severity: "healthy",
+          kind: "weekly",
+        }),
+        team,
+      ],
+    };
+    renderPopover();
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({});
+    cleanup();
+
+    showLimited(twoLimited(null));
+    expect(bannerTexts()).toHaveLength(2);
   });
 
   it("draws no banner while no profile is limited, even one running low", () => {

@@ -13,6 +13,7 @@ import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
@@ -124,6 +125,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useRateLimitPopoverStore",
     useRateLimitPopoverStore,
     "traycer-gui-app:rate-limit-popover",
+  ],
+  [
+    "useLimitedBannerDismissalsStore",
+    useLimitedBannerDismissalsStore,
+    "traycer-gui-app:limited-banner-dismissals",
   ],
   [
     "useResourceMonitorStore",
