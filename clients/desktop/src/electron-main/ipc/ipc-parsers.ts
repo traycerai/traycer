@@ -35,8 +35,10 @@ export {
 } from "../../ipc-contracts/window-state-parsers";
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
 import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
-import type { SandboxWakeVerb } from "@traycer-clients/shared/host-client/sandbox-control";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 
 export function assertString(
   value: unknown,
@@ -572,11 +574,20 @@ function requirePositiveInteger(value: unknown, name: string): number {
   return value;
 }
 
-export function parseSandboxWakeVerb(value: unknown): SandboxWakeVerb {
-  if (value === "resume" || value === "start") {
+export function parseSandboxLifecycleVerb(
+  value: unknown,
+): SandboxLifecycleVerb {
+  if (
+    value === "suspend" ||
+    value === "resume" ||
+    value === "stop" ||
+    value === "start"
+  ) {
     return value;
   }
-  throw new Error('wakeSandbox.verb must be "resume" or "start"');
+  throw new Error(
+    'runSandboxVerb.verb must be "suspend", "resume", "stop" or "start"',
+  );
 }
 
 export function readSenderWebContentsId(

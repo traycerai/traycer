@@ -89,9 +89,25 @@ export interface SandboxSummary {
   readonly lastTransitionAt: number;
   readonly lastActivityAt: number | null;
   readonly destroyedAt: number | null;
+  /**
+   * When the row was frozen for lack of credits (epoch milliseconds); `null`
+   * whenever `frozen` is false. A frozen row is destroyed
+   * {@link SANDBOX_FROZEN_RETENTION_DAYS} days after it.
+   */
+  readonly frozenAt: number | null;
+  /**
+   * The guest's configuration step as its host last reported it in the
+   * heartbeat; `null` before any report.
+   */
+  readonly guestConfigured: boolean | null;
+  /** Why it failed, as the guest reported it, when `guestConfigured` is false. */
+  readonly guestConfigFailureReason: string | null;
   /** `null` when this server has no price configured for the provider. */
   readonly priceMcPerHour: SandboxHourlyPrice | null;
 }
+
+/** Days a frozen sandbox is kept before the control plane destroys it. */
+export const SANDBOX_FROZEN_RETENTION_DAYS = 30;
 
 export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
   z.object({
@@ -116,6 +132,11 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     lastTransitionAt: z.number(),
     lastActivityAt: z.number().nullable(),
     destroyedAt: z.number().nullable(),
+    // Read as `null` when absent: a server from before these three fields
+    // still parses, and the card shows nothing it cannot know.
+    frozenAt: z.number().nullable().default(null),
+    guestConfigured: z.boolean().nullable().default(null),
+    guestConfigFailureReason: z.string().nullable().default(null),
     priceMcPerHour: sandboxHourlyPriceSchema.nullable(),
   }),
 );
@@ -276,6 +297,10 @@ export const sandboxCreateAcceptedSchema: z.ZodType<SandboxCreateAccepted> =
  *  - `provider_unavailable` (`503`), `provider_failed` (`502`, with the row,
  *    now `failed`).
  *  - `sandbox_transition_conflict` (`409`): the row is mid-transition.
+ *  - `sandbox_busy` (`409`): a suspend or stop found the guest in use (an
+ *    agent turn, a live shell, an attached client); the row is `awake` again.
+ *  - `sandbox_frozen` (`402`): a wake verb on a row frozen for lack of
+ *    credits.
  *  - `sandbox_not_found` (`404`).
  *  - `verb_not_available` (`501`): the lifecycle verb (suspend, resume, stop,
  *    start) is not served by this server yet.
@@ -305,5 +330,98 @@ export const SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE = "provider_unavailable";
 export const SANDBOX_REFUSAL_CODE_PROVIDER_FAILED = "provider_failed";
 export const SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT =
   "sandbox_transition_conflict";
+export const SANDBOX_REFUSAL_CODE_BUSY = "sandbox_busy";
+export const SANDBOX_REFUSAL_CODE_FROZEN = "sandbox_frozen";
 export const SANDBOX_REFUSAL_CODE_NOT_FOUND = "sandbox_not_found";
 export const SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE = "verb_not_available";
+
+// -----------------------------------------------------------------------------
+// Lifecycle verbs
+// -----------------------------------------------------------------------------
+
+/**
+ * `POST /api/sandboxes/:id/<verb>`. `resume` and `start` both wake the row
+ * from whichever resting state it is in. The server answers `200 { sandbox }`
+ * at rest, `202 { sandbox }` when it is still moving at its 300 s deadline,
+ * and the typed refusals above.
+ */
+export type SandboxLifecycleVerb = "suspend" | "resume" | "stop" | "start";
+
+// -----------------------------------------------------------------------------
+// Cost view
+// -----------------------------------------------------------------------------
+
+/** The states the meter bills: awake is compute, the other two storage. */
+export type SandboxBilledState = "awake" | "suspended" | "stopped";
+
+/** Consecutive same-state charges, merged into one span. */
+export interface SandboxCostSegment {
+  readonly state: SandboxBilledState;
+  /** Epoch milliseconds. */
+  readonly fromAt: number;
+  readonly toAt: number;
+  readonly millicredits: number;
+}
+
+export const sandboxCostSegmentSchema: z.ZodType<SandboxCostSegment> =
+  lazySchema(() =>
+    z.object({
+      state: z.enum(["awake", "suspended", "stopped"]),
+      fromAt: z.number(),
+      toAt: z.number(),
+      millicredits: z.number().nonnegative(),
+    }),
+  );
+
+/**
+ * One sandbox's cost, read from the control plane's own ledger
+ * (`GET /api/sandboxes/:id/cost`, and each row of `GET /api/sandboxes/cost`).
+ */
+export interface SandboxCost {
+  readonly sandboxId: string;
+  /** What the row accrues now; 0 while frozen or for a free (Automations) row. */
+  readonly currentRateMillicreditsPerHour: number;
+  readonly state: HostSandboxState;
+  readonly frozen: boolean;
+  /** Settled charges since the row was created. */
+  readonly charged: {
+    readonly computeMillicredits: number;
+    readonly storageMillicredits: number;
+    readonly sinceCreatedAt: number;
+  };
+  /** Closed segments the meter has not settled yet. */
+  readonly pendingMillicredits: number;
+  /** The ledger as a timeline, oldest first, over the latest charge rows. */
+  readonly segments: readonly SandboxCostSegment[];
+}
+
+export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
+  z.object({
+    sandboxId: z.string().min(1),
+    currentRateMillicreditsPerHour: z.number().nonnegative(),
+    state: z.enum(HOST_SANDBOX_STATES),
+    frozen: z.boolean(),
+    charged: z.object({
+      computeMillicredits: z.number().nonnegative(),
+      storageMillicredits: z.number().nonnegative(),
+      sinceCreatedAt: z.number(),
+    }),
+    pendingMillicredits: z.number().nonnegative(),
+    segments: z.array(sandboxCostSegmentSchema),
+  }),
+);
+
+/** `GET /api/sandboxes/cost`: every listed sandbox's cost and the user's burn. */
+export interface UserSandboxCost {
+  readonly sandboxes: readonly SandboxCost[];
+  /** The compute rates of the user's awake, unfrozen rows: the gate's burn. */
+  readonly awakeBurnMillicreditsPerHour: number;
+}
+
+export const userSandboxCostSchema: z.ZodType<UserSandboxCost> = lazySchema(
+  () =>
+    z.object({
+      sandboxes: z.array(sandboxCostSchema),
+      awakeBurnMillicreditsPerHour: z.number().nonnegative(),
+    }),
+);

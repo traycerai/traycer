@@ -15,11 +15,12 @@ import type {
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxCreateRequest,
+  SandboxLifecycleVerb,
   SandboxListFetchResult,
   SandboxVerbFetchResult,
-  SandboxWakeVerb,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../ipc-contracts/host-types";
@@ -112,6 +113,7 @@ export interface AuthBridgeSurface {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
@@ -123,10 +125,10 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult>;
-  wakeSandbox(
+  runSandboxVerb(
     bearerToken: string,
     sandboxId: string,
-    verb: SandboxWakeVerb,
+    verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
@@ -207,6 +209,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<SandboxListFetchResult>,
 
+    getSandboxCosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCosts,
+        bearerToken,
+      ) as Promise<SandboxCostsFetchResult>,
+
     getSandboxCatalogue: (bearerToken) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxCatalogue,
@@ -227,9 +235,9 @@ export function buildAuthBridge(): AuthBridgeSurface {
         sandboxId,
       ) as Promise<SandboxVerbFetchResult>,
 
-    wakeSandbox: (bearerToken, sandboxId, verb) =>
+    runSandboxVerb: (bearerToken, sandboxId, verb) =>
       ipcRenderer.invoke(
-        RunnerHostInvoke.wakeSandbox,
+        RunnerHostInvoke.runSandboxVerb,
         bearerToken,
         sandboxId,
         verb,

@@ -113,15 +113,19 @@ import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
   listSandboxesViaHttp,
-  wakeSandboxViaHttp,
+  runSandboxVerbViaHttp,
   type SandboxCatalogueFetchResult,
+  type SandboxCostsFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
   type SandboxVerbFetchResult,
-  type SandboxWakeVerb,
 } from "@traycer-clients/shared/host-client/sandbox-control";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobilePushRegistration } from "./push-registration";
 
@@ -650,6 +654,10 @@ export class MobileRunnerHost implements IRunnerHost {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken);
   }
 
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
@@ -670,12 +678,17 @@ export class MobileRunnerHost implements IRunnerHost {
     return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
   }
 
-  wakeSandbox(
+  runSandboxVerb(
     bearerToken: string,
     sandboxId: string,
-    verb: SandboxWakeVerb,
+    verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult> {
-    return wakeSandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId, verb);
+    return runSandboxVerbViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      sandboxId,
+      verb,
+    );
   }
 
   async getLastKnownLocalHostId(): Promise<string | null> {

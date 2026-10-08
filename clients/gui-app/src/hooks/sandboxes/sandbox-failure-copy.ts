@@ -1,5 +1,7 @@
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  SANDBOX_REFUSAL_CODE_BUSY,
+  SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
@@ -30,9 +32,11 @@ function insufficientCreditCopy(
   if (failure.reason === "unsupported-subscription") {
     return "Your plan doesn't include sandboxes.";
   }
+  // Create, resume and start share one gate (an hour of the new rate on top
+  // of what is already awake), so the sentence names no verb.
   return failure.shortfallMc === null
     ? "Your credits don't cover an hour of this sandbox."
-    : `Your credits don't cover an hour of this sandbox. Add ${formatCredits(failure.shortfallMc)} credits to create it.`;
+    : `Your credits don't cover an hour of this sandbox. Add ${formatCredits(failure.shortfallMc)} credits and try again.`;
 }
 
 /**
@@ -61,6 +65,10 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
       return "The sandbox failed to start. It's listed as failed; destroy it and try again.";
     case SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT:
       return "This sandbox is changing state. Try again in a moment.";
+    case SANDBOX_REFUSAL_CODE_BUSY:
+      return "It's in use (an agent turn, a running shell or an open tab), so it stays awake.";
+    case SANDBOX_REFUSAL_CODE_FROZEN:
+      return "This sandbox is frozen because your credits ran out. Add credits to wake it.";
     case SANDBOX_REFUSAL_CODE_NOT_FOUND:
       return "This sandbox no longer exists.";
     case SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE:

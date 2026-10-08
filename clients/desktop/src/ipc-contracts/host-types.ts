@@ -98,7 +98,10 @@ export type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxCostsFetchResult,
   SandboxVerbFetchResult,
-  SandboxWakeVerb,
 } from "@traycer-clients/shared/host-client/sandbox-control";
-export type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+export type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";

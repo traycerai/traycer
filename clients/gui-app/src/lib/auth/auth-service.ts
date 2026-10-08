@@ -39,12 +39,15 @@ import type {
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
 import type {
   SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
   SandboxVerbFetchResult,
-  SandboxWakeVerb,
 } from "@traycer-clients/shared/host-client/sandbox-control";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -2926,6 +2929,14 @@ export class AuthService {
     return this.runnerHost.listSandboxes(bearer);
   }
 
+  async getSandboxCosts(): Promise<SandboxCostsFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCosts(bearer);
+  }
+
   async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) {
@@ -2952,15 +2963,20 @@ export class AuthService {
     return this.runnerHost.destroySandbox(bearer, sandboxId);
   }
 
-  async wakeSandbox(
+  /**
+   * A lifecycle verb: the card's suspend / resume / stop / start, and the
+   * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
+   * than throwing, because the tab-open wake reads it as an outcome.
+   */
+  async runSandboxVerb(
     sandboxId: string,
-    verb: SandboxWakeVerb,
+    verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.wakeSandbox(bearer, sandboxId, verb);
+    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb);
   }
 
   private async revalidateCurrentContextOnce(

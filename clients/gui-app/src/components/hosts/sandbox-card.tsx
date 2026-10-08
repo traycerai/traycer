@@ -1,8 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type {
+  SandboxCost,
   SandboxHourlyPrice,
+  SandboxLifecycleVerb,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -18,18 +20,44 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { SandboxRunwayWarningLine } from "@/components/hosts/sandbox-balance-banner";
+import {
+  formatSandboxDay,
+  SANDBOX_CARD_ACTION_LABEL,
+  sandboxCardActions,
+  sandboxGuestConfigFailure,
+  sandboxIdleLine,
+  sandboxStateLine,
+  type SandboxCardAction,
+} from "@/components/hosts/sandbox-card-model";
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxStateWord } from "@/components/settings/host-scope/host-option-model";
+import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
+import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
+import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
+import {
+  formatRunway,
+  sandboxBalanceMc,
+  sandboxCostTodayMc,
+  sandboxRunwayMinutes,
+} from "@/lib/sandboxes/sandbox-balance";
 import { formatCredits, formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 
 /**
  * The card a sandbox host shows above its identity card in Settings: its
- * state, shape, region and rate, and the actions its state allows.
+ * state with that state's copy and actions (`sandbox-card-model.ts`), shape,
+ * region, rate, idle rule and last activity, the guest's configuration
+ * failure when the heartbeat reports one, the cost view, and the balance.
  *
- * Stage 1 draws four states as themselves - Creating, Awake, Destroyed,
- * Failed - which are the only ones a stage-1 server produces. Any other state
- * still renders, as its state word, with no copy of its own and no action.
+ * A frozen sandbox (out of credits) shows the frozen line with its destroy
+ * date and the balance, and offers only destroy, behind a typed
+ * confirmation.
  */
 export function SandboxCard(props: {
   readonly hostName: string;
@@ -37,16 +65,25 @@ export function SandboxCard(props: {
 }): ReactNode {
   const { summary } = props.sandbox;
   const state = props.sandbox.state ?? summary?.state ?? null;
+  const frozen = props.sandbox.frozen || summary?.frozen === true;
   const word = sandboxStateWord(props.sandbox);
+  const actions = summary === null ? [] : sandboxCardActions(state, frozen);
   return (
-    <Card size="sm" data-testid="sandbox-card" data-state={state ?? "unknown"}>
+    <Card
+      size="sm"
+      data-testid="sandbox-card"
+      data-state={state ?? "unknown"}
+      data-frozen={frozen ? "true" : "false"}
+    >
       <CardHeader>
         <CardTitle>{summary?.displayName ?? props.hostName}</CardTitle>
-        <CardDescription>{sandboxStateLine(state, summary)}</CardDescription>
+        <CardDescription data-testid="sandbox-card-state-line">
+          {sandboxStateLine(state, frozen, summary)}
+        </CardDescription>
         {word === null ? null : (
           <CardAction>
             <Badge
-              variant={stateBadgeVariant(state)}
+              variant={stateBadgeVariant(state, frozen)}
               data-testid="sandbox-card-state"
             >
               {capitalize(word)}
@@ -54,22 +91,23 @@ export function SandboxCard(props: {
           </CardAction>
         )}
       </CardHeader>
-      <CardContent className="flex flex-col gap-1">
+      <CardContent className="flex flex-col gap-2">
         {summary === null ? (
           <p className="text-ui-xs text-muted-foreground">
             Loading this sandbox&apos;s details…
           </p>
         ) : (
-          <SandboxFacts summary={summary} />
+          <>
+            <SandboxFacts summary={summary} />
+            <SandboxGuestConfigFailure summary={summary} />
+            <SandboxCostView sandboxId={summary.id} frozen={frozen} />
+          </>
         )}
         <SandboxSecretsSummarySlot />
       </CardContent>
-      {summary !== null && canDestroy(state) ? (
-        <CardFooter>
-          <SandboxDestroyAction
-            sandboxId={summary.id}
-            name={summary.displayName}
-          />
+      {summary !== null && actions.length > 0 ? (
+        <CardFooter className="flex flex-wrap gap-2">
+          <SandboxActions summary={summary} actions={actions} frozen={frozen} />
         </CardFooter>
       ) : null}
     </Card>
@@ -78,6 +116,7 @@ export function SandboxCard(props: {
 
 function SandboxFacts(props: { readonly summary: SandboxSummary }): ReactNode {
   const { summary } = props;
+  const now = useSampledNow();
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
@@ -90,6 +129,14 @@ function SandboxFacts(props: { readonly summary: SandboxSummary }): ReactNode {
       <dd data-testid="sandbox-card-rate">
         {formatRate(summary.priceMcPerHour)}
       </dd>
+      <dt className="text-muted-foreground">Idle</dt>
+      <dd data-testid="sandbox-card-idle">{sandboxIdleLine(summary)}</dd>
+      <dt className="text-muted-foreground">Last active</dt>
+      <dd data-testid="sandbox-card-last-active">
+        {summary.lastActivityAt === null
+          ? "No activity reported yet"
+          : formatRelativeTimestamp(summary.lastActivityAt, now)}
+      </dd>
       {summary.burst ? (
         <>
           <dt className="text-muted-foreground">Created by</dt>
@@ -97,6 +144,93 @@ function SandboxFacts(props: { readonly summary: SandboxSummary }): ReactNode {
         </>
       ) : null}
     </dl>
+  );
+}
+
+function SandboxGuestConfigFailure(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const failure = sandboxGuestConfigFailure(props.summary);
+  if (failure === null) return null;
+  return (
+    <p
+      data-testid="sandbox-card-guest-config-failure"
+      className="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-ui-xs leading-snug break-words text-destructive"
+    >
+      {failure}
+    </p>
+  );
+}
+
+/**
+ * The cost view: what this sandbox accrues now, what it cost today, and what
+ * the meter has charged since it was created (compute and storage), from the
+ * control plane's ledger; then the balance and how long it covers the
+ * account's awake burn, and the two-hour and thirty-minute warnings.
+ */
+function SandboxCostView(props: {
+  readonly sandboxId: string;
+  readonly frozen: boolean;
+}): ReactNode {
+  useRefreshSandboxCosts();
+  const costs = useSandboxCosts();
+  const user = useAuthUser().data ?? null;
+  const warning = useSandboxRunwayWarning();
+  const now = useSampledNow();
+  const cost =
+    costs.data?.sandboxes.find((c) => c.sandboxId === props.sandboxId) ?? null;
+  const balanceMc = sandboxBalanceMc(user);
+  const burn = costs.data?.awakeBurnMillicreditsPerHour ?? null;
+  return (
+    <div className="flex flex-col gap-1" data-testid="sandbox-card-cost">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-ui-xs">
+        {cost === null ? (
+          <>
+            <dt className="text-muted-foreground">Cost</dt>
+            <dd className="text-muted-foreground">
+              {costs.isError ? "Couldn't load the cost" : "Loading…"}
+            </dd>
+          </>
+        ) : (
+          <SandboxCostFacts cost={cost} now={now} />
+        )}
+        <dt className="text-muted-foreground">Balance</dt>
+        <dd data-testid="sandbox-card-balance">
+          {formatBalance(balanceMc, burn, props.frozen)}
+        </dd>
+      </dl>
+      <SandboxRunwayWarningLine warning={warning} />
+    </div>
+  );
+}
+
+function SandboxCostFacts(props: {
+  readonly cost: SandboxCost;
+  readonly now: number;
+}): ReactNode {
+  const { cost } = props;
+  const charged =
+    cost.charged.computeMillicredits + cost.charged.storageMillicredits;
+  return (
+    <>
+      <dt className="text-muted-foreground">Now</dt>
+      <dd data-testid="sandbox-card-cost-now">
+        {cost.currentRateMillicreditsPerHour === 0
+          ? "Not billing"
+          : `${formatCredits(cost.currentRateMillicreditsPerHour)} credits/hour`}
+      </dd>
+      <dt className="text-muted-foreground">Today</dt>
+      <dd data-testid="sandbox-card-cost-today">
+        {`${formatCredits(sandboxCostTodayMc(cost, props.now))} credits`}
+      </dd>
+      <dt className="text-muted-foreground">Charged</dt>
+      <dd data-testid="sandbox-card-cost-charged">
+        {`${formatCredits(charged)} credits since ${formatSandboxDay(cost.charged.sinceCreatedAt)} (${formatCredits(cost.charged.computeMillicredits)} compute · ${formatCredits(cost.charged.storageMillicredits)} storage)`}
+        {cost.pendingMillicredits > 0
+          ? ` · ${formatCredits(cost.pendingMillicredits)} pending`
+          : null}
+      </dd>
+    </>
   );
 }
 
@@ -109,21 +243,90 @@ function SandboxSecretsSummarySlot(): ReactNode {
   return null;
 }
 
+const VERB_DONE_TOAST: Record<SandboxLifecycleVerb, string> = {
+  suspend: "Suspended",
+  resume: "Resumed",
+  stop: "Stopped",
+  start: "Started",
+};
+
+function SandboxActions(props: {
+  readonly summary: SandboxSummary;
+  readonly actions: readonly SandboxCardAction[];
+  readonly frozen: boolean;
+}): ReactNode {
+  const { summary } = props;
+  const verb = useSandboxVerb(summary.id);
+  const pendingVerb = verb.isPending ? verb.variables : null;
+  return (
+    <>
+      {props.actions.map((action) =>
+        action === "destroy" ? (
+          <SandboxDestroyAction
+            key={action}
+            sandboxId={summary.id}
+            name={summary.displayName}
+            typedConfirmation={props.frozen}
+            disabled={verb.isPending}
+          />
+        ) : (
+          <Button
+            key={action}
+            type="button"
+            variant={
+              action === "resume" || action === "start" ? "default" : "outline"
+            }
+            size="sm"
+            disabled={verb.isPending}
+            data-testid={`sandbox-card-${action}`}
+            onClick={() => {
+              verb.mutate(action, {
+                onSuccess: () =>
+                  toast.success(
+                    `${VERB_DONE_TOAST[action]} ${summary.displayName}`,
+                  ),
+              });
+            }}
+          >
+            {pendingVerb === action ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={`sandbox-card-${action}-spinner`}
+                variant={undefined}
+              />
+            ) : null}
+            {SANDBOX_CARD_ACTION_LABEL[action]}
+          </Button>
+        ),
+      )}
+    </>
+  );
+}
+
 function SandboxDestroyAction(props: {
   readonly sandboxId: string;
   readonly name: string;
+  /** A frozen sandbox asks for its name to be typed (core flows, flow 5). */
+  readonly typedConfirmation: boolean;
+  readonly disabled: boolean;
 }): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const inputId = useId();
   const destroy = useSandboxDestroy(props.sandboxId);
+  const mismatch = props.typedConfirmation && typed.trim() !== props.name;
   return (
     <>
       <Button
         type="button"
         variant="destructive"
         size="sm"
-        disabled={destroy.isPending}
+        disabled={destroy.isPending || props.disabled}
         data-testid="sandbox-card-destroy"
-        onClick={() => setConfirmOpen(true)}
+        onClick={() => {
+          setTyped("");
+          setConfirmOpen(true);
+        }}
       >
         {destroy.isPending ? (
           <AgentSpinningDots
@@ -135,7 +338,9 @@ function SandboxDestroyAction(props: {
         Destroy
       </Button>
       <ConfirmDestructiveDialog
-        blockedReason={null}
+        blockedReason={
+          mismatch ? `Type ${props.name} above to destroy it.` : null
+        }
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Destroy ${props.name}?`}
@@ -144,6 +349,7 @@ function SandboxDestroyAction(props: {
         actionLabel="Destroy sandbox"
         isPending={destroy.isPending}
         onConfirm={() => {
+          if (mismatch) return;
           destroy.mutate(undefined, {
             onSuccess: () => {
               setConfirmOpen(false);
@@ -151,49 +357,51 @@ function SandboxDestroyAction(props: {
             },
           });
         }}
-      />
+      >
+        {props.typedConfirmation ? (
+          <div className="flex flex-col gap-1.5 px-5 pb-4">
+            <Label htmlFor={inputId}>
+              This sandbox is frozen. Type its name to confirm.
+            </Label>
+            <Input
+              id={inputId}
+              value={typed}
+              autoComplete="off"
+              placeholder={props.name}
+              data-testid="sandbox-card-destroy-typed"
+              onChange={(event) => setTyped(event.target.value)}
+            />
+          </div>
+        ) : null}
+      </ConfirmDestructiveDialog>
     </>
   );
 }
 
-/** Destroy is offered where the server accepts it: from a settled state. */
-function canDestroy(state: HostSandboxState | null): boolean {
-  return (
-    state === "awake" ||
-    state === "failed" ||
-    state === "suspended" ||
-    state === "stopped"
-  );
-}
-
-function sandboxStateLine(
-  state: HostSandboxState | null,
-  summary: SandboxSummary | null,
-): string {
-  switch (state) {
-    case "creating":
-      return "Provisioning and booting. This takes about 10 seconds once capacity is found.";
-    case "awake":
-      return "Running. Billed at the awake rate.";
-    case "destroying":
-    case "destroyed":
-      return "Destroyed. Its disk is gone and nothing more is billed.";
-    case "failed":
-      return summary?.failureCode === null || summary === null
-        ? "Failed to start. Nothing is billed for a sandbox that never woke."
-        : `Failed to start (${summary.failureCode}). Nothing is billed for a sandbox that never woke.`;
-    default:
-      return "Sandbox";
-  }
-}
-
 function stateBadgeVariant(
   state: HostSandboxState | null,
-): "success" | "info" | "destructive" | "muted" {
-  if (state === "awake") return "success";
-  if (state === "creating") return "info";
-  if (state === "failed") return "destructive";
-  return "muted";
+  frozen: boolean,
+): "success" | "info" | "warning" | "destructive" | "muted" {
+  if (frozen) return "warning";
+  switch (state) {
+    case "awake":
+      return "success";
+    case "creating":
+    case "resuming":
+    case "starting":
+    case "suspending":
+    case "stopping":
+      return "info";
+    case "failed":
+      return "destructive";
+    case "suspended":
+    case "stopped":
+    case "destroying":
+    case "destroyed":
+    case "released":
+    case null:
+      return "muted";
+  }
 }
 
 function formatShape(cpus: number, memoryMb: number, diskMb: number): string {
@@ -206,6 +414,25 @@ function formatShape(cpus: number, memoryMb: number, diskMb: number): string {
 function formatRate(price: SandboxHourlyPrice | null): string {
   if (price === null) return "Not priced here";
   return `${formatCredits(price.awakeMc)} credits/hour awake · ${formatCredits(price.suspendedMc)} suspended · ${formatCredits(price.stoppedMc)} stopped`;
+}
+
+/**
+ * The balance line: the credits sandboxes are charged against and how long
+ * they cover the account's awake burn, in the warnings' own words. A frozen
+ * card's state line already says what wakes it, so it gets the figure alone.
+ */
+function formatBalance(
+  balanceMc: number | null,
+  burnMcPerHour: number | null,
+  frozen: boolean,
+): string {
+  if (balanceMc === null) return "Loading…";
+  const balance = `${formatCredits(balanceMc)} credits`;
+  if (frozen || burnMcPerHour === null) return balance;
+  const minutes = sandboxRunwayMinutes(balanceMc, burnMcPerHour);
+  return minutes === null
+    ? balance
+    : `${balance}, about ${formatRunway(minutes)} at your current burn`;
 }
 
 function capitalize(word: string): string {

@@ -21,6 +21,17 @@ export const sandboxQueryKeys = {
     "sandboxes",
     "missing",
   ],
+  // NOT under `registeredHostsAll`: the cost route reads each sandbox's
+  // ledger, so it must not ride the directory's liveness tick. It refreshes
+  // on focus and on the events `useRefreshSandboxCosts` names.
+  costs: (authService: object, userId: string | null): readonly unknown[] => [
+    "auth",
+    "sandbox-costs",
+    authService,
+    userId,
+  ],
+  costsAll: (): readonly unknown[] => ["auth", "sandbox-costs"],
+  costsMissing: (): readonly unknown[] => ["auth", "sandbox-costs", "missing"],
   catalogue: (
     authService: object,
     userId: string | null,
@@ -37,6 +48,8 @@ export const sandboxMutationKeys = {
   // Per sandbox, so two destroys never share a pending state.
   destroy: (sandboxId: string) =>
     ["auth", "sandbox", "destroy", sandboxId] as const,
+  // Per sandbox, like destroy: the card's suspend / resume / stop / start.
+  verb: (sandboxId: string) => ["auth", "sandbox", "verb", sandboxId] as const,
   // Per HOST: the tab open that wakes it knows the host, not the sandbox id.
   wake: (hostId: string) => ["auth", "sandbox", "wake", hostId] as const,
 };

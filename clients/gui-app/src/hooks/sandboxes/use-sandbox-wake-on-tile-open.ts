@@ -63,7 +63,7 @@ async function wakeSandboxHost(
   let last: SandboxDialFacts = initial;
   return ensureSandboxAwake({
     initial,
-    wake: (sandboxId, verb) => auth.wakeSandbox(sandboxId, verb),
+    wake: (sandboxId, verb) => auth.runSandboxVerb(sandboxId, verb),
     readFacts: async () => {
       const facts = await readSandboxFacts(auth, hostId, last);
       if (facts !== null) last = facts;

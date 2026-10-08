@@ -69,10 +69,11 @@ export const RunnerHostInvoke = {
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
   listSandboxes: "runnerHost:sandboxes:list",
+  getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   createSandbox: "runnerHost:sandboxes:create",
   destroySandbox: "runnerHost:sandboxes:destroy",
-  wakeSandbox: "runnerHost:sandboxes:wake",
+  runSandboxVerb: "runnerHost:sandboxes:verb",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",

@@ -19,8 +19,9 @@ import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
   listSandboxesViaHttp,
-  wakeSandboxViaHttp,
+  runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import { config } from "../../config";
 import type {
@@ -34,7 +35,7 @@ import {
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
   parseSandboxCreateRequest,
-  parseSandboxWakeVerb,
+  parseSandboxLifecycleVerb,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
@@ -224,6 +225,14 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxCosts,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getSandboxCosts.bearerToken");
+      return fetchSandboxCostsViaHttp(config.serverBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.getSandboxCatalogue,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCatalogue.bearerToken");
@@ -257,15 +266,15 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.wakeSandbox,
+    RunnerHostInvoke.runSandboxVerb,
     async (_event, bearerToken: unknown, sandboxId: unknown, verb: unknown) => {
-      assertString(bearerToken, "wakeSandbox.bearerToken");
-      assertString(sandboxId, "wakeSandbox.sandboxId");
-      return wakeSandboxViaHttp(
+      assertString(bearerToken, "runSandboxVerb.bearerToken");
+      assertString(sandboxId, "runSandboxVerb.sandboxId");
+      return runSandboxVerbViaHttp(
         config.serverBaseUrl,
         bearerToken,
         sandboxId,
-        parseSandboxWakeVerb(verb),
+        parseSandboxLifecycleVerb(verb),
       );
     },
   );

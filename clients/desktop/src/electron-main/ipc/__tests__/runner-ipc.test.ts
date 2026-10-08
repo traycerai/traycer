@@ -600,10 +600,11 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.updateHostVersionPolicy,
           // The sandbox control plane, for traycer-server's CORS reason.
           RunnerHostInvoke.listSandboxes,
+          RunnerHostInvoke.getSandboxCosts,
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.createSandbox,
           RunnerHostInvoke.destroySandbox,
-          RunnerHostInvoke.wakeSandbox,
+          RunnerHostInvoke.runSandboxVerb,
           RunnerHostInvoke.listUserSessions,
           RunnerHostInvoke.revokeUserSession,
           RunnerHostInvoke.revokeAllSessions,

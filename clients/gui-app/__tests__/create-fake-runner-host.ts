@@ -95,13 +95,15 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    getSandboxCosts: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     createSandbox: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     destroySandbox: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
-    wakeSandbox: () =>
+    runSandboxVerb: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),

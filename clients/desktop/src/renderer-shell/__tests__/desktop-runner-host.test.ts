@@ -111,6 +111,10 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    getSandboxCosts: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     getSandboxCatalogue: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -123,7 +127,7 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    wakeSandbox: async () => ({
+    runSandboxVerb: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),

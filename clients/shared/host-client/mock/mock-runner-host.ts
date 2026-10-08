@@ -2,15 +2,19 @@ import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
   listSandboxesViaHttp,
-  wakeSandboxViaHttp,
+  runSandboxVerbViaHttp,
   type SandboxCatalogueFetchResult,
+  type SandboxCostsFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
   type SandboxVerbFetchResult,
-  type SandboxWakeVerb,
 } from "../sandbox-control";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "../../platform/uri-callback";
 import type { NotificationFeedOccurrence } from "../../notifications/feed-delivery";
 import type {
@@ -605,6 +609,10 @@ export class MockRunnerHost implements IRunnerHost {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken);
   }
 
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
@@ -625,12 +633,17 @@ export class MockRunnerHost implements IRunnerHost {
     return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
   }
 
-  wakeSandbox(
+  runSandboxVerb(
     bearerToken: string,
     sandboxId: string,
-    verb: SandboxWakeVerb,
+    verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult> {
-    return wakeSandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId, verb);
+    return runSandboxVerbViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      sandboxId,
+      verb,
+    );
   }
 
   async openExternalLink(url: string): Promise<void> {

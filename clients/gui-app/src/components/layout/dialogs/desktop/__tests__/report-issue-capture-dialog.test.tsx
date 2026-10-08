@@ -228,11 +228,12 @@ function createBaseRunnerHost(): IRunnerHost {
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     createSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
     destroySandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
-    wakeSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    runSandboxVerb: () => Promise.resolve({ kind: "unauthorized" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
     revokeUserSession: () =>
       Promise.resolve({ kind: "network-error" as const }),

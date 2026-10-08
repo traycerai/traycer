@@ -1,15 +1,19 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
+  SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
   sandboxCatalogueSchema,
   sandboxCreateAcceptedSchema,
   sandboxListResponseSchema,
   sandboxRefusalBodySchema,
+  userSandboxCostSchema,
   type SandboxCatalogue,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
+  type SandboxLifecycleVerb,
   type SandboxListResponse,
+  type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 
 /**
@@ -25,7 +29,7 @@ import {
  * so it crosses the Electron IPC boundary unchanged.
  */
 
-/** Per-request budget of the reads and the 501-answering verbs. */
+/** Per-request budget of the reads. */
 const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
 
 /**
@@ -38,6 +42,13 @@ const SANDBOX_CREATE_FETCH_TIMEOUT_MS = 370_000;
 
 /** A destroy runs on the server's 180 s `part-verify` tier; same margin. */
 const SANDBOX_DESTROY_FETCH_TIMEOUT_MS = 190_000;
+
+/**
+ * The lifecycle verbs run on the server's 360 s `transfer` tier and answer
+ * `202` at their own 300 s deadline; same margin as a create, so the server's
+ * answer is what the client reads.
+ */
+const SANDBOX_VERB_FETCH_TIMEOUT_MS = 370_000;
 
 /**
  * A non-`ok` answer:
@@ -71,17 +82,24 @@ export type SandboxCatalogueFetchResult =
   | { readonly kind: "ok"; readonly catalogue: SandboxCatalogue }
   | SandboxControlFailure;
 
+export type SandboxCostsFetchResult =
+  | { readonly kind: "ok"; readonly costs: UserSandboxCost }
+  | SandboxControlFailure;
+
 export type SandboxCreateFetchResult =
   | { readonly kind: "ok"; readonly accepted: SandboxCreateAccepted }
   | SandboxControlFailure;
 
-/** `destroy` and the wake verbs answer with no body the client reads. */
+/**
+ * `destroy` and the lifecycle verbs answer with a body the client does not
+ * read: the sandbox list is what every surface renders the row from.
+ */
 export type SandboxVerbFetchResult =
   | { readonly kind: "ok" }
   | SandboxControlFailure;
 
 /** The two lifecycle verbs a client calls to wake a sandbox before dialing. */
-export type SandboxWakeVerb = "resume" | "start";
+export type SandboxWakeVerb = Extract<SandboxLifecycleVerb, "resume" | "start">;
 
 function sandboxesUrl(serverBaseUrl: string, path: string): string {
   const base = serverBaseUrl.endsWith("/")
@@ -217,6 +235,31 @@ export async function fetchSandboxCatalogueViaHttp(
   return { kind: "ok", catalogue: parsed.data };
 }
 
+/**
+ * `GET /api/sandboxes/cost`: every listed sandbox's cost from the control
+ * plane's ledger, and the user's awake burn.
+ */
+export async function fetchSandboxCostsViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+): Promise<SandboxCostsFetchResult> {
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, "/cost"),
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  const parsed = userSandboxCostSchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the sandbox cost did not match the contract",
+    };
+  }
+  return { kind: "ok", costs: parsed.data };
+}
+
 /** `POST /api/sandboxes`: `202` with the sandbox and host ids. */
 export async function createSandboxViaHttp(
   serverBaseUrl: string,
@@ -269,22 +312,23 @@ export async function destroySandboxViaHttp(
 }
 
 /**
- * `POST /api/sandboxes/:id/resume` or `/start`. The server answers once the
- * transition is under way (or joins one in flight); the caller waits for the
+ * `POST /api/sandboxes/:id/{suspend,resume,stop,start}`. `200` once the row
+ * is at rest, `202` when it is still moving at the server's deadline (both
+ * `ok`: the sandbox list shows the rest); a wake's caller then waits for the
  * host list to say `awake` (see {@link ensureSandboxAwake}).
  */
-export async function wakeSandboxViaHttp(
+export async function runSandboxVerbViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   sandboxId: string,
-  verb: SandboxWakeVerb,
+  verb: SandboxLifecycleVerb,
 ): Promise<SandboxVerbFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}/${verb}`),
     {
       method: "POST",
       body: null,
-      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+      timeoutMs: SANDBOX_VERB_FETCH_TIMEOUT_MS,
     },
     bearerToken,
   );
@@ -336,7 +380,7 @@ export type SandboxWakeOutcome =
 export interface EnsureSandboxAwakeDeps {
   /** The facts the caller dialed from (its host list row joined to the sandbox id). */
   readonly initial: SandboxDialFacts;
-  /** Calls the wake verb; the runner host's `wakeSandbox`. */
+  /** Calls the wake verb; the runner host's `runSandboxVerb`. */
   readonly wake: (
     sandboxId: string,
     verb: SandboxWakeVerb,
@@ -455,6 +499,14 @@ function outcomeOfWakeFailure(
   }
   if (failure.code === SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE) {
     return { kind: "wake-not-available" };
+  }
+  // The row froze between the list read and the verb.
+  if (failure.code === SANDBOX_REFUSAL_CODE_FROZEN) {
+    return {
+      kind: "refused",
+      code: "SANDBOX_FROZEN",
+      message: SANDBOX_FROZEN_MESSAGE,
+    };
   }
   if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
     return {

@@ -30,6 +30,7 @@ import {
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
+import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
 import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import { Button } from "@/components/ui/button";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
@@ -217,6 +218,10 @@ function SettingsSidebarHostPicker(props: {
         <Plus className="size-3.5 shrink-0" aria-hidden />
         New sandbox…
       </Button>
+      {/* The host list's balance banner: the two-hour and thirty-minute
+          warnings for the account's awake sandboxes. Nothing for a user with
+          none. */}
+      <SandboxBalanceBanner />
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
           surface can be in, so it never waits to be noticed.

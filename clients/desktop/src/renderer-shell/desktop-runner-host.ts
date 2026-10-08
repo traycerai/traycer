@@ -141,10 +141,13 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxCostsFetchResult,
   SandboxVerbFetchResult,
-  SandboxWakeVerb,
 } from "@traycer-clients/shared/host-client/sandbox-control";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -208,6 +211,7 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
@@ -219,10 +223,10 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult>;
-  wakeSandbox(
+  runSandboxVerb(
     bearerToken: string,
     sandboxId: string,
-    verb: SandboxWakeVerb,
+    verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
@@ -1117,6 +1121,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.listSandboxes(bearerToken);
   }
 
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return this.bridge.getSandboxCosts(bearerToken);
+  }
+
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
@@ -1137,12 +1145,12 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.destroySandbox(bearerToken, sandboxId);
   }
 
-  wakeSandbox(
+  runSandboxVerb(
     bearerToken: string,
     sandboxId: string,
-    verb: SandboxWakeVerb,
+    verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult> {
-    return this.bridge.wakeSandbox(bearerToken, sandboxId, verb);
+    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb);
   }
 
   beginAuthAttempt(): void {
