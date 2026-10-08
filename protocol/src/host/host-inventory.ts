@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { hostListItemSchema } from "@traycer/protocol/host/host-status";
+import {
+  hostListItemSchema,
+  hostListItemSchemaV10,
+} from "@traycer/protocol/host/host-status";
 
 const textFrameFields = {
   hasBinaryPayload: lazySchema(() => z.literal(false)),
@@ -66,6 +69,15 @@ const textFrameFields = {
  * therefore the last GOOD rows, and those may legitimately be empty - an
  * account with no other host whose next read fails is exactly that frame -
  * which is why the schema does not demand a non-empty `hosts` on `stale`.
+ *
+ * ## Minors
+ *
+ * @1.0 is FROZEN on {@link hostListItemSchemaV10}, the row before sandbox
+ * hosts. @1.1 carries the live {@link hostListItemSchema}, whose rows may hold
+ * `sandboxState`, `sandboxFrozen` and `profile`, and whose set may include
+ * `kind: sandbox` rows. The serving host gates on the negotiated minor: a 1.0
+ * subscriber receives rows with the three fields stripped and the sandbox rows
+ * removed, so a released client sees the fleet it always saw.
  */
 export const hostInventorySubscribeOpenRequestSchemaV10 = lazySchema(() =>
   z.object({}),
@@ -79,7 +91,7 @@ export const hostInventorySubscribeServerFrameSchemaV10 = lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
-      hosts: z.array(hostListItemSchema),
+      hosts: z.array(hostListItemSchemaV10),
       /** The host's clock at the read these rows came from. */
       fetchedAtMs: z.number().int().nonnegative(),
       /** These are the last good rows; the most recent read did not refresh them. */
@@ -122,5 +134,39 @@ export const hostInventorySubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: hostInventorySubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostInventorySubscribeServerFrameSchemaV10,
+  clientFrameSchema: hostInventorySubscribeClientFrameSchemaV10,
+});
+
+/**
+ * @1.1: the same two frame kinds, with the snapshot's rows on the live
+ * registry row, so they may carry the sandbox fields and include `kind:
+ * sandbox` rows. Everything else is @1.0's, field for field.
+ */
+export const hostInventorySubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      hosts: z.array(hostListItemSchema),
+      /** The host's clock at the read these rows came from. */
+      fetchedAtMs: z.number().int().nonnegative(),
+      /** These are the last good rows; the most recent read did not refresh them. */
+      stale: z.boolean(),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]),
+);
+export type HostInventorySubscribeServerFrameV11 = z.infer<
+  typeof hostInventorySubscribeServerFrameSchemaV11
+>;
+
+export const hostInventorySubscribeV11 = defineStreamRpcContract({
+  method: "host.hostInventory.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: hostInventorySubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostInventorySubscribeServerFrameSchemaV11,
   clientFrameSchema: hostInventorySubscribeClientFrameSchemaV10,
 });

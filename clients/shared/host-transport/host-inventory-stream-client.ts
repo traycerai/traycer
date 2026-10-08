@@ -1,6 +1,8 @@
 import {
   hostInventorySubscribeServerFrameSchemaV10,
+  hostInventorySubscribeServerFrameSchemaV11,
   type HostInventorySubscribeServerFrameV10,
+  type HostInventorySubscribeServerFrameV11,
 } from "@traycer/protocol/host/host-inventory";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -62,12 +64,14 @@ export interface HostInventoryStreamClientOptions {
  * fields the minor existed to carry, and the ladder is only safe if it starts
  * this way.
  */
-export const HOST_INVENTORY_STREAM_PARSED_MINOR_CEILING = 0;
+export const HOST_INVENTORY_STREAM_PARSED_MINOR_CEILING = 1;
 
 type ParsedFrame =
   | {
       readonly success: true;
-      readonly data: HostInventorySubscribeServerFrameV10;
+      readonly data:
+        | HostInventorySubscribeServerFrameV10
+        | HostInventorySubscribeServerFrameV11;
     }
   | { readonly success: false };
 
@@ -86,6 +90,12 @@ function parseNegotiatedFrame(
       negotiated.minor > HOST_INVENTORY_STREAM_PARSED_MINOR_CEILING)
   ) {
     return { success: false };
+  }
+  // @1.1 rows may carry the sandbox fields and include `kind: sandbox` rows;
+  // @1.0 (and the pre-handshake parse) is the frozen pre-sandbox row, which
+  // REJECTS those fields rather than stripping them.
+  if (negotiated !== null && negotiated.minor === 1) {
+    return hostInventorySubscribeServerFrameSchemaV11.safeParse(envelope);
   }
   return hostInventorySubscribeServerFrameSchemaV10.safeParse(envelope);
 }

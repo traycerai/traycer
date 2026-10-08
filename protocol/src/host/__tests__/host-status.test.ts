@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { hostListItemSchema, hostListResponseSchema } from "../host-status";
+import {
+  HOST_SANDBOX_STATES,
+  hostListItemSchema,
+  hostListItemSchemaV10,
+  hostListResponseSchema,
+  hostSandboxStateSchema,
+} from "../host-status";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
 
 /**
@@ -222,5 +228,108 @@ describe("commandInterpreter — why the cloud DTO needs a consumer opt-in", () 
         ],
       }).success,
     ).toBe(true);
+  });
+});
+
+/**
+ * The item schema as OSS `main` `cb1dcabbf3e0047fb3d9b8899aeee6ec08f003cb`
+ * shipped it - the last commit before the sandbox fields. Copied, not
+ * imported, for the reason the `76459f8d` copy above gives.
+ */
+const RELEASED_HOST_LIST_ITEM_SCHEMA_AT_CB1DCABB =
+  RELEASED_HOST_LIST_ITEM_SCHEMA_AT_76459F8D.extend({
+    commandInterpreter: z
+      .enum(["posix-shell", "git-bash", "powershell", "cmd"])
+      .nullable()
+      .optional(),
+  }).strict();
+
+const SANDBOX_ROW = {
+  ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+  kind: "sandbox",
+  sandboxState: "awake",
+  sandboxFrozen: false,
+  profile: "agent",
+} as const;
+
+describe("sandbox fields - why they ride the `include=sandboxState` opt-in", () => {
+  it("keeps the un-opted response parseable by the released schema", () => {
+    expect(
+      RELEASED_HOST_LIST_ITEM_SCHEMA_AT_CB1DCABB.safeParse(
+        HOST_LIST_ITEM_GOLDEN_FIXTURE,
+      ).success,
+    ).toBe(true);
+  });
+
+  it("proves the opt-in is REQUIRED: the released schema rejects each field, null included", () => {
+    for (const extra of [
+      { sandboxState: "awake" },
+      { sandboxState: null },
+      { sandboxFrozen: false },
+      { sandboxFrozen: null },
+      { profile: "agent" },
+      { profile: null },
+    ]) {
+      expect(
+        RELEASED_HOST_LIST_ITEM_SCHEMA_AT_CB1DCABB.safeParse({
+          ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+          ...extra,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("accepts absence, explicit nulls and an opted-in sandbox row on the CURRENT schema", () => {
+    expect(
+      hostListItemSchema.safeParse(HOST_LIST_ITEM_GOLDEN_FIXTURE).success,
+    ).toBe(true);
+    expect(
+      hostListItemSchema.safeParse({
+        ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+        sandboxState: null,
+        sandboxFrozen: null,
+        profile: null,
+      }).success,
+    ).toBe(true);
+    expect(hostListItemSchema.parse(SANDBOX_ROW)).toEqual(SANDBOX_ROW);
+  });
+
+  it("accepts every one of the twelve sandbox states and nothing else", () => {
+    expect(HOST_SANDBOX_STATES).toHaveLength(12);
+    for (const sandboxState of HOST_SANDBOX_STATES) {
+      expect(hostSandboxStateSchema.safeParse(sandboxState).success).toBe(true);
+      expect(
+        hostListItemSchema.safeParse({ ...SANDBOX_ROW, sandboxState }).success,
+      ).toBe(true);
+    }
+    expect(
+      hostListItemSchema.safeParse({ ...SANDBOX_ROW, sandboxState: "paused" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts the two profiles and rejects any other word", () => {
+    for (const profile of ["agent", "automation"]) {
+      expect(
+        hostListItemSchema.safeParse({ ...SANDBOX_ROW, profile }).success,
+      ).toBe(true);
+    }
+    expect(
+      hostListItemSchema.safeParse({ ...SANDBOX_ROW, profile: "slim" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a non-boolean frozen flag", () => {
+    expect(
+      hostListItemSchema.safeParse({ ...SANDBOX_ROW, sandboxFrozen: "yes" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("keeps the frozen inventory-1.0 row on the pre-sandbox shape", () => {
+    expect(
+      hostListItemSchemaV10.safeParse(HOST_LIST_ITEM_GOLDEN_FIXTURE).success,
+    ).toBe(true);
+    expect(hostListItemSchemaV10.safeParse(SANDBOX_ROW).success).toBe(false);
   });
 });
