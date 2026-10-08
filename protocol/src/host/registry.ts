@@ -616,6 +616,12 @@ import {
   epicRestoreFileV10,
 } from "@traycer/protocol/host/epic/files";
 import {
+  chatMcpAppCallToolV10,
+  chatMcpAppDescribeToolV10,
+  chatMcpAppReadResourceV10,
+  chatMcpAppUpdateModelContextV10,
+} from "@traycer/protocol/host/chat/mcp-app";
+import {
   epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
   epicBatchDeleteV11,
@@ -8781,6 +8787,62 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicOpenFileInBrowserV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // An MCP App's requests (`chat/mcp-app.ts`), served through the harness's
+  // own MCP connection behind the host's gate. Optional and off the released
+  // floor: an old host answers `E_HOST_UNSUPPORTED` and the app row renders
+  // read-only from its stored result.
+  "chat.mcpApp.describeTool": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppDescribeToolV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.mcpApp.callTool": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppCallToolV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.mcpApp.readResource": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppReadResourceV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.mcpApp.updateModelContext": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppUpdateModelContextV10,
           upgradeFromPreviousVersion: null,
         },
       },
