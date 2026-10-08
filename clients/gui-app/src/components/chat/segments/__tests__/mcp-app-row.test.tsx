@@ -213,6 +213,9 @@ function makeFileRpc(
     fetchFile: vi
       .fn<EpicFileRpc["fetchFile"]>()
       .mockResolvedValue({ kind: "downloading" }),
+    cancelFetchFile: vi
+      .fn<EpicFileRpc["cancelFetchFile"]>()
+      .mockResolvedValue({ cancelled: true }),
   };
 }
 

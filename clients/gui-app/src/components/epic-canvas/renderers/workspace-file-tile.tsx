@@ -367,6 +367,7 @@ function WorkspaceImageFileTile(props: {
           onTransformChange={null}
           doubleClickOverride={null}
           onDecodeError={handleDecodeError}
+          toolbarActions={null}
         />
       </div>
     </div>

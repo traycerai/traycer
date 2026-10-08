@@ -82,6 +82,15 @@ export const RAIL_ARTIFACTS_REGION: LayoutRegion<"railArtifacts"> = {
   ...railRegionBase("railArtifacts", ["artifacts", "outputs", "files"], null),
 };
 
+export const RAIL_FILES_REGION: LayoutRegion<"railFiles"> = {
+  id: "railFiles",
+  ...railRegionBase(
+    "railFiles",
+    ["files", "pages", "images", "videos", "pdf"],
+    null,
+  ),
+};
+
 export const RAIL_GIT_DIFF_REGION: LayoutRegion<"railGitDiff"> = {
   id: "railGitDiff",
   ...railRegionBase("railGitDiff", ["git", "diff", "changes"], null),

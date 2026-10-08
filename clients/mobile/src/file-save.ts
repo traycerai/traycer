@@ -4,6 +4,7 @@ import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import type {
   FileSaveRequest,
+  UrlDownloadRequest,
   IFileSaveHost,
   SavedFileLocation,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -510,10 +511,44 @@ export class MobileFileSave implements IFileSaveHost {
    *   offering a Download it could only ever fail: the capability is absent
    *   rather than present-and-broken, and Share is unaffected.
    */
+  /**
+   * A URL fetched natively into the same documents directory as
+   * {@link downloadFile}: the plugin streams it to disk, so a large published
+   * file never passes through the web view. Present exactly when
+   * {@link downloadFile} is, for the same reason.
+   */
+  readonly downloadUrl:
+    | ((request: UrlDownloadRequest) => Promise<SavedFileLocation | null>)
+    | null;
+
   constructor(directDownloads: boolean) {
     this.downloadFile = directDownloads
       ? (request) => this.writeDownload(request)
       : null;
+    this.downloadUrl = directDownloads
+      ? (request) => this.fetchDownload(request)
+      : null;
+  }
+
+  private async fetchDownload(
+    request: UrlDownloadRequest,
+  ): Promise<SavedFileLocation> {
+    const name = toFileName(request.name, request.type);
+    const path = await claimDownloadPath(name);
+    try {
+      const written = await Filesystem.downloadFile({
+        url: request.url,
+        path,
+        directory: Directory.Documents,
+        recursive: true,
+      });
+      return {
+        name: path.split("/").at(-1) ?? name,
+        path: written.path ?? null,
+      };
+    } finally {
+      releaseDownloadPath(path);
+    }
   }
 
   private async writeDownload(

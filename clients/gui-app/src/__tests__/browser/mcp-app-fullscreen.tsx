@@ -100,6 +100,7 @@ const fileRpc: EpicFileRpc = {
     }),
   openFileInBrowser: () => Promise.reject(new Error("not in this fixture")),
   fetchFile: () => Promise.reject(new Error("not in this fixture")),
+  cancelFetchFile: () => Promise.reject(new Error("not in this fixture")),
 };
 
 let calls = 0;

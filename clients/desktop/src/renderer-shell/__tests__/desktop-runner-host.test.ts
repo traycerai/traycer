@@ -239,6 +239,7 @@ function buildFakeBridge(
         return { name: input.name, path: `/tmp/saved/${input.name}` };
       },
       openSavedFile: async () => undefined,
+      downloadUrl: async () => null,
     },
     menu: {
       platform: "darwin",

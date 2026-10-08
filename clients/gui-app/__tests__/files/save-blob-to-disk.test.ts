@@ -116,6 +116,7 @@ describe("saveBlobToDisk", () => {
         saveFile,
         openSavedFile: () => Promise.resolve(),
         downloadFile: null,
+        downloadUrl: null,
 
         saveRoute: "download",
       }),
@@ -156,6 +157,7 @@ describe("downloadBlobToDevice", () => {
         saveFile,
         openSavedFile: null,
         downloadFile,
+        downloadUrl: null,
         saveRoute: "share",
       }),
     ).resolves.toEqual({
@@ -185,6 +187,7 @@ describe("downloadBlobToDevice", () => {
           saveFile,
           openSavedFile: null,
           downloadFile: null,
+          downloadUrl: null,
           saveRoute: "download",
         },
       ),
@@ -223,6 +226,7 @@ describe("canDownloadToDevice", () => {
     >(() => Promise.resolve(null)),
     openSavedFile: null,
     downloadFile: null,
+    downloadUrl: null,
     saveRoute: "share" as const,
   });
 
@@ -239,6 +243,7 @@ describe("canDownloadToDevice", () => {
       canDownloadToDevice({
         ...shareOnlyShell(),
         downloadFile: () => Promise.resolve({ name: "u.png", path: null }),
+        downloadUrl: null,
       }),
     ).toBe(true);
     expect(
@@ -272,6 +277,7 @@ describe("hasSeparateDownloadRoute", () => {
         saveFile,
         openSavedFile: null,
         downloadFile: null,
+        downloadUrl: null,
         saveRoute: "download",
       }),
     ).toBe(false);
@@ -286,6 +292,7 @@ describe("hasSeparateDownloadRoute", () => {
         saveFile,
         openSavedFile: null,
         downloadFile: () => Promise.resolve({ name: "u.png", path: null }),
+        downloadUrl: null,
         saveRoute: "share",
       }),
     ).toBe(true);

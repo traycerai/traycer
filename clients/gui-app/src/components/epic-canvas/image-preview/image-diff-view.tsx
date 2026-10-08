@@ -720,6 +720,7 @@ function ImageDiffSide(props: {
       onTransformChange={props.compact ? null : props.onTransformChange}
       doubleClickOverride={props.doubleClickOverride}
       onDecodeError={handleDecodeError}
+      toolbarActions={null}
     />
   );
 }

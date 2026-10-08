@@ -118,6 +118,12 @@ export interface ImagePreviewProps {
    * the caller must react and switch to its own settled placeholder.
    */
   readonly onDecodeError: (() => void) | null;
+  /**
+   * The host surface's own actions (an epic-file tile's Download and More),
+   * drawn at the end of this instance's toolbar so the surface needs no second
+   * bar. `null` adds nothing; ignored when `compact`.
+   */
+  readonly toolbarActions: ReactNode;
 }
 
 const COPY_FEEDBACK_RESET_MS = 1500;
@@ -521,7 +527,9 @@ export function ImagePreview(props: ImagePreviewProps) {
     );
   }, []);
 
-  const caption = formatImagePreviewCaption(props.meta);
+  const caption = formatImagePreviewCaption(
+    withDecodedSize(props.meta, metaSize),
+  );
   const aspectRatio = imagePreviewAspectRatio(props.meta);
   const zoomDisabled = props.status !== "ready";
   const zoomOutDisabled =
@@ -696,6 +704,7 @@ export function ImagePreview(props: ImagePreviewProps) {
                 {copyButtonIcon(copyFeedback)}
               </Button>
             </TooltipWrapper>
+            {props.toolbarActions}
           </div>
         </div>
       )}
@@ -712,6 +721,18 @@ export function ImagePreview(props: ImagePreviewProps) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * A dimensionless `meta` (every SVG, a Blob with no header parse) captioned
+ * with the size the `<img>` decoded, once it has.
+ */
+function withDecodedSize(
+  meta: FileAssetMeta | null,
+  size: ContainerSize | null,
+): FileAssetMeta | null {
+  if (meta === null || size === null) return meta;
+  return { ...meta, width: size.width, height: size.height };
 }
 
 /**
