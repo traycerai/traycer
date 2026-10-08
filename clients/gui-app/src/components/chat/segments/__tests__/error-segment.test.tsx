@@ -508,3 +508,71 @@ describe("<ErrorSegment />", () => {
     });
   });
 });
+
+// A turn ended because its sandbox froze for lack of credits is an
+// interruption with the sandbox's own words, not a red error carrying the
+// host's raw `SANDBOX_FROZEN: sandbox host '...'` message.
+describe("<ErrorSegment /> sandbox refusals", () => {
+  afterEach(cleanup);
+
+  const RAW_MESSAGE =
+    "SANDBOX_FROZEN: sandbox host 'build-box': frozen, out of credits";
+
+  function renderRow(input: {
+    readonly code: string | null;
+    readonly message: string;
+  }): HTMLElement {
+    const { container } = render(
+      <ErrorSegment
+        turnId={null}
+        message={input.message}
+        code={input.code}
+        recoverable={false}
+        findUnitId={null}
+        harnessId="traycer"
+        failure={null}
+        settledNotice={null}
+        settledNoticeFindUnitId={null}
+      />,
+    );
+    const root = container.querySelector("[data-failure-presentation]");
+    if (!(root instanceof HTMLElement)) {
+      throw new Error("the error row did not render");
+    }
+    return root;
+  }
+
+  it("renders SANDBOX_FROZEN in the interrupted presentation with the frozen copy", () => {
+    const root = renderRow({ code: "SANDBOX_FROZEN", message: RAW_MESSAGE });
+
+    expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
+    expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
+    expect(screen.getByText("Paused: account out of credits")).toBeDefined();
+    expect(screen.getByText(/froze when your credits ran out/)).toBeDefined();
+    // The host's raw sentence is replaced, not shown beside the copy.
+    expect(screen.queryByText(RAW_MESSAGE)).toBeNull();
+    expect(screen.queryByText("Error")).toBeNull();
+  });
+
+  it("recognises the same turn from the message prefix when the block has no code", () => {
+    const root = renderRow({ code: null, message: RAW_MESSAGE });
+
+    expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
+    expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
+    expect(screen.getByText("Paused: account out of credits")).toBeDefined();
+  });
+
+  it("leaves any other error as the red error row with its own message", () => {
+    const root = renderRow({
+      code: "RUNTIME_THROWN",
+      message: "SANDBOX_FROZEN: quoted by an unrelated failure",
+    });
+
+    expect(root.getAttribute("data-failure-presentation")).toBe("error");
+    expect(root.hasAttribute("data-sandbox-refusal")).toBe(false);
+    expect(
+      screen.getByText("SANDBOX_FROZEN: quoted by an unrelated failure"),
+    ).toBeDefined();
+    expect(screen.queryByText("Paused: account out of credits")).toBeNull();
+  });
+});
