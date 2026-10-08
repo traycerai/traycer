@@ -1340,11 +1340,11 @@ export function reconcileSnapshotChange(
           messageId: pending.messageId,
           content: pending.restore.content,
           browserAnnotations: pending.restore.browserAnnotations,
-          reason: `OpenMessage was not confirmed after reconnect.${deadSendAccountClauses(
+          reason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
             snapshotAccount,
             true,
           )}`,
-          displacedReason: `OpenMessage was not confirmed after reconnect.${deadSendAccountClauses(
+          displacedReason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
             snapshotAccount,
             false,
           )}`,

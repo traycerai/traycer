@@ -2810,10 +2810,10 @@ function rejectionRestoration(input: {
     messageId: pending.messageId,
     content: pending.restore.content,
     browserAnnotations: pending.restore.browserAnnotations,
-    reason: `${frame.reason ?? "OpenMessage was not accepted."}${
+    reason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
-    displacedReason: `${frame.reason ?? "OpenMessage was not accepted."}${
+    displacedReason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, false)
     }`,
     // This path owns a notice and says it there, so the ack stays quiet.

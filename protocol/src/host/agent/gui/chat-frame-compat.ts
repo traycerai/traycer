@@ -123,28 +123,13 @@ const CHAT_SUBSCRIBE_AUTO_JUDGE_NOTICE_MINOR = 16;
  * the registry's latest minor slides up with the ceiling and refuses every
  * peer still on the line that introduced them.
  *
- * The host's twin is `OPEN_HARNESS_CHAT_SUBSCRIBE_MINOR` in
- * `chat-frame-projection.ts`, and the two must move together: the host caps
- * its per-harness floor at this minor for every heard-from carrier, so a peer
- * at or above it is never refused a chat for an agent it only heard from.
+ * The host reads this one constant (`heardMinorForDriveMinor` in its
+ * `chat-frame-projection.ts`, no twin): it caps its per-harness floor at this
+ * minor for every heard-from carrier, so a peer at or above it is never
+ * refused a chat for an agent it only heard from. The client needs no
+ * predicate on it: a `1.22` peer parses with the open schemas its line binds.
  */
 export const CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR = 22;
-
-/**
- * Whether this negotiated line decodes an unknown harness id on the heard-from
- * carriers instead of dropping the frame. A null version - the handshake has
- * not resolved - reads as NOT capable, the same safe direction `supportsV17`
- * takes.
- */
-export function supportsOpenHarnessIds(
-  negotiated: SchemaVersion | null,
-): boolean {
-  return (
-    negotiated !== null &&
-    negotiated.major === 1 &&
-    negotiated.minor >= CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR
-  );
-}
 
 /**
  * Typed against the live enum on purpose: a rename of the mode breaks this

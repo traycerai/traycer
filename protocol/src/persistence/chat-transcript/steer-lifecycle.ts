@@ -1,5 +1,5 @@
 import {
-  chatQueuedItemSchema,
+  openChatQueuedItemSchema,
   type OpenChatQueuedItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -148,6 +148,9 @@ function queueItemHasActiveInterruptRestartSteer(
   );
 }
 
+// Parsed with the OPEN item schema: a `1.22` client folds a steer queued by
+// an agent on a harness its build predates, so that steer's user row is still
+// marked steered. Every closed item parses the same way.
 function queueItemsFromEventMetadata(
   metadata: OpenChatEvent["metadata"],
 ): ReadonlyArray<OpenChatQueuedItem> {
@@ -155,10 +158,10 @@ function queueItemsFromEventMetadata(
   const stateItems = metadata["items"];
   if (Array.isArray(stateItems)) {
     return stateItems.flatMap((item) => {
-      const parsed = chatQueuedItemSchema.safeParse(item);
+      const parsed = openChatQueuedItemSchema.safeParse(item);
       return parsed.success ? [parsed.data] : [];
     });
   }
-  const parsed = chatQueuedItemSchema.safeParse(metadata["item"]);
+  const parsed = openChatQueuedItemSchema.safeParse(metadata["item"]);
   return parsed.success ? [parsed.data] : [];
 }

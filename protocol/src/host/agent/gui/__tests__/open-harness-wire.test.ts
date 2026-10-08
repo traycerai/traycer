@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { runtimeEventSchema } from "@traycer/protocol/host/agent/gui/agent-runtime";
-import {
-  supportsOpenHarnessIds,
-  CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR,
-} from "@traycer/protocol/host/agent/gui/chat-frame-compat";
+import { CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import {
   openAgentSenderSchema,
   openContentBlockSchema,
@@ -245,13 +242,9 @@ describe("open-harness-wire: the 1.22 server-frame sweep", () => {
   });
 });
 
-describe("supportsOpenHarnessIds", () => {
-  it("is false until the handshake resolves and below 1.22, true from 1.22 on 1.x", () => {
+describe("CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR", () => {
+  it("is the literal 22, the minor the open leaves arrived on", () => {
     expect(CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR).toBe(22);
-    expect(supportsOpenHarnessIds(null)).toBe(false);
-    expect(supportsOpenHarnessIds({ major: 1, minor: 21 })).toBe(false);
-    expect(supportsOpenHarnessIds({ major: 1, minor: 22 })).toBe(true);
-    expect(supportsOpenHarnessIds({ major: 2, minor: 0 })).toBe(false);
   });
 });
 

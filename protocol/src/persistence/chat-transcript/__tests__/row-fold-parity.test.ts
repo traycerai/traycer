@@ -51,6 +51,11 @@ import {
   foldTranscriptRows as v141FoldTranscriptRows,
   foldTranscriptRowsInMemory as v141FoldTranscriptRowsInMemory,
 } from "./support/v1-4-1-row-projection";
+import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
+import {
+  chatQueuedItemSchema,
+  openChatQueuedItemSchema,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -2373,6 +2378,81 @@ describe("c. events: interrupt_restart steer lifecycle retractions", () => {
       { mayDecline: false },
       "retract by items snapshot",
     );
+  });
+
+  it("marks the steered row for a steer queued by an agent on a harness this build does not know", () => {
+    const store = new RowFoldStore("chat-steer-unknown-agent-harness");
+    const u1 = userMessage("u1", 1000, null);
+    applyStep(
+      store,
+      { upserts: [u1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
+
+    const turnId = "t1";
+    const knownItem = promptQueueItem({
+      queueItemId: "q1",
+      messageId: "u1",
+      ts: 1001,
+      status: "steer_requested",
+      steerRequest: {
+        mode: "interrupt_restart",
+        targetTurnId: turnId,
+        requestedAt: 1001,
+      },
+    });
+    const unknownHarnessItem = {
+      ...knownItem,
+      sender: {
+        type: "agent",
+        harnessId: "harness-this-build-predates",
+        agentId: "agent-1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+    };
+    const steerEvent = ev({
+      ...EVENT_DEFAULTS,
+      type: "queue.steerRequested",
+      ts: 1001,
+      turnId,
+      messageId: "u1",
+      queueItemId: "q1",
+      metadata: { items: [unknownHarnessItem] },
+    });
+
+    expect(
+      chatQueuedItemSchema.safeParse(unknownHarnessItem).success,
+      "the closed item schema rejects the unknown harness",
+    ).toBe(false);
+    expect(
+      openChatQueuedItemSchema.safeParse(unknownHarnessItem).success,
+      "the open item schema accepts it",
+    ).toBe(true);
+
+    const knownHarnessEvent = steerRequestedEvent(1001, turnId, "q1", "u1");
+    expect(
+      [...steeredMessageIdsFromEvents([knownHarnessEvent])],
+      "known-harness sibling case",
+    ).toEqual(["u1"]);
+    expect(
+      [...steeredMessageIdsFromEvents([steerEvent])],
+      "steered ids for the unknown-harness steer",
+    ).toEqual(["u1"]);
+
+    // `store.apply`, not `applyStep`: the frozen legacy oracle parses queue
+    // items with the closed schema, so it cannot agree on this one input.
+    const applied = store.apply({
+      upserts: [],
+      removes: [],
+      events: [steerEvent],
+      activeTurnId: turnId,
+    });
+    expect(applied.continued).toBe(true);
+    const userRow = store.rowsSorted().find((row) => row.rowId === "u1");
+    expect(userRow?.context.completedSteer).toBe(true);
   });
 
   it("appends the steer user before AND after the block naming it", () => {
