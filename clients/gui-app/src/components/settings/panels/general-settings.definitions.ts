@@ -183,7 +183,7 @@ export const GENERAL = defineSettingsSection("general", {
     search: { contributesTo: "agents" },
     label: "Archive idle agents automatically",
     description:
-      "Archive a chat an agent created once it has been idle this long. A new message unarchives it.",
+      "Tidy up chats agents started once they go quiet. Applies on all your hosts.",
     availableWhen: alwaysAvailable,
     keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
   },

@@ -43,10 +43,18 @@ interface SettingsRowProps {
    * resolve against (see `SETTINGS_ROW_STACK.controlLine`).
    */
   readonly controlSpansLine?: boolean;
+  /**
+   * Options the row's control governs, drawn on a line of their own under the
+   * label and the control, across the row's full width. Selected by
+   * `!== undefined` like `status`; `null` or `false` draw nothing, which is
+   * how a row hides its options while its switch is off.
+   */
+  readonly details?: ReactNode;
 }
 
 export function SettingsRow(props: SettingsRowProps) {
-  const { row, status, labelStatus, hint, control, controlSpansLine } = props;
+  const { row, status, labelStatus, hint, control, controlSpansLine, details } =
+    props;
   const compact = useSettingsDensity() === "compact";
   const descriptionId = useId();
   const showsStatus = status !== undefined;
@@ -107,6 +115,9 @@ export function SettingsRow(props: SettingsRowProps) {
           {control}
         </SettingsRowDescriptionContext.Provider>
       </div>
+      {details !== undefined && rendersContent(details) ? (
+        <div className="basis-full">{details}</div>
+      ) : null}
     </div>
   );
 }

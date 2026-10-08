@@ -55,31 +55,88 @@ export function chatAutoArchiveShownPolicy(
   };
 }
 
-/** `null` when `draft` is a whole number of seconds inside `bounds`. */
-export function idleSecondsError(
+/** The units the threshold field offers, smallest first. */
+export type IdleUnit = "seconds" | "minutes" | "hours" | "days";
+
+export const IDLE_UNIT_SECONDS: Readonly<Record<IdleUnit, number>> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3600,
+  days: 86_400,
+};
+
+export const IDLE_UNIT_LABELS: Readonly<Record<IdleUnit, string>> = {
+  seconds: "seconds",
+  minutes: "minutes",
+  hours: "hours",
+  days: "days",
+};
+
+export function isIdleUnit(value: string): value is IdleUnit {
+  return Object.hasOwn(IDLE_UNIT_SECONDS, value);
+}
+
+/**
+ * The largest unit that states `totalSeconds` as a whole number: 3600 reads
+ * "1 hour", 5400 "90 minutes", 90 "90 seconds".
+ */
+export function idleUnitFor(totalSeconds: number): IdleUnit {
+  if (totalSeconds % IDLE_UNIT_SECONDS.days === 0) return "days";
+  if (totalSeconds % IDLE_UNIT_SECONDS.hours === 0) return "hours";
+  if (totalSeconds % IDLE_UNIT_SECONDS.minutes === 0) return "minutes";
+  return "seconds";
+}
+
+/**
+ * The units the picker lists. Seconds only when the shown value needs them:
+ * nobody picks a threshold in seconds, but a saved one must still be shown
+ * exactly.
+ */
+export function idleUnitsFor(unit: IdleUnit): readonly IdleUnit[] {
+  return unit === "seconds"
+    ? ["seconds", "minutes", "hours", "days"]
+    : ["minutes", "hours", "days"];
+}
+
+/** `null` when `draft` × `unit` is a whole number of seconds inside `bounds`. */
+export function idleDurationError(
   draft: string,
+  unit: IdleUnit,
   bounds: ChatAutoArchiveBounds,
 ): string | null {
   const trimmed = draft.trim();
-  if (trimmed.length === 0) return "Enter a number of seconds.";
-  if (!/^\d+$/.test(trimmed)) return "Enter a whole number of seconds.";
-  const seconds = Number(trimmed);
+  if (trimmed.length === 0) return "Enter a number.";
+  if (!/^\d+$/.test(trimmed)) return "Enter a whole number.";
+  const seconds = Number(trimmed) * IDLE_UNIT_SECONDS[unit];
   if (seconds < bounds.minSeconds || seconds > bounds.maxSeconds) {
-    return `Choose between ${String(bounds.minSeconds)} and ${String(bounds.maxSeconds)} seconds.`;
+    return `Choose between ${formatIdleSeconds(bounds.minSeconds)} and ${formatIdleSeconds(bounds.maxSeconds)}.`;
   }
   return null;
 }
 
 /**
- * The status sentence. No wall-clock promise: an epic nothing holds open is
- * swept when a host next opens it, which is what the second sentence says.
+ * The thresholds the picker offers by name. Anything else is "Custom", which
+ * opens a number-and-unit field.
  */
-export function chatAutoArchiveStatusLine(
-  policy: ChatAutoArchiveSetRequest,
-): string {
-  if (!policy.enabled) return "Off on all your hosts.";
-  return `After ${formatIdleSeconds(policy.idleSeconds)} of inactivity, on all your hosts. Applied when a host next looks at the chat's task.`;
+export const IDLE_PRESET_SECONDS: readonly number[] = [
+  3600, 21_600, 86_400, 259_200, 604_800, 2_592_000,
+];
+
+/** The presets inside the host's bounds, so no named choice is a refused write. */
+export function idlePresetsWithin(
+  bounds: ChatAutoArchiveBounds,
+): readonly number[] {
+  return IDLE_PRESET_SECONDS.filter(
+    (seconds) => seconds >= bounds.minSeconds && seconds <= bounds.maxSeconds,
+  );
 }
+
+/**
+ * The line under the options while the setting is on. No wall-clock promise:
+ * an epic nothing holds open is swept when a host next opens it.
+ */
+export const CHAT_AUTO_ARCHIVE_ON_FOOTNOTE =
+  "Archived when a host next opens the task. A new message brings a chat back.";
 
 const DURATION_UNITS: ReadonlyArray<{
   readonly seconds: number;

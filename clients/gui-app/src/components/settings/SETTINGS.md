@@ -266,6 +266,11 @@ predicates; it never imports the assembled index or the search consumer.
   `null` / `false` / `""` rendering the bare label. The theme slots pass
   `"Active"` there ("Light theme · Active"); the definition's label stays the
   searchable copy.
+- **`details` is the row's full-width tail.** Options a row's control
+  governs go in `details`, drawn on a line of their own under the label and
+  the control, across the row's whole width; `null` / `false` draw nothing,
+  which is how a row hides its options while its switch is off. Archive idle
+  agents automatically is the caller.
 - **Hand-built regions read the definition too.** The branch-prefix row keeps
   its bespoke layout (the input and its live preview share a line) and writes
   `data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}` and its
@@ -1177,19 +1182,26 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       absent. Gated on the selected host, so it has no search entry of its
       own: its label and keywords (archive, idle, inactive, auto, cleanup,
       timer) contribute to the Agents group. Controls: the main switch
-      (`enabled`), a seconds field (whole number inside the host's `bounds`,
-      committed on blur or Enter (not an Enter that confirms an IME
-      composition), an inline error and no write otherwise,
-      editable while the switch is off, 3600 clamped into the host's
-      `bounds` for a never-saved account, which is also what the switches
-      write), and
-      under the description "Also archive chats I created"
-      (`includeUserCreated`, off by default; terminal agents count as the
-      user's). Every write sends all three fields. The status line is the
-      threshold in words ("After 1 hour of inactivity, on all your hosts.
-      Applied when a host next looks at the chat's task."), "Off on all your
-      hosts." while disabled, and "Couldn't read the auto-archive setting from
-      this host." on a failed read. Controls stay disabled with no error until
+      (`enabled`), alone in the control slot. Its options sit in the row's
+      `details` slot, an inset group (`bg-foreground/3`, one option per line,
+      label and hint left, control right) drawn only while the policy has
+      loaded and the switch is on; closing it writes nothing. "Archive after"
+      is a preset picker (1 hour, 6 hours, 1 day, 3 days, 1 week, 30 days,
+      filtered to the host's `bounds`) that commits on pick, plus "Custom…",
+      which writes nothing and opens a number-and-unit field (minutes, hours,
+      days; seconds listed only when the saved value needs them; shown in the
+      largest unit that states the saved seconds exactly; committed on blur,
+      Enter (not an Enter that confirms an IME composition) or a unit change
+      when the result is inside `bounds`, an inline error and no write
+      otherwise). A saved value that is no preset shows as Custom with the
+      field open. "Include chats I started" (`includeUserCreated`, off by
+      default; terminal agent chats count as the user's) is the second line.
+      Under the group, a footnote: "Archived when a host next opens the task.
+      A new message brings a chat back." A never-saved account shows 3600
+      clamped into `bounds`, which is also what the switches write. Every
+      write sends all three fields. A failed read adds "Couldn't read the
+      auto-archive setting from this host." under the description. Controls
+      stay disabled with no error until
       the viewer id resolves and the read lands, and while a save is pending
       (with `AgentSpinningDots`). The client never schedules archiving: the
       host's sweep does, and a task nothing holds open is swept when a host

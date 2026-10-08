@@ -12,6 +12,13 @@ import { GENERAL } from "@/components/settings/panels/general-settings.definitio
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -22,8 +29,16 @@ import { trackSettingChanged } from "@/lib/analytics";
 import {
   chatAutoArchiveShownPolicy,
   CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS,
-  chatAutoArchiveStatusLine,
-  idleSecondsError,
+  CHAT_AUTO_ARCHIVE_ON_FOOTNOTE,
+  formatIdleSeconds,
+  IDLE_UNIT_LABELS,
+  IDLE_UNIT_SECONDS,
+  idleDurationError,
+  idlePresetsWithin,
+  idleUnitFor,
+  idleUnitsFor,
+  isIdleUnit,
+  type IdleUnit,
 } from "@/components/settings/panels/chat-auto-archive-copy";
 
 /**
@@ -51,7 +66,6 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   const query = useChatAutoArchivePolicyQuery();
   const setPolicy = useChatAutoArchiveSetMutation();
   const viewerUserId = useCloudChatViewerId();
-  const includeUserCreatedId = useId();
 
   // `undefined` until the read lands, which covers the unresolved viewer (the
   // read is disabled there), a read in flight and a failed read: every
@@ -61,7 +75,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   const disabled = data === undefined || setPolicy.isPending;
 
   // `onRejected` runs after the hook's own error toast, for the one write
-  // whose control holds local state: the threshold field.
+  // whose control holds local state: the custom threshold field.
   const save = (
     next: ChatAutoArchiveSetRequest,
     onRejected: (() => void) | null,
@@ -77,33 +91,12 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
     <SettingsRow
       row={GENERAL.definitions.chatAutoArchive}
       status={
-        <div className="flex flex-col gap-2">
-          <p>{GENERAL.definitions.chatAutoArchive.description}</p>
-          {/* Nothing until the read lands: before then the row knows no
-              policy, and the defaults' "Off" would be a claim, not a fact. */}
-          {query.isError ? <p>{CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS}</p> : null}
-          {data !== undefined ? (
-            <p>{chatAutoArchiveStatusLine(current)}</p>
-          ) : null}
+        query.isError ? (
           <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <Switch
-                id={includeUserCreatedId}
-                checked={current.includeUserCreated}
-                disabled={disabled}
-                onCheckedChange={(includeUserCreated) => {
-                  save({ ...current, includeUserCreated }, null);
-                }}
-              />
-              <Label htmlFor={includeUserCreatedId}>
-                Also archive chats I created
-              </Label>
-            </div>
-            <p>
-              Off: only chats agents created. Terminal agents count as yours.
-            </p>
+            <p>{GENERAL.definitions.chatAutoArchive.description}</p>
+            <p>{CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS}</p>
           </div>
-        </div>
+        ) : undefined
       }
       control={
         <div className="flex items-center gap-2">
@@ -114,31 +107,6 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
               variant={undefined}
             />
           ) : null}
-          {/* Keyed by the viewer: the draft and its error belong to the
-              person typing, and an account switch with Settings open must
-              neither show nor commit the outgoing account's edit. The query
-              partition cannot reach component state. While the viewer is
-              unresolved the read is disabled, so there is no draft to keep. */}
-          {viewerUserId.length > 0 ? (
-            <IdleSecondsInput
-              key={viewerUserId}
-              idleSeconds={current.idleSeconds}
-              bounds={data?.bounds ?? null}
-              disabled={disabled}
-              onCommit={(idleSeconds, onRejected) => {
-                save({ ...current, idleSeconds }, onRejected);
-              }}
-            />
-          ) : (
-            <IdleSecondsField
-              value={String(current.idleSeconds)}
-              error={null}
-              errorId={undefined}
-              disabled
-              onChange={null}
-              onCommit={null}
-            />
-          )}
           <Switch
             checked={current.enabled}
             disabled={disabled}
@@ -149,26 +117,175 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
           />
         </div>
       }
+      // The options configure what the switch turns on, so they are drawn
+      // only while it is on. Closing them writes nothing: the saved threshold
+      // and include choice are where they were when the switch comes back.
+      details={
+        data !== undefined && current.enabled ? (
+          <div className="flex flex-col gap-2.5">
+            {/* An alpha of the foreground rather than `bg-muted`: every
+                preset theme's dark variant collapses `--muted` onto the card
+                this group sits on. */}
+            <div className="overflow-hidden rounded-lg border border-border/60 bg-foreground/3">
+              <ChatAutoArchiveOptionLine
+                label="Archive after"
+                hint="Time since the chat's last activity"
+                renderControl={(controlId, hintId) => (
+                  // Keyed by the viewer: the custom draft and its error belong
+                  // to the person typing, and an account switch with Settings
+                  // open must neither show nor commit the outgoing account's
+                  // edit. The query partition cannot reach component state.
+                  <IdleThresholdControl
+                    key={viewerUserId}
+                    controlId={controlId}
+                    hintId={hintId}
+                    idleSeconds={current.idleSeconds}
+                    bounds={data.bounds}
+                    disabled={disabled}
+                    onCommit={(idleSeconds, onRejected) => {
+                      save({ ...current, idleSeconds }, onRejected);
+                    }}
+                  />
+                )}
+              />
+              <ChatAutoArchiveOptionLine
+                label="Include chats I started"
+                hint="Terminal agent chats count as yours"
+                renderControl={(controlId, hintId) => (
+                  <Switch
+                    id={controlId}
+                    checked={current.includeUserCreated}
+                    disabled={disabled}
+                    aria-describedby={hintId}
+                    onCheckedChange={(includeUserCreated) => {
+                      save({ ...current, includeUserCreated }, null);
+                    }}
+                  />
+                )}
+              />
+            </div>
+            <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+              <span
+                aria-hidden
+                className="size-1.5 shrink-0 rounded-full bg-success"
+              />
+              {CHAT_AUTO_ARCHIVE_ON_FOOTNOTE}
+            </p>
+          </div>
+        ) : null
+      }
     />
   );
 }
 
+/** One option inside the group: label and hint on the left, control on the right. */
+function ChatAutoArchiveOptionLine(props: {
+  readonly label: string;
+  readonly hint: string;
+  readonly renderControl: (controlId: string, hintId: string) => ReactNode;
+}): ReactNode {
+  const controlId = useId();
+  const hintId = useId();
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-border/40 px-4 py-3 first:border-t-0">
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <Label htmlFor={controlId}>{props.label}</Label>
+        <p id={hintId} className="text-ui-xs text-muted-foreground">
+          {props.hint}
+        </p>
+      </div>
+      <div className="ml-auto max-w-full">
+        {props.renderControl(controlId, hintId)}
+      </div>
+    </div>
+  );
+}
+
 /**
- * The threshold field. Editable while the main switch is off, so the value is
- * kept for the next enable. Commits on blur or Enter when the value changed
- * and is a whole number inside the HOST's bounds; anything else shows an
- * inline error and sends nothing.
+ * The threshold: a named preset, or "Custom…", which opens a number-and-unit
+ * field. A preset commits on pick; a saved value that is not a preset shows
+ * as Custom with its field open.
  */
-function IdleSecondsInput(props: {
+function IdleThresholdControl(props: {
+  readonly controlId: string;
+  readonly hintId: string;
   readonly idleSeconds: number;
-  readonly bounds: ChatAutoArchiveBounds | null;
+  readonly bounds: ChatAutoArchiveBounds;
+  readonly disabled: boolean;
+  readonly onCommit: (
+    idleSeconds: number,
+    onRejected: (() => void) | null,
+  ) => void;
+}): ReactNode {
+  const { controlId, hintId, idleSeconds, bounds, disabled, onCommit } = props;
+  const presets = idlePresetsWithin(bounds);
+  // "Custom…" picked by hand keeps the field open even once its value lands on
+  // a preset, so the field does not vanish under the cursor.
+  const [pickedCustom, setPickedCustom] = useState(false);
+  const custom = pickedCustom || !presets.includes(idleSeconds);
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <Select
+        value={custom ? "custom" : String(idleSeconds)}
+        disabled={disabled}
+        onValueChange={(value) => {
+          if (value === "custom") {
+            setPickedCustom(true);
+            return;
+          }
+          setPickedCustom(false);
+          const seconds = Number(value);
+          if (seconds !== idleSeconds) onCommit(seconds, null);
+        }}
+      >
+        <SelectTrigger
+          id={controlId}
+          aria-describedby={hintId}
+          className="w-[min(40vw,9rem)]"
+          size="sm"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {presets.map((seconds) => (
+            <SelectItem key={seconds} value={String(seconds)}>
+              {formatIdleSeconds(seconds)}
+            </SelectItem>
+          ))}
+          <SelectItem value="custom">Custom…</SelectItem>
+        </SelectContent>
+      </Select>
+      {custom ? (
+        <IdleDurationInput
+          idleSeconds={idleSeconds}
+          bounds={bounds}
+          disabled={disabled}
+          onCommit={onCommit}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The custom threshold: a whole number and a unit, shown in the largest unit
+ * that states the saved seconds exactly. Commits on blur or Enter, and on a
+ * unit change, when the result changed and is inside the HOST's bounds;
+ * anything else shows an inline error and sends nothing.
+ */
+function IdleDurationInput(props: {
+  readonly idleSeconds: number;
+  readonly bounds: ChatAutoArchiveBounds;
   readonly disabled: boolean;
   /** `onRejected` restores the field when the save fails. */
   readonly onCommit: (idleSeconds: number, onRejected: () => void) => void;
 }): ReactNode {
   const { idleSeconds, bounds, disabled, onCommit } = props;
   const errorId = useId();
-  const [draft, setDraft] = useState(String(idleSeconds));
+  const savedUnit = idleUnitFor(idleSeconds);
+  const savedAmount = String(idleSeconds / IDLE_UNIT_SECONDS[savedUnit]);
+  const [draft, setDraft] = useState(savedAmount);
+  const [unit, setUnit] = useState<IdleUnit>(savedUnit);
   const [error, setError] = useState<string | null>(null);
   // Adjusted during render, keyed on the SAVED value changing rather than on
   // the draft differing from it: a committed draft stays on screen while its
@@ -177,67 +294,47 @@ function IdleSecondsInput(props: {
   const [syncedIdleSeconds, setSyncedIdleSeconds] = useState(idleSeconds);
   if (syncedIdleSeconds !== idleSeconds) {
     setSyncedIdleSeconds(idleSeconds);
-    setDraft(String(idleSeconds));
+    setDraft(savedAmount);
+    setUnit(savedUnit);
     setError(null);
   }
 
-  const commitDraft = (value: string): void => {
-    if (bounds === null) return;
-    const validationError = idleSecondsError(value, bounds);
+  const commit = (value: string, nextUnit: IdleUnit): void => {
+    const validationError = idleDurationError(value, nextUnit, bounds);
     setError(validationError);
     if (validationError !== null) return;
-    const next = Number(value.trim());
+    const next = Number(value.trim()) * IDLE_UNIT_SECONDS[nextUnit];
     if (next === idleSeconds) return;
     // A rejected save restores the SAVED threshold rather than leaving the
     // refused draft on screen: the switches write the saved value, so a kept
     // draft would show one threshold while the host applies another. The
     // toast says why; the field says what is in force.
     onCommit(next, () => {
-      setDraft(String(idleSeconds));
+      setDraft(savedAmount);
+      setUnit(savedUnit);
       setError(null);
     });
   };
 
   return (
-    <IdleSecondsField
-      value={draft}
-      error={error}
-      errorId={errorId}
-      disabled={disabled}
-      onChange={(value) => {
-        setDraft(value);
-        setError(null);
-      }}
-      onCommit={commitDraft}
-    />
-  );
-}
-
-/** The threshold field's markup, shared by the live field and the placeholder. */
-function IdleSecondsField(props: {
-  readonly value: string;
-  readonly error: string | null;
-  readonly errorId: string | undefined;
-  readonly disabled: boolean;
-  readonly onChange: ((value: string) => void) | null;
-  readonly onCommit: ((value: string) => void) | null;
-}): ReactNode {
-  const { value, error, errorId, disabled, onChange, onCommit } = props;
-  return (
     <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2">
         <Input
-          value={value}
-          readOnly={onChange === null}
+          value={draft}
           inputMode="numeric"
-          aria-label="Idle seconds before archiving"
+          aria-label="Custom idle time"
           aria-invalid={error !== null}
           aria-describedby={error !== null ? errorId : undefined}
           disabled={disabled}
-          className="w-[min(30vw,6rem)] text-right"
+          className="w-[min(20vw,4.5rem)] text-right"
           size="sm"
-          onChange={(event) => onChange?.(event.target.value)}
-          onBlur={(event) => onCommit?.(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setError(null);
+          }}
+          onBlur={(event) => {
+            commit(event.target.value, unit);
+          }}
           onKeyDown={(event) => {
             // An Enter that confirms an IME composition is the IME's, not a
             // commit (the drafts dialog's guard, copied).
@@ -252,7 +349,30 @@ function IdleSecondsField(props: {
             event.currentTarget.blur();
           }}
         />
-        <span className="text-ui-sm text-muted-foreground">seconds</span>
+        <Select
+          value={unit}
+          disabled={disabled}
+          onValueChange={(value) => {
+            if (!isIdleUnit(value)) return;
+            setUnit(value);
+            commit(draft, value);
+          }}
+        >
+          <SelectTrigger
+            aria-label="Idle time unit"
+            className="w-[min(30vw,7rem)]"
+            size="sm"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {idleUnitsFor(unit).map((option) => (
+              <SelectItem key={option} value={option}>
+                {IDLE_UNIT_LABELS[option]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {error !== null ? (
         <p id={errorId} role="alert" className="text-ui-xs text-destructive">
