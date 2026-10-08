@@ -230,8 +230,9 @@ export type HostListItem = {
    */
   sandboxState?: HostSandboxState | null;
   /**
-   * With `?include=sandboxState`: the out-of-credits flag on a `suspended` or
-   * `stopped` sandbox. `null` on a personal host.
+   * With `?include=sandboxState`: the stored out-of-credits flag, sent for
+   * every state and meaningful on a row at rest; a destroyed row keeps its
+   * last value. `null` on a personal host.
    */
   sandboxFrozen?: boolean | null;
   /**

@@ -162,7 +162,10 @@ export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
 export interface RemoteHostSandboxFacts {
   /** `null` before the control plane's first state post. */
   readonly state: HostSandboxState | null;
-  /** Frozen for lack of credits; only ever true on a suspended or stopped row. */
+  /**
+   * Frozen for lack of credits: the stored flag, meaningful on a row at rest;
+   * a destroyed row keeps its last value.
+   */
   readonly frozen: boolean;
   readonly profile: HostProfile | null;
 }
