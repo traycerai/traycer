@@ -39,6 +39,7 @@ function renderPreview(
       onTransformChange={null}
       doubleClickOverride={null}
       onDecodeError={null}
+      toolbarActions={null}
     />,
   );
 }

@@ -383,12 +383,12 @@ const FLAT_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
 
 describe("dragging in the sidebar rail", () => {
   it("moves a panel past its neighbour, placed by id", () => {
-    // Artifacts sits at 40..76 and Terminals at 80..116 (centre 98). A slot is
+    // Artifacts sits at 40..76 and Files at 80..116 (centre 98). A slot is
     // claimed when the leading edge passes the neighbour's centre (L-143).
     // The engine's grab point is the move that crosses the 6px activation
     // distance, which this helper sends at clientY:8, so a final clientY:40
     // travels 32 past that grab point - carrying Artifacts' bottom edge to
-    // 40 + 32 + 36 = 108, past Terminals' centre at 98 and short of Browsers'
+    // 40 + 32 + 36 = 108, past Files' centre at 98 and short of Terminals'
     // at 138.
     setRail(FLAT_RAIL);
     const nodes = mountRail(FLAT_RAIL);
@@ -397,8 +397,9 @@ describe("dragging in the sidebar rail", () => {
 
     expect(railOrder()).toEqual([
       "chats",
-      "terminals",
+      "files",
       "artifacts",
+      "terminals",
       "browsers",
       "git-diff",
       "pull-requests",
@@ -444,6 +445,7 @@ describe("dragging in the sidebar rail", () => {
       "railAgents",
       "stack:railAgents+railArtifacts",
       "railArtifacts",
+      "railFiles",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -457,7 +459,7 @@ describe("dragging in the sidebar rail", () => {
     // A divider the user added between Chats and Artifacts (which the drop
     // pushes to 52..88, centre 70). The same clientY:40 (32px past the
     // clientY:8 grab point) carries the divider's leading edge to 80, past
-    // Artifacts' centre and short of Terminals' at 110, so it settles right
+    // Artifacts' centre and short of Files' at 110, so it settles right
     // after Artifacts instead of before it.
     const entries: ReadonlyArray<RailEntry> = [
       ...FLAT_RAIL.slice(0, 1),
@@ -473,6 +475,7 @@ describe("dragging in the sidebar rail", () => {
       "chats",
       "artifacts",
       railDividerId(1),
+      "files",
       "terminals",
       "browsers",
       "git-diff",

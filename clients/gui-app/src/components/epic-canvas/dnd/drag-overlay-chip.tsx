@@ -51,6 +51,7 @@ import {
   isBrowserSessionTileRef,
   isCommGraphTileRef,
   isDeletedArtifactsTileRef,
+  isEpicFileTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
@@ -68,6 +69,7 @@ import {
   type SnapshotDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
+import { epicFileViewer } from "@/lib/files/viewer-registry";
 import {
   gitBundleGroupLabel,
   gitDiffRepositoryContextLabel,
@@ -313,6 +315,17 @@ function EpicCanvasNodeDragOverlay(props: {
     return (
       <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
         <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      </m.div>
+    );
+  }
+  if (isEpicFileTileRef(props.node)) {
+    const viewer = epicFileViewer(props.node.path);
+    return (
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+        <viewer.Icon
+          className={cn("size-3.5 shrink-0", viewer.iconClassName)}
+        />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
     );

@@ -310,6 +310,7 @@ function samplePanelDefinition(panelId: LeftPanelId): LeftPanelDefinition {
 const SAMPLE_PANEL_BODIES: Readonly<Record<LeftPanelId, () => ReactNode>> = {
   chats: SampleAgentsBody,
   artifacts: SampleArtifactsBody,
+  files: sampleEmptyBody("files"),
   terminals: sampleEmptyBody("terminals"),
   browsers: sampleEmptyBody("browsers"),
   "git-diff": sampleEmptyBody("git-diff"),

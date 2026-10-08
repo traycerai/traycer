@@ -1,6 +1,4 @@
 import {
-  useCallback,
-  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -8,7 +6,10 @@ import {
   type PointerEvent as ReactPointerEvent,
   type Ref,
 } from "react";
+import { SandboxFrame } from "@/components/sandbox/sandbox-frame";
 import { cn } from "@/lib/utils";
+import type { SandboxSize } from "@/lib/sandbox/bridge-host";
+import type { SandboxPermission } from "@/lib/sandbox/sandbox-url";
 
 export interface WireframeIframeProps {
   readonly htmlContent: string;
@@ -33,78 +34,7 @@ const MAX_HEIGHT_MULTIPLIER = 3;
 const MANUAL_MAX_HEIGHT_MULTIPLIER = 4;
 const KEYBOARD_RESIZE_STEP_PX = 16;
 const POINTER_DRAG_THRESHOLD_PX = 4;
-// A swallowed reporter must not suppress ordinary ResizeObserver reports
-// indefinitely. After this window, unsolicited current-generation reports are
-// accepted again; a matching reply clears the wait immediately.
-const MEASURE_REQUEST_TIMEOUT_MS = 1_000;
-const HEIGHT_MESSAGE_MARKER = "traycer:wireframe:height:v1";
-const MEASURE_REQUEST_MARKER = "traycer:wireframe:measure-request:v1";
-const INITIAL_DOCTYPE_PATTERN = /^\s*<!doctype(?:\s+[^>]*)?>/i;
-function buildHeightMeasurementScript(documentGeneration: number): string {
-  return `
-<script>
-(() => {
-  const documentGeneration = ${documentGeneration};
-  const reportHeight = (requestId) => {
-    const body = document.body;
-    const bodyRect = body?.getBoundingClientRect();
-    const bodyStyle = body === null ? null : window.getComputedStyle(body);
-    const bodyMarginHeight =
-      Number.parseFloat(bodyStyle?.marginTop ?? "0") +
-      Number.parseFloat(bodyStyle?.marginBottom ?? "0");
-    const bodyHeight =
-      Math.max(body?.offsetHeight ?? 0, bodyRect?.height ?? 0) + bodyMarginHeight;
-    const documentElement = document.documentElement;
-    const viewportHeight = documentElement.clientHeight;
-    const documentHeight =
-      documentElement.scrollHeight > viewportHeight
-        ? documentElement.scrollHeight
-        : 0;
-    window.parent.postMessage(
-      {
-        marker: "${HEIGHT_MESSAGE_MARKER}",
-        height: Math.max(bodyHeight, documentHeight),
-        documentGeneration,
-        requestId,
-      },
-      "*",
-    );
-  };
-
-  window.addEventListener("message", (event) => {
-    if (event.source !== window.parent) return;
-    const data = event.data;
-    if (typeof data !== "object" || data === null) return;
-    if (data.marker !== "${MEASURE_REQUEST_MARKER}") return;
-    if (data.documentGeneration !== documentGeneration) return;
-    if (typeof data.requestId !== "number" || !Number.isFinite(data.requestId)) return;
-    reportHeight(data.requestId);
-  });
-
-  const observeDocument = () => {
-    const observer = new ResizeObserver(() => reportHeight(null));
-    if (document.body !== null) observer.observe(document.body);
-    observer.observe(document.documentElement);
-    reportHeight(null);
-  };
-
-  if (document.readyState === "complete") {
-    observeDocument();
-  } else {
-    window.addEventListener("load", observeDocument, { once: true });
-  }
-})();
-</script>`;
-}
-
-function buildAutoDocument(
-  htmlContent: string,
-  documentGeneration: number,
-): string {
-  const reporter = buildHeightMeasurementScript(documentGeneration);
-  const doctype = INITIAL_DOCTYPE_PATTERN.exec(htmlContent)?.[0] ?? "";
-  return `${doctype}${reporter}${htmlContent.slice(doctype.length)}`;
-}
+const NO_PERMISSIONS: readonly SandboxPermission[] = [];
 
 interface ActiveResizeDrag {
   readonly pointerId: number;
@@ -112,36 +42,6 @@ interface ActiveResizeDrag {
   readonly startHeight: number;
   readonly startManualHeight: number | null;
   readonly crossedThreshold: boolean;
-}
-
-interface AwaitingMeasurement {
-  readonly documentGeneration: number;
-  readonly requestId: number;
-}
-
-interface HeightMessage {
-  readonly documentGeneration: number;
-  readonly height: number;
-  readonly requestId: number | null;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function parseHeightMessage(data: unknown): HeightMessage | null {
-  if (typeof data !== "object" || data === null) return null;
-  if (!("marker" in data) || data.marker !== HEIGHT_MESSAGE_MARKER) return null;
-  if (!("height" in data) || !isFiniteNumber(data.height)) return null;
-  if (!("documentGeneration" in data)) return null;
-  if (!isFiniteNumber(data.documentGeneration)) return null;
-  if (!("requestId" in data)) return null;
-  if (data.requestId !== null && !isFiniteNumber(data.requestId)) return null;
-  return {
-    documentGeneration: data.documentGeneration,
-    height: data.height,
-    requestId: data.requestId,
-  };
 }
 
 function clampAutoHeight(height: number, viewportHeight: number): number {
@@ -166,20 +66,17 @@ function clampManualHeight(height: number, maxHeight: number): number {
   return Math.max(MIN_HEIGHT_PX, Math.min(maxHeight, height));
 }
 
+function ignoreSandboxEvent(): void {}
+
 /**
- * Sandboxed preview iframe. `allow-scripts` enables artifact-authored
- * interactions and the appended height reporter. Deliberately omitting
- * `allow-same-origin` gives the document an opaque origin, so its scripts
- * cannot access the parent DOM, storage, or cookies. The remaining sandbox
- * restrictions also block top-level navigation, form submission, and popups.
+ * A wireframe preview in the shared sandbox frame (D12): the same opaque,
+ * own-origin loader agent pages and MCP Apps use, always https-only because
+ * artifact text is peer-editable. Wireframes keep their light srcdoc look
+ * (`sandboxTheme`) and get the theme variables and link handling for free.
  *
- * The opaque origin makes `contentDocument` inaccessible from the parent.
- * Auto-sized previews therefore inject a trusted script before artifact
- * markup (but after an initial doctype) and receive its ResizeObserver
- * measurements via postMessage. Putting the reporter first prevents malformed
- * trailing raw-text/comment contexts from swallowing it. Document generations
- * reject reports queued by an earlier srcdoc, while request IDs correlate
- * explicit reset/load measurements with their replies.
+ * The frame's bootstrap reports the document height on every resize, so the
+ * auto-sized preview just follows the latest report. A new document is a new
+ * frame (`SandboxFrame` remounts on content), so no stale report can arrive.
  */
 export function WireframeIframe(props: WireframeIframeProps) {
   const { htmlContent, title, className, mode, ref: forwardedRef } = props;
@@ -188,12 +85,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
   const pendingAutoMeasurementRef = useRef<number | null>(null);
   const manualHeightRef = useRef<number | null>(null);
   const activeResizeDragRef = useRef<ActiveResizeDrag | null>(null);
-  const awaitingMeasurementRef = useRef<AwaitingMeasurement | null>(null);
-  const measurementRequestTimeoutRef = useRef<number | null>(null);
-  const measurementRequestWindowRef = useRef<Window | null>(null);
-  const nextMeasurementRequestIdRef = useRef(0);
   const [autoHeightState, setAutoHeightState] = useState(() => ({
-    documentGeneration: 1,
     htmlContent,
     height: MIN_HEIGHT_PX,
   }));
@@ -204,13 +96,8 @@ export function WireframeIframe(props: WireframeIframeProps) {
   );
 
   if (autoHeightState.htmlContent !== htmlContent) {
-    setAutoHeightState({
-      documentGeneration: autoHeightState.documentGeneration + 1,
-      htmlContent,
-      height: MIN_HEIGHT_PX,
-    });
+    setAutoHeightState({ htmlContent, height: MIN_HEIGHT_PX });
   }
-  const documentGeneration = autoHeightState.documentGeneration;
   const autoHeight =
     autoHeightState.htmlContent === htmlContent
       ? autoHeightState.height
@@ -225,112 +112,15 @@ export function WireframeIframe(props: WireframeIframeProps) {
     }
   };
 
-  const clearMeasurementWait = useCallback((): void => {
-    const timeoutId = measurementRequestTimeoutRef.current;
-    const requestWindow = measurementRequestWindowRef.current;
-    if (timeoutId !== null && requestWindow !== null) {
-      requestWindow.clearTimeout(timeoutId);
-    }
-    measurementRequestTimeoutRef.current = null;
-    measurementRequestWindowRef.current = null;
-    awaitingMeasurementRef.current = null;
-  }, []);
-
-  const requestIframeMeasurement = useCallback(
-    (iframe: HTMLIFrameElement, generation: number): void => {
-      const win = iframe.ownerDocument.defaultView;
-      if (win === null) return;
-      clearMeasurementWait();
-
-      const requestId = nextMeasurementRequestIdRef.current + 1;
-      nextMeasurementRequestIdRef.current = requestId;
-      const awaitingMeasurement = {
-        documentGeneration: generation,
-        requestId,
-      };
-      awaitingMeasurementRef.current = awaitingMeasurement;
-      measurementRequestWindowRef.current = win;
-      measurementRequestTimeoutRef.current = win.setTimeout(() => {
-        const awaiting = awaitingMeasurementRef.current;
-        if (awaiting === null) return;
-        if (awaiting.documentGeneration !== generation) return;
-        if (awaiting.requestId !== requestId) return;
-        awaitingMeasurementRef.current = null;
-        measurementRequestTimeoutRef.current = null;
-        measurementRequestWindowRef.current = null;
-      }, MEASURE_REQUEST_TIMEOUT_MS);
-      iframe.contentWindow?.postMessage(
-        {
-          marker: MEASURE_REQUEST_MARKER,
-          documentGeneration: generation,
-          requestId,
-        },
-        "*",
-      );
-    },
-    [clearMeasurementWait],
-  );
-  const requestMeasurementFromEffect = useEffectEvent(
-    (iframe: HTMLIFrameElement, generation: number): void => {
-      requestIframeMeasurement(iframe, generation);
-    },
-  );
-
   useLayoutEffect(() => {
-    clearMeasurementWait();
     lastAutoMeasurementRef.current = null;
     pendingAutoMeasurementRef.current = null;
-  }, [clearMeasurementWait, htmlContent]);
+  }, [htmlContent]);
 
   useLayoutEffect(() => {
     if (mode !== "auto") return;
-    const iframe = innerRef.current;
-    if (iframe === null) return;
-    const win = iframe.ownerDocument.defaultView;
-    if (win === null) return;
-
-    const applyAutoHeight = (measurement: number): void => {
-      const clamped = clampAutoHeight(measurement, win.innerHeight);
-      setAutoHeightState({
-        documentGeneration,
-        htmlContent,
-        height: clamped,
-      });
-    };
-
-    const onMessage = (event: MessageEvent<unknown>): void => {
-      if (event.source !== iframe.contentWindow) return;
-      const message = parseHeightMessage(event.data);
-      if (message === null) return;
-      if (message.documentGeneration !== documentGeneration) return;
-
-      const awaiting = awaitingMeasurementRef.current;
-      if (awaiting !== null) {
-        if (
-          message.requestId !== awaiting.requestId ||
-          message.documentGeneration !== awaiting.documentGeneration
-        ) {
-          return;
-        }
-        clearMeasurementWait();
-      } else if (message.requestId !== null) {
-        return;
-      }
-
-      if (manualHeightRef.current !== null) return;
-      const drag = activeResizeDragRef.current;
-      if (drag !== null) {
-        if (!drag.crossedThreshold) {
-          pendingAutoMeasurementRef.current = message.height;
-        }
-        return;
-      }
-      lastAutoMeasurementRef.current = message.height;
-      applyAutoHeight(message.height);
-    };
-
     const onResize = (): void => {
-      setViewportHeight(win.innerHeight);
+      setViewportHeight(window.innerHeight);
       const measurement = lastAutoMeasurementRef.current;
       if (measurement === null) return;
       if (
@@ -339,25 +129,28 @@ export function WireframeIframe(props: WireframeIframeProps) {
       ) {
         return;
       }
-      applyAutoHeight(measurement);
+      setAutoHeightState({
+        htmlContent,
+        height: clampAutoHeight(measurement, window.innerHeight),
+      });
     };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [htmlContent, mode]);
 
-    const onLoad = (): void => {
-      if (lastAutoMeasurementRef.current !== null) return;
-      requestMeasurementFromEffect(iframe, documentGeneration);
-    };
-
-    win.addEventListener("message", onMessage);
-    win.addEventListener("resize", onResize);
-    iframe.addEventListener("load", onLoad);
-
-    return () => {
-      win.removeEventListener("message", onMessage);
-      win.removeEventListener("resize", onResize);
-      iframe.removeEventListener("load", onLoad);
-      clearMeasurementWait();
-    };
-  }, [clearMeasurementWait, documentGeneration, htmlContent, mode]);
+  const handleSize = (size: SandboxSize): void => {
+    if (mode !== "auto" || size.height === null) return;
+    if (activeResizeDragRef.current !== null) {
+      pendingAutoMeasurementRef.current = size.height;
+      return;
+    }
+    lastAutoMeasurementRef.current = size.height;
+    if (manualHeightRef.current !== null) return;
+    setAutoHeightState({
+      htmlContent,
+      height: clampAutoHeight(size.height, window.innerHeight),
+    });
+  };
 
   const applyLatestAutoMeasurement = (): void => {
     const pendingMeasurement = pendingAutoMeasurementRef.current;
@@ -366,14 +159,12 @@ export function WireframeIframe(props: WireframeIframeProps) {
       pendingAutoMeasurementRef.current = null;
     }
 
-    const iframe = innerRef.current;
-    const win = iframe?.ownerDocument.defaultView;
     const measurement = lastAutoMeasurementRef.current;
     const clamped =
-      win === null || win === undefined || measurement === null
+      measurement === null
         ? MIN_HEIGHT_PX
-        : clampAutoHeight(measurement, win.innerHeight);
-    setAutoHeightState({ documentGeneration, htmlContent, height: clamped });
+        : clampAutoHeight(measurement, window.innerHeight);
+    setAutoHeightState({ htmlContent, height: clamped });
   };
 
   const finishResizeDrag = (
@@ -448,12 +239,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
   const handleDoubleClick = (): void => {
     manualHeightRef.current = null;
     setManualHeight(null);
-    pendingAutoMeasurementRef.current = null;
     applyLatestAutoMeasurement();
-    const iframe = innerRef.current;
-    if (iframe !== null) {
-      requestIframeMeasurement(iframe, documentGeneration);
-    }
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -478,23 +264,22 @@ export function WireframeIframe(props: WireframeIframeProps) {
 
   return (
     <>
-      <iframe
+      <SandboxFrame
         ref={setRef}
+        html={htmlContent}
+        kind="wireframe"
         title={title}
-        // Scripts enable wireframe interactions and height reporting. Omitting
-        // allow-same-origin keeps the frame isolated behind an opaque origin.
-        sandbox="allow-scripts"
-        srcDoc={
-          mode === "auto"
-            ? buildAutoDocument(htmlContent, documentGeneration)
-            : htmlContent
-        }
+        networkPolicy="https-only"
+        appCsp={null}
+        permissions={NO_PERMISSIONS}
+        appRequests={null}
         className={cn("tc-node-wireframe__iframe", className)}
-        style={
-          mode === "auto"
-            ? { height: `${effectiveHeight}px`, width: "100%" }
-            : { height: "100%", width: "100%" }
-        }
+        height={mode === "auto" ? effectiveHeight : null}
+        onSize={handleSize}
+        onStatus={ignoreSandboxEvent}
+        onRequestTeardown={ignoreSandboxEvent}
+        displayMode="inline"
+        onBridge={null}
       />
       {mode === "auto" ? (
         <>

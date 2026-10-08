@@ -4926,6 +4926,30 @@ function parentIdField(parentBlockId: string | null | undefined): {
     : { parentId: parentBlockId };
 }
 
+/**
+ * A tool call's page stamp, or `null` for a record that never carried the
+ * field. Same hazard as `assistantImageResolutions`: a snapshot taken on a
+ * SHALLOW parse path (`ChatStreamClient`, live and `1.6` lines alike) runs no
+ * zod defaults, so a block a pre-pages host stored arrives typed as carrying
+ * `page: null` and genuinely `undefined` - and every `page !== null` check
+ * downstream would promote it to a page row with no page.
+ */
+function toolCallPageStamp(
+  block: Extract<ContentBlock, { type: "tool_call" }>,
+): Extract<ContentBlock, { type: "tool_call" }>["page"] {
+  // Read through `unknown` for the reason `assistantImageResolutions` gives.
+  const page: unknown = block.page;
+  return page === undefined ? null : block.page;
+}
+
+/** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+function toolCallMcpAppStamp(
+  block: Extract<ContentBlock, { type: "tool_call" }>,
+): Extract<ContentBlock, { type: "tool_call" }>["mcpApp"] {
+  const mcpApp: unknown = block.mcpApp;
+  return mcpApp === undefined ? null : block.mcpApp;
+}
+
 const BLOCK_HANDLERS: {
   [K in ContentBlock["type"]]: (
     block: Extract<ContentBlock, { type: K }>,
@@ -5000,6 +5024,8 @@ const BLOCK_HANDLERS: {
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
+    page: toolCallPageStamp(block),
+    mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",

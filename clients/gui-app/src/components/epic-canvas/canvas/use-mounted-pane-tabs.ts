@@ -2,7 +2,8 @@
  * Per-pane keep-alive policy for canvas tab bodies (paseo
  * `use-mounted-tab-set` port + traycer terminal pinning):
  *
- *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab) ∪ retained chats
+ *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab)
+ *             ∪ retained chats ∪ retained pages
  *
  * - The LRU tracks the most recently ACTIVE non-terminal, non-chat tabs, so
  *   switching back to a recently used editor/spec is a visibility toggle
@@ -53,6 +54,15 @@
  *   unreclaimable `chat.subscribe` sockets, none of them visible. Revisit
  *   this if that socket count bites before the churn does.
  *
+ * - HTML epic-file tabs (agent pages) are RETAINED too, outside the LRU: the
+ *   page is a running document - its scripts' state, what the reader typed
+ *   into it - that a remount throws away (D10). They are kept for the
+ *   `RETAINED_PANE_PAGE_CAP` most recently active, read from the same
+ *   store-resident `activationHistory` chats use, and like chats they do not
+ *   collapse while the pane is hidden: backgrounding a task must not reload
+ *   its pages. The cap is what keeps a pane with many pages open from
+ *   holding that many live frames.
+ *
  * Recency is recorded with React's "adjust state during render" pattern (a
  * guarded `setState` while rendering, same idiom as `EpicTabHost`'s pane
  * recency): the derivation reads the previous committed list + the new
@@ -63,6 +73,8 @@
  */
 import { useMemo, useState } from "react";
 import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
+import { epicFileViewer } from "@/lib/files/viewer-registry";
+import { TILE_KIND_EPIC_FILE } from "@/stores/epics/canvas/tile-kinds";
 import {
   isRetainablePaneChat,
   RETAINED_PANE_CHAT_CAP,
@@ -71,6 +83,37 @@ import {
 
 /** Max recently-active non-terminal, non-chat tab bodies kept mounted per pane. */
 export const MOUNTED_PANE_TAB_LRU_CAP = 3;
+
+/** Max recently-active HTML epic-file (page) tabs kept mounted per pane. */
+export const RETAINED_PANE_PAGE_CAP = 4;
+
+/** An epic-file tab its HTML viewer renders: a live page in a frame. */
+export function isRetainablePanePage(tab: EpicCanvasTileRef): boolean {
+  return (
+    tab.type === TILE_KIND_EPIC_FILE && epicFileViewer(tab.path).kind === "html"
+  );
+}
+
+/**
+ * The retained page tabs for one pane, most recently active first: the
+ * active tab, then the pane's activation history.
+ */
+function retainedPanePageInstanceIds(
+  activeTabId: string | null,
+  activationHistory: ReadonlyArray<string>,
+  tileByInstanceId: ReadonlyMap<string, EpicCanvasTileRef>,
+): ReadonlyArray<string> {
+  const retained: string[] = [];
+  for (const instanceId of [activeTabId, ...activationHistory]) {
+    if (retained.length >= RETAINED_PANE_PAGE_CAP) break;
+    if (instanceId === null || retained.includes(instanceId)) continue;
+    const tile = tileByInstanceId.get(instanceId);
+    if (tile !== undefined && isRetainablePanePage(tile)) {
+      retained.push(instanceId);
+    }
+  }
+  return retained;
+}
 
 /**
  * Terminal-backed surfaces keep their xterm buffers mounted for the pane's
@@ -144,8 +187,8 @@ export function useMountedPaneTabs(
 ): ReadonlySet<string> {
   const { activeTabId, pane, tabs, paneVisible } = input;
 
-  // Terminals are pinned; chats are retained by their own policy below;
-  // everything else competes for LRU slots.
+  // Terminals are pinned; chats and pages are retained by their own policies
+  // below; everything else competes for LRU slots.
   const { pinnedIds, availableLruIds, tileByInstanceId } = useMemo(() => {
     const pinned = new Set<string>();
     const available = new Set<string>();
@@ -154,7 +197,7 @@ export function useMountedPaneTabs(
       byInstanceId.set(tab.instanceId, tab);
       if (isPersistentTerminalSurface(tab)) {
         pinned.add(tab.instanceId);
-      } else if (!isRetainablePaneChat(tab)) {
+      } else if (!isRetainablePaneChat(tab) && !isRetainablePanePage(tab)) {
         available.add(tab.instanceId);
       }
     }
@@ -187,6 +230,16 @@ export function useMountedPaneTabs(
     [pane, tileByInstanceId],
   );
 
+  const retainedPageIds = useMemo(
+    () =>
+      retainedPanePageInstanceIds(
+        activeTabId,
+        pane.activationHistory,
+        tileByInstanceId,
+      ),
+    [activeTabId, pane.activationHistory, tileByInstanceId],
+  );
+
   const [committedLru, setCommittedLru] =
     useState<ReadonlyArray<string>>(EMPTY_LRU);
   const mountedTabLru = deriveMountedTabLru({
@@ -211,6 +264,7 @@ export function useMountedPaneTabs(
     const mounted = new Set<string>(committedLru);
     for (const id of pinnedIds) mounted.add(id);
     for (const id of retainedChatIds) mounted.add(id);
+    for (const id of retainedPageIds) mounted.add(id);
     return mounted;
-  }, [committedLru, pinnedIds, retainedChatIds]);
+  }, [committedLru, pinnedIds, retainedChatIds, retainedPageIds]);
 }

@@ -117,6 +117,7 @@ describe("<TabSwitcherSheet />", () => {
     expect(tabIds()).toEqual([
       "mobile-switcher-tab-chats",
       "mobile-switcher-tab-artifacts",
+      "mobile-switcher-tab-files",
       "mobile-switcher-tab-terminals",
       "mobile-switcher-tab-browsers",
       "mobile-switcher-tab-git-diff",

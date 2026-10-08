@@ -52,6 +52,7 @@ import type {
 import {
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
+  EMPTY_FILES_SLICE,
   EMPTY_PROJECTED_SLICES,
 } from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -484,6 +485,7 @@ function createDirtyEpicHandle(
     // Empty is this field's TRUE value on a legacy connection - the `@1` wire
     // carries no comment records at all - so the poll remains the source there.
     commentThreads: EMPTY_COMMENT_THREADS_SLICE,
+    files: EMPTY_FILES_SLICE,
     // Keyed by ARTIFACT id since the cutover - a room hosts many bodies, and
     // `artifact.subscribe` has no rooms at all.
     artifactRooms: { stateByArtifactId: {}, bodySyncingByArtifactId: {} },

@@ -1282,6 +1282,8 @@ export function AssistantSegment({
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
+          page={segment.page}
+          mcpApp={segment.mcpApp}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null

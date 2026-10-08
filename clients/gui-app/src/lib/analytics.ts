@@ -600,6 +600,7 @@ export function analyticsTargetForCanvasTileType(
     case "terminal-agent":
       return "terminal_agent";
     case "workspace-file":
+    case "epic-file":
       return "file";
     case "git-diff":
     case "snapshot-diff":
@@ -1301,6 +1302,7 @@ const ANALYTICS_LAYOUT_REGIONS = new Set<string>(
     railTerminals: true,
     railBrowsers: true,
     railArtifacts: true,
+    railFiles: true,
     railGitDiff: true,
     railPullRequests: true,
     railFileTree: true,

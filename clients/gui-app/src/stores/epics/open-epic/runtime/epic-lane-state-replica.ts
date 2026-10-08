@@ -84,11 +84,13 @@ import type {
   DeletedArtifactProjection,
   DeletedArtifactsSlice,
   EpicHeader,
+  FilesSlice,
 } from "../types";
 import {
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
+  EMPTY_FILES_SLICE,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "../types";
@@ -159,6 +161,7 @@ export interface EpicLaneStateSlices {
   readonly epicHeader: EpicHeader;
   readonly roleClaims: readonly RoleClaim[];
   readonly commentThreads: CommentThreadsSlice;
+  readonly files: FilesSlice;
 }
 
 /**
@@ -173,6 +176,7 @@ export const EMPTY_LANE_STATE_SLICES: EpicLaneStateSlices = Object.freeze({
   epicHeader: EMPTY_PROJECTED_SLICES.epic,
   roleClaims: Object.freeze([]),
   commentThreads: EMPTY_COMMENT_THREADS_SLICE,
+  files: EMPTY_FILES_SLICE,
 });
 
 export interface EpicLaneStateReplicaSources {
@@ -306,8 +310,37 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
       a.roleClaims.map((claim) => claim.claimId),
       b.roleClaims.map((claim) => claim.claimId),
     ) &&
-    commentThreadsEq(a.commentThreads, b.commentThreads)
+    commentThreadsEq(a.commentThreads, b.commentThreads) &&
+    filesSliceEq(a.files, b.files)
   );
+}
+
+/**
+ * Files rows replace as a set, so identity is the common unchanged answer; a
+ * replacement that restates the same records (a snapshot after a resume gap)
+ * must not republish them, or every open Files panel re-renders for nothing.
+ */
+function filesSliceEq(a: FilesSlice, b: FilesSlice): boolean {
+  if (a === b) return true;
+  if (a.served !== b.served || a.records.length !== b.records.length) {
+    return false;
+  }
+  return a.records.every((left, index) => {
+    const right = b.records[index];
+    return (
+      left.path === right.path &&
+      left.entry.sha256 === right.entry.sha256 &&
+      left.entry.status === right.entry.status &&
+      left.entry.deletedAt === right.entry.deletedAt &&
+      left.entry.byteLength === right.entry.byteLength &&
+      left.entry.createdAt === right.entry.createdAt &&
+      left.localState.kind === right.localState.kind &&
+      (left.localState.kind !== "downloading" ||
+        right.localState.kind !== "downloading" ||
+        (left.localState.received === right.localState.received &&
+          left.localState.total === right.localState.total))
+    );
+  });
 }
 
 /**
@@ -351,6 +384,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   const threadsByArtifactId: Record<string, CommentThreadWire[]> = {};
   let roleClaims: readonly RoleClaim[] = EMPTY_LANE_STATE_SLICES.roleClaims;
   let epicHeader: EpicHeader = EMPTY_LANE_STATE_SLICES.epicHeader;
+  let files: FilesSlice = EMPTY_LANE_STATE_SLICES.files;
 
   for (const held of rows) {
     const row = held.row;
@@ -409,6 +443,9 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       case "role-claims":
         roleClaims = row.claims;
         break;
+      case "files":
+        files = { served: true, records: row.files };
+        break;
       case "epic-meta":
         epicHeader = { title: row.meta.title, updatedAt: row.meta.updatedAt };
         break;
@@ -439,6 +476,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       Object.keys(threadsByArtifactId).length === 0
         ? EMPTY_COMMENT_THREADS_SLICE
         : { byArtifactId: threadsByArtifactId },
+    files,
   };
 }
 

@@ -10,6 +10,7 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
 import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
+import { sandboxAssets } from "../gui-app/vite/sandbox-assets";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
 import {
   DEV_ALLOW_LAN_BACKEND_ENV,
@@ -460,6 +461,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       react(),
       tailwindcss(),
       pdfjsAssets(),
+      sandboxAssets(),
       // Emitted JS as pure ASCII: one character above U+00FF makes the engine
       // keep a whole chunk's source as UTF-16 (see the plugin).
       asciiOnlyOutput(),

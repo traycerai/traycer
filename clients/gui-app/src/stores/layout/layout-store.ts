@@ -12,7 +12,7 @@ import {
 import {
   normalizeRail,
   RAIL_REGION_BY_PANEL,
-  railFromPanelIdOrder,
+  railPanelEntriesFromIds,
   railStackId,
   railVisibilityFor,
   type RailEntry,
@@ -587,7 +587,7 @@ function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
   );
   const panelIds = groups.flat();
   if (panelIds.length === 0) return DEFAULT_ARRANGEMENT.rail;
-  const rail = railFromPanelIdOrder(panelIds);
+  const rail = railPanelEntriesFromIds(panelIds);
   const links = groups.flatMap((group): RailEntry[] => {
     const members = group.flatMap((panelId) => {
       const regionId = carriedRailRegion(panelId);
