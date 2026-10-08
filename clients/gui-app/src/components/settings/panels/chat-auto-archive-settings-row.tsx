@@ -2,7 +2,7 @@
  * Docs: see ../SETTINGS.md (General ▸ Agents).
  * Update that file whenever this settings surface changes.
  */
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import type {
   ChatAutoArchiveBounds,
   ChatAutoArchiveSetRequest,
@@ -203,8 +203,16 @@ function ChatAutoArchiveOptionLine(props: {
 
 /**
  * The threshold: a named preset, or "Custom…", which opens a number-and-unit
- * field. A preset commits on pick; a saved value that is not a preset shows
- * as Custom with its field open.
+ * field shown in the largest unit that states the saved seconds exactly. A
+ * saved value that is not a preset shows as Custom with its field open.
+ *
+ * The preset picker and the custom field are ONE value, so one action is one
+ * write. A preset commits on pick; the custom value commits on a unit pick, on
+ * Enter, and when focus leaves the whole control - not when it moves inside it
+ * (number, unit picker, preset picker, or either portalled list). Committing
+ * on the number's own blur would save it the moment a picker opened, and the
+ * pick would save a second time. A value outside the HOST's bounds shows an
+ * inline error and sends nothing.
  */
 function IdleThresholdControl(props: {
   readonly controlId: string;
@@ -218,13 +226,73 @@ function IdleThresholdControl(props: {
   ) => void;
 }): ReactNode {
   const { controlId, hintId, idleSeconds, bounds, disabled, onCommit } = props;
+  const errorId = useId();
+  const controlRef = useRef<HTMLDivElement>(null);
+  // Both lists are portalled, so neither is inside `controlRef` in the DOM;
+  // React still delivers their focus events to `controlRef`'s handler.
+  const presetListRef = useRef<HTMLDivElement>(null);
+  const unitListRef = useRef<HTMLDivElement>(null);
   const presets = idlePresetsWithin(bounds);
   // "Custom…" picked by hand keeps the field open even once its value lands on
   // a preset, so the field does not vanish under the cursor.
   const [pickedCustom, setPickedCustom] = useState(false);
   const custom = pickedCustom || !presets.includes(idleSeconds);
+
+  const savedUnit = idleUnitFor(idleSeconds);
+  const savedAmount = String(idleSeconds / IDLE_UNIT_SECONDS[savedUnit]);
+  const [draft, setDraft] = useState(savedAmount);
+  const [unit, setUnit] = useState<IdleUnit>(savedUnit);
+  const [error, setError] = useState<string | null>(null);
+  const resetDraft = (): void => {
+    setDraft(savedAmount);
+    setUnit(savedUnit);
+    setError(null);
+  };
+  // Adjusted during render, keyed on the SAVED value changing rather than on
+  // the draft differing from it: a committed draft stays on screen while its
+  // save is in flight instead of snapping back to the old value, and a value
+  // saved elsewhere still reaches the field when it lands.
+  const [syncedIdleSeconds, setSyncedIdleSeconds] = useState(idleSeconds);
+  if (syncedIdleSeconds !== idleSeconds) {
+    setSyncedIdleSeconds(idleSeconds);
+    resetDraft();
+  }
+
+  const commitCustom = (value: string, nextUnit: IdleUnit): void => {
+    // A save is in flight, and every control here has been disabled since it
+    // left, so nothing new can have been entered: a commit now (focus leaving
+    // after a pick) could only send the same value twice.
+    if (disabled) return;
+    const validationError = idleDurationError(value, nextUnit, bounds);
+    setError(validationError);
+    if (validationError !== null) return;
+    const next = Number(value.trim()) * IDLE_UNIT_SECONDS[nextUnit];
+    if (next === idleSeconds) return;
+    // A rejected save restores the SAVED threshold rather than leaving the
+    // refused draft on screen: the switches write the saved value, so a kept
+    // draft would show one threshold while the host applies another. The
+    // toast says why; the field says what is in force.
+    onCommit(next, resetDraft);
+  };
+
   return (
-    <div className="flex flex-col items-end gap-2">
+    <div
+      ref={controlRef}
+      className="flex flex-col items-end gap-2"
+      onBlur={(event) => {
+        if (!custom) return;
+        const next = event.relatedTarget;
+        if (
+          next instanceof Node &&
+          [controlRef, presetListRef, unitListRef].some(
+            (ref) => ref.current?.contains(next) === true,
+          )
+        ) {
+          return;
+        }
+        commitCustom(draft, unit);
+      }}
+    >
       <Select
         value={custom ? "custom" : String(idleSeconds)}
         disabled={disabled}
@@ -233,7 +301,10 @@ function IdleThresholdControl(props: {
             setPickedCustom(true);
             return;
           }
+          // A preset replaces whatever the custom field held, so its draft
+          // is dropped rather than kept for the next "Custom…".
           setPickedCustom(false);
+          resetDraft();
           const seconds = Number(value);
           if (seconds !== idleSeconds) onCommit(seconds, null);
         }}
@@ -246,7 +317,7 @@ function IdleThresholdControl(props: {
         >
           <SelectValue />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent ref={presetListRef}>
           {presets.map((seconds) => (
             <SelectItem key={seconds} value={String(seconds)}>
               {formatIdleSeconds(seconds)}
@@ -256,128 +327,73 @@ function IdleThresholdControl(props: {
         </SelectContent>
       </Select>
       {custom ? (
-        <IdleDurationInput
-          idleSeconds={idleSeconds}
-          bounds={bounds}
-          disabled={disabled}
-          onCommit={onCommit}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * The custom threshold: a whole number and a unit, shown in the largest unit
- * that states the saved seconds exactly. Commits on blur or Enter, and on a
- * unit change, when the result changed and is inside the HOST's bounds;
- * anything else shows an inline error and sends nothing.
- */
-function IdleDurationInput(props: {
-  readonly idleSeconds: number;
-  readonly bounds: ChatAutoArchiveBounds;
-  readonly disabled: boolean;
-  /** `onRejected` restores the field when the save fails. */
-  readonly onCommit: (idleSeconds: number, onRejected: () => void) => void;
-}): ReactNode {
-  const { idleSeconds, bounds, disabled, onCommit } = props;
-  const errorId = useId();
-  const savedUnit = idleUnitFor(idleSeconds);
-  const savedAmount = String(idleSeconds / IDLE_UNIT_SECONDS[savedUnit]);
-  const [draft, setDraft] = useState(savedAmount);
-  const [unit, setUnit] = useState<IdleUnit>(savedUnit);
-  const [error, setError] = useState<string | null>(null);
-  // Adjusted during render, keyed on the SAVED value changing rather than on
-  // the draft differing from it: a committed draft stays on screen while its
-  // save is in flight instead of snapping back to the old value, and a value
-  // saved elsewhere still reaches the field when it lands.
-  const [syncedIdleSeconds, setSyncedIdleSeconds] = useState(idleSeconds);
-  if (syncedIdleSeconds !== idleSeconds) {
-    setSyncedIdleSeconds(idleSeconds);
-    setDraft(savedAmount);
-    setUnit(savedUnit);
-    setError(null);
-  }
-
-  const commit = (value: string, nextUnit: IdleUnit): void => {
-    const validationError = idleDurationError(value, nextUnit, bounds);
-    setError(validationError);
-    if (validationError !== null) return;
-    const next = Number(value.trim()) * IDLE_UNIT_SECONDS[nextUnit];
-    if (next === idleSeconds) return;
-    // A rejected save restores the SAVED threshold rather than leaving the
-    // refused draft on screen: the switches write the saved value, so a kept
-    // draft would show one threshold while the host applies another. The
-    // toast says why; the field says what is in force.
-    onCommit(next, () => {
-      setDraft(savedAmount);
-      setUnit(savedUnit);
-      setError(null);
-    });
-  };
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-2">
-        <Input
-          value={draft}
-          inputMode="numeric"
-          aria-label="Custom idle time"
-          aria-invalid={error !== null}
-          aria-describedby={error !== null ? errorId : undefined}
-          disabled={disabled}
-          className="w-[min(20vw,4.5rem)] text-right"
-          size="sm"
-          onChange={(event) => {
-            setDraft(event.target.value);
-            setError(null);
-          }}
-          onBlur={(event) => {
-            commit(event.target.value, unit);
-          }}
-          onKeyDown={(event) => {
-            // An Enter that confirms an IME composition is the IME's, not a
-            // commit (the drafts dialog's guard, copied).
-            if (
-              event.key !== "Enter" ||
-              event.nativeEvent.isComposing ||
-              // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
-              event.keyCode === 229
-            ) {
-              return;
-            }
-            event.currentTarget.blur();
-          }}
-        />
-        <Select
-          value={unit}
-          disabled={disabled}
-          onValueChange={(value) => {
-            if (!isIdleUnit(value)) return;
-            setUnit(value);
-            commit(draft, value);
-          }}
-        >
-          <SelectTrigger
-            aria-label="Idle time unit"
-            className="w-[min(30vw,7rem)]"
-            size="sm"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {idleUnitsFor(unit).map((option) => (
-              <SelectItem key={option} value={option}>
-                {IDLE_UNIT_LABELS[option]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      {error !== null ? (
-        <p id={errorId} role="alert" className="text-ui-xs text-destructive">
-          {error}
-        </p>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <Input
+              value={draft}
+              inputMode="numeric"
+              aria-label="Custom idle time"
+              aria-invalid={error !== null}
+              aria-describedby={error !== null ? errorId : undefined}
+              disabled={disabled}
+              className="w-[min(20vw,4.5rem)] text-right"
+              size="sm"
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setError(null);
+              }}
+              onKeyDown={(event) => {
+                // An Enter that confirms an IME composition is the IME's, not
+                // a commit (the drafts dialog's guard, copied).
+                if (
+                  event.key !== "Enter" ||
+                  event.nativeEvent.isComposing ||
+                  // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
+                  event.keyCode === 229
+                ) {
+                  return;
+                }
+                event.currentTarget.blur();
+              }}
+            />
+            <Select
+              value={unit}
+              disabled={disabled}
+              onValueChange={(value) => {
+                if (!isIdleUnit(value)) return;
+                setUnit(value);
+                commitCustom(draft, value);
+              }}
+            >
+              <SelectTrigger
+                aria-label="Idle time unit"
+                className="w-[min(30vw,7rem)]"
+                size="sm"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent ref={unitListRef}>
+                {/* From the SAVED unit, not the draft's: a saved value in
+                    seconds keeps "seconds" listed after the draft moves to
+                    another unit, so the exact saved value stays reachable. */}
+                {idleUnitsFor(savedUnit).map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {IDLE_UNIT_LABELS[option]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {error !== null ? (
+            <p
+              id={errorId}
+              role="alert"
+              className="text-ui-xs text-destructive"
+            >
+              {error}
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

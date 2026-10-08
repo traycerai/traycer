@@ -465,6 +465,128 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
       expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 86_400 });
     });
 
+    it("does not commit when focus moves from the number to the unit picker, and the unit pick then writes once", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("2");
+      fireEvent.blur(customInput(), { relatedTarget: unitSelect() });
+      expectNoWrite();
+
+      pickOption(unitSelect(), "days");
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 2 * 86_400 });
+    });
+
+    it("does not commit when focus moves from the number into the open unit list", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("2");
+      // Taken before the list opens: Radix hides everything else from role
+      // queries while it is open.
+      const input = customInput();
+      fireEvent.keyDown(unitSelect(), { key: "Enter" });
+      fireEvent.blur(input, {
+        relatedTarget: screen.getByRole("option", { name: "days" }),
+      });
+      expectNoWrite();
+    });
+
+    it("does not commit when focus moves from the number into the open preset list, and the preset pick then writes once", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("5");
+      // Taken before the list opens: Radix hides everything else from role
+      // queries while it is open.
+      const input = customInput();
+      fireEvent.keyDown(archiveAfterSelect(), { key: "Enter" });
+      fireEvent.blur(input, {
+        relatedTarget: screen.getByRole("option", { name: "Custom…" }),
+      });
+      expectNoWrite();
+      fireEvent.click(screen.getByRole("option", { name: "1 day" }));
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 86_400 });
+    });
+
+    it("writes nothing more when focus leaves the field while a unit pick's save is pending", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+      pickOption(archiveAfterSelect(), "Custom…");
+      pickOption(unitSelect(), "days");
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 86_400 });
+
+      // The save is now in flight; the saved prop has not moved, so only the
+      // pending guard stands between this blur and a second identical write.
+      harness.mutationPending = true;
+      rerender(<ChatAutoArchiveSettingsRow />);
+      fireEvent.blur(unitSelect(), { relatedTarget: null });
+      expect(harness.mutate).toHaveBeenCalledTimes(1);
+      expect(harness.trackSettingChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      { label: "nothing", target: (): HTMLElement | null => null },
+      {
+        label: "an element outside the field",
+        target: (): HTMLElement | null => document.body,
+      },
+    ])("commits once when focus leaves the number to $label", ({ target }) => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("2");
+      fireEvent.blur(customInput(), { relatedTarget: target() });
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 7200 });
+    });
+
+    it("does not save a typed custom value when a preset is picked instead", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("5");
+      // Focus moving from the number to the preset picker stays inside the
+      // control, so the typed 5 is not committed on its own.
+      fireEvent.blur(customInput(), { relatedTarget: archiveAfterSelect() });
+      expectNoWrite();
+
+      // The preset replaces the draft: one write, the preset's, never the 5.
+      pickOption(archiveAfterSelect(), "1 day");
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 86_400 });
+    });
+
+    it("drops the custom draft when a preset is picked", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("5");
+      expect(customInput().value).toBe("5");
+
+      // The saved preset again: it writes nothing, but it still replaces the
+      // draft and closes the field.
+      pickOption(archiveAfterSelect(), "1 hour");
+      expectNoWrite();
+
+      pickOption(archiveAfterSelect(), "Custom…");
+      expect(customInput().value).toBe("1");
+      expect(unitSelect().textContent).toBe("hours");
+      expectNoWrite();
+    });
+
+    it("still saves a typed custom value when focus leaves via the preset picker", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      renderRow();
+      pickOption(archiveAfterSelect(), "Custom…");
+      typeCustom("5");
+      const presetSelect = archiveAfterSelect();
+      fireEvent.blur(customInput(), { relatedTarget: presetSelect });
+      expectNoWrite();
+
+      // Focus then leaves the control from the preset picker itself.
+      fireEvent.blur(presetSelect, { relatedTarget: null });
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 5 * 3600 });
+    });
+
     it("commits nothing when the typed value equals the saved one", () => {
       harness.query.data = SAVED_ENABLED_CUSTOM;
       renderRow();
@@ -502,6 +624,20 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
         "hours",
         "days",
       ]);
+    });
+
+    it("keeps seconds listed after the draft unit moves off it, so the saved value stays reachable", () => {
+      // The mutate mock is a no-op, so the saved value stays 90 seconds.
+      harness.query.data = savedPolicy(true, false, 90, FULL_BOUNDS);
+      renderRow();
+      expect(customInput().value).toBe("90");
+      expect(unitSelect().textContent).toBe("seconds");
+
+      pickOption(unitSelect(), "minutes");
+      expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 90 * 60 });
+      expect(unitSelect().textContent).toBe("minutes");
+
+      expect(openOptionLabels(unitSelect())).toContain("seconds");
     });
 
     it.each([

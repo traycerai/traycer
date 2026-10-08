@@ -1186,15 +1186,20 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       `details` slot, an inset group (`bg-foreground/3`, one option per line,
       label and hint left, control right) drawn only while the policy has
       loaded and the switch is on; closing it writes nothing. "Archive after"
-      is a preset picker (1 hour, 6 hours, 1 day, 3 days, 1 week, 30 days,
+      is a preset picker (1 hour, 6 hours, 1 day, 3 days, 7 days, 30 days,
       filtered to the host's `bounds`) that commits on pick, plus "Custom…",
-      which writes nothing and opens a number-and-unit field (minutes, hours,
-      days; seconds listed only when the saved value needs them; shown in the
-      largest unit that states the saved seconds exactly; committed on blur,
-      Enter (not an Enter that confirms an IME composition) or a unit change
-      when the result is inside `bounds`, an inline error and no write
-      otherwise). A saved value that is no preset shows as Custom with the
-      field open. "Include chats I started" (`includeUserCreated`, off by
+      which writes nothing and opens a number-and-unit field: minutes, hours
+      and days, with seconds listed only when the saved value needs them,
+      shown in the largest unit that states the saved seconds exactly. A
+      saved value that is no preset shows as Custom with the field open, and
+      picking a preset drops the field's draft. The presets and the custom
+      field are one value, so one action is one write: the custom value
+      commits on a unit pick, on Enter (not an Enter that confirms an IME
+      composition), and when focus leaves the whole threshold control -
+      moving between the number, the unit picker, the preset picker or
+      either portalled list is not leaving. A value outside `bounds` shows an
+      inline error and writes nothing, and nothing commits while a save is in
+      flight. "Include chats I started" (`includeUserCreated`, off by
       default; terminal agent chats count as the user's) is the second line.
       Under the group, a footnote: "Archived when a host next opens the task.
       A new message brings a chat back." A never-saved account shows 3600
