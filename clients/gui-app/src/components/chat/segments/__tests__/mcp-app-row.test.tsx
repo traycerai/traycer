@@ -50,6 +50,7 @@ import {
   type SandboxSize,
   type SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { McpAppRpcContext, type McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 import {
   readComposerDraftSnapshot,
@@ -946,24 +947,23 @@ describe("<McpAppRow /> when the agent session cannot be reached", () => {
   });
 
   it("says so when the host does not serve apps at all", async () => {
-    // No McpAppRpc provided: the row falls back to the unserved seam.
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    const client = new QueryClient();
-    render(
-      <QueryClientProvider client={client}>
-        <ResolvedThemeContext.Provider value={THEME}>
-          <ChatAttachmentScopeContext.Provider value={SCOPE}>
-            <EpicFileRpcContext.Provider value={fileRpc}>
-              <McpAppRow
-                id={BLOCK_ID}
-                app={STAMP}
-                fallback={<div data-testid="ordinary-tool-row" />}
-              />
-            </EpicFileRpcContext.Provider>
-          </ChatAttachmentScopeContext.Provider>
-        </ResolvedThemeContext.Provider>
-      </QueryClientProvider>,
-    );
+    // A host without the methods answers every one E_HOST_UNSUPPORTED.
+    const unsupported = (method: string) =>
+      Promise.reject(
+        new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: `${method} is not served by this host`,
+          requestId: "",
+          method,
+          fatalDetails: null,
+        }),
+      );
+    const unserved: McpAppRpc = {
+      callTool: () => unsupported("chat.mcpApp.callTool"),
+      readResource: () => unsupported("chat.mcpApp.readResource"),
+      updateModelContext: () => unsupported("chat.mcpApp.updateModelContext"),
+    };
+    renderRow(makeFileRpc(HTML_RESPONSE), unserved, SCOPE, STAMP);
     await screen.findByTestId("sandbox-frame");
 
     await act(async () => {
