@@ -1,4 +1,13 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
+import { protocolSurfaceSchema } from "@traycer/protocol/framework/surface-compat";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry as hostStreamRegistryFromIndex,
+} from "@traycer/protocol/host/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { RPC_ERROR_CODES } from "@traycer/protocol/framework/versioned-rpc-types";
 import {
   hostInventorySubscribeServerFrameSchemaV10,
@@ -87,5 +96,50 @@ describe("sandbox refusal codes", () => {
     ]) {
       expect(RPC_ERROR_CODES).toContain(code);
     }
+  });
+});
+
+describe("host.hostInventory.subscribe against the released baseline", () => {
+  const baseline = protocolSurfaceSchema.parse(
+    JSON.parse(
+      readFileSync(
+        join(
+          import.meta.dirname,
+          "__fixtures__/released-baseline-surface.json",
+        ),
+        "utf8",
+      ),
+    ),
+  );
+  const live = buildProtocolSurface({
+    unary: hostRpcRegistry,
+    unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
+    stream: hostStreamRegistryFromIndex,
+  });
+  const METHOD = "host.hostInventory.subscribe";
+
+  it("serves a 1.0 frame schema field for field the one the released clients shipped", () => {
+    const released = baseline.stream[METHOD];
+    const current = live.stream[METHOD];
+    expect(released.schemas["1.0"]).toBeDefined();
+    expect(current.schemas["1.0"]).toEqual(released.schemas["1.0"]);
+  });
+
+  it("stays on major 1 and adds 1.1 as a new installed minor", () => {
+    const current = live.stream[METHOD];
+    expect(current.canonical.major).toBe(
+      baseline.stream[METHOD].canonical.major,
+    );
+    expect(baseline.stream[METHOD].majors["1"].installedMinors).toEqual([0]);
+    expect(current.majors["1"].installedMinors).toEqual([0, 1]);
+    expect(current.majors["1"].latestMinor).toBe(1);
+  });
+
+  it("does not let the 1.1 row leak into the 1.0 frame schema", () => {
+    const current = live.stream[METHOD];
+    expect(JSON.stringify(current.schemas["1.0"])).not.toContain(
+      "sandboxState",
+    );
+    expect(JSON.stringify(current.schemas["1.1"])).toContain("sandboxState");
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  SANDBOX_FROZEN_RETENTION_DAYS,
   sandboxCatalogueSchema,
   sandboxCreateAcceptedSchema,
   sandboxListResponseSchema,
@@ -134,5 +135,87 @@ describe("sandbox control plane mirror", () => {
         state: null,
       }).code,
     ).toBe("sandbox_transition_conflict");
+  });
+
+  describe("frozenAt, guestConfigured and guestConfigFailureReason", () => {
+    // SANDBOX_VIEW above is the older server's body: none of the three.
+    const WITH_FIELDS = {
+      ...SANDBOX_VIEW,
+      state: "suspended",
+      frozen: true,
+      frozenAt: 1_791_000_020_000,
+      guestConfigured: false,
+      guestConfigFailureReason: "broker unreachable",
+    };
+
+    it("reads an older server's body as three nulls, never a failure", () => {
+      const parsed = sandboxListResponseSchema.parse({
+        sandboxes: [SANDBOX_VIEW],
+      });
+      expect(parsed.sandboxes[0]?.frozenAt).toBeNull();
+      expect(parsed.sandboxes[0]?.guestConfigured).toBeNull();
+      expect(parsed.sandboxes[0]?.guestConfigFailureReason).toBeNull();
+    });
+
+    it("reads a newer server's body with the values it carries", () => {
+      const parsed = sandboxListResponseSchema.parse({
+        sandboxes: [WITH_FIELDS],
+      });
+      expect(parsed.sandboxes[0]?.frozenAt).toBe(1_791_000_020_000);
+      expect(parsed.sandboxes[0]?.guestConfigured).toBe(false);
+      expect(parsed.sandboxes[0]?.guestConfigFailureReason).toBe(
+        "broker unreachable",
+      );
+    });
+
+    it("keeps explicit nulls as nulls", () => {
+      const parsed = sandboxListResponseSchema.parse({
+        sandboxes: [
+          {
+            ...SANDBOX_VIEW,
+            frozenAt: null,
+            guestConfigured: null,
+            guestConfigFailureReason: null,
+          },
+        ],
+      });
+      expect(parsed.sandboxes[0]?.frozenAt).toBeNull();
+      expect(parsed.sandboxes[0]?.guestConfigured).toBeNull();
+    });
+
+    it("parses the same two shapes inside the 202 create answer", () => {
+      expect(
+        sandboxCreateAcceptedSchema.safeParse({
+          sandboxId: "sbx_1",
+          hostId: SANDBOX_VIEW.hostId,
+          sandbox: SANDBOX_VIEW,
+        }).success,
+      ).toBe(true);
+      expect(
+        sandboxCreateAcceptedSchema.safeParse({
+          sandboxId: "sbx_1",
+          hostId: SANDBOX_VIEW.hostId,
+          sandbox: WITH_FIELDS,
+        }).success,
+      ).toBe(true);
+    });
+
+    it("still refuses a field of the wrong type", () => {
+      for (const bad of [
+        { frozenAt: "yesterday" },
+        { guestConfigured: "no" },
+        { guestConfigFailureReason: 12 },
+      ]) {
+        expect(
+          sandboxListResponseSchema.safeParse({
+            sandboxes: [{ ...WITH_FIELDS, ...bad }],
+          }).success,
+        ).toBe(false);
+      }
+    });
+
+    it("keeps the retention the day-30 job destroys a frozen row at", () => {
+      expect(SANDBOX_FROZEN_RETENTION_DAYS).toBe(30);
+    });
   });
 });
