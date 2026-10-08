@@ -22,13 +22,16 @@ interface SandboxDestroyContext {
  * `202` (still destroying) is success too: the row says `destroying` until
  * the list drops it.
  *
+ * Resolves to whether the row is gone (`200`, or `404 sandbox_not_found`);
+ * `false` for a `202`, the row still `destroying`.
+ *
  * Success refreshes the host list, the sandbox list and the selection fleet,
  * for the reason `useDeregisterHostFromAccount` refreshes all three: the whole
  * visible effect is the row's absence.
  */
 export function useSandboxDestroy(
   sandboxId: string,
-): UseMutationResult<void, Error, void, SandboxDestroyContext> {
+): UseMutationResult<boolean, Error, void, SandboxDestroyContext> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
@@ -37,7 +40,7 @@ export function useSandboxDestroy(
     onMutate: (): SandboxDestroyContext => ({
       directory: binding === null ? null : binding.directory,
     }),
-    mutationFn: async (): Promise<void> => {
+    mutationFn: async (): Promise<boolean> => {
       if (binding === null) {
         throw new Error("Sign in to destroy this sandbox.");
       }
@@ -45,12 +48,12 @@ export function useSandboxDestroy(
       // `404 sandbox_not_found` resolves too: the user's intent ("this
       // sandbox should not exist") already holds - destroyed from another
       // window, or by its own idle timer.
+      if (result.kind === "ok") return result.settled;
       if (
-        result.kind === "ok" ||
-        (result.kind === "refused" &&
-          result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND)
+        result.kind === "refused" &&
+        result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
       ) {
-        return;
+        return true;
       }
       throw new Error(sandboxFailureMessage(result));
     },

@@ -3,7 +3,10 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
+import {
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  type SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
@@ -14,6 +17,14 @@ import {
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+
+/**
+ * How a verb ended: `settled` (`200`, at rest), `moving` (`202`, still
+ * moving at the server's deadline), or `gone` (`404 sandbox_not_found`: the
+ * row was destroyed while the verb waited, typically by the card's own
+ * Destroy - nothing to report, the destroy already said it).
+ */
+export type SandboxVerbOutcome = "settled" | "moving" | "gone";
 
 interface SandboxVerbContext {
   readonly directory: HostDirectoryService | null;
@@ -32,15 +43,20 @@ const VERB_FAILURE_TITLE: Record<SandboxLifecycleVerb, string> = {
  * re-render cannot re-point a verb already in flight; one mutation key per
  * sandbox, so the card disables the other verbs while any one runs.
  *
- * Resolves to whether the row is at rest (`200`). `202` (still moving at the
- * server's deadline) is success too, resolving `false`: the row says so and
- * the list's next read shows where it landed. Success refreshes the
+ * Resolves to a {@link SandboxVerbOutcome}. `202` (still moving at the
+ * server's deadline) and a `404` for a row destroyed meanwhile are success
+ * too: the list's next read shows where it landed. Success refreshes the
  * host list, the sandbox list, the fleet and the cost view (the burn moved),
  * as a destroy does.
  */
 export function useSandboxVerb(
   sandboxId: string,
-): UseMutationResult<boolean, Error, SandboxLifecycleVerb, SandboxVerbContext> {
+): UseMutationResult<
+  SandboxVerbOutcome,
+  Error,
+  SandboxLifecycleVerb,
+  SandboxVerbContext
+> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
@@ -49,12 +65,20 @@ export function useSandboxVerb(
     onMutate: (): SandboxVerbContext => ({
       directory: binding === null ? null : binding.directory,
     }),
-    mutationFn: async (verb: SandboxLifecycleVerb): Promise<boolean> => {
+    mutationFn: async (
+      verb: SandboxLifecycleVerb,
+    ): Promise<SandboxVerbOutcome> => {
       if (binding === null) {
         throw new Error("Sign in to change this sandbox.");
       }
       const result = await binding.auth.runSandboxVerb(sandboxId, verb);
-      if (result.kind === "ok") return result.settled;
+      if (result.kind === "ok") return result.settled ? "settled" : "moving";
+      if (
+        result.kind === "refused" &&
+        result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+      ) {
+        return "gone";
+      }
       throw new Error(sandboxFailureMessage(result));
     },
     onSettled: (_data, _error, _verb, context) => {

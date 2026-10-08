@@ -310,12 +310,12 @@ function SandboxActions(props: {
             data-testid={`sandbox-card-${action}`}
             onClick={() => {
               verb.mutate(action, {
-                onSuccess: (settled) => {
-                  if (settled) {
+                onSuccess: (outcome) => {
+                  if (outcome === "settled") {
                     toast.success(
                       `${VERB_DONE_TOAST[action]} ${summary.displayName}`,
                     );
-                  } else {
+                  } else if (outcome === "moving") {
                     toast.info(
                       `${VERB_MOVING_TOAST[action]} ${summary.displayName}…`,
                     );
@@ -388,9 +388,13 @@ function SandboxDestroyAction(props: {
         onConfirm={() => {
           if (mismatch) return;
           destroy.mutate(undefined, {
-            onSuccess: () => {
+            onSuccess: (gone) => {
               setConfirmOpen(false);
-              toast.success(`Destroyed ${props.name}`);
+              if (gone) {
+                toast.success(`Destroyed ${props.name}`);
+              } else {
+                toast.info(`Destroying ${props.name}…`);
+              }
             },
           });
         }}
