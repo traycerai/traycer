@@ -6,7 +6,7 @@ import type { ChatDockCompactChipModel } from "@/components/chat/chat-dock-compa
 import type { LeftPanelAvailabilityContext } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import type {
   BackgroundItem,
-  ChatQueueState,
+  OpenChatQueueState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
@@ -254,7 +254,7 @@ export const SAMPLE_TODO: PinnedTodoSnapshot = {
  * One queued prompt, so the canvas shows the queue where it always sits:
  * directly on the composer, in every preset (it is not a region, G1-G2).
  */
-export const SAMPLE_QUEUE: ChatQueueState = {
+export const SAMPLE_QUEUE: OpenChatQueueState = {
   status: "running",
   items: [
     {

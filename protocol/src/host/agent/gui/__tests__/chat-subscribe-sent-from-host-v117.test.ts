@@ -12,8 +12,10 @@ import {
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
+  openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
@@ -44,10 +46,11 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 installed below the 1.18, 1.19 and 1.20 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.21", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.21 lines, 1.16 still installed", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.22", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(21);
+    expect(line.latestMinor).toBe(22);
+    expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
     expect(line.versions[20].contract).toBe(chatSubscribeV120);
     expect(line.versions[19].contract).toBe(chatSubscribeV119);
@@ -82,12 +85,19 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18, 1.19 and 1.20 
     expect(chatSubscribeV117.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    // 1.20 froze when 1.21 opened above it; 1.21 is the live windowed schema.
+    // 1.20 froze when 1.21 opened above it; 1.21 binds the closed live union
+    // the host builds, 1.22 the open twin a client parses.
     expect(chatSubscribeV120.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV121.serverFrameSchema).toBe(
       chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV122.serverFrameSchema).not.toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV122.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
     );
   });
 

@@ -1,10 +1,11 @@
 import { z } from "zod";
 import {
   chatImportedMetadataSchema,
-  type ChatEvent,
   type ChatImportedMetadata,
 } from "@traycer/protocol/persistence/epic/chat-events";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+
+import type { OpenChatEvent } from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # Canonical transcript row order
@@ -146,7 +147,7 @@ export interface ForkedChatLinkRowSource {
  * exists to prevent, so it does not get to have one.
  */
 export function forkedChatLinkRowSource(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): ForkedChatLinkRowSource | null {
   if (event.type !== "chat.forked") return null;
   const metadata = event.metadata;
@@ -178,7 +179,7 @@ export interface NotificationAnchorRowSource {
  * on this rather than on a copy of it.
  */
 export function notificationAnchorRowSource(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): NotificationAnchorRowSource | null {
   if (event.type !== "send.failed") return null;
   const metadata = event.metadata;
@@ -205,7 +206,7 @@ export function notificationAnchorRowSource(
  * row silently vanished (spec `session-import.md` §8e).
  */
 export function importedChatMarkerRowSource(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): ChatImportedMetadata | null {
   if (event.type !== "chat.imported") return null;
   const parsed = chatImportedMetadataSchema.safeParse(event.metadata);
@@ -272,7 +273,7 @@ export interface AutoJudgeUnattendedDenialRowSource {
  * this rather than on a copy of it.
  */
 export function autoJudgeUnattendedDenialRowSource(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): AutoJudgeUnattendedDenialRowSource | null {
   if (event.type !== "approval.denied") return null;
   const parsed = autoJudgeUnattendedDenialMetadataSchema.safeParse(
@@ -338,7 +339,7 @@ export interface AutoJudgeNoticeRowSource {
  * renderer filters on this rather than on a copy of it.
  */
 export function autoJudgeNoticeRowSource(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): AutoJudgeNoticeRowSource | null {
   if (event.type !== "permission.blocked") return null;
   if (event.message === null || event.message.length === 0) return null;
@@ -347,7 +348,7 @@ export function autoJudgeNoticeRowSource(
   return { marker: parsed.data.autoJudge, message: event.message };
 }
 
-export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
+export function eventMaterializesTranscriptRow(event: OpenChatEvent): boolean {
   return (
     forkedChatLinkRowSource(event) !== null ||
     notificationAnchorRowSource(event) !== null ||

@@ -1,16 +1,17 @@
 import type {
-  ChatQueuedItem,
-  ChatQueueState,
+  OpenChatQueuedItem,
+  OpenChatQueueState,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import type {
   ChatSendRestore,
   PendingChatAction,
 } from "@/stores/chats/chat-session-store";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * What the user asked for when they submitted an edited queued prompt: plain
@@ -481,14 +482,14 @@ export function queueEditContentMatches(
 
 /** What the host can be seen to hold, at the moment a record is accounted for. */
 export interface QueueEditEvidence {
-  readonly queue: ChatQueueState;
+  readonly queue: OpenChatQueueState;
   /**
    * The transcript messages whose bodies this client holds. Never the whole
    * story: a windowed transcript holds only its loaded rows, and on any line a
    * row can leave the queue a frame before the message it became arrives. So
    * a message that is not here is not evidence of anything.
    */
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   readonly settingsEqual: (a: ChatRunSettings, b: ChatRunSettings) => boolean;
   readonly accountContextEqual: (
     a: AccountContext,
@@ -517,7 +518,7 @@ type QueueEditVerdict = "applied" | "not_applied" | "unknown";
  */
 function queueEditVerdict(
   record: QueueEditRecord,
-  row: ChatQueuedItem | null,
+  row: OpenChatQueuedItem | null,
   evidence: QueueEditEvidence,
 ): QueueEditVerdict {
   if (row !== null) {
@@ -563,7 +564,7 @@ function queueEditVerdict(
  */
 function followUpShownApplied(
   record: QueueEditRecord,
-  row: ChatQueuedItem | null,
+  row: OpenChatQueuedItem | null,
   evidence: QueueEditEvidence,
 ): boolean {
   if (row === null) return record.followUpIsNoOp;

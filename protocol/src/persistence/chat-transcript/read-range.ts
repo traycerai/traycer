@@ -1,6 +1,3 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type { Message } from "@traycer/protocol/persistence/epic/messages";
-
 import type {
   TranscriptRowDescriptor,
   TranscriptRowSource,
@@ -11,6 +8,13 @@ import {
   type RecordFingerprintMemo,
 } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
+
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # Serving a span of bodies
@@ -123,7 +127,15 @@ export interface TranscriptRangeRequest {
   readonly maxBytes: number;
 }
 
-export interface TranscriptRangeSlice {
+// The record parameters default to the CLOSED records: the host slices what it
+// wrote and hands the slice to closed frame builders, while a reader over
+// `chat.subscribe@1.22` bodies instantiates them open. Each slicer preserves
+// its lookup's record types, so neither caller sees the other's harness-id
+// type.
+export interface TranscriptRangeSlice<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
   /** Where the served span actually starts, after clamping. */
   readonly fromOrdinal: number;
   /**
@@ -137,8 +149,8 @@ export interface TranscriptRangeSlice {
   /** Served rows whose required record set is incomplete in the lookup. */
   readonly incompleteRowIds: readonly string[];
   /** Deduplicated union of the records the served rows render from. */
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+  readonly messages: readonly M[];
+  readonly events: readonly E[];
   /**
    * Per-row projection context, by row id - see {@link TranscriptRowContext}.
    *
@@ -253,15 +265,18 @@ export function rowRecordIds(source: TranscriptRowSource): RowRecordIds {
 }
 
 /** Resolves record ids to bodies. Both maps are the authority's own state. */
-export interface TranscriptRecordLookup {
-  readonly messagesById: ReadonlyMap<string, Message>;
-  readonly eventsById: ReadonlyMap<string, ChatEvent>;
+export interface TranscriptRecordLookup<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
+  readonly messagesById: ReadonlyMap<string, M>;
+  readonly eventsById: ReadonlyMap<string, E>;
 }
 
-export function buildTranscriptRecordLookup(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
-): TranscriptRecordLookup {
+export function buildTranscriptRecordLookup<
+  M extends OpenMessage,
+  E extends OpenChatEvent,
+>(messages: readonly M[], events: readonly E[]): TranscriptRecordLookup<M, E> {
   return {
     messagesById: new Map(
       messages.map((message) => [message.messageId, message]),
@@ -321,7 +336,7 @@ function clamp(value: number, low: number, high: number): number {
  */
 function recordBytes(
   memo: RecordFingerprintMemo | null,
-  record: Message | ChatEvent,
+  record: OpenMessage | OpenChatEvent,
 ): number {
   return memo === null
     ? recordByteLength(record)
@@ -346,7 +361,7 @@ export interface TranscriptRecordSizes {
 
 /** {@link TranscriptRecordSizes} over a lookup that holds the bodies. */
 export function transcriptRecordSizesOf(
-  lookup: TranscriptRecordLookup,
+  lookup: TranscriptRecordLookup<OpenMessage, OpenChatEvent>,
   memo: RecordFingerprintMemo | null,
 ): TranscriptRecordSizes {
   return {
@@ -475,12 +490,15 @@ function planRowCharge(
  * with both `reachedStart` and `reachedEnd` set - "there is nothing here", not
  * "you asked wrongly".
  */
-export function sliceTranscriptRange(
+export function sliceTranscriptRange<
+  M extends OpenMessage,
+  E extends OpenChatEvent,
+>(
   rows: readonly TranscriptRowDescriptor[],
-  lookup: TranscriptRecordLookup,
+  lookup: TranscriptRecordLookup<M, E>,
   request: TranscriptRangeRequest,
   memo: RecordFingerprintMemo | null,
-): TranscriptRangeSlice {
+): TranscriptRangeSlice<M, E> {
   const plan = planTranscriptRange(
     transcriptRowWindowOf(rows),
     transcriptRecordSizesOf(lookup, memo),
@@ -604,14 +622,17 @@ export function planTranscriptRange(
 }
 
 /** The hydrated tail a bounded snapshot ships inline. */
-export interface TranscriptTailSlice {
+export interface TranscriptTailSlice<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
   /** Ordinal of the first row in the tail. `rows.length` when the tail is empty. */
   readonly fromOrdinal: number;
   readonly rowIds: readonly string[];
   /** Tail rows whose required record set is incomplete in the lookup. */
   readonly incompleteRowIds: readonly string[];
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+  readonly messages: readonly M[];
+  readonly events: readonly E[];
   /**
    * Per-row projection context, by row id - exactly as a range carries it, and
    * for exactly the same reason (see {@link TranscriptRangeSlice.rowContext}).
@@ -691,12 +712,15 @@ export type TranscriptTailPlan = Omit<
  * paint delay for a rare reordered frame, and a reordered snapshot is a
  * transcript rendering the wrong thing rather than rendering late.
  */
-export function sliceTranscriptTail(
+export function sliceTranscriptTail<
+  M extends OpenMessage,
+  E extends OpenChatEvent,
+>(
   rows: readonly TranscriptRowDescriptor[],
-  lookup: TranscriptRecordLookup,
+  lookup: TranscriptRecordLookup<M, E>,
   maxBytes: number,
   memo: RecordFingerprintMemo | null,
-): TranscriptTailSlice {
+): TranscriptTailSlice<M, E> {
   const plan = planTranscriptTail(
     transcriptRowWindowOf(rows),
     transcriptRecordSizesOf(lookup, memo),

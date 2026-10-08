@@ -28,6 +28,7 @@ import {
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -156,8 +157,16 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // `transcriptRowContextSchemaPreCommandCode`.
 //
 // 1.20 is captured LATE, from our own render: on the harness axis it cannot
-// match the bytes main shipped, since main's 1.20 predates the id. 1.21 is the
-// live line, the first that may name `commandcode`.
+// match the bytes main shipped, since main's 1.20 predates the id.
+//
+// 1.21 is captured ON TIME, from the tree before the open-harness-id line took
+// 1.22 above it: the last line whose heard-from leaves (agent senders, event
+// actors, provider notices, plan sources, session announcements) are still the
+// closed enum, and the first that may name `commandcode`. Its server-frame
+// union is the closed live `chatSubscribeWindowedServerFrameSchema`, which the
+// host builds; 1.22 binds its open twin. 1.22 is the live line: it reopens exactly those heard-from
+// leaves to a string (`open-harness-wire.ts`) and moves nothing else, so the
+// 1.0-1.21 digests above did not change when it opened.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -247,6 +256,10 @@ const SERVER_FRAME_DIGESTS = {
     "95eb83c260fa3524bcf2a276bcc7b3e21f36da417803d484580aad803eab4c8d",
     "df9bbe86f245826e18b231b0266dc27364e9cf82d825f3672f48633febd3825a",
   ],
+  22: [
+    "c196eb5624840268d72b08b89b20fc50202d06d01f6999e506f48b02f2c7c46c",
+    "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
+  ],
 } as const;
 
 const contracts = [
@@ -272,10 +285,11 @@ const contracts = [
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.21 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.22 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([
@@ -329,6 +343,166 @@ describe("chat.subscribe placement freeze", () => {
     expect(
       chatSubscribeV120.serverFrameSchema.safeParse(withAnchor).success,
     ).toBe(false);
+  });
+
+  it("1.21 and 1.22 differ only in the heard-from harness leaves", () => {
+    const agentSender = (harnessId: string) => ({
+      type: "agent",
+      harnessId,
+      agentId: "a",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    });
+    const userRow = (harnessId: string) => ({
+      role: "user",
+      messageId: "m-1",
+      sender: agentSender(harnessId),
+      message: {
+        kind: "agent",
+        content: { type: "doc", content: [] },
+        fromAgentId: "a",
+        senderTitle: null,
+        senderHarnessId: harnessId,
+        reply: { expectsReply: false },
+      },
+      timestamp: 1,
+      sessionAnchor: null,
+    });
+    const rangeFrame = (harnessId: string) => ({
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "range-1",
+        epoch: 0,
+        fromOrdinal: 0,
+        rowIds: ["m-1"],
+        messages: [userRow(harnessId)],
+        events: [],
+        rowContext: {},
+        reachedStart: true,
+        reachedEnd: true,
+      },
+    });
+    // Positive control: a roster id parses on both lines, so the frame itself
+    // is well formed and the only thing the unknown id can be rejected for is
+    // the harness leaf.
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(rangeFrame("claude"))
+        .success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(rangeFrame("claude"))
+        .success,
+    ).toBe(true);
+    // The heard-from leaf: open on 1.22, still the closed enum on 1.21.
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(rangeFrame("zzz-future"))
+        .success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(rangeFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+  });
+
+  it("keeps the harness a client DRIVES closed on 1.22: the snapshot's chat settings and the active turn", () => {
+    const settings = (harnessId: string) => ({
+      harnessId,
+      model: "model-1",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "epic",
+    });
+    const snapshotFrame = (harnessId: string) => ({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat: {
+          parentId: null,
+          id: "chat-1",
+          userId: "user-1",
+          hostId: "host-1",
+          title: "Chat",
+          createdAt: 1000,
+          updatedAt: 1000,
+          isTitleEditedByUser: false,
+          settings: settings(harnessId),
+        },
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        runStatus: "idle",
+        activeTurn: null,
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChangeCount: 0,
+        transcriptEpoch: 0,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+        derived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: null,
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+      },
+    });
+    // Positive control on both lines: the fixture is a valid snapshot.
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(snapshotFrame("claude"))
+        .success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(snapshotFrame("claude"))
+        .success,
+    ).toBe(true);
+    // The drive carrier stays closed on BOTH lines.
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+
+    // The same holds for the active turn on `turnStateChanged`.
+    const turnFrame = (harnessId: string) => ({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: {
+        turnId: "turn-1",
+        userMessageId: "m-1",
+        status: "running",
+        harnessId,
+        model: "model-1",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    for (const contract of [chatSubscribeV121, chatSubscribeV122]) {
+      expect(
+        contract.serverFrameSchema.safeParse(turnFrame("claude")).success,
+      ).toBe(true);
+      expect(
+        contract.serverFrameSchema.safeParse(turnFrame("zzz-future")).success,
+      ).toBe(false);
+    }
   });
 
   it("keeps old notifications placement-free while current explicit placement survives", () => {

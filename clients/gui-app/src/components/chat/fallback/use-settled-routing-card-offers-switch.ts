@@ -1,5 +1,4 @@
 import { create, useStore } from "zustand";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
@@ -15,6 +14,8 @@ import {
   useFailedTurnRefusal,
   type FailedTurnRefusal,
 } from "./failed-turn-actions";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 type SettledCardSlice = Pick<
   ChatSessionState,
@@ -129,7 +130,7 @@ export function settledRoutingCardOffersSwitch(
  * once it has seen this one.
  */
 function turnCarriesSettledReceipt(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   turnId: string,
 ): boolean {
   let seen = false;

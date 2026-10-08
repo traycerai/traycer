@@ -1,7 +1,4 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type { Message } from "@traycer/protocol/persistence/epic/messages";
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 
 import {
   finishContentFingerprint,
@@ -34,6 +31,12 @@ import {
   compareTranscriptRowOrder,
   type TranscriptFoldUnit,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection-fold-state";
+
+import type {
+  OpenChatEvent,
+  OpenContentBlock,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # Building the row skeleton
@@ -358,8 +361,8 @@ function contextDigestOf(
 function rowBodyFingerprint(
   source: TranscriptRowSource,
   context: TranscriptRowContext,
-  lookup: TranscriptRecordLookup,
-  blocksById: ReadonlyMap<string, ContentBlock>,
+  lookup: TranscriptRecordLookup<OpenMessage, OpenChatEvent>,
+  blocksById: ReadonlyMap<string, OpenContentBlock>,
   memo: RecordFingerprintMemo | null,
 ): RowBodyFingerprint {
   const digest = startContentFingerprint();
@@ -394,7 +397,9 @@ function rowBodyFingerprint(
   // covers strictly more than the length, never less.
   absorbContribution(contextDigestOf(memo, context));
 
-  const absorbRecord = (record: Message | ChatEvent | undefined): void => {
+  const absorbRecord = (
+    record: OpenMessage | OpenChatEvent | undefined,
+  ): void => {
     if (record === undefined) {
       absorbContribution(ABSENT_RECORD_MARKER);
       return;
@@ -527,9 +532,9 @@ function rowBodyFingerprint(
 }
 
 function blocksByIdFrom(
-  messages: readonly Message[],
-): ReadonlyMap<string, ContentBlock> {
-  const blocks = new Map<string, ContentBlock>();
+  messages: readonly OpenMessage[],
+): ReadonlyMap<string, OpenContentBlock> {
+  const blocks = new Map<string, OpenContentBlock>();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const block of message.blocks) blocks.set(block.blockId, block);
@@ -546,7 +551,7 @@ function blocksByIdFrom(
  */
 function rowUsage(
   source: TranscriptRowSource,
-  lookup: TranscriptRecordLookup,
+  lookup: TranscriptRecordLookup<OpenMessage, OpenChatEvent>,
   isLastRowOfTurn: boolean,
 ): RowSkeletonEntry["usage"] {
   if (source.kind !== "assistant-slice" || !isLastRowOfTurn) return undefined;
@@ -575,9 +580,12 @@ function rowUsage(
  */
 function isHumanUserRecord(
   source: TranscriptRowSource,
-  lookup: TranscriptRecordLookup,
-  blocksById: ReadonlyMap<string, ContentBlock>,
-): { readonly message: Message | undefined; readonly sentByAgent: boolean } {
+  lookup: TranscriptRecordLookup<OpenMessage, OpenChatEvent>,
+  blocksById: ReadonlyMap<string, OpenContentBlock>,
+): {
+  readonly message: OpenMessage | undefined;
+  readonly sentByAgent: boolean;
+} {
   const messageId =
     source.kind === "user"
       ? source.messageId
@@ -608,7 +616,7 @@ function isHumanUserRecord(
  */
 function steerBlockSentByAgent(
   blockId: string,
-  blocksById: ReadonlyMap<string, ContentBlock>,
+  blocksById: ReadonlyMap<string, OpenContentBlock>,
 ): boolean {
   const block = blocksById.get(blockId);
   if (block === undefined || block.type !== "steer") return false;
@@ -636,7 +644,7 @@ function steerBlockSentByAgent(
  * is recomputed, never what is computed.
  */
 export function buildRowSkeleton(
-  input: TranscriptRowProjectionInput,
+  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
   previewText: TranscriptPreviewProjection,
   memo: RecordFingerprintMemo | null,
 ): readonly RowSkeletonEntry[] {
@@ -697,8 +705,8 @@ export function transcriptFoldUnitSkeleton(
 function skeletonEntryOf(
   row: TranscriptRowDescriptor,
   isLastOfTurn: boolean,
-  lookup: TranscriptRecordLookup,
-  blocksById: ReadonlyMap<string, ContentBlock>,
+  lookup: TranscriptRecordLookup<OpenMessage, OpenChatEvent>,
+  blocksById: ReadonlyMap<string, OpenContentBlock>,
   previewText: TranscriptPreviewProjection,
   memo: RecordFingerprintMemo | null,
 ): RowSkeletonEntry {
@@ -728,7 +736,7 @@ function skeletonEntryOf(
   };
 }
 
-function userContent(message: Message): JsonContent {
+function userContent(message: OpenMessage): JsonContent {
   if (message.role !== "user") {
     throw new Error("build-skeleton: expected a user record");
   }

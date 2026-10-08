@@ -6,8 +6,8 @@ import type {
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
@@ -235,25 +235,25 @@ export interface ChatLowerApprovalsState {
 }
 
 export interface ChatLowerQueueState {
-  readonly editingItem: ChatQueuedPromptItem | null;
+  readonly editingItem: OpenChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
   readonly resumeRequested: boolean;
   readonly keepPausedRequested: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onCancel: (item: OpenChatQueuedItem) => void;
+  readonly onAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
   readonly onStopBackgroundSession: () => string | null;
   readonly onReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: OpenChatQueuedPromptItem) => void;
 }
 
 export interface ChatLowerComposerState {

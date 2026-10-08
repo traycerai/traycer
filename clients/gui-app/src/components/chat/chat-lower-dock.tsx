@@ -4,8 +4,8 @@ import { AnimatePresence } from "motion/react";
 import type {
   BackgroundItem,
   ChatActiveTurn,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PinnedTodoPanel } from "@/components/chat/chat-pinned-stack";
 import { ChatAccumulatedChangesPanel } from "@/components/chat/chat-accumulated-changes-panel";
@@ -141,14 +141,14 @@ export interface ChatLowerDockProps {
   readonly scrollRegionMaxHeightClass: string;
   readonly onQueuePause: () => string | null;
   readonly onQueueResume: () => string | null;
-  readonly onQueueEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onQueueCancel: (item: ChatQueuedItem) => void;
-  readonly onQueueAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onQueueEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onQueueCancel: (item: OpenChatQueuedItem) => void;
+  readonly onQueueAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onQueueReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onQueueSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onQueueSteerNow: (item: OpenChatQueuedPromptItem) => void;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;

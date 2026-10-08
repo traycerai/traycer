@@ -1,13 +1,7 @@
 import { createStore, useStore } from "zustand";
 import type { UseBoundStore, StoreApi } from "zustand";
-import {
-  chatEventSchema,
-  type ChatEvent,
-} from "@traycer/protocol/persistence/epic/chat-events";
-import {
-  messageSchema,
-  type Message,
-} from "@traycer/protocol/persistence/epic/messages";
+import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
+import { messageSchema } from "@traycer/protocol/persistence/epic/messages";
 import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
@@ -16,6 +10,11 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * A published chat, adapted into the shape the ordinary chat surface reads.
@@ -64,8 +63,8 @@ import type {
  */
 
 export interface PublishedChatConversion {
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+  readonly messages: readonly OpenMessage[];
+  readonly events: readonly OpenChatEvent[];
   /**
    * Messages and events this build could parse as chat-sync but not as its own
    * epic records. Surfaced beside the transcript's own fidelity line rather
@@ -84,8 +83,8 @@ export interface PublishedChatConversion {
 export function convertPublishedChat(
   presented: PresentedChat,
 ): PublishedChatConversion {
-  const messages: Message[] = [];
-  const events: ChatEvent[] = [];
+  const messages: OpenMessage[] = [];
+  const events: OpenChatEvent[] = [];
   let unreadableCount = 0;
   for (const message of presented.messages) {
     const rebuilt = rebuildMessage(message.raw, message.blocks);
@@ -112,10 +111,15 @@ export function convertPublishedChat(
  * Returns `null` only when the ENVELOPE itself is unrepresentable, which the
  * caller counts.
  */
+interface RebuiltMessage {
+  readonly message: OpenMessage;
+  readonly replacedBlockCount: number;
+}
+
 function rebuildMessage(
   raw: JsonObject,
   presentedBlocks: PresentedChat["messages"][number]["blocks"],
-): { readonly message: Message; readonly replacedBlockCount: number } | null {
+): RebuiltMessage | null {
   if (presentedBlocks.length === 0) {
     const parsed = messageSchema.safeParse(raw);
     return parsed.success
@@ -173,7 +177,7 @@ export function convertReplicaChat(
   rawMessages: readonly Record<string, unknown>[],
   rawEvents: readonly Record<string, unknown>[],
 ): PublishedChatConversion {
-  const messages: Message[] = [];
+  const messages: OpenMessage[] = [];
   let unreadableCount = 0;
   for (const raw of rawMessages) {
     const rebuilt = rebuildReplicaMessage(raw);
@@ -184,7 +188,7 @@ export function convertReplicaChat(
     messages.push(rebuilt.message);
     unreadableCount += rebuilt.replacedBlockCount;
   }
-  const events: ChatEvent[] = [];
+  const events: OpenChatEvent[] = [];
   for (const raw of rawEvents) {
     const parsed = chatEventSchema.safeParse(raw);
     if (parsed.success) events.push(parsed.data);
@@ -201,7 +205,7 @@ export function convertReplicaChat(
  */
 function rebuildReplicaMessage(
   raw: Record<string, unknown>,
-): { readonly message: Message; readonly replacedBlockCount: number } | null {
+): RebuiltMessage | null {
   const parsed = messageSchema.safeParse(raw);
   if (parsed.success) {
     return { message: parsed.data, replacedBlockCount: 0 };

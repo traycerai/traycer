@@ -17,14 +17,11 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
-import type {
-  InterviewAnswer,
-  UserMessageSender,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
   BackgroundItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -340,6 +337,8 @@ import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -2148,7 +2147,7 @@ function useChatTileSessionViewModel(
   // could supply.
   const editingQueueItem =
     projectedQueue.items.find(
-      (item): item is ChatQueuedPromptItem =>
+      (item): item is OpenChatQueuedPromptItem =>
         item.kind === "prompt" &&
         item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;

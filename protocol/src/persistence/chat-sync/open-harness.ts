@@ -26,6 +26,7 @@ import {
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { openHarnessIdSchema } from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * Open harness ids for the `chat-head` / `chat-shard` records.
@@ -89,11 +90,10 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * the derivation while sidestepping the helpers.
  */
 
-/**
- * A harness id as this record carries it: any non-empty string. Renderers
- * treat an id they do not recognize as a generic agent, never as a failure.
- */
-export const openHarnessIdSchema = lazySchema(() => z.string().min(1));
+// A harness id as this record carries it: any non-empty string, shared with the
+// epic record readers (`persistence/epic/open-harness-records.ts`). Renderers
+// treat an id they do not recognize as a generic agent, never as a failure.
+export { openHarnessIdSchema };
 
 /**
  * A provider-notice kind as this record carries it: any non-empty string.

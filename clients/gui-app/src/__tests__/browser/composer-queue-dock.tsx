@@ -3,8 +3,8 @@ import { createRoot } from "react-dom/client";
 import { LazyMotion, domAnimation } from "motion/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   CHAT_DOCK_PANEL_ROW,
@@ -63,7 +63,7 @@ import "@/index.css";
 type ChatQueueState = ChatSessionState["queue"];
 
 /** The sample's own queued prompt, re-keyed and re-worded per send. */
-function queuedPrompt(index: number, text: string): ChatQueuedPromptItem {
+function queuedPrompt(index: number, text: string): OpenChatQueuedPromptItem {
   const template = SAMPLE_QUEUE.items.find((item) => item.kind === "prompt");
   if (template?.kind !== "prompt") {
     throw new Error("the sample queue lost its prompt row");
@@ -175,7 +175,7 @@ export function ComposerQueueDockFixture(): ReactElement {
     };
     probeWindow.__probeReady = true;
   }, []);
-  const cancel = (item: ChatQueuedItem) => {
+  const cancel = (item: OpenChatQueuedItem) => {
     setQueue((current) => ({
       ...current,
       items: current.items.filter(

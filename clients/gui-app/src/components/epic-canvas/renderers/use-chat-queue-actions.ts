@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -92,15 +92,15 @@ export interface ChatQueueActionsInput {
 }
 
 export interface ChatQueueActionsResult {
-  readonly editQueuedItem: (item: ChatQueuedPromptItem) => void;
-  readonly cancelQueuedItem: (item: ChatQueuedItem) => void;
-  readonly abortSteerQueuedItem: (item: ChatQueuedPromptItem) => void;
+  readonly editQueuedItem: (item: OpenChatQueuedPromptItem) => void;
+  readonly cancelQueuedItem: (item: OpenChatQueuedItem) => void;
+  readonly abortSteerQueuedItem: (item: OpenChatQueuedPromptItem) => void;
   readonly cancelQueueEditMode: () => void;
   readonly reorderQueuedItem: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly steerQueuedItemNow: (item: ChatQueuedPromptItem) => void;
+  readonly steerQueuedItemNow: (item: OpenChatQueuedPromptItem) => void;
   readonly handleComposerSettingsChange: (settings: ChatRunSettings) => void;
   readonly steerRestart: {
     readonly open: boolean;
@@ -142,7 +142,7 @@ export function useChatQueueActions(
   // Set when steering a queued prompt requires ending the running turn (a
   // turn-start-baked setting differs); drives the confirm dialog.
   const [pendingSteerRestart, setPendingSteerRestart] = useState<{
-    readonly item: ChatQueuedItem;
+    readonly item: OpenChatQueuedItem;
     readonly decision: Extract<
       SteerSettingsDecision,
       { readonly kind: "interrupt_restart" }
@@ -235,7 +235,7 @@ export function useChatQueueActions(
   );
 
   const editQueuedItem = useCallback(
-    (item: ChatQueuedPromptItem): void => {
+    (item: OpenChatQueuedPromptItem): void => {
       if (item.delivery === "same_turn") {
         const actionId = chatActions.queueCancel(item.queueItemId);
         if (actionId === null) return;
@@ -295,7 +295,7 @@ export function useChatQueueActions(
   ]);
 
   const cancelQueuedItem = useCallback(
-    (item: ChatQueuedItem): void => {
+    (item: OpenChatQueuedItem): void => {
       const actionId = chatActions.queueCancel(item.queueItemId);
       if (actionId === null) return;
       if (editingQueueItemId === item.queueItemId) {
@@ -307,7 +307,7 @@ export function useChatQueueActions(
   );
 
   const abortSteerQueuedItem = useCallback(
-    (item: ChatQueuedItem): void => {
+    (item: OpenChatQueuedItem): void => {
       // Un-stage a still-pending steer: the host reverts it to a plain queued
       // item. Rejected host-side if the steer already began folding into the
       // turn - the row's affordance is only shown while it is safe to undo.
@@ -322,14 +322,14 @@ export function useChatQueueActions(
   }, [dispatchUi, restoreQueuedEditDraft]);
 
   const reorderQueuedItem = useCallback(
-    (item: ChatQueuedItem, beforeQueueItemId: string | null): void => {
+    (item: OpenChatQueuedItem, beforeQueueItemId: string | null): void => {
       chatActions.queueReorder(item.queueItemId, beforeQueueItemId);
     },
     [chatActions],
   );
 
   const steerQueuedItemNow = useCallback(
-    (item: ChatQueuedItem): void => {
+    (item: OpenChatQueuedItem): void => {
       // Read the live turn at call time instead of closing over `state.activeTurn`
       // (the store assigns a fresh object every snapshot, so depending on it would
       // re-create this callback every streamed token → lowerQueue → composerModel

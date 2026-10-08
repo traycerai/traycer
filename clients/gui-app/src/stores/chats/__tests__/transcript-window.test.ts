@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  ChatEvent,
-  ImageResolutionEntry,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { ImageResolutionEntry } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
-import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { OpenChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   assistantRowId,
@@ -45,6 +41,11 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 /**
  * The client half of the windowed transcript.
  *
@@ -60,7 +61,7 @@ const CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
 };
 
-function userMessage(messageId: string, timestamp: number): Message {
+function userMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "user",
     messageId,
@@ -75,7 +76,7 @@ function assistantMessage(
   messageId: string,
   turnId: string | null,
   timestamp: number,
-): Extract<Message, { role: "assistant" }> {
+): Extract<OpenMessage, { role: "assistant" }> {
   return {
     role: "assistant",
     messageId,
@@ -99,7 +100,7 @@ function assistantMessage(
   };
 }
 
-function event(eventId: string, timestamp: number): ChatEvent {
+function event(eventId: string, timestamp: number): OpenChatEvent {
   return {
     eventId,
     type: "turn.completed",
@@ -141,9 +142,9 @@ function rangeResponse(input: {
   readonly fromOrdinal: number;
   readonly rowIds: readonly string[];
   readonly incompleteRowIds?: readonly string[];
-  readonly messages: readonly Message[];
-  readonly events?: readonly ChatEvent[];
-}): ChatRangeResponse {
+  readonly messages: readonly OpenMessage[];
+  readonly events?: readonly OpenChatEvent[];
+}): OpenChatRangeResponse {
   return {
     requestId: `req-${input.fromOrdinal}`,
     epoch: input.epoch,
@@ -1344,7 +1345,7 @@ describe("held-copy preference for the active turn", () => {
   function seatedAssistantBlocks(
     window: TranscriptWindow,
     messageId: string,
-  ): Extract<Message, { role: "assistant" }>["blocks"] {
+  ): Extract<OpenMessage, { role: "assistant" }>["blocks"] {
     const seated = hydratedRecords(window).messages.find(
       (message) => message.messageId === messageId,
     );
@@ -1356,7 +1357,7 @@ describe("held-copy preference for the active turn", () => {
 
   function windowHoldingAssistant(
     turnId: string,
-    message: Extract<Message, { role: "assistant" }>,
+    message: Extract<OpenMessage, { role: "assistant" }>,
   ): TranscriptWindow {
     const seeded = applySkeletonChunk(
       applyWindowedSnapshot(
@@ -2820,7 +2821,7 @@ describe("stale spans", () => {
   function settledWithImages(
     messageId: string,
     entries: readonly ImageResolutionEntry[],
-  ): Extract<Message, { role: "assistant" }> {
+  ): Extract<OpenMessage, { role: "assistant" }> {
     return {
       ...assistantMessage(messageId, `t-${messageId}`, 5),
       blocksVersion: 3,
@@ -3250,14 +3251,14 @@ describe("stale spans", () => {
     const recordWith = (
       s1Entry: ImageResolutionEntry,
       s2Entry: ImageResolutionEntry,
-    ): Extract<Message, { role: "assistant" }> => ({
+    ): Extract<OpenMessage, { role: "assistant" }> => ({
       ...assistantMessage("a-dom", "t-a-dom", 5),
       blocksVersion: 3,
       imageResolutions: [s1Entry, s2Entry],
     });
     const rewriteBoth =
       (s1Entry: ImageResolutionEntry, s2Entry: ImageResolutionEntry) =>
-      (message: Message): Message =>
+      (message: OpenMessage): OpenMessage =>
         message.role !== "assistant"
           ? message
           : { ...message, imageResolutions: [s1Entry, s2Entry] };
@@ -4265,7 +4266,7 @@ describe("the record ledger", () => {
     // that trusted it would let the tail absorb a neighbour into one span far
     // past `SPAN_MERGE_MAX_BYTES`, exactly the unbounded-tail hazard the cap
     // exists to prevent.
-    const grow = (message: Message): Message =>
+    const grow = (message: OpenMessage): OpenMessage =>
       messageWithText(
         message,
         "g".repeat(Math.ceil(SPAN_MERGE_MAX_BYTES * 1.5)),
@@ -4402,7 +4403,7 @@ describe("the record ledger", () => {
 
 describe("reading a long chat upward from the tail", () => {
   /** ~400 KiB in one message, so a few rows cross the span merge cap. */
-  function fatMessage(messageId: string, timestamp: number): Message {
+  function fatMessage(messageId: string, timestamp: number): OpenMessage {
     return {
       role: "user",
       messageId,
@@ -5094,7 +5095,7 @@ describe("the streaming row's byte charge", () => {
     // shared budget out by whatever the rewrite changed. Pinned as an equality
     // against the same growth applied BEFORE the demotion, where the seat
     // measured it: "bigger than before" would pass on any charge at all.
-    const grow = (message: Message): Message =>
+    const grow = (message: OpenMessage): OpenMessage =>
       message.messageId === "m-0"
         ? messageWithText(message, "grown body ".repeat(400))
         : message;
@@ -5510,7 +5511,7 @@ describe("what an overlap keeps", () => {
   });
 
   it("keeps a live event that overtakes a rebasing snapshot", () => {
-    const setup: ChatEvent = {
+    const setup: OpenChatEvent = {
       eventId: "setup-after-rebase-snapshot",
       type: "setup.running",
       timestamp: 2,
@@ -5548,7 +5549,7 @@ describe("what an overlap keeps", () => {
   });
 
   it("retires a carried setup event after completed authority omits it", () => {
-    const setup: ChatEvent = {
+    const setup: OpenChatEvent = {
       eventId: "setup-deleted-by-rebuild",
       type: "setup.running",
       timestamp: 2,
@@ -5601,7 +5602,7 @@ describe("what an overlap keeps", () => {
   });
 
   it("tracks retained events across a same-epoch null-revision rebuild", () => {
-    const setup: ChatEvent = {
+    const setup: OpenChatEvent = {
       eventId: "setup-same-epoch-rebuild",
       type: "setup.running",
       timestamp: 2,
@@ -5725,7 +5726,7 @@ describe("what an overlap keeps", () => {
       null,
       null,
     );
-    const failed: ChatEvent = {
+    const failed: OpenChatEvent = {
       ...event("send-failed-deleted", 2),
       type: "send.failed",
       turnId,
@@ -5773,8 +5774,8 @@ describe("what an overlap keeps", () => {
   it("matches same-timestamp provisional setup windows one-to-one", () => {
     const setupEvent = (
       eventId: string,
-      type: ChatEvent["type"],
-    ): ChatEvent => ({
+      type: OpenChatEvent["type"],
+    ): OpenChatEvent => ({
       eventId,
       type,
       timestamp: 2,
@@ -6345,7 +6346,7 @@ describe("what an overlap keeps", () => {
     const turnId = "turn-after-setup";
     const transientId = transientLiveAssistantMessageId(turnId);
     const setupRowId = "setup-card:chat-1:1:100";
-    const setup: ChatEvent = {
+    const setup: OpenChatEvent = {
       eventId: "setup-second-window",
       type: "setup.running",
       timestamp: 100,
@@ -6391,8 +6392,8 @@ describe("what an overlap keeps", () => {
     const transientId = transientLiveAssistantMessageId(turnId);
     const setupEvent = (
       eventId: string,
-      type: ChatEvent["type"],
-    ): ChatEvent => ({
+      type: OpenChatEvent["type"],
+    ): OpenChatEvent => ({
       eventId,
       type,
       timestamp: 100,
@@ -6446,9 +6447,9 @@ describe("what an overlap keeps", () => {
   it("counts a withheld setup row before seating a later range setup", () => {
     const setupEvent = (
       eventId: string,
-      type: ChatEvent["type"],
+      type: OpenChatEvent["type"],
       timestamp: number,
-    ): ChatEvent => ({
+    ): OpenChatEvent => ({
       eventId,
       type,
       timestamp,
@@ -6490,9 +6491,9 @@ describe("what an overlap keeps", () => {
   it("counts a withheld setup row before seating a later inline-tail setup", () => {
     const setupEvent = (
       eventId: string,
-      type: ChatEvent["type"],
+      type: OpenChatEvent["type"],
       timestamp: number,
-    ): ChatEvent => ({
+    ): OpenChatEvent => ({
       eventId,
       type,
       timestamp,
@@ -7027,7 +7028,7 @@ describe("one record across several spans", () => {
     input: {
       readonly fromOrdinal: number;
       readonly rowIds: readonly string[];
-      readonly messages: readonly Message[];
+      readonly messages: readonly OpenMessage[];
     },
   ): TranscriptWindow {
     return applyRangeResponse(
@@ -7362,7 +7363,7 @@ describe("what a span charges the byte budget", () => {
     "row-1": { legacyRowAnchorAt: 5678 },
   };
 
-  function hydrated(rowContext: ChatRangeResponse["rowContext"]) {
+  function hydrated(rowContext: OpenChatRangeResponse["rowContext"]) {
     return applyRangeResponse(
       windowWithSkeleton(10),
       {
@@ -7402,7 +7403,7 @@ describe("what a span charges the byte budget", () => {
     // tempting single-window forms are vacuous: `bytes` still exceeds
     // `bytes - contextBytes` when the context was never added, and the
     // `contextBytes` field itself survives any re-measure that spreads a span.
-    const grow = (message: Message): Message =>
+    const grow = (message: OpenMessage): OpenMessage =>
       messageWithText(message, "streamed body ".repeat(50));
     const withContext = settleWindowBytes(
       streamWindowMessage(hydrated(CONTEXT), "m-0", grow, null).window,
@@ -7418,7 +7419,7 @@ describe("what a span charges the byte budget", () => {
   });
 
   it("keeps the context charge when records are remapped", () => {
-    const rewrite = (message: Message): Message =>
+    const rewrite = (message: OpenMessage): OpenMessage =>
       messageWithText(message, "a rewritten body");
     const withContext = mapWindowMessages(hydrated(CONTEXT), rewrite, null);
     const bare = mapWindowMessages(hydrated({}), rewrite, null);
@@ -7523,7 +7524,7 @@ describe("what a span charges the byte budget", () => {
   });
 });
 
-function messageWithText(message: Message, text: string): Message {
+function messageWithText(message: OpenMessage, text: string): OpenMessage {
   if (message.role !== "user") return message;
   return {
     ...message,

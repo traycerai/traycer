@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
@@ -30,6 +29,8 @@ import {
   nextHandoffTransition,
   type HandoffStep,
 } from "@/lib/chats/next-handoff-transition";
+
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 
 /**
  * Single owner for the chat-tile's initial-chat handoff lifecycle.

@@ -130,12 +130,14 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // receipt (`providerNotice.receipt`) and the queue's `pausedReason` took @1.18;
     // the skeleton-resume open claim and retained-prefix count took @1.19.
     // The Claude-parity surfaces took @1.20. The Command Code harness id took
-    // @1.21 (the released minors froze the row context without it).
+    // @1.21 (the released minors froze the row context without it). The
+    // open-harness-id line, which reopens every heard-from harness leaf to a
+    // string, took @1.22.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(21);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(22);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame that restates it on a live stream.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);

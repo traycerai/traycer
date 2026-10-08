@@ -10,6 +10,7 @@ import {
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
 import { subagentCardPath } from "@/components/chat/segments/subagent-display";
+import { knownHarnessId } from "@/lib/chat/sender-display";
 import type { SubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { useEpicContinueSubagent } from "@/hooks/epic/use-epic-continue-subagent-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -49,7 +50,13 @@ function openSubagentCard(
   for (const message of messages) {
     const card = subagentCardPath([message], openId)?.at(-1);
     if (card === undefined) continue;
-    return { card, provider: message.assistantMeta?.provider ?? null };
+    // A heard-from id off a `1.22` row may name a harness this build cannot
+    // continue a subagent on; `null` is the "not offered" branch below.
+    const meta = message.assistantMeta;
+    return {
+      card,
+      provider: meta === null ? null : knownHarnessId(meta.provider),
+    };
   }
   return null;
 }

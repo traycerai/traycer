@@ -1,7 +1,7 @@
 import type { GuiAgentCommandOption } from "@traycer/protocol/host/index";
 import type {
-  ChatQueuedItem,
-  ChatQueueState,
+  OpenChatQueuedItem,
+  OpenChatQueueState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
@@ -40,7 +40,7 @@ export function findManualCompactCommand(
  */
 const QUEUE_PROMOTION_TIMEOUT_MS = 15_000;
 
-function isAuthoritative(item: ChatQueuedItem): boolean {
+function isAuthoritative(item: OpenChatQueuedItem): boolean {
   return !isOptimisticQueuedItem(item);
 }
 
@@ -67,7 +67,7 @@ function isAuthoritative(item: ChatQueuedItem): boolean {
  * Returns a cancel function; call it if the surface unmounts first.
  */
 export function promoteQueuedMessageToFront<
-  TState extends { readonly queue: ChatQueueState },
+  TState extends { readonly queue: OpenChatQueueState },
 >(input: {
   /**
    * Structural rather than the concrete `ChatSessionStoreHandle["store"]`: this

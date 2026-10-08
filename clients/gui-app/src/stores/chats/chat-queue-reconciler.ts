@@ -1,16 +1,14 @@
 import type {
   ChatErrorNotice,
   ChatQueueDeliveryPolicy,
-  ChatQueueState,
+  OpenChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   restoreResultManifestSchema,
   type RestoreResultManifest,
@@ -29,6 +27,11 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
@@ -140,7 +143,7 @@ export function noticeCarriesOnlyCopy(notice: ChatErrorNotice): boolean {
 export type ReconcileQueueInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
-  readonly queue: ChatQueueState;
+  readonly queue: OpenChatQueueState;
   /**
    * Accepted records, because this frame confirms sends that are no longer
    * pending. See the stamping pass in {@link reconcileQueueChange}.
@@ -174,8 +177,8 @@ export type ReconcileQueuePatch = {
 export type ReconcileSnapshotInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
-  readonly messages: ReadonlyArray<Message>;
-  readonly queue: ChatQueueState;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly queue: OpenChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /**
    * The connection this snapshot arrived on. Absence from a snapshot is only
@@ -1337,11 +1340,11 @@ export function reconcileSnapshotChange(
           messageId: pending.messageId,
           content: pending.restore.content,
           browserAnnotations: pending.restore.browserAnnotations,
-          reason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
+          reason: `OpenMessage was not confirmed after reconnect.${deadSendAccountClauses(
             snapshotAccount,
             true,
           )}`,
-          displacedReason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
+          displacedReason: `OpenMessage was not confirmed after reconnect.${deadSendAccountClauses(
             snapshotAccount,
             false,
           )}`,
@@ -1528,8 +1531,8 @@ export type ReconcileTurnSettledInput = {
    */
   readonly recoveringActionIds: ReadonlySet<string>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
-  readonly messages: ReadonlyArray<Message>;
-  readonly queue: ChatQueueState;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly queue: OpenChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /** See {@link ReconcileSnapshotInput.currentSettings}. */
   readonly currentSettings: ChatRunSettings | null;
@@ -1820,7 +1823,7 @@ export function sweepStalePendingActions(
 function pendingActionIdsForQueuedMessages(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   pendingUserMessages: ReadonlyArray<PendingUserMessage>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): Set<string> {
   const pendingUsersByAction = new Map(
     pendingUserMessages.map((message) => [message.clientActionId, message]),
@@ -1904,7 +1907,7 @@ function pendingUserMessageFromPendingAction(
  * equality for pending messages not yet assigned an id by the host.
  */
 function queueContainsPendingSend(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   pendingMessageId: string,
   pendingUser: PendingUserMessage | undefined,
 ): boolean {
@@ -1935,7 +1938,7 @@ function queueContainsPendingSend(
  * pending actions have been confirmed by the host.
  */
 function confirmedMessageIdsForMessages(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
 ): Set<string> {
   return new Set(
     messages.flatMap((message) => {
@@ -2082,7 +2085,7 @@ export function pruneAcceptedActions(
  */
 export function withoutResolvedAcceptedQueueCancellations(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): Readonly<Record<string, AcceptedChatAction>> {
   const queueItemIds = new Set(queue.items.map((item) => item.queueItemId));
   const retained = Object.values(acceptedActions).filter(
@@ -2111,7 +2114,7 @@ export function withoutResolvedAcceptedQueueCancellations(
  * the held prompts the status stays `running` and a status-keyed verdict
  * would never settle.
  */
-export function queuePauseSettled(queue: ChatQueueState): boolean {
+export function queuePauseSettled(queue: OpenChatQueueState): boolean {
   return !queue.items.some(queueItemCanPauseFromQueueHeader);
 }
 
@@ -2123,7 +2126,7 @@ export function queuePauseSettled(queue: ChatQueueState): boolean {
  * `idle` or `running` can still carry paused rows, and a resume accepted
  * against it is not settled until they are released.
  */
-export function queueResumeSettled(queue: ChatQueueState): boolean {
+export function queueResumeSettled(queue: OpenChatQueueState): boolean {
   return !queue.items.some((item) => item.status === "paused");
 }
 
@@ -2146,7 +2149,7 @@ export function queueResumeSettled(queue: ChatQueueState): boolean {
  */
 export function withoutSettledAcceptedQueueStatusActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): Readonly<Record<string, AcceptedChatAction>> {
   return withoutAcceptedActions(acceptedActions, (action) => {
     if (action.action === "pauseQueue") return queuePauseSettled(queue);
@@ -2243,7 +2246,7 @@ export type RestoreAttemptEvidence =
  * the record retires, the spinner is cleared rather than completed.
  */
 export function restoreOutcomesFrom(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<RestoreAttemptEvidence> {
   const evidence: RestoreAttemptEvidence[] = [];
   for (const event of events) {
@@ -2596,7 +2599,7 @@ export function acceptedActionHoldsUnrecoveredSend(
 
 /** The live state an accepted action's settlement is judged against. */
 export interface AcceptedActionSettlementContext {
-  readonly queue: ChatQueueState;
+  readonly queue: OpenChatQueueState;
 }
 
 /**

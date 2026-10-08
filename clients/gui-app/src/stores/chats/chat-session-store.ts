@@ -60,7 +60,7 @@ import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-tr
 import type {
   ChatAccumulatedFileChangeSummary,
   ChatIndexChange,
-  ChatRangeResponse,
+  OpenChatRangeResponse,
   ChatTranscriptDerived,
   InterviewAnswerability,
   SetupCardWindowIdentity,
@@ -214,10 +214,7 @@ import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/brow
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import { addWithFifoEviction } from "@/lib/bounded-set";
-import type {
-  RuntimeApprovalDecision,
-  RuntimeEvent,
-} from "@traycer/protocol/host/agent/gui/agent-runtime";
+import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   accumulateTurnContent,
@@ -243,10 +240,10 @@ import type {
   ChatErrorNotice,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatQueueDeliveryPolicy,
-  ChatQueueState,
+  OpenChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
   ChatSubscribeClientFrame,
@@ -268,12 +265,8 @@ import type {
 } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   Chat,
-  ChatEvent,
-  ContentBlock,
   ImageResolutionEntry,
   InterviewAnswer,
-  Message,
-  UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { latestAssistantAuthFailureTurnKey } from "@traycer/protocol/persistence/chat-transcript/provider-auth-failure";
 import { v4 as uuidv4 } from "uuid";
@@ -298,6 +291,19 @@ import {
   writePersistedDeliveryRestoreAck,
 } from "@/lib/chats/delivery-restore-ack-persistence";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+
+import type {
+  OpenChat,
+  OpenChatEvent,
+  OpenContentBlock,
+  OpenMessage,
+  OpenRuntimeEvent,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+// The sender this client SENDS is its own - a user, or an agent on a harness
+// this build knows - so the send path keeps the closed shape; only what it
+// receives is open (`OpenMessage` above).
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
+import type { OpenChatSnapshot } from "@traycer/protocol/host/agent/gui/subscribe";
 
 export type ChatStreamClientHandle = Pick<
   ChatStreamClient,
@@ -462,7 +468,14 @@ export interface UnattendedFallbackOutcome {
   readonly sequence: number;
 }
 
-type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
+// The legacy callback delivers the closed full snapshot; the store also BUILDS
+// one from its windowed transcript, whose rows are open on `1.22`, so the one
+// snapshot type the store applies is the open one (the closed frame is
+// assignable to it).
+type ChatSnapshotFrame = Omit<
+  Parameters<ChatStreamCallbacks["onSnapshot"]>[0],
+  "snapshot"
+> & { readonly snapshot: OpenChatSnapshot };
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
 >[0];
@@ -811,8 +824,11 @@ export interface FailedSendRestorationState {
 
 export interface LiveAssistantMessage {
   readonly turnId: string;
-  readonly sender: Extract<Message, { readonly role: "assistant" }>["sender"];
-  readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly sender: Extract<
+    OpenMessage,
+    { readonly role: "assistant" }
+  >["sender"];
+  readonly blocks: ReadonlyArray<OpenContentBlock>;
   /**
    * `ChatActiveTurn.startedAt` - set once at turn-start and never updated.
    * Mirrors the schema field on persisted `AssistantMessage` so the live row
@@ -1047,7 +1063,7 @@ export type ChatSessionRecord = Omit<Chat, "messages" | "events">;
  * here and in {@link ChatSessionRecord}, and the two are checked against each
  * other by the return type.
  */
-function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
+function chatRecordWithoutTranscript(chat: OpenChat): ChatSessionRecord {
   const { messages: _messages, events: _events, ...record } = chat;
   return record;
 }
@@ -1231,9 +1247,9 @@ export interface ChatSessionState {
   readonly transcriptRowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly chat: ChatSessionRecord | null;
   readonly access: ChatAccess | null;
-  readonly messages: ReadonlyArray<Message>;
-  readonly events: ReadonlyArray<ChatEvent>;
-  readonly queue: ChatQueueState;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly events: ReadonlyArray<OpenChatEvent>;
+  readonly queue: OpenChatQueueState;
   /**
    * The host's delivery view of this chat's opening prompt
    * (`chat.subscribe@1.15`), or `null`: no opening, or a host older than the
@@ -2391,7 +2407,7 @@ export const MAX_PROVISIONAL_CATCH_UP_ROUNDS = 3;
  * which changes nothing about the active body and so is no evidence at all.
  */
 function countsAsActiveTurnWrite(
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
   activeTurnId: string | null,
 ): boolean {
   if (activeTurnId === null) return false;
@@ -2399,7 +2415,7 @@ function countsAsActiveTurnWrite(
   return event.turnId === activeTurnId;
 }
 
-const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
+const EMPTY_QUEUE: OpenChatQueueState = { status: "idle", items: [] };
 
 function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
   // Keyed by every `ChatRunSettings` field via `satisfies`: adding a field to
@@ -2794,10 +2810,10 @@ function rejectionRestoration(input: {
     messageId: pending.messageId,
     content: pending.restore.content,
     browserAnnotations: pending.restore.browserAnnotations,
-    reason: `${frame.reason ?? "Message was not accepted."}${
+    reason: `${frame.reason ?? "OpenMessage was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
-    displacedReason: `${frame.reason ?? "Message was not accepted."}${
+    displacedReason: `${frame.reason ?? "OpenMessage was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, false)
     }`,
     // This path owns a notice and says it there, so the ack stays quiet.
@@ -3024,9 +3040,9 @@ function withoutSettledAcceptedActions(
  * claiming a message the host does not have.
  */
 function queueWithoutSettledAcceptedSends(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   settled: ReadonlySet<string>,
-): ChatQueueState {
+): OpenChatQueueState {
   if (settled.size === 0) return queue;
   return [...settled].reduce(
     (next, clientActionId) =>
@@ -3431,7 +3447,7 @@ export function createChatSessionStoreWithNotificationDependencies(
   };
   const noteSendSnapshot = (
     messages: readonly { readonly messageId: string }[],
-    queue: ChatQueueState,
+    queue: OpenChatQueueState,
   ): void => {
     if (!sendTimings.enabled) return;
     for (const message of messages)
@@ -4116,7 +4132,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     // message/turn state (`onSnapshot`, `onTurnStateChanged`, `onMessageAccepted`,
     // `onInterviewRequested`) flushes the buffer first, so observable ordering
     // matches arrival order.
-    let bufferedDeltas: RuntimeEvent[] = [];
+    let bufferedDeltas: OpenRuntimeEvent[] = [];
 
     // `providers.list` nudge driven by the DURABLE auth-failure signal: an
     // error block tagged `code: "auth"` persisted on the latest assistant row
@@ -5823,7 +5839,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * question is what happened to the ordinals THIS request asked for, and
      * the request that replaced it in the slot cannot answer that.
      */
-    const rangeResponseIsStale = (response: ChatRangeResponse): boolean =>
+    const rangeResponseIsStale = (response: OpenChatRangeResponse): boolean =>
       recovery.rangeAnswerIsStale({
         requestId: response.requestId,
         fromOrdinal: response.fromOrdinal,
@@ -5841,7 +5857,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * outside until a screenshot arrived.
      */
     const rangeAnswerLogFields = (
-      response: ChatRangeResponse,
+      response: OpenChatRangeResponse,
     ): {
       readonly epicId: string;
       readonly chatId: string;
@@ -5904,7 +5920,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * still refuse it, and re-ask for a body that predates a dropped write.
      */
     const seatRangeAnswer = (
-      response: ChatRangeResponse,
+      response: OpenChatRangeResponse,
       /**
        * The write mark this answer's request was sent under, or `undefined` for
        * a request nothing recorded - a cap-evicted or boundary-abandoned id,
@@ -6023,7 +6039,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * answer seat at all", here is "is what it seated the whole of the turn".
      */
     const settleActiveTurnCatchUp = (input: {
-      readonly response: ChatRangeResponse;
+      readonly response: OpenChatRangeResponse;
       readonly seated: TranscriptWindow;
       readonly activeTurnId: string | null;
       /** No write was observed between this answer's request and its arrival. */
@@ -6381,8 +6397,8 @@ export function createChatSessionStoreWithNotificationDependencies(
      * HAS an ordinal.
      */
     const takeLiveRecords = (input: {
-      readonly messages: readonly Message[];
-      readonly events: readonly ChatEvent[];
+      readonly messages: readonly OpenMessage[];
+      readonly events: readonly OpenChatEvent[];
     }): void => {
       publishWindowedTranscript(
         appendLiveRecords(get().transcriptWindow, input),
@@ -11300,7 +11316,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Managed-command items carry no settings stamp at all (they dispatch on
         // the chat's current settings), so there is nothing to restamp.
         const pendingItems = get().queue.items.filter(
-          (item: ChatQueuedItem) =>
+          (item: OpenChatQueuedItem) =>
             item.kind === "prompt" &&
             item.sender.type !== "agent" &&
             item.status === "pending" &&
@@ -12606,8 +12622,8 @@ function queueEditRecordsAfterCancelAck(
 
 /** What the host can be seen to hold, as the queue-edit accounting reads it. */
 function queueEditEvidence(input: {
-  readonly queue: ChatQueueState;
-  readonly messages: ReadonlyArray<Message>;
+  readonly queue: OpenChatQueueState;
+  readonly messages: ReadonlyArray<OpenMessage>;
 }): QueueEditEvidence {
   return {
     queue: input.queue,
@@ -12692,7 +12708,7 @@ export function unconfirmedSendActionIdsOf(
 function settleCancelRestorations(
   restorations: Readonly<Record<string, PendingCancelRestoration | undefined>>,
   sweptActionIds: ReadonlySet<string>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): {
   readonly settledActionIds: ReadonlySet<string>;
   readonly honoured: ReadonlyArray<{
@@ -12831,10 +12847,10 @@ function basicPending(
  * ack-before-queueChanged window.
  */
 export function projectQueueWithPendingCancellations(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-): ChatQueueState {
+): OpenChatQueueState {
   const hiddenQueueItemIds = new Set(
     [
       ...Object.values(pendingActions),
@@ -12970,11 +12986,11 @@ function withoutInterviewActionsForBlock<
 }
 
 function isCurrentRetryableInterviewDelivery(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   liveAssistantMessage: LiveAssistantMessage | null,
   identity: InterviewDeliveryRetryIdentity,
 ): boolean {
-  const matchesBlock = (block: ContentBlock): boolean =>
+  const matchesBlock = (block: OpenContentBlock): boolean =>
     block.type === "interview" &&
     block.blockId === identity.blockId &&
     block.settlement?.settlementId === identity.settlementId &&
@@ -13002,7 +13018,7 @@ function withoutSupersededInterviewDeliveryRetryActions<
   },
 >(
   actions: Readonly<Record<string, T>>,
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   liveAssistantMessage: LiveAssistantMessage | null,
   retireBeforeConnectionEpoch: number | null,
 ): Readonly<Record<string, T>> {
@@ -13864,7 +13880,7 @@ function repaintOptimisticQueueRowForRetry(input: {
 
 function optimisticQueuedItemForSend(
   input: OptimisticQueuedItemForSendInput,
-): ChatQueuedPromptItem | null {
+): OpenChatQueuedPromptItem | null {
   if (!shouldRenderSendAsOptimisticQueuedItem(input.state)) return null;
   const now = Date.now();
   return {
@@ -13899,7 +13915,7 @@ function shouldRenderSendAsOptimisticQueuedItem(
 }
 
 function messageExists(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   messageId: string,
 ): boolean {
   return messages.some(
@@ -13908,7 +13924,7 @@ function messageExists(
 }
 
 function eventExists(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
   eventId: string,
 ): boolean {
   return events.some((event) => event.eventId === eventId);
@@ -13966,7 +13982,7 @@ function withoutPendingInterview(
 
 function applyBlockDelta(
   state: ChatSessionState,
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   return event.type === "image_resolution.updated"
@@ -13976,7 +13992,7 @@ function applyBlockDelta(
 
 function applyImageResolutionDelta(
   state: ChatSessionState,
-  event: Extract<RuntimeEvent, { type: "image_resolution.updated" }>,
+  event: Extract<OpenRuntimeEvent, { type: "image_resolution.updated" }>,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   // Recorded FIRST, and unconditionally: the witness is evidence about the
@@ -14073,7 +14089,7 @@ function applyImageResolutionDelta(
 
 function applyContentDelta(
   state: ChatSessionState,
-  event: Exclude<RuntimeEvent, { type: "image_resolution.updated" }>,
+  event: Exclude<OpenRuntimeEvent, { type: "image_resolution.updated" }>,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
@@ -14177,9 +14193,9 @@ function applyContentDelta(
 // owner rule below, and the session memory that tells a first one from a
 // repeat.
 function isSubagentCardOpeningEvent(
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
 ): event is Extract<
-  RuntimeEvent,
+  OpenRuntimeEvent,
   { type: "subagent.started" | "workflow.started" }
 > {
   return event.type === "subagent.started" || event.type === "workflow.started";
@@ -14191,7 +14207,7 @@ function isSubagentCardOpeningEvent(
 // pair grows. Both triples address the SAME card by their own `blockId`; the
 // only thing that differs between them is which event opens it.
 function subagentCardOwnerTarget(
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
 ): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
   if (isSubagentCardOpeningEvent(event)) {
     return { ownerBlockId: event.blockId, ownerMustExist: false };
@@ -14208,7 +14224,7 @@ function subagentCardOwnerTarget(
 }
 
 function detachedSubagentOwnerTarget(
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
 ): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
   const parentBlockId =
     "parentBlockId" in event &&
@@ -14438,7 +14454,7 @@ function withColdRewrite(
 function rewriteMessageInPlace(
   state: ChatSessionState,
   messageId: string,
-  update: (message: Message) => Message,
+  update: (message: OpenMessage) => OpenMessage,
   apply: {
     readonly charge: "now" | "deferred";
     readonly witnesses: ImageWitnessStore | null;
@@ -14491,7 +14507,7 @@ function rewriteMessageInPlace(
   };
 }
 
-type InterviewBlock = Extract<ContentBlock, { readonly type: "interview" }>;
+type InterviewBlock = Extract<OpenContentBlock, { readonly type: "interview" }>;
 type InterviewLifecycleProjection = {
   readonly kind: "answered" | "errored";
   readonly blockId: string;
@@ -14560,12 +14576,12 @@ const CLAUDE_RUNTIME_DISPOSED_ERROR_CODE = "CLAUDE_RUNTIME_DISPOSED";
  * is the live mirror for a row the client already hydrated.
  */
 function withRuntimeDisposalRetiredForInterview(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   targetInterviewIndex: number,
   targetSettledAt: number,
-): ReadonlyArray<ContentBlock> {
+): ReadonlyArray<OpenContentBlock> {
   let nearestInterviewIndex = -1;
-  const retained: ContentBlock[] = [];
+  const retained: OpenContentBlock[] = [];
   for (const [index, block] of blocks.entries()) {
     if (block.type === "interview") nearestInterviewIndex = index;
     if (
@@ -14584,10 +14600,10 @@ function withRuntimeDisposalRetiredForInterview(
 }
 
 function withInterviewLifecycleBlocks(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   projection: InterviewLifecycleProjection,
   allowUnresolvedFallback: boolean,
-): ReadonlyArray<ContentBlock> {
+): ReadonlyArray<OpenContentBlock> {
   const targetIndex = interviewLifecycleBlockIndex(
     blocks,
     projection,
@@ -14596,7 +14612,7 @@ function withInterviewLifecycleBlocks(
   if (targetIndex < 0) return blocks;
   const block = blocks[targetIndex];
   if (block.type !== "interview") return blocks;
-  let updated: ContentBlock;
+  let updated: OpenContentBlock;
   if (
     projection.settlementId !== null &&
     projection.settlementSource !== null &&
@@ -14643,7 +14659,7 @@ function withInterviewLifecycleBlocks(
             delivery,
           };
   }
-  let settled: ReadonlyArray<ContentBlock> = blocks;
+  let settled: ReadonlyArray<OpenContentBlock> = blocks;
   if (updated !== block) {
     const next = blocks.slice();
     next[targetIndex] = updated;
@@ -14687,7 +14703,7 @@ function withInterviewLifecycleBlocks(
  * disposal the answer truly predates.
  */
 function lifecycleFrameOwnsInterviewSettlement(
-  settledInterview: Extract<ContentBlock, { type: "interview" }>,
+  settledInterview: Extract<OpenContentBlock, { type: "interview" }>,
   projection: InterviewLifecycleProjection,
 ): boolean {
   if (settledInterview.outcome !== "answered") return false;
@@ -14700,7 +14716,7 @@ function lifecycleFrameOwnsInterviewSettlement(
 }
 
 function interviewLifecycleBlockIndex(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   projection: InterviewLifecycleProjection,
   allowUnresolvedFallback: boolean,
 ): number {
@@ -14734,11 +14750,11 @@ function interviewLifecycleBlockIndex(
 }
 
 function withInterviewLifecycleProjectionPass(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   projection: InterviewLifecycleProjection,
   allowUnresolvedFallback: boolean,
 ): {
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   readonly matched: boolean;
   /**
    * The one row this pass rewrote, or `null` if it rewrote none.
@@ -14782,11 +14798,11 @@ function withInterviewLifecycleProjectionPass(
 }
 
 function withInterviewLifecycleState(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   liveAssistantMessage: LiveAssistantMessage | null,
   projection: InterviewLifecycleProjection,
 ): {
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly matchedOwner: boolean;
   readonly resolvedPendingOwner: boolean;
@@ -14875,7 +14891,10 @@ function withInterviewLifecycleState(
   };
 }
 
-function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
+function assistantMessageOwnsBlock(
+  message: OpenMessage,
+  blockId: string,
+): boolean {
   return (
     message.role === "assistant" &&
     message.blocks.some((block) => block.blockId === blockId)
@@ -14894,7 +14913,7 @@ function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
 function applySteerSplitCarryoverEvent(
   state: ChatSessionState,
   assistantIndex: number,
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> | null {
   if (assistantIndex < 0) return null;
@@ -14944,10 +14963,10 @@ function applySteerSplitCarryoverEvent(
 // a provider blockId reused across turns (e.g. a resumed agent) can never
 // resurrect an unrelated old row. Returns -1 when no sibling owns it.
 function earlierSameTurnRowOwningEventBlock(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   activeIndex: number,
   turnId: string | null,
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
 ): number {
   if (turnId === null || !("blockId" in event)) return -1;
   const parentBlockId =
@@ -14975,7 +14994,7 @@ function earlierSameTurnRowOwningEventBlock(
 // null when no message owns the block (caller falls back to active-turn routing).
 function applyEventToOwningMessage(
   state: ChatSessionState,
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
   ownerBlockId: string,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> | null {
@@ -15027,7 +15046,7 @@ function applyEventToOwningMessage(
  */
 function applyContentBlockDelta(
   state: ChatSessionState,
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   const applied = reduceContentBlockDelta(state, event, witnesses);
@@ -15062,7 +15081,7 @@ function applyContentBlockDelta(
 // eslint-disable-next-line complexity
 function reduceContentBlockDelta(
   state: ChatSessionState,
-  event: RuntimeEvent,
+  event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   const assistantIndex = findAssistantMessageIndex(
@@ -15242,7 +15261,7 @@ function reduceContentBlockDelta(
 }
 
 function findAssistantMessageIndex(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   turnId: string | null,
 ): number {
   if (turnId === null) return -1;
@@ -15284,15 +15303,15 @@ function snapshotPreviousTurnId(
  */
 function turnStateMessages(input: {
   readonly windowed: boolean;
-  readonly previousMessages: ReadonlyArray<Message>;
+  readonly previousMessages: ReadonlyArray<OpenMessage>;
   readonly previousWindow: TranscriptWindow;
   readonly nextWindow: TranscriptWindow;
-  readonly materialized: Message | null;
+  readonly materialized: OpenMessage | null;
   readonly turnIds: {
     readonly previousTurnId: string | null;
     readonly nextTurnId: string | null;
   };
-}): ReadonlyArray<Message> {
+}): ReadonlyArray<OpenMessage> {
   if (input.windowed) {
     return input.nextWindow === input.previousWindow
       ? input.previousMessages
@@ -15317,7 +15336,7 @@ function turnStateMessages(input: {
 function turnRemapFor(turnIds: {
   readonly previousTurnId: string | null;
   readonly nextTurnId: string | null;
-}): ((message: Message) => Message) | null {
+}): ((message: OpenMessage) => OpenMessage) | null {
   const previousTurnId = turnIds.previousTurnId;
   const nextTurnId = turnIds.nextTurnId;
   if (
@@ -15327,19 +15346,19 @@ function turnRemapFor(turnIds: {
   ) {
     return null;
   }
-  return (message: Message): Message =>
+  return (message: OpenMessage): OpenMessage =>
     message.role === "assistant" && message.turnId === previousTurnId
       ? { ...message, turnId: nextTurnId }
       : message;
 }
 
 function messagesForTurnStateChange(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   turnIds: {
     readonly previousTurnId: string | null;
     readonly nextTurnId: string | null;
   },
-): ReadonlyArray<Message> {
+): ReadonlyArray<OpenMessage> {
   const remap = turnRemapFor(turnIds);
   return remap === null ? messages : messages.map(remap);
 }
@@ -15356,13 +15375,13 @@ function messagesForTurnStateChange(
  * republished the array from a window that never received the row.
  */
 function materializedLiveAssistant(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
   liveAssistant: LiveAssistantMessage | null,
   turnIds: {
     readonly previousActiveTurnId: string | null;
     readonly nextActiveTurnId: string | null;
   },
-): Message | null {
+): OpenMessage | null {
   if (liveAssistant === null) return null;
   if (liveAssistantCoveredByMessages(liveAssistant, messages)) return null;
   if (
@@ -15393,7 +15412,7 @@ function materializedLiveAssistant(
 function assistantMessageFromLiveAssistant(
   liveAssistant: LiveAssistantMessage,
   fallbackStatus: FinalizedActionStatus,
-): Extract<Message, { role: "assistant" }> {
+): Extract<OpenMessage, { role: "assistant" }> {
   // Spread converts the readonly live blocks to the mutable array the accumulator
   // signature takes (it does not mutate in place).
   const liveBlocks = [...liveAssistant.blocks];
@@ -15446,7 +15465,7 @@ function liveAssistantForActiveTurnState(input: {
   readonly current: LiveAssistantMessage | null;
   readonly previousTurnId: string | null;
   readonly activeTurn: ChatActiveTurn;
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
 }): LiveAssistantMessage | null {
   const current =
     input.current !== null &&
@@ -15477,7 +15496,7 @@ function liveAssistantForTurnStateFrame(input: {
   readonly current: LiveAssistantMessage | null;
   readonly previousTurnId: string | null;
   readonly activeTurn: ChatActiveTurn | null;
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
 }): LiveAssistantMessage | null {
   if (input.activeTurn === null) {
     if (liveAssistantCoveredByMessages(input.current, input.messages)) {
@@ -15526,7 +15545,7 @@ function liveAssistantForActiveTurn(
 
 function liveAssistantCoveredByMessages(
   liveAssistant: LiveAssistantMessage | null,
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
 ): boolean {
   if (liveAssistant === null) return true;
   return messages.some(

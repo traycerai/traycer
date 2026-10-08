@@ -10,8 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatQueuedManagedCommandItem,
   ChatQueuedPortForwardItem,
   ChatRunSettings,
@@ -441,7 +441,7 @@ describe("<QueuedMessagePanel />", () => {
   });
 
   it("offers an un-stage control for a safe-point steer still waiting", () => {
-    const waiting: ChatQueuedItem = {
+    const waiting: OpenChatQueuedItem = {
       ...queuedItem("queue-1", "Waiting prompt", "steer_requested"),
       delivery: "same_turn",
       targetTurnId: "turn-1",
@@ -473,7 +473,7 @@ describe("<QueuedMessagePanel />", () => {
   });
 
   it("hides the un-stage control for an interrupt-restart steer", () => {
-    const restarting: ChatQueuedItem = {
+    const restarting: OpenChatQueuedItem = {
       ...queuedItem("queue-1", "Restart prompt", "steer_requested"),
       targetTurnId: "turn-1",
       steerRequest: {
@@ -1058,7 +1058,7 @@ describe("<QueuedMessagePanel />", () => {
     function steerRequestedItem(
       queueItemId: string,
       mode: "safe_point" | "interrupt_restart",
-    ): ChatQueuedPromptItem {
+    ): OpenChatQueuedPromptItem {
       return {
         ...queuedItem(queueItemId, `${queueItemId} text`, "steer_requested"),
         delivery: mode === "safe_point" ? "same_turn" : "next_turn",
@@ -1394,7 +1394,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
 
     function renderReasonRow(
       queue: ChatSessionState["queue"],
-      item: ChatQueuedItem,
+      item: OpenChatQueuedItem,
     ): HTMLElement {
       renderPanel({
         queue: { ...queue, items: [item] },
@@ -1406,9 +1406,9 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     }
 
     function promptWithReason(
-      status: ChatQueuedPromptItem["status"],
+      status: OpenChatQueuedPromptItem["status"],
       reason: string | null,
-    ): ChatQueuedPromptItem {
+    ): OpenChatQueuedPromptItem {
       return {
         ...queuedItem("queue-reason", "Held prompt", status),
         fallbackReason: reason,
@@ -1559,7 +1559,7 @@ interface PanelInput {
   readonly onPause?: () => string | null;
   readonly onResume?: () => string | null;
   readonly onReorder:
-    | ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void)
+    | ((item: OpenChatQueuedItem, beforeQueueItemId: string | null) => void)
     | null;
 }
 
@@ -1589,13 +1589,13 @@ function renderPanel(input: PanelInput) {
 }
 
 function queueState(
-  items: ReadonlyArray<ChatQueuedItem>,
+  items: ReadonlyArray<OpenChatQueuedItem>,
 ): ChatSessionState["queue"] {
   return { status: "idle", items: [...items] };
 }
 
 function runningQueueState(
-  items: ReadonlyArray<ChatQueuedItem>,
+  items: ReadonlyArray<OpenChatQueuedItem>,
 ): ChatSessionState["queue"] {
   return { status: "running", items: [...items] };
 }
@@ -1603,8 +1603,8 @@ function runningQueueState(
 function queuedItem(
   queueItemId: string,
   text: string,
-  status: ChatQueuedItem["status"],
-): ChatQueuedPromptItem {
+  status: OpenChatQueuedItem["status"],
+): OpenChatQueuedPromptItem {
   return {
     kind: "prompt",
     queueItemId,
@@ -1667,7 +1667,7 @@ function portForwardQueuedItem(
 function agentQueuedItem(
   queueItemId: string,
   text: string,
-): ChatQueuedPromptItem {
+): OpenChatQueuedPromptItem {
   return {
     ...queuedItem(queueItemId, text, "pending"),
     sender: {

@@ -50,8 +50,8 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
   ChatActiveTurn,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 import {
@@ -108,7 +108,7 @@ interface QueuedMessageRowActionState {
 }
 
 interface QueuedMessageRowActionStateInput {
-  readonly item: ChatQueuedItem;
+  readonly item: OpenChatQueuedItem;
   /** This row's own unanswered mutation, or `null` when it has none. */
   readonly inFlight: QueueItemInFlight | null;
   readonly queueStatus: ChatSessionState["queue"]["status"];
@@ -126,7 +126,7 @@ interface QueuedMessageRowChrome {
 }
 
 interface QueuedMessageRowChromeInput {
-  readonly promptItem: ChatQueuedPromptItem | null;
+  readonly promptItem: OpenChatQueuedPromptItem | null;
   readonly receivedAgentResponse: boolean;
   readonly readOnly: boolean;
   readonly canAct: boolean;
@@ -161,17 +161,17 @@ export interface QueuedMessagePanelProps {
   // compiler - not a runtime guard - is what keeps it out of these paths.
   // Cancel and reorder stay on the union: both key off `queueItemId` alone and
   // both are offered for managed-command items.
-  readonly onEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onCancel: (item: OpenChatQueuedItem) => void;
+  readonly onAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: OpenChatQueuedPromptItem) => void;
 }
 
-function queueItemAllowsReorder(item: ChatQueuedItem): boolean {
+function queueItemAllowsReorder(item: OpenChatQueuedItem): boolean {
   return !queueItemSteerLocked(item) && item.status !== "injected";
 }
 
@@ -644,7 +644,7 @@ export function QueuedMessageHeader(props: {
 }
 
 const QueuedMessageRow = memo(function QueuedMessageRow(props: {
-  readonly item: ChatQueuedItem;
+  readonly item: OpenChatQueuedItem;
   readonly index: number;
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
@@ -665,10 +665,10 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     queueItemId: string,
     element: HTMLDivElement | null,
   ) => void;
-  readonly onEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
-  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onCancel: (item: OpenChatQueuedItem) => void;
+  readonly onAbortSteer: (item: OpenChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: OpenChatQueuedPromptItem) => void;
 }) {
   const {
     item,
@@ -831,7 +831,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
 });
 
 function QueuedMessageRowContent(props: {
-  readonly item: ChatQueuedItem;
+  readonly item: OpenChatQueuedItem;
   readonly statusLabel: string | null;
   /** Why the status is what it is, where the label alone does not say. */
   readonly statusTooltip: string | null;
@@ -964,7 +964,7 @@ const QUEUE_WIDE_PAUSE_HOST_REASONS: ReadonlySet<string> = new Set([
  * queue-wide notes are recognised by the GUI's own copies of them.
  */
 function QueuedMessageFallbackReason(props: {
-  readonly item: ChatQueuedItem;
+  readonly item: OpenChatQueuedItem;
   readonly pillSaysPausedAfterError: boolean;
 }) {
   if (props.item.kind !== "prompt") return null;
@@ -1005,7 +1005,7 @@ function QueuedMessageFallbackReason(props: {
  * its line, content keeps its three.
  */
 /** The one badge a queued row's provenance calls for, or `null` for none. */
-function queuedMessageProvenanceBadge(item: ChatQueuedItem): ReactNode {
+function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
   if (isReceivedAgentResponse(item))
     return <ReceivedAgentBadge sender={item.sender} />;
   if (item.kind === "managed-command")
@@ -1021,7 +1021,7 @@ function queuedMessageProvenanceBadge(item: ChatQueuedItem): ReactNode {
 }
 
 function QueuedMessageProvenanceChip(props: {
-  readonly item: ChatQueuedItem;
+  readonly item: OpenChatQueuedItem;
 }): ReactNode {
   const badge = queuedMessageProvenanceBadge(props.item);
   if (badge === null) return null;
@@ -1234,7 +1234,7 @@ function queuedMessageRowChrome(
  * has not seen yet.
  */
 function queuedMessageRowLocked(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
   inFlight: QueueItemInFlight | null,
 ): boolean {
   return (
@@ -1300,7 +1300,7 @@ export const QUEUED_MESSAGE_WAITING_FOR_PROVIDER_LABEL = "Waiting for provider";
  * pill is never what distinguishes confirmed from local.
  */
 function queuedMessageStatusLabel(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
   pausedAfterError: boolean,
   local: {
     readonly inFlight: QueueItemInFlight | null;
@@ -1322,7 +1322,7 @@ function queuedMessageStatusLabel(
 
 /** The host's own account of a row, read off its item and nothing else. */
 function hostConfirmedStatusLabel(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
   pausedLabel: string,
   queuePaused: boolean,
 ): string | null {
@@ -1374,7 +1374,7 @@ function hostConfirmedStatusLabel(
  * read as the moment the host accepted it.
  */
 function queuedMessageStatusTooltip(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
   input: {
     readonly inFlight: QueueItemInFlight | null;
     readonly pausedAfterErrorTooltip: string | null;
@@ -1445,7 +1445,10 @@ function QueuedMessageStatusBadge(props: {
  * read-only (reorder only) and naming the agent it came from.
  */
 function ReceivedAgentBadge(props: {
-  readonly sender: Extract<ChatQueuedPromptItem["sender"], { type: "agent" }>;
+  readonly sender: Extract<
+    OpenChatQueuedPromptItem["sender"],
+    { type: "agent" }
+  >;
 }) {
   const name =
     props.sender.displayName !== null && props.sender.displayName.length > 0
@@ -1470,7 +1473,7 @@ function ReceivedAgentBadge(props: {
 }
 
 function queuedMessageEditActionCopy(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
 ): QueuedMessageEditActionCopy {
   if (item.kind !== "prompt" || item.delivery !== "same_turn") {
     return {

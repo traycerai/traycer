@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
-import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpenChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import {
@@ -12,6 +11,8 @@ import {
   readEpicCreateSeed,
   releaseEpicCreateSeed,
 } from "@/lib/worktree/pending-epic-create-seeds";
+
+import type { OpenChatEvent } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * Module-private stable empty partition, mirroring `chat-tile.tsx`'s own. A
@@ -100,8 +101,8 @@ interface StillProvisioningInput {
   readonly seededMessageId: string | null;
   readonly epicId: string;
   readonly chatId: string;
-  readonly queue: ChatQueueState;
-  readonly events: ReadonlyArray<ChatEvent>;
+  readonly queue: OpenChatQueueState;
+  readonly events: ReadonlyArray<OpenChatEvent>;
   readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
 }
 

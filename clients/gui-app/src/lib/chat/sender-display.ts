@@ -1,7 +1,11 @@
+// The OPEN sender shapes: `chat.subscribe@1.22` carries a heard-from harness
+// id as written, so a row's sender may name a harness this build does not
+// know. Every closed sender is assignable to its open shape, so callers that
+// build one from the chat's own settings pass unchanged.
 import type {
-  AgentSender,
-  UserMessageSender,
-} from "@traycer/protocol/persistence/epic/schemas";
+  OpenAgentSender,
+  OpenUserMessageSender,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { EpicCollaboratorView } from "@/hooks/epics/use-epic-collaborators-query";
 import type { GuiHarnessId } from "@traycer/protocol/host";
@@ -16,15 +20,12 @@ export interface SenderDisplayContext {
   >;
 }
 
-export function agentModelKey(
-  provider: AgentSender["harnessId"],
-  model: string,
-): string {
+export function agentModelKey(provider: string, model: string): string {
   return `${provider}:${model}`;
 }
 
 export function resolveSenderLabel(
-  sender: UserMessageSender,
+  sender: OpenUserMessageSender,
   context: SenderDisplayContext,
 ): string {
   if (sender.type === "agent") {
@@ -46,7 +47,7 @@ export interface AgentSenderDisplay {
 }
 
 export function resolveAgentSenderDisplay(
-  sender: AgentSender,
+  sender: OpenAgentSender,
   context: SenderDisplayContext,
 ): AgentSenderDisplay {
   const providerLabel = agentProviderLabel(sender.harnessId);
@@ -58,7 +59,7 @@ export function resolveAgentSenderDisplay(
 }
 
 export function resolveAgentReasoningLabel(
-  sender: AgentSender,
+  sender: OpenAgentSender,
   reasoningEffort: string | null,
   context: SenderDisplayContext,
 ): string | null {
@@ -84,7 +85,7 @@ export function resolveAgentReasoningLabel(
 }
 
 function agentModelLabel(
-  sender: AgentSender,
+  sender: OpenAgentSender,
   providerLabel: string,
   context: SenderDisplayContext,
 ): string {
@@ -102,7 +103,7 @@ function agentModelLabel(
 }
 
 function modelLabelFromDisplayName(
-  sender: AgentSender,
+  sender: OpenAgentSender,
   context: SenderDisplayContext,
 ): string | undefined {
   if (sender.displayName === null) return undefined;
@@ -112,7 +113,7 @@ function modelLabelFromDisplayName(
 }
 
 function reasoningLabelForModel(
-  provider: GuiHarnessId,
+  provider: string,
   model: string,
   reasoningEffort: string,
   context: SenderDisplayContext,
@@ -159,6 +160,27 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   commandcode: "Command Code",
 };
 
-export function agentProviderLabel(provider: GuiHarnessId): string {
-  return AGENT_PROVIDER_LABEL[provider];
+function isKnownProvider(provider: string): provider is GuiHarnessId {
+  return Object.hasOwn(AGENT_PROVIDER_LABEL, provider);
+}
+
+/**
+ * A known harness gets its label; an unknown one (a sender on a harness this
+ * build predates, decoded as written on `chat.subscribe@1.22`) gets its raw id.
+ * The raw id is the honest answer: never another provider's name, never a
+ * blank "Provider" row.
+ */
+export function agentProviderLabel(provider: string): string {
+  return isKnownProvider(provider) ? AGENT_PROVIDER_LABEL[provider] : provider;
+}
+
+/**
+ * The harness id as this build knows it, or `null` for one it does not: the
+ * narrowing a DRIVE affordance needs (open that provider's settings, continue
+ * a subagent on that harness) when its input is a heard-from id off a `1.22`
+ * row. `null` is the affordance's own "no harness in hand" branch, never a
+ * substitute provider.
+ */
+export function knownHarnessId(provider: string): GuiHarnessId | null {
+  return isKnownProvider(provider) ? provider : null;
 }

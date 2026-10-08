@@ -1,8 +1,9 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   chatQueuedItemSchema,
-  type ChatQueuedItem,
+  type OpenChatQueuedItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+
+import type { OpenChatEvent } from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # Which user messages completed an interrupt-restart steer
@@ -36,7 +37,7 @@ import {
  * imports this one.
  */
 export function steeredMessageIdsFromEvents(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlySet<string> {
   const fold = newSteerLifecycleFold();
   for (const event of events) applySteerLifecycleEvent(fold, event);
@@ -62,7 +63,7 @@ export function newSteerLifecycleFold(): SteerLifecycleFold {
 }
 
 /** The event types that move {@link SteerLifecycleFold}. Every other type is a no-op. */
-export const STEER_LIFECYCLE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> =
+export const STEER_LIFECYCLE_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> =
   new Set([
     "queue.steerRequested",
     "queue.fallback",
@@ -74,7 +75,7 @@ export const STEER_LIFECYCLE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> =
 /** One step of {@link steeredMessageIdsFromEvents}, applied in place. */
 export function applySteerLifecycleEvent(
   fold: SteerLifecycleFold,
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): void {
   const { steeredMessageIds, steerRequestMessageIdsByQueueItemId } = fold;
   if (event.type === "queue.steerRequested") {
@@ -124,7 +125,7 @@ export function applySteerLifecycleEvent(
   }
 }
 
-function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
+function isInterruptRestartSteerRequest(event: OpenChatEvent): boolean {
   if (event.type !== "queue.steerRequested") return false;
   const requestedItems = queueItemsFromEventMetadata(event.metadata);
   for (const item of requestedItems) {
@@ -137,7 +138,7 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
 }
 
 function queueItemHasActiveInterruptRestartSteer(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
 ): boolean {
   if (item.kind !== "prompt") return false;
   return (
@@ -148,8 +149,8 @@ function queueItemHasActiveInterruptRestartSteer(
 }
 
 function queueItemsFromEventMetadata(
-  metadata: ChatEvent["metadata"],
-): ReadonlyArray<ChatQueuedItem> {
+  metadata: OpenChatEvent["metadata"],
+): ReadonlyArray<OpenChatQueuedItem> {
   if (metadata === null) return [];
   const stateItems = metadata["items"];
   if (Array.isArray(stateItems)) {

@@ -113,6 +113,40 @@ const CHAT_SUBSCRIBE_AUTO_MODE_MINOR = 13;
 const CHAT_SUBSCRIBE_AUTO_JUDGE_NOTICE_MINOR = 16;
 
 /**
+ * The minor on which the leaves a chat names a harness through WITHOUT the
+ * peer acting on it - agent senders, event actors, steer blocks, provider
+ * notices, plans, the session and plan runtime events - take an open string
+ * (`open-harness-wire.ts`).
+ *
+ * A literal, for the reason {@link CHAT_SUBSCRIBE_AUTO_MODE_MINOR} became one:
+ * this names the minor where the open leaves ARRIVED, and a floor written as
+ * the registry's latest minor slides up with the ceiling and refuses every
+ * peer still on the line that introduced them.
+ *
+ * The host's twin is `OPEN_HARNESS_CHAT_SUBSCRIBE_MINOR` in
+ * `chat-frame-projection.ts`, and the two must move together: the host caps
+ * its per-harness floor at this minor for every heard-from carrier, so a peer
+ * at or above it is never refused a chat for an agent it only heard from.
+ */
+export const CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR = 22;
+
+/**
+ * Whether this negotiated line decodes an unknown harness id on the heard-from
+ * carriers instead of dropping the frame. A null version - the handshake has
+ * not resolved - reads as NOT capable, the same safe direction `supportsV17`
+ * takes.
+ */
+export function supportsOpenHarnessIds(
+  negotiated: SchemaVersion | null,
+): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR
+  );
+}
+
+/**
  * Typed against the live enum on purpose: a rename of the mode breaks this
  * compile rather than leaving a string literal that silently matches nothing.
  *

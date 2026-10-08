@@ -27,6 +27,7 @@ import { use, useCallback, useMemo } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
+import { knownHarnessId } from "@/lib/chat/sender-display";
 import { formatClockDuration } from "@/lib/format-duration";
 import {
   formatMessageTimeWithSeconds,
@@ -413,7 +414,7 @@ export function AssistantMessageBody({
               // even when the transcript is scrolled back to a turn from a harness
               // the chat has since switched away from. `null` on legacy turns with
               // no metadata; the affordance then falls back to the section root.
-              harnessId={meta?.provider ?? null}
+              harnessId={meta === null ? null : knownHarnessId(meta.provider)}
               // ONE segment, not every error row on the turn, and not one per
               // row of a split turn. A failed turn routinely carries several
               // error blocks that all share this `turnId` - the queue-pause

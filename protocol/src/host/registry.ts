@@ -346,6 +346,7 @@ import {
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -13203,7 +13204,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 21,
+      latestMinor: 22,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13334,6 +13335,15 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // host refuses such a chat to a subscriber below this minor.
         21: {
           contract: chatSubscribeV121,
+        },
+        // @1.22 is the open-harness-id line: the leaves a chat names a harness
+        // through without the peer acting on it (agent senders, event actors,
+        // steer blocks, provider notices, plans, session and plan runtime
+        // events) take an open string, so a chat that merely heard from an
+        // agent on a harness the peer cannot name is served rather than
+        // refused. The head the peer drives keeps the closed enum.
+        22: {
+          contract: chatSubscribeV122,
         },
       },
     },

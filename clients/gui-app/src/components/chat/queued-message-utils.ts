@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpenChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   queueItemCanPauseFromQueueHeader,
   queueItemSteerLocked,
@@ -10,7 +10,7 @@ import {
 // component module; re-exported here for the header's existing imports.
 export { queueItemCanPauseFromQueueHeader, queueItemSteerLocked };
 
-export function useQueuePauseState(items: readonly ChatQueuedItem[]) {
+export function useQueuePauseState(items: readonly OpenChatQueuedItem[]) {
   return useMemo(
     () => ({
       hasPausableHumanItems: items.some(queueItemCanPauseFromQueueHeader),

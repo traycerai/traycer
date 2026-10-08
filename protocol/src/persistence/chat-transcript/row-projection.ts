@@ -1,10 +1,3 @@
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type {
-  AssistantMessage,
-  Message,
-  UserMessage,
-} from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/senders";
 
 import {
@@ -73,6 +66,30 @@ import {
   type TranscriptTurnUnitState,
   type TranscriptWalkRegion,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection-fold-state";
+
+import type {
+  OpenAssistantMessage,
+  OpenChatEvent,
+  OpenContentBlock,
+  OpenMessage,
+  OpenUserMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
+
+// The reader's instantiation of the fold vocabulary
+// (`row-projection-fold-state.ts`). The bodies in this module are typed
+// against OPEN records, which every closed record satisfies, and the exported
+// entry points hand a closed caller its closed types back through overloads:
+// the host folds what it wrote, a `chat.subscribe@1.22` client folds what it
+// decoded, and neither sees the other's harness-id type.
+type OpenPositionedMessage = PositionedMessage<OpenMessage>;
+type OpenPositionedEvent = PositionedEvent<OpenChatEvent>;
+type OpenPositionedTurnEvent = PositionedTurnEvent<OpenChatEvent>;
+type OpenFoldChange = TranscriptFoldChange<OpenMessage, OpenChatEvent>;
+type OpenFoldLoadResult = TranscriptFoldLoadResult<OpenMessage, OpenChatEvent>;
+type OpenFoldUnit = TranscriptFoldUnit<OpenMessage, OpenChatEvent>;
+type OpenFoldResult = TranscriptFoldResult<OpenMessage, OpenChatEvent>;
 
 /**
  * # The transcript row projection
@@ -285,9 +302,12 @@ export interface TranscriptRowDescriptor {
   readonly context: TranscriptRowContext;
 }
 
-export interface TranscriptRowProjectionInput {
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+export interface TranscriptRowProjectionInput<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
+  readonly messages: readonly M[];
+  readonly events: readonly E[];
   /**
    * The turn currently running, or `null`. Decides `turnComplete`, which gates
    * the synthesized stopped-turn boundary row and the stopped-turn synthesis.
@@ -383,7 +403,7 @@ export function setupCardRowId(
 export interface DurableTurnAccumulator {
   readonly turnKey: string;
   /** Concatenated across records in walk order. */
-  readonly blocks: readonly ContentBlock[];
+  readonly blocks: readonly OpenContentBlock[];
   /** `min` across records, a real value beating `null` (legacy records). */
   readonly startedAt: number | null;
   /** `max` across records. */
@@ -394,7 +414,7 @@ export interface DurableTurnAccumulator {
 
 interface MutableTurnAccumulator {
   readonly turnKey: string;
-  blocks: ContentBlock[];
+  blocks: OpenContentBlock[];
   startedAt: number | null;
   timestamp: number;
   messageIds: string[];
@@ -415,7 +435,7 @@ function minNullable(a: number | null, b: number | null): number | null {
  * the maximum so the last-resort anchor reflects the real turn end.
  */
 export function accumulateDurableTurns(
-  messages: readonly Message[],
+  messages: readonly OpenMessage[],
 ): ReadonlyMap<string, DurableTurnAccumulator> {
   const turns = new Map<string, MutableTurnAccumulator>();
   for (const message of messages) {
@@ -462,7 +482,7 @@ export function accumulateDurableTurns(
  * its own `turnProfile` and never consults the walk at all.
  */
 function turnOpensWithAutonomousResume(
-  blocks: readonly ContentBlock[],
+  blocks: readonly OpenContentBlock[],
 ): boolean {
   const first = blocks.at(0);
   if (first === undefined || first.type !== "autonomous_resume") return false;
@@ -519,7 +539,7 @@ function turnOpensWithAutonomousResume(
  * for itself, so the definition of an attempt cannot drift between the two.
  */
 export function turnKeysWithUnprovableProfileWalk(
-  messages: readonly Message[],
+  messages: readonly OpenMessage[],
 ): ReadonlySet<string> {
   const recorded = new Set<string>();
   const autonomous = new Set<string>();
@@ -586,7 +606,7 @@ export function turnKeysWithUnprovableProfileWalk(
  * second implementation beside it.
  */
 export interface BlockBearingTurn {
-  readonly blocks: readonly ContentBlock[];
+  readonly blocks: readonly OpenContentBlock[];
 }
 
 /**
@@ -600,7 +620,7 @@ export interface BlockBearingTurn {
  */
 export function nestedSteeredMessageIds(
   turns: Iterable<BlockBearingTurn>,
-  userMessagesById: ReadonlyMap<string, UserMessage>,
+  userMessagesById: ReadonlyMap<string, OpenUserMessage>,
 ): ReadonlySet<string> {
   const messageIds = new Set<string>();
   for (const turn of turns) {
@@ -614,9 +634,9 @@ export function nestedSteeredMessageIds(
 }
 
 export function userMessagesById(
-  messages: readonly Message[],
-): ReadonlyMap<string, UserMessage> {
-  const usersById = new Map<string, UserMessage>();
+  messages: readonly OpenMessage[],
+): ReadonlyMap<string, OpenUserMessage> {
+  const usersById = new Map<string, OpenUserMessage>();
   for (const message of messages) {
     if (message.role === "user") usersById.set(message.messageId, message);
   }
@@ -660,7 +680,7 @@ export interface AssistantTurnRowPlan {
  * ordinal like any other.
  */
 export function planAssistantTurnRows(
-  blocks: readonly ContentBlock[],
+  blocks: readonly OpenContentBlock[],
 ): AssistantTurnRowPlan {
   const split = blocks.some((block) => block.type === "steer");
   const entries: AssistantTurnRowPlanEntry[] = [];
@@ -765,15 +785,17 @@ const COMPLETED_STEER_CONTEXT: TranscriptRowContext = { completedSteer: true };
  * use of the same event. Listing it in both places is what makes a range serve
  * it either way.
  */
-const TURN_DECORATING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
-  "turn.started",
-  "turn.completed",
-  "turn.stopped",
-  "turn.interrupted",
-  "checkpoint.captured",
-]);
+const TURN_DECORATING_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> = new Set(
+  [
+    "turn.started",
+    "turn.completed",
+    "turn.stopped",
+    "turn.interrupted",
+    "checkpoint.captured",
+  ],
+);
 
-export function isTurnDecoratingEvent(event: ChatEvent): boolean {
+export function isTurnDecoratingEvent(event: OpenChatEvent): boolean {
   return TURN_DECORATING_EVENT_TYPES.has(event.type);
 }
 
@@ -794,11 +816,11 @@ export function isTurnDecoratingEvent(event: ChatEvent): boolean {
  * overcounted elapsed the association exists to prevent. So a close is
  * attributed to the turn its OPEN named.
  */
-const PAUSE_OPEN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+const PAUSE_OPEN_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> = new Set([
   "approval.requested",
   "interview.requested",
 ]);
-const PAUSE_CLOSE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+const PAUSE_CLOSE_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> = new Set([
   "approval.resolved",
   "approval.denied",
   "approval.abandoned",
@@ -813,7 +835,7 @@ const PAUSE_CLOSE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
  * neither is unpairable - `buildTurnPauseAccounting` skips those on both sides,
  * so associating them with a row would ship bytes the fold discards.
  */
-function pauseCorrelationKey(event: ChatEvent): string | null {
+function pauseCorrelationKey(event: OpenChatEvent): string | null {
   if (event.type.startsWith("interview.")) {
     return event.blockId === null ? null : `interview:${event.blockId}`;
   }
@@ -851,7 +873,7 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
  * holds it to this function.
  */
 export function turnKeysWithLaterOverlappingChanges(
-  events: readonly ChatEvent[],
+  events: readonly OpenChatEvent[],
 ): ReadonlySet<string> {
   // Select the retained checkpoint per turn from the RAW events, then parse
   // only what survived - the order `restoreCumulative` and the two
@@ -887,7 +909,7 @@ export function turnKeysWithLaterOverlappingChanges(
  * fold relies on that when it records an unjudgeable checkpoint as changing no
  * path.
  */
-function retainedCheckpointChangePaths(event: ChatEvent): string[] | null {
+function retainedCheckpointChangePaths(event: OpenChatEvent): string[] | null {
   if (event.metadata === null) return null;
   const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
   return manifest.success ? checkpointChangePaths(manifest.data) : null;
@@ -905,7 +927,7 @@ const EMPTY_TURN_KEYS: ReadonlySet<string> = new Set<string>();
  * {@link PAUSE_OPEN_EVENT_TYPES}.
  */
 export function decoratingEventIdsByTurn(
-  events: readonly ChatEvent[],
+  events: readonly OpenChatEvent[],
 ): ReadonlyMap<string, readonly string[]> {
   const out = new Map<string, string[]>();
   const turnByPauseKey = new Map<string, string>();
@@ -951,7 +973,7 @@ export function decoratingEventIdsByTurn(
  * stopped rows.
  */
 export function turnStoppedInfoByTurnKey(
-  events: readonly ChatEvent[],
+  events: readonly OpenChatEvent[],
 ): ReadonlyMap<string, TurnStoppedInfo> {
   const out = new Map<string, TurnStoppedInfo>();
   for (const event of events) {
@@ -982,7 +1004,7 @@ export function turnStoppedInfoByTurnKey(
  * same code path a store runs incrementally, not a second implementation of it.
  */
 export function projectTranscriptRows(
-  input: TranscriptRowProjectionInput,
+  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
 ): readonly TranscriptRowDescriptor[] {
   const folded = foldTranscriptRowsInMemory({
     chatId: input.chatId,
@@ -998,7 +1020,7 @@ export function projectTranscriptRows(
 
 /** Every row of `units`, in ordinal order. */
 export function sortedTranscriptFoldRows(
-  units: readonly TranscriptFoldUnit[],
+  units: readonly OpenFoldUnit[],
 ): readonly TranscriptFoldRow[] {
   const rows: TranscriptFoldRow[] = [];
   for (const unit of units) rows.push(...unit.rows);
@@ -1006,13 +1028,16 @@ export function sortedTranscriptFoldRows(
 }
 
 /** A whole chat's records, positioned - what a full fold runs over. */
-export interface TranscriptFoldFullInput {
+export interface TranscriptFoldFullInput<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
   readonly chatId: string;
   readonly activeTurnId: string | null;
   /** In position order. */
-  readonly messages: readonly PositionedMessage[];
+  readonly messages: readonly PositionedMessage<M>[];
   /** In position order. */
-  readonly events: readonly PositionedEvent[];
+  readonly events: readonly PositionedEvent<E>[];
 }
 
 /**
@@ -1025,9 +1050,15 @@ export interface TranscriptFoldFullInput {
  */
 export function foldTranscriptRowsInMemory(
   input: TranscriptFoldFullInput,
-): Extract<TranscriptFoldResult, { readonly continued: true }> {
-  const messagesByTurnKey = new Map<string, PositionedMessage[]>();
-  const messagesById = new Map<string, PositionedMessage>();
+): Extract<TranscriptFoldResult, { readonly continued: true }>;
+export function foldTranscriptRowsInMemory(
+  input: TranscriptFoldFullInput<OpenMessage, OpenChatEvent>,
+): Extract<OpenFoldResult, { readonly continued: true }>;
+export function foldTranscriptRowsInMemory(
+  input: TranscriptFoldFullInput<OpenMessage, OpenChatEvent>,
+): Extract<OpenFoldResult, { readonly continued: true }> {
+  const messagesByTurnKey = new Map<string, OpenPositionedMessage[]>();
+  const messagesById = new Map<string, OpenPositionedMessage>();
   for (const positioned of input.messages) {
     messagesById.set(positioned.message.messageId, positioned);
     if (positioned.message.role !== "assistant") continue;
@@ -1040,7 +1071,9 @@ export function foldTranscriptRowsInMemory(
     held.push(positioned);
   }
   const factsByPosition = new Map<number, PositionedMessageFacts>();
-  const factsOf = (positioned: PositionedMessage): PositionedMessageFacts => {
+  const factsOf = (
+    positioned: OpenPositionedMessage,
+  ): PositionedMessageFacts => {
     const held = factsByPosition.get(positioned.position);
     if (held !== undefined) return held;
     const facts: PositionedMessageFacts = {
@@ -1051,7 +1084,7 @@ export function foldTranscriptRowsInMemory(
     factsByPosition.set(positioned.position, facts);
     return facts;
   };
-  const answer = (load: TranscriptFoldLoad): TranscriptFoldLoadResult => {
+  const answer = (load: TranscriptFoldLoad): OpenFoldLoadResult => {
     switch (load.kind) {
       case "facts-from": {
         const from = load.position;
@@ -1150,7 +1183,7 @@ export function foldTranscriptRowsInMemory(
  * See {@link TranscriptMessageFoldFacts}.
  */
 export function transcriptMessageFoldFacts(
-  message: Message,
+  message: OpenMessage,
 ): TranscriptMessageFoldFacts {
   if (message.role === "user") {
     return {
@@ -1178,7 +1211,9 @@ export function transcriptMessageFoldFacts(
  * none - see {@link decoratingEventIdsByTurn}. A store keeps it as a column so
  * the fold's "latest open with this key" is one indexed read.
  */
-export function transcriptPauseCorrelationKey(event: ChatEvent): string | null {
+export function transcriptPauseCorrelationKey(
+  event: OpenChatEvent,
+): string | null {
   if (
     !PAUSE_OPEN_EVENT_TYPES.has(event.type) &&
     !PAUSE_CLOSE_EVENT_TYPES.has(event.type)
@@ -1188,11 +1223,11 @@ export function transcriptPauseCorrelationKey(event: ChatEvent): string | null {
   return pauseCorrelationKey(event);
 }
 
-export function isTranscriptPauseOpenEvent(event: ChatEvent): boolean {
+export function isTranscriptPauseOpenEvent(event: OpenChatEvent): boolean {
   return PAUSE_OPEN_EVENT_TYPES.has(event.type);
 }
 
-const TERMINAL_TURN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+const TERMINAL_TURN_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> = new Set([
   "turn.completed",
   "turn.stopped",
   "turn.interrupted",
@@ -1209,18 +1244,17 @@ const TERMINAL_TURN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
  * partition, and let a rewrite of that type slip past the in-place-rewrite
  * decline.
  */
-export const SETUP_CARD_INPUT_EVENT_TYPES: readonly ChatEvent["type"][] =
+export const SETUP_CARD_INPUT_EVENT_TYPES: readonly OpenChatEvent["type"][] =
   SETUP_DERIVATION_EVENT_TYPES;
 
-const SETUP_CARD_INPUT_EVENT_TYPE_SET: ReadonlySet<ChatEvent["type"]> = new Set(
-  SETUP_CARD_INPUT_EVENT_TYPES,
-);
+const SETUP_CARD_INPUT_EVENT_TYPE_SET: ReadonlySet<OpenChatEvent["type"]> =
+  new Set(SETUP_CARD_INPUT_EVENT_TYPES);
 
 /**
  * Every event type any row, row context or row digest of the projection reads.
  * An event of any other type can be rewritten in place without moving a row.
  */
-const ROW_RELEVANT_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+const ROW_RELEVANT_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> = new Set([
   ...TURN_DECORATING_EVENT_TYPES,
   ...PAUSE_OPEN_EVENT_TYPES,
   ...PAUSE_CLOSE_EVENT_TYPES,
@@ -1310,8 +1344,8 @@ function* loadMessages(
   load: TranscriptFoldLoad,
 ): Generator<
   TranscriptFoldLoad,
-  readonly PositionedMessage[],
-  TranscriptFoldLoadResult
+  readonly OpenPositionedMessage[],
+  OpenFoldLoadResult
 > {
   const result = yield load;
   if (result.kind !== "messages") {
@@ -1325,7 +1359,7 @@ function* loadFacts(
 ): Generator<
   TranscriptFoldLoad,
   readonly PositionedMessageFacts[],
-  TranscriptFoldLoadResult
+  OpenFoldLoadResult
 > {
   const result = yield load;
   if (result.kind !== "facts") {
@@ -1338,8 +1372,8 @@ function* loadEvents(
   load: TranscriptFoldLoad,
 ): Generator<
   TranscriptFoldLoad,
-  readonly PositionedEvent[],
-  TranscriptFoldLoadResult
+  readonly OpenPositionedEvent[],
+  OpenFoldLoadResult
 > {
   const result = yield load;
   if (result.kind !== "events") {
@@ -1352,8 +1386,8 @@ function* loadTurnEvents(
   turnKeys: readonly string[],
 ): Generator<
   TranscriptFoldLoad,
-  readonly PositionedTurnEvent[],
-  TranscriptFoldLoadResult
+  readonly OpenPositionedTurnEvent[],
+  OpenFoldLoadResult
 > {
   const result = yield { kind: "events-of-turns", turnKeys };
   if (result.kind !== "turn-events") {
@@ -1367,7 +1401,7 @@ function* loadRows(
 ): Generator<
   TranscriptFoldLoad,
   readonly StoredTranscriptRow[],
-  TranscriptFoldLoadResult
+  OpenFoldLoadResult
 > {
   const result = yield load;
   if (result.kind !== "rows") {
@@ -1379,7 +1413,7 @@ function* loadRows(
 function* loadPauseOpen(
   pauseKey: string,
   beforePosition: number,
-): Generator<TranscriptFoldLoad, string | null, TranscriptFoldLoadResult> {
+): Generator<TranscriptFoldLoad, string | null, OpenFoldLoadResult> {
   const result = yield { kind: "pause-open", pauseKey, beforePosition };
   if (result.kind !== "pause-open") {
     throw new Error(`row fold: pause-open answered with ${result.kind}`);
@@ -1443,7 +1477,7 @@ class CheckpointOverlapLoads {
 
   *loadTurns(
     turnKeys: Iterable<string>,
-  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+  ): Generator<TranscriptFoldLoad, void, OpenFoldLoadResult> {
     const missing = [...new Set(turnKeys)].filter(
       (turnKey) => !this.stored.has(turnKey),
     );
@@ -1462,7 +1496,7 @@ class CheckpointOverlapLoads {
   *loadLastChangesOf(
     turnKeys: Iterable<string>,
     world: CheckpointWorld,
-  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+  ): Generator<TranscriptFoldLoad, void, OpenFoldLoadResult> {
     const paths = new Set<string>();
     for (const turnKey of turnKeys) {
       for (const path of this.pathsOf(turnKey, world)) paths.add(path);
@@ -1472,7 +1506,7 @@ class CheckpointOverlapLoads {
 
   *loadLastChanges(
     paths: Iterable<string>,
-  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+  ): Generator<TranscriptFoldLoad, void, OpenFoldLoadResult> {
     const missing = [...new Set(paths)].filter(
       (path) => !this.lastChanges.has(path),
     );
@@ -1688,15 +1722,23 @@ interface WalkEntry {
  * state or fold facts written by another version, and a turn with rows but no
  * stored walk state (a corrupt index).
  */
-export function* foldTranscriptRows(
+export function foldTranscriptRows(
   prior: TranscriptFoldState,
   change: TranscriptFoldChange,
 ): Generator<
   TranscriptFoldLoad,
   TranscriptFoldResult,
   TranscriptFoldLoadResult
-> {
-  const notContinued = (reason: string): TranscriptFoldResult => ({
+>;
+export function foldTranscriptRows(
+  prior: TranscriptFoldState,
+  change: OpenFoldChange,
+): Generator<TranscriptFoldLoad, OpenFoldResult, OpenFoldLoadResult>;
+export function* foldTranscriptRows(
+  prior: TranscriptFoldState,
+  change: OpenFoldChange,
+): Generator<TranscriptFoldLoad, OpenFoldResult, OpenFoldLoadResult> {
+  const notContinued = (reason: string): OpenFoldResult => ({
     continued: false,
     reason,
   });
@@ -1785,14 +1827,14 @@ export function* foldTranscriptRows(
   const stopTriggers = listsFrom(prior.stopTriggers);
   const pauseTurnsInChange = new Map<string, string>();
   const eventRowTurnKeys = new Map<string, string>();
-  const changeEventsByTurn = new Map<string, PositionedEvent[]>();
-  const eventUnits = new Map<string, PositionedEvent>();
+  const changeEventsByTurn = new Map<string, OpenPositionedEvent[]>();
+  const eventUnits = new Map<string, OpenPositionedEvent>();
   let eventsThrough = prior.eventsThrough;
   // Per turn, the first and the last checkpoint this change appended. An
   // event-keyed checkpoint (no `turnId`) never enters the overlap rule.
   const changedCheckpoints = new Map<
     string,
-    { readonly firstPosition: number; readonly last: ChatEvent }
+    { readonly firstPosition: number; readonly last: OpenChatEvent }
   >();
   let setupChanged = false;
 
@@ -1947,7 +1989,7 @@ export function* foldTranscriptRows(
   const turnFacts = new Map<string, FoldTurnFacts | null>();
   const loadTurnFacts = function* (
     turnKeys: Iterable<string>,
-  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+  ): Generator<TranscriptFoldLoad, void, OpenFoldLoadResult> {
     const missing = [...new Set(turnKeys)].filter(
       (turnKey) => !turnFacts.has(turnKey),
     );
@@ -2033,11 +2075,11 @@ export function* foldTranscriptRows(
   }
 
   // --- User records. ---
-  const liveUsers = new Map<string, PositionedMessage>();
+  const liveUsers = new Map<string, OpenPositionedMessage>();
   const absentUsers = new Set<string>();
   const loadUsers = function* (
     messageIds: Iterable<string>,
-  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+  ): Generator<TranscriptFoldLoad, void, OpenFoldLoadResult> {
     const missing = [...new Set(messageIds)].filter(
       (messageId) => !liveUsers.has(messageId) && !absentUsers.has(messageId),
     );
@@ -2322,7 +2364,7 @@ export function* foldTranscriptRows(
   const overlapping = checkpointLoads.overlapping(touchedTurns, "after");
 
   // --- Bodies of what is re-described. ---
-  const turnBodies = new Map<string, PositionedMessage[]>();
+  const turnBodies = new Map<string, OpenPositionedMessage[]>();
   if (touchedTurns.size > 0) {
     for (const turnKey of touchedTurns) turnBodies.set(turnKey, []);
     const loaded = yield* loadMessages({
@@ -2338,10 +2380,10 @@ export function* foldTranscriptRows(
   // The events decorating every re-described turn: those persisted before
   // this change, under the turn the store recorded them as decorating, plus
   // the ones this change appended, in event order.
-  const decoratingByTurn = new Map<string, PositionedEvent[]>();
+  const decoratingByTurn = new Map<string, OpenPositionedEvent[]>();
   if (touchedTurns.size > 0) {
     const placed = new Set<string>();
-    const place = (turnKey: string, positioned: PositionedEvent): void => {
+    const place = (turnKey: string, positioned: OpenPositionedEvent): void => {
       const identity = `${turnKey}\u0000${positioned.event.eventId}`;
       if (placed.has(identity)) return;
       placed.add(identity);
@@ -2373,7 +2415,7 @@ export function* foldTranscriptRows(
       events.sort((a, b) => a.position - b.position);
     }
   }
-  const stopsOf = (turnKey: string): readonly PositionedEvent[] =>
+  const stopsOf = (turnKey: string): readonly OpenPositionedEvent[] =>
     (decoratingByTurn.get(turnKey) ?? []).filter(
       (positioned) => positioned.event.type === "turn.stopped",
     );
@@ -2393,7 +2435,7 @@ export function* foldTranscriptRows(
   }
 
   // --- Re-describe every touched unit. ---
-  const units: TranscriptFoldUnit[] = [];
+  const units: OpenFoldUnit[] = [];
   for (const turnKey of touchedTurns) {
     const unitKey = turnRowUnitKey(turnKey);
     const records = turnBodies.get(turnKey) ?? [];
@@ -2410,7 +2452,7 @@ export function* foldTranscriptRows(
             messageId: lastStop.event.messageId,
             eventId: lastStop.event.eventId,
           };
-    const assistants: AssistantMessage[] = [];
+    const assistants: OpenAssistantMessage[] = [];
     for (const positioned of records) {
       if (positioned.message.role === "assistant") {
         assistants.push(positioned.message);
@@ -2423,7 +2465,7 @@ export function* foldTranscriptRows(
       if (unitState === null) {
         return notContinued("an assistant turn has no stored walk state");
       }
-      const usersById = new Map<string, UserMessage>();
+      const usersById = new Map<string, OpenUserMessage>();
       for (const messageId of targetsByTurn.get(turnKey) ?? []) {
         const record = liveUsers.get(messageId);
         if (record !== undefined && record.message.role === "user") {
@@ -2750,7 +2792,9 @@ export function* foldTranscriptRows(
 }
 
 /** The row a row-materializing event draws, or `null` when it draws none. */
-function eventUnitRow(positioned: PositionedEvent): TranscriptFoldRow | null {
+function eventUnitRow(
+  positioned: OpenPositionedEvent,
+): TranscriptFoldRow | null {
   const { event, position } = positioned;
   if (forkedChatLinkRowSource(event) !== null) {
     return {
@@ -2861,7 +2905,7 @@ export function chatTranscriptEventRowId(eventId: string): string {
 
 function describeTurnRows(input: {
   readonly turn: DurableTurnAccumulator;
-  readonly usersById: ReadonlyMap<string, UserMessage>;
+  readonly usersById: ReadonlyMap<string, OpenUserMessage>;
   readonly lastUserTimestamp: number | null;
   readonly activeTurnId: string | null;
   readonly stopped: TurnStoppedInfo | null;
