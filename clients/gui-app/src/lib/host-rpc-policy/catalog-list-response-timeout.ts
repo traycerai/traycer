@@ -9,10 +9,15 @@ import { CATALOG_PROBE_TIMEOUT_MAX_SECONDS } from "@traycer/protocol/config/sche
  * ordinary unary deadline - 30 s on a remote session - which fails a picker
  * before the host's own bound (60 s by default) can, so the setting would
  * govern nothing over a remote link. This covers the longest bound the host
- * accepts, plus 15 s for the probe to queue behind the host's catalog gate and
- * 15 s for transport, like `USAGE_SUMMARY_RESPONSE_TIMEOUT_MS`. A host that
- * answers sooner settles the request sooner; the allowance only stops the
- * transport from giving up first.
+ * accepts plus 30 s of slack for a short wait behind the host's catalog gate
+ * and for transport. A host that answers sooner settles the request sooner;
+ * the allowance only stops the transport from giving up first.
+ *
+ * It does not cover an unbounded gate queue. The host's per-probe bound
+ * starts once a probe is admitted to one of its four catalog slots, so a read
+ * queued behind four probes each wedged for the full bound can still outlast
+ * this allowance - as it outlasted the ordinary deadline before. Its answer is
+ * still cached host-side when it lands, so the next read serves it.
  */
 export const CATALOG_LIST_RESPONSE_TIMEOUT_MS =
   CATALOG_PROBE_TIMEOUT_MAX_SECONDS * 1_000 + 30_000;
