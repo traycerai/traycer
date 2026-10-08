@@ -67,19 +67,29 @@ describe("sandboxThemeVariables", () => {
 });
 
 describe("sandboxTheme", () => {
-  it("lets pages and apps follow the app's mode and paint the transcript surface", () => {
-    for (const kind of ["page", "app"] as const) {
-      for (const mode of ["light", "dark"] as const) {
-        const theme = sandboxTheme(kind, mode, read);
-        expect(theme.colorScheme).toBe(mode);
-        expect(theme.background).toBe("<--background>");
-      }
+  it("lets a page follow the app's mode and paint the transcript surface", () => {
+    for (const mode of ["light", "dark"] as const) {
+      const theme = sandboxTheme("page", mode, read);
+      expect(theme.appliesToRoot).toBe(true);
+      expect(theme.colorScheme).toBe(mode);
+      expect(theme.background).toBe("<--background>");
+    }
+  });
+
+  it("leaves an app's root to the app, which applies the host context itself", () => {
+    for (const mode of ["light", "dark"] as const) {
+      const theme = sandboxTheme("app", mode, read);
+      expect(theme.appliesToRoot).toBe(false);
+      expect(theme.colorScheme).toBe(mode);
+      expect(theme.background).toBeNull();
+      expect(theme.variables["--color-text-primary"]).toBe("<--foreground>");
     }
   });
 
   it("keeps wireframes a light canvas in either mode, with the variables still available", () => {
     for (const mode of ["light", "dark"] as const) {
       const theme = sandboxTheme("wireframe", mode, read);
+      expect(theme.appliesToRoot).toBe(true);
       expect(theme.colorScheme).toBe("light");
       expect(theme.background).toBeNull();
       expect(theme.variables["--color-text-primary"]).toBe("<--foreground>");

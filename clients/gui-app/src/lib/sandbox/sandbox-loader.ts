@@ -20,6 +20,7 @@ interface LoaderShortcut {
 }
 
 interface LoaderTheme {
+  readonly appliesToRoot: boolean;
   readonly colorScheme: "light" | "dark";
   readonly background: string | null;
   readonly variables: readonly (readonly [string, string])[];
@@ -37,6 +38,8 @@ interface BootstrapConfig {
   readonly nonce: string;
   readonly shortcuts: readonly LoaderShortcut[];
   readonly paintBackground: boolean;
+  /** False for an MCP App, which applies the host context's theme itself. */
+  readonly applyTheme: boolean;
 }
 
 /**
@@ -105,6 +108,7 @@ function bootstrapMain(config: BootstrapConfig): void {
     ) {
       fullscreen = context.displayMode === "fullscreen";
     }
+    if (!config.applyTheme) return;
     if (context.theme === "light" || context.theme === "dark") {
       root.style.colorScheme = context.theme;
     }
@@ -333,7 +337,8 @@ function runLoader(): void {
 
   const parseTheme = (value: unknown): LoaderTheme | null => {
     if (!isRecord(value)) return null;
-    const { colorScheme, background, variables } = value;
+    const { appliesToRoot, colorScheme, background, variables } = value;
+    if (typeof appliesToRoot !== "boolean") return null;
     if (colorScheme !== "light" && colorScheme !== "dark") return null;
     if (background !== null && typeof background !== "string") return null;
     if (!isRecord(variables)) return null;
@@ -344,7 +349,7 @@ function runLoader(): void {
       }
       entries.push([name, cssValue]);
     }
-    return { colorScheme, background, variables: entries };
+    return { appliesToRoot, colorScheme, background, variables: entries };
   };
 
   const parseShortcuts = (value: unknown): LoaderShortcut[] | null => {
@@ -393,6 +398,16 @@ function runLoader(): void {
       .replace(/\u2029/g, "\\u2029");
 
   const themeStyle = (theme: LoaderTheme): string => {
+    const font =
+      "@font-face{font-family:'Figtree Variable';font-style:normal;" +
+      "font-display:swap;font-weight:300 900;" +
+      `src:url("${FIGTREE_FONT_URL}") format("woff2-variations")}`;
+    // An app that applies no theme gets the canvas of the scheme it is in,
+    // light unless it says otherwise, never the transcript showing through
+    // behind text it colored for white. `:where` keeps any app rule ahead.
+    if (!theme.appliesToRoot) {
+      return escapeStyleText(`:where(:root){background-color:Canvas}${font}`);
+    }
     const declarations = [`color-scheme:${theme.colorScheme}`];
     if (theme.background !== null) {
       declarations.push(`background:${theme.background}`);
@@ -400,12 +415,7 @@ function runLoader(): void {
     for (const [name, value] of theme.variables) {
       declarations.push(`${name}:${value}`);
     }
-    return escapeStyleText(
-      `:root{${declarations.join(";")}}` +
-        "@font-face{font-family:'Figtree Variable';font-style:normal;" +
-        "font-display:swap;font-weight:300 900;" +
-        `src:url("${FIGTREE_FONT_URL}") format("woff2-variations")}`,
-    );
+    return escapeStyleText(`:root{${declarations.join(";")}}${font}`);
   };
 
   const buildDocument = (resource: LoaderResource): string => {
@@ -421,7 +431,9 @@ function runLoader(): void {
     const config: BootstrapConfig = {
       nonce: resource.nonce,
       shortcuts: resource.shortcuts,
-      paintBackground: resource.theme.background !== null,
+      paintBackground:
+        resource.theme.appliesToRoot && resource.theme.background !== null,
+      applyTheme: resource.theme.appliesToRoot,
     };
     return (
       "<!doctype html>" +
@@ -444,9 +456,11 @@ function runLoader(): void {
     delivered = true;
     // Paint the theme's background before the rewrite so nothing flashes.
     const root = document.documentElement;
-    root.style.colorScheme = resource.theme.colorScheme;
-    if (resource.theme.background !== null) {
-      root.style.background = resource.theme.background;
+    if (resource.theme.appliesToRoot) {
+      root.style.colorScheme = resource.theme.colorScheme;
+      if (resource.theme.background !== null) {
+        root.style.background = resource.theme.background;
+      }
     }
     // `document.write` is deprecated for a parser that is still running; here
     // it is the in-place rewrite of a finished document, which keeps the

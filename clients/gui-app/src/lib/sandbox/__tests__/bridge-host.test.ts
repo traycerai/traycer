@@ -87,7 +87,12 @@ function createHarness(options: {
       networkPolicy: "https-only",
       csp: null,
       permissions: [],
-      theme: { colorScheme: "light", background: null, variables: {} },
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "light",
+        background: null,
+        variables: {},
+      },
       forwardedShortcuts: [
         { code: "KeyK", ctrl: false, meta: true, alt: false, shift: false },
       ],

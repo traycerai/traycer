@@ -105,7 +105,12 @@ function detachedBridge(): SandboxBridgeHost {
       networkPolicy: "https-only",
       csp: null,
       permissions: [],
-      theme: { colorScheme: "dark", background: null, variables: {} },
+      theme: {
+        appliesToRoot: false,
+        colorScheme: "dark",
+        background: null,
+        variables: {},
+      },
       forwardedShortcuts: [],
     },
     nonce: "nonce",

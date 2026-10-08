@@ -62,6 +62,22 @@ async function deliver(kind: "page" | "app", appliesToRoot: boolean) {
   return writtenDocument(resourceMessage(kind, appliesToRoot));
 }
 
+describe("sandbox loader theme", () => {
+  it("writes a page's color scheme, background and variables onto the root", async () => {
+    const style = between(await deliver("page", true), "<style>", "</style>");
+    expect(style).toContain(
+      ":root{color-scheme:dark;background:rgb(1, 2, 3);--color-text-primary:red}",
+    );
+  });
+
+  it("gives an app only the Canvas floor, leaving its color scheme to the app", async () => {
+    const style = between(await deliver("app", false), "<style>", "</style>");
+    expect(style).not.toContain("color-scheme");
+    expect(style).not.toContain("--color-text-primary");
+    expect(style).toContain(":where(:root){background-color:Canvas}");
+  });
+});
+
 describe("sandbox loader wheel", () => {
   it("hands a wheel the page cannot use to the app, and leaves one it can scroll", async () => {
     const html = await deliver("page", true);
