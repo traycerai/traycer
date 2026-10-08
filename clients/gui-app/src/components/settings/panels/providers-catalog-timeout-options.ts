@@ -4,9 +4,11 @@ import type { ConfigCatalogResponse } from "@traycer/protocol/host/config/schema
 const PRESET_SECONDS: readonly number[] = [60, 90, 120, 180];
 
 /**
- * The menu's values: the presets inside the host's bounds, plus the stored
- * value as "N s (custom)" when it is not one of them (a hand-edited file), so
- * the current value is always a visible, selected row.
+ * The menu's values: the presets inside the host's bounds and the bounds
+ * themselves (so a host whose range moved past every preset still offers
+ * choices), plus the stored value as "N s (custom)" when it is none of those
+ * (a hand-edited file), so the current value is always a visible, selected
+ * row.
  */
 export function catalogTimeoutOptions(
   state: ConfigCatalogResponse | null,
@@ -18,9 +20,16 @@ export function catalogTimeoutOptions(
     }));
   }
   const { minSeconds, maxSeconds } = state.bounds;
-  const presets = PRESET_SECONDS.filter(
-    (seconds) => seconds >= minSeconds && seconds <= maxSeconds,
-  ).map((seconds) => ({ seconds, label: `${seconds} s` }));
+  const offered = new Set(
+    PRESET_SECONDS.filter(
+      (seconds) => seconds >= minSeconds && seconds <= maxSeconds,
+    ),
+  );
+  offered.add(minSeconds);
+  offered.add(maxSeconds);
+  const presets = [...offered]
+    .sort((a, b) => a - b)
+    .map((seconds) => ({ seconds, label: `${seconds} s` }));
   if (presets.some((option) => option.seconds === state.probeTimeoutSeconds)) {
     return presets;
   }

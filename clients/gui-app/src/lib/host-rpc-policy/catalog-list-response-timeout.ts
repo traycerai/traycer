@@ -18,6 +18,12 @@ import { CATALOG_PROBE_TIMEOUT_MAX_SECONDS } from "@traycer/protocol/config/sche
  * queued behind four probes each wedged for the full bound can still outlast
  * this allowance - as it outlasted the ordinary deadline before. Its answer is
  * still cached host-side when it lands, so the next read serves it.
+ *
+ * It is built from this client's `CATALOG_PROBE_TIMEOUT_MAX_SECONDS`, while
+ * the host sends its own bounds. A host release that raises that maximum must
+ * raise this allowance in the same release; a GUI released before it keeps
+ * 210 s, so on such a host a remote read with a longer stored timeout can
+ * still be cut at 210 s.
  */
 export const CATALOG_LIST_RESPONSE_TIMEOUT_MS =
   CATALOG_PROBE_TIMEOUT_MAX_SECONDS * 1_000 + 30_000;

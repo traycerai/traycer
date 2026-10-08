@@ -68,6 +68,19 @@ import {
 const HOST_A = { hostId: "host-a", name: "Host A" };
 const DEFAULT_BOUNDS = { minSeconds: 60, maxSeconds: 180 };
 
+interface Deferred {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+}
+
+function deferred(): Deferred {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 interface Harness {
   readonly client: HostClient<HostRpcRegistry>;
   readonly gets: () => number;
@@ -79,6 +92,8 @@ interface HarnessOptions {
   readonly initial: number;
   readonly bounds: { readonly minSeconds: number; readonly maxSeconds: number };
   readonly failReads: boolean;
+  /** While non-null, `config.catalog.set` does not answer until it settles. */
+  readonly holdSet: Deferred | null;
   readonly host: typeof mockLocalHostEntry;
 }
 
@@ -116,10 +131,13 @@ function createHarness(options: HarnessOptions): {
           addressed.push(
             messenger.calls.at(-1)?.authority.endpoint.hostId ?? "",
           );
-          stored = params.probeTimeoutSeconds;
-          return Promise.resolve({
-            probeTimeoutSeconds: stored,
-            bounds: options.bounds,
+          const gate = options.holdSet?.promise ?? Promise.resolve();
+          return gate.then(() => {
+            stored = params.probeTimeoutSeconds;
+            return {
+              probeTimeoutSeconds: stored,
+              bounds: options.bounds,
+            };
           });
         },
       },
@@ -153,6 +171,7 @@ function defaultOptions(initial: number): HarnessOptions {
     initial,
     bounds: DEFAULT_BOUNDS,
     failReads: false,
+    holdSet: null,
     host: mockLocalHostEntry,
   };
 }
@@ -370,6 +389,56 @@ describe("ProvidersCatalogTimeoutChip ready", () => {
     ]);
   });
 
+  it("disables the trigger while a set is in flight, and re-enables it after", async () => {
+    const holdSet = deferred();
+    const { harness, queryClient } = createHarness({
+      ...defaultOptions(60),
+      holdSet,
+    });
+    renderChip(harness.client, queryClient);
+    await waitFor(() => {
+      expect(chip().textContent).toBe("Model list timeout · 60 s");
+    });
+    expect(chip().hasAttribute("disabled")).toBe(false);
+
+    await openMenu();
+    await waitFor(() => {
+      expect(isDisabled(radio("120 s"))).toBe(false);
+    });
+    fireEvent.click(radio("120 s"));
+
+    await screen.findByTestId("providers-catalog-timeout-saving");
+    expect(chip().hasAttribute("disabled")).toBe(true);
+    // The chip still states the last value the host answered.
+    expect(chip().getAttribute("data-seconds")).toBe("60");
+    expect(harness.sets()).toEqual([120]);
+
+    holdSet.resolve();
+    await waitFor(() => {
+      expect(chip().textContent).toBe("Model list timeout · 120 s");
+    });
+    await waitFor(() => {
+      expect(chip().hasAttribute("disabled")).toBe(false);
+    });
+    expect(screen.queryByTestId("providers-catalog-timeout-saving")).toBeNull();
+  });
+
+  it("offers both bounds when they sit outside every preset", async () => {
+    const { harness, queryClient } = createHarness({
+      ...defaultOptions(240),
+      bounds: { minSeconds: 240, maxSeconds: 300 },
+    });
+    renderChip(harness.client, queryClient);
+    await waitFor(() => {
+      expect(chip().textContent).toBe("Model list timeout · 240 s");
+    });
+    await openMenu();
+    await waitFor(() => {
+      expect(radio("240 s").getAttribute("aria-checked")).toBe("true");
+    });
+    expect(radioLabels()).toEqual(["240 s", "300 s"]);
+  });
+
   it("does not offer a preset below the host's minimum", async () => {
     const { harness, queryClient } = createHarness({
       ...defaultOptions(120),
@@ -428,6 +497,42 @@ describe("catalogTimeoutOptions", () => {
       { seconds: 120, label: "120 s" },
       { seconds: 180, label: "180 s" },
     ]);
+  });
+
+  it("offers both bounds when they sit outside every preset", () => {
+    expect(catalogTimeoutOptions(response(240, 240, 300))).toEqual([
+      { seconds: 240, label: "240 s" },
+      { seconds: 300, label: "300 s" },
+    ]);
+  });
+
+  it("includes a non-preset bound beside the presets inside the range", () => {
+    expect(catalogTimeoutOptions(response(75, 75, 180))).toEqual([
+      { seconds: 75, label: "75 s" },
+      { seconds: 90, label: "90 s" },
+      { seconds: 120, label: "120 s" },
+      { seconds: 180, label: "180 s" },
+    ]);
+  });
+
+  it("does not label a stored value that equals a bound as custom", () => {
+    const options = catalogTimeoutOptions(response(75, 75, 180));
+    expect(options.filter((option) => option.label.includes("custom"))).toEqual(
+      [],
+    );
+    expect(options.filter((option) => option.seconds === 75)).toEqual([
+      { seconds: 75, label: "75 s" },
+    ]);
+    const upper = catalogTimeoutOptions(response(300, 240, 300));
+    expect(upper.filter((option) => option.seconds === 300)).toEqual([
+      { seconds: 300, label: "300 s" },
+    ]);
+  });
+
+  it("dedupes a bound that is also a preset", () => {
+    expect(
+      catalogTimeoutOptions(response(60, 60, 180)).map((o) => o.seconds),
+    ).toEqual([60, 90, 120, 180]);
   });
 
   it("keeps an out-of-bounds stored value visible as custom", () => {

@@ -104,6 +104,7 @@ function CatalogTimeoutChip(props: {
         <button
           type="button"
           aria-label="Model list timeout setting"
+          disabled={setTimeoutSeconds.isPending}
           data-testid="providers-catalog-timeout-chip"
           data-seconds={current ?? undefined}
           className={CATALOG_TIMEOUT_CHIP_CLASS}
