@@ -127,11 +127,13 @@ const textResponse = (
 type ReadFile = EpicFileRpc["readFile"];
 type OpenFileInBrowser = EpicFileRpc["openFileInBrowser"];
 type FetchFile = EpicFileRpc["fetchFile"];
+type CancelFetchFile = EpicFileRpc["cancelFetchFile"];
 
 interface FakeRpc extends EpicFileRpc {
   readonly readFile: Mock<ReadFile>;
   readonly openFileInBrowser: Mock<OpenFileInBrowser>;
   readonly fetchFile: Mock<FetchFile>;
+  readonly cancelFetchFile: Mock<CancelFetchFile>;
 }
 
 function makeRpc(
@@ -147,7 +149,10 @@ function makeRpc(
   const fetchFile = vi
     .fn<FetchFile>()
     .mockResolvedValue({ kind: "downloading" });
-  return { readFile, openFileInBrowser, fetchFile };
+  const cancelFetchFile = vi
+    .fn<CancelFetchFile>()
+    .mockResolvedValue({ cancelled: true });
+  return { readFile, openFileInBrowser, fetchFile, cancelFetchFile };
 }
 
 interface RowOverrides {

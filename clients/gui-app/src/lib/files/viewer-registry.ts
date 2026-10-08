@@ -1,10 +1,14 @@
-import { File, FileCode, type LucideIcon } from "lucide-react";
+import {
+  File,
+  FileCode,
+  FileText,
+  Film,
+  Image,
+  type LucideIcon,
+} from "lucide-react";
 
-/**
- * The viewers an epic file can open in. Pages and other HTML today; image,
- * video and PDF join with their viewers.
- */
-export type EpicFileViewerKind = "html";
+/** The viewers an epic file can open in. */
+export type EpicFileViewerKind = "html" | "image" | "video" | "pdf";
 
 export interface EpicFileViewerEntry {
   /** `null`: no viewer, so the tile offers Download only. */
@@ -20,6 +24,24 @@ const HTML_VIEWER: EpicFileViewerEntry = {
   iconClassName: "text-[var(--term-ansi-yellow)]",
 };
 
+const IMAGE_VIEWER: EpicFileViewerEntry = {
+  kind: "image",
+  Icon: Image,
+  iconClassName: "text-[var(--term-ansi-green)]",
+};
+
+const VIDEO_VIEWER: EpicFileViewerEntry = {
+  kind: "video",
+  Icon: Film,
+  iconClassName: "text-[var(--term-ansi-red)]",
+};
+
+const PDF_VIEWER: EpicFileViewerEntry = {
+  kind: "pdf",
+  Icon: FileText,
+  iconClassName: "text-[var(--term-ansi-red)]",
+};
+
 const NO_VIEWER: EpicFileViewerEntry = {
   kind: null,
   Icon: File,
@@ -29,6 +51,19 @@ const NO_VIEWER: EpicFileViewerEntry = {
 const VIEWERS_BY_EXTENSION: Readonly<Record<string, EpicFileViewerEntry>> = {
   html: HTML_VIEWER,
   htm: HTML_VIEWER,
+  png: IMAGE_VIEWER,
+  jpg: IMAGE_VIEWER,
+  jpeg: IMAGE_VIEWER,
+  gif: IMAGE_VIEWER,
+  webp: IMAGE_VIEWER,
+  avif: IMAGE_VIEWER,
+  bmp: IMAGE_VIEWER,
+  svg: IMAGE_VIEWER,
+  mp4: VIDEO_VIEWER,
+  webm: VIDEO_VIEWER,
+  mov: VIDEO_VIEWER,
+  m4v: VIDEO_VIEWER,
+  pdf: PDF_VIEWER,
 };
 
 /**

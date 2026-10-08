@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import {
+  epicStateSubscribeServerFrameSchemaV11,
+  epicStateSubscribeServerFrameSchemaV12,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   AdapterHost,
   AdapterStatus,
@@ -20,6 +23,7 @@ import {
   artifactTombstoneRowId,
   commentThreadRowId,
   EPIC_META_ROW_ID,
+  FILES_ROW_ID,
   ROLE_CLAIMS_ROW_ID,
 } from "../epic-state-rows";
 import { EPIC_STATE_LANE_ID, type EpicStateLaneEvent } from "../lane-events";
@@ -1123,5 +1127,171 @@ describe("createEpicStateLaneAdapter - seed trust", () => {
       [],
     );
     expect(replacementReasons(log)).toEqual([]);
+  });
+});
+
+// ─── Files (epic.state.subscribe@1.2) ───────────────────────────────────────
+
+const FILE_SHA = "a".repeat(64);
+
+function fileWire(
+  path: string,
+  localState: { kind: string; received?: number; total?: number },
+): unknown {
+  return {
+    path,
+    entry: {
+      v: 1,
+      kind: "file",
+      sha256: FILE_SHA,
+      byteLength: 10,
+      mediaType: "text/plain",
+      status: "ready",
+      createdAt: 1000,
+      derivedFrom: null,
+      deletedAt: null,
+    },
+    localState,
+  };
+}
+
+/** A `@1.2` snapshot: the `@1.1` fixture plus a files arm, parsed through the real schema. */
+function snapshotFrameWithFiles(files: unknown): EpicStateSnapshotFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV12.parse({
+    ...snapshotFrame({}),
+    files,
+  });
+  if (parsed.kind !== "snapshot") throw new Error("fixture drift: snapshot");
+  return parsed;
+}
+
+/** A `@1.2` delta that touches only files. */
+function deltaFrameWithFiles(files: unknown): EpicStateDeltaFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV12.parse({
+    ...deltaFrame({ epicMeta: { revision: 1, meta: { title: "T" } } }),
+    epicMeta: null,
+    files,
+  });
+  if (parsed.kind !== "delta") throw new Error("fixture drift: delta");
+  return parsed;
+}
+
+function attached(): {
+  readonly callbacks: EpicStateStreamCallbacks;
+  readonly log: readonly LogEntry[];
+} {
+  const { factory, latest } = createFakeStreamClientFactory();
+  const adapter = createEpicStateLaneAdapter(
+    createSources(factory, undefined, undefined),
+  );
+  const { host, log } = createRecordingHost();
+  adapter.attach(host);
+  return { callbacks: latest().callbacks, log };
+}
+
+function snapshotRows(log: readonly LogEntry[]) {
+  const event = emittedEvents(log).find(
+    (candidate) => candidate.kind === "record-snapshot",
+  );
+  if (event === undefined || event.kind !== "record-snapshot") {
+    throw new Error("expected a record-snapshot event");
+  }
+  return event.rows;
+}
+
+function filesRows(log: readonly LogEntry[]) {
+  return snapshotRows(log).filter((row) => row.rowId === FILES_ROW_ID);
+}
+
+describe("createEpicStateLaneAdapter - files row", () => {
+  it("carries a snapshot's files as one row at the set's revision, even when the set is empty", () => {
+    const withFiles = attached();
+    withFiles.callbacks.onSnapshot(
+      snapshotFrameWithFiles({
+        revision: 4,
+        files: [fileWire("files/a.txt", { kind: "present" })],
+      }),
+    );
+    const [row] = filesRows(withFiles.log);
+    expect(row.revision).toBe(4);
+    if (row.row.kind !== "files") throw new Error("expected a files row");
+    expect(row.row.files.map((record) => record.path)).toEqual(["files/a.txt"]);
+
+    const empty = attached();
+    empty.callbacks.onSnapshot(
+      snapshotFrameWithFiles({ revision: 1, files: [] }),
+    );
+    const [emptyRow] = filesRows(empty.log);
+    if (emptyRow.row.kind !== "files") throw new Error("expected a files row");
+    expect(emptyRow.row.files).toEqual([]);
+  });
+
+  it("writes no files row for a snapshot from a host that predates the arm", () => {
+    const { callbacks, log } = attached();
+
+    callbacks.onSnapshot(snapshotFrame({}));
+
+    expect(filesRows(log)).toEqual([]);
+  });
+
+  it("drops a malformed files arm but still delivers the rest of the frame", () => {
+    const { callbacks, log } = attached();
+    const malformed = {
+      ...snapshotFrame({}),
+      files: { revision: 2, files: [{ path: "" }] },
+    };
+
+    callbacks.onSnapshot(malformed);
+
+    expect(filesRows(log)).toEqual([]);
+    expect(snapshotRows(log).map((row) => row.rowId)).toContain(
+      ROLE_CLAIMS_ROW_ID,
+    );
+  });
+
+  it("emits a files-only delta as one upsert of the files row", () => {
+    const { callbacks, log } = attached();
+
+    callbacks.onDelta(
+      deltaFrameWithFiles({
+        revision: 5,
+        files: [
+          fileWire("files/big.mov", {
+            kind: "downloading",
+            received: 1,
+            total: 9,
+          }),
+        ],
+      }),
+    );
+
+    const [event] = emittedEvents(log);
+    if (event.kind !== "record-transaction") {
+      throw new Error("expected a record-transaction event");
+    }
+    expect(event.changes).toHaveLength(1);
+    const [change] = event.changes;
+    if (change.kind !== "upsert") throw new Error("expected an upsert");
+    expect(change.row.rowId).toBe(FILES_ROW_ID);
+    expect(change.row.revision).toBe(5);
+  });
+
+  it("emits no files change for a delta that did not touch files", () => {
+    const { callbacks, log } = attached();
+
+    callbacks.onDelta(
+      deltaFrame({ epicMeta: { revision: 2, meta: { title: "T" } } }),
+    );
+
+    const [event] = emittedEvents(log);
+    if (event.kind !== "record-transaction") {
+      throw new Error("expected a record-transaction event");
+    }
+    expect(
+      event.changes.filter(
+        (change) =>
+          change.kind === "upsert" && change.row.rowId === FILES_ROW_ID,
+      ),
+    ).toEqual([]);
   });
 });

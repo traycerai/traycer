@@ -1,6 +1,7 @@
 import { ipcRenderer, webUtils } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
 import type {
+  FileDownloadUrlInput,
   FileSaveInput,
   FileSaveResult,
 } from "../ipc-contracts/platform-types";
@@ -19,6 +20,8 @@ export interface FileDropsBridgeSurface {
   saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
   /** Open a file a prior `saveFile` wrote, with the OS default application. */
   openSavedFile(path: string): Promise<void>;
+  /** Download an https URL natively into a file the user names. */
+  downloadUrl(input: FileDownloadUrlInput): Promise<FileSaveResult | null>;
 }
 
 export const NATIVE_CLIPBOARD_PASTE_WINDOW_MS = 2_000;
@@ -77,5 +80,10 @@ export function buildFileDropsBridge(
       ) as Promise<FileSaveResult | null>,
     openSavedFile: (path) =>
       ipcRenderer.invoke(RunnerHostInvoke.fileOpenSaved, path) as Promise<void>,
+    downloadUrl: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.fileDownloadUrl,
+        input,
+      ) as Promise<FileSaveResult | null>,
   };
 }

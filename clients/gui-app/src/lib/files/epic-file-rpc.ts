@@ -1,6 +1,8 @@
 import { createContext, use } from "react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
+  EpicCancelFetchFileRequest,
+  EpicCancelFetchFileResponse,
   EpicFetchFileRequest,
   EpicFetchFileResponse,
   EpicOpenFileInBrowserRequest,
@@ -13,9 +15,9 @@ import type {
  * The epic-file calls the page row and the epic-file tile make, typed by the
  * protocol contracts (`@traycer/protocol/host/epic/files`).
  *
- * A seam rather than `useHostQuery`, because `epic.readFile` and
- * `epic.openFileInBrowser` (and `epic.fetchFile`) join the host RPC registry together with their
- * resolvers. Until then nothing answers them, and a surface that reads one
+ * A seam rather than `useHostQuery`, because `epic.readFile`,
+ * `epic.openFileInBrowser`, `epic.fetchFile` and `epic.cancelFetchFile` join
+ * the host RPC registry together with their resolvers. Until then nothing answers them, and a surface that reads one
  * shows its unavailable state. Tests provide a fake through
  * {@link EpicFileRpcContext}. Once the methods are registered the fallback
  * below becomes the tab host client's `requestWithSignal`, and no caller
@@ -33,6 +35,10 @@ export interface EpicFileRpc {
   readonly fetchFile: (
     params: EpicFetchFileRequest,
   ) => Promise<EpicFetchFileResponse>;
+  /** Stops a copy `fetchFile` started; progress rides the files lane. */
+  readonly cancelFetchFile: (
+    params: EpicCancelFetchFileRequest,
+  ) => Promise<EpicCancelFetchFileResponse>;
 }
 
 function unserved(method: string): Promise<never> {
@@ -51,6 +57,7 @@ const UNSERVED_EPIC_FILE_RPC: EpicFileRpc = {
   readFile: () => unserved("epic.readFile"),
   openFileInBrowser: () => unserved("epic.openFileInBrowser"),
   fetchFile: () => unserved("epic.fetchFile"),
+  cancelFetchFile: () => unserved("epic.cancelFetchFile"),
 };
 
 export const EpicFileRpcContext = createContext<EpicFileRpc | null>(null);

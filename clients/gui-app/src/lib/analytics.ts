@@ -1302,6 +1302,7 @@ const ANALYTICS_LAYOUT_REGIONS = new Set<string>(
     railTerminals: true,
     railBrowsers: true,
     railArtifacts: true,
+    railFiles: true,
     railGitDiff: true,
     railPullRequests: true,
     railFileTree: true,

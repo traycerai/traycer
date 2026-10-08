@@ -227,8 +227,8 @@ function usePageActions(
       ),
     openInBrowser: () => openInBrowser.mutate(),
     openInBrowserPending: openInBrowser.isPending,
-    download: () => download.mutate(),
-    downloadPending: download.isPending,
+    download: () => download.mutation.mutate(),
+    downloadPending: download.mutation.isPending,
   };
 }
 
