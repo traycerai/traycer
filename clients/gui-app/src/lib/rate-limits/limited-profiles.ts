@@ -84,6 +84,63 @@ export function limitedProfiles(
   });
 }
 
+/**
+ * The account a banner speaks for, within one host's dismissals
+ * (`limited-banner-dismissals-store.ts` buckets by host). The provider id is
+ * a fixed lowercase slug, so the first `:` always ends it whatever the
+ * profile id holds.
+ */
+export function limitedBannerKey(
+  profile: Pick<LimitedProfile, "providerId" | "profileId">,
+): string {
+  return `${profile.providerId}:${profile.profileId ?? ""}`;
+}
+
+/**
+ * The accounts a live reading shows NOT limited: the evidence that ends a
+ * dismissal with no reset time. A cold, failed or degraded segment says
+ * nothing about the limit, so it is not here.
+ */
+export function clearedBannerKeys(
+  cluster: StatusBarRateLimitCluster,
+): ReadonlySet<string> {
+  if (cluster.kind !== "segments") return new Set();
+  return new Set(
+    cluster.segments
+      .filter(
+        (segment) =>
+          segment.state === "live" && blockingWindow(segment) === null,
+      )
+      .map((segment) =>
+        limitedBannerKey({
+          providerId: segment.providerId,
+          profileId: segment.profileId,
+        }),
+      ),
+  );
+}
+
+/**
+ * Whether the user hid this banner for the limit episode it shows now. The
+ * episode is the reset time: a stored `resetsAt` that differs is an earlier
+ * episode and hides nothing. A dismissed reset that has passed hides nothing
+ * either, so a reading that lags its own reset still shows. A limit with no
+ * reset time stays hidden while the account remains limited (the store drops
+ * the entry once it is not).
+ */
+export function isLimitedBannerDismissed(
+  entries: Readonly<Record<string, number | null>> | undefined,
+  profile: LimitedProfile,
+  now: number,
+): boolean {
+  if (entries === undefined) return false;
+  const key = limitedBannerKey(profile);
+  if (!Object.hasOwn(entries, key)) return false;
+  const dismissedResetsAt = entries[key];
+  if (dismissedResetsAt !== profile.resetsAt) return false;
+  return dismissedResetsAt === null || dismissedResetsAt > now;
+}
+
 /** `Fri, Oct 9, 2:00 PM`. `hour12` is explicit so AM/PM always renders. */
 function formatBannerReset(resetsAt: number): string {
   return new Date(resetsAt).toLocaleString(undefined, {

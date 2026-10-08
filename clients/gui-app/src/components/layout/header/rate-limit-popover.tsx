@@ -11,12 +11,13 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Gauge, Settings, TriangleAlert } from "lucide-react";
+import { Eye, EyeOff, Gauge, Settings, TriangleAlert, X } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
   AgentSpinningDots,
@@ -71,10 +72,14 @@ import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider
 import { useStatusBarRateLimitSegments } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import {
+  clearedBannerKeys,
+  isLimitedBannerDismissed,
+  limitedBannerKey,
   limitedProfileBannerText,
   limitedProfiles,
   type LimitedProfile,
 } from "@/lib/rate-limits/limited-profiles";
+import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   resolveStatusBarProfileIds,
@@ -839,6 +844,11 @@ function RateLimitPopoverScopedBody({
     sample: false,
   });
   const limited = limitedProfiles(cluster);
+  // By value: `cluster` is rebuilt on every render, and the banners prune
+  // their dismissals only when this set really changes.
+  const clearedSignature = JSON.stringify(
+    [...clearedBannerKeys(cluster)].sort(),
+  );
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
   const { openSettings } = useSystemTabModalActions();
@@ -957,7 +967,12 @@ function RateLimitPopoverScopedBody({
           onClose={onClose}
         />
         <div className="min-h-0 min-w-0 overflow-y-auto p-3">
-          <LimitedProfileBanners limited={limited} openTab={resolvedTab} />
+          <LimitedProfileBanners
+            limited={limited}
+            clearedSignature={clearedSignature}
+            openTab={resolvedTab}
+            displayedHostId={displayedHostId}
+          />
           {resolvedTab === "overview" ? (
             <RateLimitOverview
               railTabs={railTabs}
@@ -1308,37 +1323,107 @@ function RailTab({
   );
 }
 
+/** The `clearedSignature` the scoped body builds, back to its keys. */
+function clearedKeysOf(signature: string): ReadonlySet<string> {
+  const parsed: unknown = JSON.parse(signature);
+  if (!Array.isArray(parsed)) return new Set();
+  return new Set(
+    parsed.filter((key): key is string => typeof key === "string"),
+  );
+}
+
 /**
  * One banner per limited profile whose own card is not on the open tab, at
  * the top of the content area. Overview draws a provider's condensed windows
  * only and another provider's tab draws nothing of this account, so there the
  * banner is what names the blocked account and when it is back. A provider's
  * own tab already says both on the profile's card, so its accounts get no
- * banner there. State only, with no action - the chat using that provider
- * already offers the switch. Nothing renders when no banner is left to draw.
+ * banner there. The chat using that provider already offers the switch, so
+ * the one action is to hide the banner until the limit resets: a monthly
+ * limit would otherwise sit on every tab for weeks. Hiding is per device and
+ * per limit episode (`limited-banner-dismissals-store.ts`), so a new limit
+ * shows again, and the rail dot and the provider's own card keep the state
+ * visible meanwhile. Nothing renders when no banner is left to draw.
  */
 function LimitedProfileBanners({
   limited,
+  clearedSignature,
   openTab,
+  displayedHostId,
 }: {
   readonly limited: ReadonlyArray<LimitedProfile>;
+  /** `clearedBannerKeys` of the same reading, as a JSON list. */
+  readonly clearedSignature: string;
   readonly openTab: RateLimitPopoverTab;
+  /** Dismissals are this host's; `null` remembers nothing and offers no hide. */
+  readonly displayedHostId: string | null;
 }): ReactNode {
-  const offTab = limited.filter((profile) => profile.providerId !== openTab);
-  if (offTab.length === 0) return null;
+  const now = useSampledNow();
+  const hostDismissals = useLimitedBannerDismissalsStore((state) =>
+    displayedHostId === null ? undefined : state.dismissals[displayedHostId],
+  );
+  const dismiss = useLimitedBannerDismissalsStore((state) => state.dismiss);
+  const prune = useLimitedBannerDismissalsStore((state) => state.prune);
+  useEffect(() => {
+    if (displayedHostId === null) return;
+    prune(displayedHostId, clearedKeysOf(clearedSignature), now);
+  }, [clearedSignature, displayedHostId, now, prune]);
+
+  const shown = limited.filter(
+    (profile) =>
+      profile.providerId !== openTab &&
+      !isLimitedBannerDismissed(hostDismissals, profile, now),
+  );
+  if (shown.length === 0) return null;
   return (
     <div className="mb-3 flex flex-col gap-2">
-      {offTab.map((profile) => (
-        <div
-          key={`${profile.providerId}:${profile.profileId ?? ""}`}
-          role="status"
-          data-testid="rate-limit-limited-banner"
-          className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive"
-        >
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0">{limitedProfileBannerText(profile)}</span>
-        </div>
-      ))}
+      {shown.map((profile) => {
+        const hideLabel =
+          profile.resetsAt === null ? "Hide" : "Hide until it resets";
+        return (
+          <div
+            key={limitedBannerKey(profile)}
+            role="status"
+            data-testid="rate-limit-limited-banner"
+            className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive"
+          >
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">
+              {limitedProfileBannerText(profile)}
+            </span>
+            {displayedHostId === null ? null : (
+              <TooltipWrapper
+                label={hideLabel}
+                side="top"
+                sideOffset={6}
+                align={undefined}
+              >
+                {/* The span is the trigger, as on the strip eye: the tooltip
+                    repeats the button's own name, and on the button Radix
+                    would read it twice. */}
+                <span className="-my-1 -mr-1.5 inline-flex shrink-0">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={hideLabel}
+                    data-testid="rate-limit-limited-banner-hide"
+                    onClick={() =>
+                      dismiss(
+                        displayedHostId,
+                        limitedBannerKey(profile),
+                        profile.resetsAt,
+                      )
+                    }
+                  >
+                    <X aria-hidden />
+                  </Button>
+                </span>
+              </TooltipWrapper>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

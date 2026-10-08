@@ -330,6 +330,11 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   {
+    camelName: "limitedBannerDismissals",
+    leaf: "limited-banner-dismissals",
+    kind: "static",
+  },
+  {
     camelName: "resourceMonitor",
     leaf: "resource-monitor",
     kind: "static",
