@@ -1162,7 +1162,7 @@ describe("<QueuedMessagePanel />", () => {
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
-    it("renders a received A2A item's retained pending reason inline in its row", () => {
+    it("renders a received A2A item's retained pending reason inline in its row once the row is unfolded", () => {
       const reason = "Retained after the turn ended before it could steer.";
       renderPanel({
         queue: queueState([
@@ -1178,6 +1178,9 @@ describe("<QueuedMessagePanel />", () => {
 
       const row = screen.getByTestId("queued-message-row");
       expect(within(row).getByText("Agent response")).not.toBeNull();
+      // A folded agent row is one line, its reason included (#2441).
+      expect(within(row).queryByText(reason)).toBeNull();
+      fireEvent.click(within(row).getByTestId("queued-message-agent-fold"));
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
