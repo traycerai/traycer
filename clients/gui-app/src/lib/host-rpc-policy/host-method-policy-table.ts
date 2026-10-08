@@ -1408,6 +1408,23 @@ export const HOST_METHOD_POLL_TABLE = {
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Epic files are content-addressed too: a read names its sha. Download
+  // progress rides the files lane's `localState`, never a poll.
+  "epic.readFile": { ...LATEST_SCHEDULING, poll: null },
+  "epic.fetchFile": { ...LATEST_SCHEDULING, poll: null },
+  // User actions: each one runs, in order.
+  "epic.cancelFetchFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deleteFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.restoreFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.openFileInBrowser": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork

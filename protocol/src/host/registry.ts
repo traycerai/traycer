@@ -608,6 +608,14 @@ import {
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
+  epicCancelFetchFileV10,
+  epicDeleteFileV10,
+  epicFetchFileV10,
+  epicOpenFileInBrowserV10,
+  epicReadFileV10,
+  epicRestoreFileV10,
+} from "@traycer/protocol/host/epic/files";
+import {
   epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
   epicBatchDeleteV11,
@@ -759,6 +767,7 @@ import {
 import {
   epicStateSubscribeV10,
   epicStateSubscribeV11,
+  epicStateSubscribeV12,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -8708,6 +8717,77 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // The epic files plane (`epic/files.ts`): every byte a client renders, the
+  // explicit download of a big file, tombstone/restore, and the token-bound
+  // "Open in browser" URL. Optional and off the released floor: a new method
+  // name is handshake-fatal against a released peer, and an old host simply
+  // hides the files surface.
+  "epic.readFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicReadFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.fetchFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicFetchFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.cancelFetchFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicCancelFetchFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.deleteFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicDeleteFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.restoreFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicRestoreFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.openFileInBrowser": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicOpenFileInBrowserV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // Artifact attachment bytes still live in the root-doc attachment map, but
   // @2 does not replicate that map to clients. This optional read keeps the
   // artifact/epic authorization subject on the request; a hash alone is never
@@ -12448,7 +12528,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -12458,6 +12538,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // `epicDeletedArtifactRecordSchemaV10`.
         1: {
           contract: epicStateSubscribeV11,
+        },
+        // `@1.2`: the files arm. The host sends it only to a `>=1.2` peer and
+        // projects older peers' frames down (`epic-state-stream-resolver.ts`).
+        2: {
+          contract: epicStateSubscribeV12,
         },
       },
     },

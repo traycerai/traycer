@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+
 import {
   EPIC_READ_FILE_RANGE_MAX_BYTES,
   epicCancelFetchFileV10,
@@ -392,11 +394,14 @@ describe("epic.state.subscribe@1.2 files arm", () => {
     expect(withState({ kind: "uploading" })).toBe(false);
   });
 
-  it("is the @1.2 contract of the line, not yet registered", () => {
+  it("is the @1.2 contract and the registered top of the line", () => {
     expect(epicStateSubscribeV12.schemaVersion).toEqual({ major: 1, minor: 2 });
     expect(epicStateSubscribeV12.serverFrameSchema).toBe(
       epicStateSubscribeServerFrameSchemaV12,
     );
+    const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
+    expect(line.latestMinor).toBe(2);
+    expect(line.versions[2].contract).toBe(epicStateSubscribeV12);
   });
 });
 

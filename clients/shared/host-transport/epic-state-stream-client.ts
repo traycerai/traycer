@@ -39,7 +39,9 @@
  */
 import {
   epicStateSubscribeServerFrameSchemaV11,
+  epicStateSubscribeServerFrameSchemaV12,
   type EpicStateSubscribeServerFrameV11,
+  type EpicStateSubscribeServerFrameV12,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -53,8 +55,19 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const EPIC_STATE_SUBSCRIBE_METHOD = "epic.state.subscribe";
 
-type StateServerFrame<Kind extends EpicStateSubscribeServerFrameV11["kind"]> =
-  Extract<EpicStateSubscribeServerFrameV11, { readonly kind: Kind }>;
+/**
+ * A frame from either line this client negotiates: `@1.2` (with the files
+ * arm) or `@1.1` from a host that predates it. Host skew is normal, so both
+ * decode; a consumer that wants files checks `"files" in frame`.
+ */
+export type EpicStateServerFrame =
+  | EpicStateSubscribeServerFrameV12
+  | EpicStateSubscribeServerFrameV11;
+
+type StateServerFrame<Kind extends EpicStateServerFrame["kind"]> = Extract<
+  EpicStateServerFrame,
+  { readonly kind: Kind }
+>;
 
 export type EpicStateSnapshotFrame = StateServerFrame<"snapshot">;
 export type EpicStateResumedFrame = StateServerFrame<"resumed">;
@@ -132,13 +145,18 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    const parsed = epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);
+    // `@1.2` first: an `@1.1` frame lacks the required `files` arm and fails
+    // it, while the `@1.1` schema would accept a `@1.2` frame by stripping it.
+    const latest = epicStateSubscribeServerFrameSchemaV12.safeParse(envelope);
+    const parsed = latest.success
+      ? latest
+      : epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // snapshot `basis` enum is CLOSED for the same reason, so a widened basis
     // from a newer host arrives as an unparseable frame instead of as a
     // silently mis-handled cold open.
     if (!parsed.success) return;
-    const frame = parsed.data;
+    const frame: EpicStateServerFrame = parsed.data;
     switch (frame.kind) {
       case "snapshot":
         this.callbacks.onSnapshot(frame);
