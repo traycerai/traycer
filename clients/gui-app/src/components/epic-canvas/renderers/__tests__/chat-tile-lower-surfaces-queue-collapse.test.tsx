@@ -107,7 +107,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
-import { useChatDockOpenStore } from "@/stores/chats/chat-dock-open-store";
+import {
+  queueFoldKey,
+  useChatDockOpenStore,
+} from "@/stores/chats/chat-dock-open-store";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { AgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import {
@@ -285,11 +288,12 @@ function surfacesProps(
 function tile(
   props: ChatLowerInteractionSurfacesProps,
   queryClient: QueryClient,
+  hostId: string,
 ): ReactElement {
   return (
     <QueryClientProvider client={queryClient}>
       <EpicSessionContext.Provider value={epicHandle}>
-        <TabHostProvider hostId={TAB_HOST.hostId}>
+        <TabHostProvider hostId={hostId}>
           <TooltipProvider>
             <ChatLowerInteractionSurfaces {...props} />
           </TooltipProvider>
@@ -310,9 +314,14 @@ beforeEach(() => {
     epicId: EPIC_ID,
     chatId: OTHER_CHAT_ID,
   });
+  installManagedCommandChatSession({
+    hostId: DEFAULT_HOST.hostId,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+  });
   useChatDockOpenStore.setState({
     openByChatId: new Map(),
-    queueCollapsedByChatId: new Map(),
+    queueCollapsedByHostChat: new Map(),
   });
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
@@ -338,7 +347,7 @@ afterEach(() => {
   cleanup();
   useChatDockOpenStore.setState({
     openByChatId: new Map(),
-    queueCollapsedByChatId: new Map(),
+    queueCollapsedByHostChat: new Map(),
   });
   disposeManagedCommandChatSessions();
   epicHandle.dispose();
@@ -390,6 +399,15 @@ function tileFor(
   items: ReadonlyArray<ChatQueuedPromptItem>,
   queryClient: QueryClient,
 ): ReactElement {
+  return tileOnHost(TAB_HOST.hostId, chatId, items, queryClient);
+}
+
+function tileOnHost(
+  hostId: string,
+  chatId: string,
+  items: ReadonlyArray<ChatQueuedPromptItem>,
+  queryClient: QueryClient,
+): ReactElement {
   const props = surfacesProps(() => null);
   const queue: ChatSessionState["queue"] = {
     status: "idle",
@@ -398,11 +416,13 @@ function tileFor(
   return tile(
     {
       ...props,
+      hostId,
       chatId,
       composer: { ...props.composer, nodeId: chatId },
       queue: { ...props.queue, value: queue },
     },
     queryClient,
+    hostId,
   );
 }
 
@@ -426,7 +446,9 @@ describe("the Message queue fold survives the queue emptying (#2441)", () => {
     );
     expect(screen.queryByTestId("queued-message-list")).toBeNull();
     expect(
-      useChatDockOpenStore.getState().queueCollapsedByChatId.get(CHAT_ID),
+      useChatDockOpenStore
+        .getState()
+        .queueCollapsedByHostChat.get(queueFoldKey(TAB_HOST.hostId, CHAT_ID)),
     ).toBe(true);
   });
 
@@ -441,16 +463,53 @@ describe("the Message queue fold survives the queue emptying (#2441)", () => {
 
     expect(screen.getByTestId("queued-message-list")).not.toBeNull();
     expect(
-      useChatDockOpenStore.getState().queueCollapsedByChatId.has(CHAT_ID),
+      useChatDockOpenStore
+        .getState()
+        .queueCollapsedByHostChat.has(queueFoldKey(TAB_HOST.hostId, CHAT_ID)),
     ).toBe(false);
   });
 
   it("leaves another chat's queue open", () => {
-    useChatDockOpenStore.getState().setQueueCollapsed(CHAT_ID, true);
+    useChatDockOpenStore
+      .getState()
+      .setQueueCollapsed(TAB_HOST.hostId, CHAT_ID, true);
 
     render(tileFor(OTHER_CHAT_ID, [queuedPrompt("other")], new QueryClient()));
 
     expect(screen.getByTestId("queued-message-list")).not.toBeNull();
+  });
+
+  it("leaves the same chat id open under a different tab host", () => {
+    const queryClient = new QueryClient();
+    const view = render(
+      tileOnHost(
+        TAB_HOST.hostId,
+        CHAT_ID,
+        [queuedPrompt("first")],
+        queryClient,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("queued-message-header-toggle"));
+    expect(screen.queryByTestId("queued-message-list")).toBeNull();
+    view.unmount();
+
+    render(
+      tileOnHost(
+        DEFAULT_HOST.hostId,
+        CHAT_ID,
+        [queuedPrompt("first")],
+        queryClient,
+      ),
+    );
+
+    expect(screen.getByTestId("queued-message-list")).not.toBeNull();
+    expect(
+      useChatDockOpenStore
+        .getState()
+        .queueCollapsedByHostChat.has(
+          queueFoldKey(DEFAULT_HOST.hostId, CHAT_ID),
+        ),
+    ).toBe(false);
   });
 
   it("opens a queue with no recorded fold", () => {

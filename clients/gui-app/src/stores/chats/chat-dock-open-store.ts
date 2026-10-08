@@ -20,7 +20,9 @@ import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
  * more: the queue panel unmounts whenever the queue drains, so a fold kept in
  * the panel came back open with the next queued message - in a busy chat, all
  * the time. A chat with no entry has its queue OPEN, which is what it always
- * was; only a fold the user made is remembered.
+ * was; only a fold the user made is remembered. It is keyed by the tab's HOST
+ * as well as the chat: chat ids are host-minted, so two hosts can each hold a
+ * chat with the same id (gui-app AGENTS.md: a chat id is not a host binding).
  */
 const MAX_REMEMBERED_CHATS = 64;
 
@@ -30,9 +32,16 @@ interface ChatDockOpenState {
   readonly toggleSection: (chatId: string, section: ChatDockSection) => void;
   /** Closes whatever this chat had open - a section that went empty. */
   readonly closeSection: (chatId: string) => void;
-  /** Chats whose Message queue the user folded; absent means open. */
-  readonly queueCollapsedByChatId: ReadonlyMap<string, boolean>;
-  readonly setQueueCollapsed: (chatId: string, collapsed: boolean) => void;
+  /**
+   * Host-and-chat keys (`queueFoldKey`) whose Message queue the user folded;
+   * absent means open.
+   */
+  readonly queueCollapsedByHostChat: ReadonlyMap<string, boolean>;
+  readonly setQueueCollapsed: (
+    hostId: string,
+    chatId: string,
+    collapsed: boolean,
+  ) => void;
 }
 
 /**
@@ -79,24 +88,25 @@ export const useChatDockOpenStore = create<ChatDockOpenState>((set) => ({
       return { openByChatId: next };
     });
   },
-  queueCollapsedByChatId: new Map<string, boolean>(),
-  setQueueCollapsed: (chatId, collapsed) => {
+  queueCollapsedByHostChat: new Map<string, boolean>(),
+  setQueueCollapsed: (hostId, chatId, collapsed) => {
+    const key = queueFoldKey(hostId, chatId);
     set((state) => {
       if (collapsed) {
         return {
-          queueCollapsedByChatId: withBoundedEntry(
-            state.queueCollapsedByChatId,
-            chatId,
+          queueCollapsedByHostChat: withBoundedEntry(
+            state.queueCollapsedByHostChat,
+            key,
             true,
           ),
         };
       }
       // Open is the default, so an opened queue drops its entry rather than
       // holding a slot in the bound.
-      if (!state.queueCollapsedByChatId.has(chatId)) return state;
-      const next = new Map(state.queueCollapsedByChatId);
-      next.delete(chatId);
-      return { queueCollapsedByChatId: next };
+      if (!state.queueCollapsedByHostChat.has(key)) return state;
+      const next = new Map(state.queueCollapsedByHostChat);
+      next.delete(key);
+      return { queueCollapsedByHostChat: next };
     });
   },
 }));
@@ -107,8 +117,17 @@ export function useChatDockOpenSection(chatId: string): ChatDockSection | null {
   );
 }
 
-export function useChatQueueCollapsed(chatId: string): boolean {
+/**
+ * One key per (host, chat). A JSON pair rather than a joined string, so no
+ * character in either id can make two different pairs collide.
+ */
+export function queueFoldKey(hostId: string, chatId: string): string {
+  return JSON.stringify([hostId, chatId]);
+}
+
+export function useChatQueueCollapsed(hostId: string, chatId: string): boolean {
+  const key = queueFoldKey(hostId, chatId);
   return useChatDockOpenStore(
-    (state) => state.queueCollapsedByChatId.get(chatId) === true,
+    (state) => state.queueCollapsedByHostChat.get(key) === true,
   );
 }

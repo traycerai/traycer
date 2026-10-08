@@ -356,6 +356,41 @@ describe("the agent fold's nested controls and key repeat (#2441)", () => {
   });
 });
 
+describe("a folded agent row's retained reason (#2441)", () => {
+  const REASON = "Retained after the turn ended before it could steer.";
+
+  it("shows no reason while folded and shows it once unfolded", () => {
+    renderPanel([
+      {
+        ...agentItem("q-agent", "agent reply q-agent"),
+        fallbackReason: REASON,
+      },
+    ]);
+    const row = rowFor("q-agent");
+    const fold = within(row).getByTestId("queued-message-agent-fold");
+
+    expect(within(row).queryByText(REASON)).toBeNull();
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(fold);
+    expect(within(row).getByText(REASON)).not.toBeNull();
+
+    fireEvent.click(fold);
+    expect(within(row).queryByText(REASON)).toBeNull();
+  });
+
+  it("still shows a user row's reason", () => {
+    renderPanel([
+      {
+        ...userItem("q-user", "typed by the user q-user"),
+        fallbackReason: REASON,
+      },
+    ]);
+
+    expect(within(rowFor("q-user")).getByText(REASON)).not.toBeNull();
+  });
+});
+
 describe("the queue header summary (#2441)", () => {
   function summary(): string {
     return screen.getByTestId("queued-message-header").textContent;

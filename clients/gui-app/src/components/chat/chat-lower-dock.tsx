@@ -21,6 +21,7 @@ import {
   useChatDockOpenStore,
   useChatQueueCollapsed,
 } from "@/stores/chats/chat-dock-open-store";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 
 import {
   ChatDockCompactStrip,
@@ -214,20 +215,6 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   // never reordered. Whenever it holds anything it is the frame's LAST child,
   // so it sits directly on the composer under every row and attached panel.
   const queueVisible = props.queue.items.length > 0;
-  // The queue's fold is per CHAT and outlives the panel (#2441): the panel
-  // unmounts every time the queue drains, and a fold it kept itself came back
-  // open with the next queued message.
-  const queueCollapsed = useChatQueueCollapsed(props.chatId);
-  const setQueueCollapsed = useChatDockOpenStore(
-    (state) => state.setQueueCollapsed,
-  );
-  const chatId = props.chatId;
-  const onQueueOpenChange = useCallback(
-    (open: boolean) => {
-      setQueueCollapsed(chatId, !open);
-    },
-    [chatId, setQueueCollapsed],
-  );
   // The attached panel is built ONCE, here, and everything that claims a panel
   // is open follows THE NODE rather than the pill that asked for it.
   //
@@ -368,12 +355,10 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
                     data-layout-passive
                     data-layout-cue="Message queue · Always here"
                   >
-                    {queuePanel({
-                      dock: props,
-                      separated: anyRowVisible,
-                      open: !queueCollapsed,
-                      onOpenChange: onQueueOpenChange,
-                    })}
+                    <ChatDockQueuePanel
+                      dock={props}
+                      separated={anyRowVisible}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -517,13 +502,32 @@ function dockPanelContent(
   );
 }
 
-function queuePanel(props: {
+/**
+ * The Message queue, with its fold read from and written to the store per
+ * (host, chat) (#2441): the panel unmounts every time the queue drains, and a
+ * fold it kept itself came back open with the next queued message.
+ *
+ * A component of its own, mounted only while the queue holds something, so
+ * the tab's host is read where a queue exists - always inside a tab - and not
+ * by every dock (a layout-editor picture can draw one with no tab around it).
+ */
+function ChatDockQueuePanel(props: {
   readonly dock: ChatLowerDockProps;
   readonly separated: boolean;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
   const { dock } = props;
+  const hostId = useTabHostId();
+  const chatId = dock.chatId;
+  const collapsed = useChatQueueCollapsed(hostId, chatId);
+  const setQueueCollapsed = useChatDockOpenStore(
+    (state) => state.setQueueCollapsed,
+  );
+  const onOpenChange = useCallback(
+    (open: boolean) => {
+      setQueueCollapsed(hostId, chatId, !open);
+    },
+    [hostId, chatId, setQueueCollapsed],
+  );
   return (
     <QueuedMessagePanel
       queue={dock.queue}
@@ -535,8 +539,8 @@ function queuePanel(props: {
       editingQueueItemId={dock.editingQueueItemId}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
       separated={props.separated}
-      open={props.open}
-      onOpenChange={props.onOpenChange}
+      open={!collapsed}
+      onOpenChange={onOpenChange}
       onPause={dock.onQueuePause}
       onResume={dock.onQueueResume}
       onEdit={dock.onQueueEdit}

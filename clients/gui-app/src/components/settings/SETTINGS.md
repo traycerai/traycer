@@ -1988,12 +1988,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     actions and Pause, under the pill row and every other row. It has no
     Size, no Shown and no dock position; stale stored values for it are
     dropped on rehydrate. It empties to nothing, leaving no gap.
-    Its fold is remembered per chat in `chat-dock-open-store.ts` (#2441),
-    because the panel unmounts whenever the queue drains and a fold kept in
-    the panel came back open with the next queued message. A received agent
-    row is one line (its sender chip and the message, ellipsized) until its
-    text is clicked, and the header splits the count: `2 messages · 12 from
-agents`.
+    Its fold is remembered per host and chat in `chat-dock-open-store.ts`
+    (#2441), because the panel unmounts whenever the queue drains and a fold
+    kept in the panel came back open with the next queued message; chat ids
+    are host-minted, so the host is part of the key. A received agent row is
+    one line (its sender chip and the message as plain text, ellipsized; a
+    held reason waits for the unfold) until its text is clicked, and the
+    header splits the count: `2 messages · 12 from agents`.
   - **Received A2A queue rows follow the Running agents mode**, and fold into
     the same chip with their own count. That is also why the chip exists
     whenever those rows do, even with no sub-agent running: without it, folding

@@ -982,12 +982,17 @@ function QueuedMessageRowContent(props: {
         ) : null}
         <QueuedMessageRowText item={item} agentFold={props.agentFold} />
       </div>
-      <QueuedMessageFallbackReason
-        item={item}
-        pillSaysPausedAfterError={
-          props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
-        }
-      />
+      {/* A folded agent row is one line, its held reason included: the
+          reason comes back with the rest of the message when it is unfolded
+          (#2441, PR review). */}
+      {compact ? null : (
+        <QueuedMessageFallbackReason
+          item={item}
+          pillSaysPausedAfterError={
+            props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
+          }
+        />
+      )}
     </div>
   );
 }
