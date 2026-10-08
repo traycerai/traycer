@@ -95,3 +95,50 @@ test("a dialog open before the app asked is never covered", async ({
     () => document.querySelector(":popover-open") !== null,
   );
 });
+
+function blockingClaimed(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const read: unknown = Reflect.get(window, "blockingLayerClaimed");
+    return (
+      typeof read === "function" && Reflect.apply(read, window, []) === true
+    );
+  });
+}
+
+function escapesSeen(page: Page): Promise<number> {
+  return page.evaluate(() => Number(document.body.dataset.escapes ?? "0"));
+}
+
+test("Escape inside a fullscreen app leaves fullscreen", async ({ page }) => {
+  await page.goto(`${fixture("mcp-app-fullscreen")}?scenario=escape`);
+  // The bootstrap has been told the app is fullscreen.
+  await page.waitForFunction(
+    () => document.body.dataset.appFullscreen === "true",
+  );
+  expect(await popoverOpen(page)).toBe(true);
+  expect(await blockingClaimed(page)).toBe(true);
+
+  // Focus inside the opaque frame: the key never reaches the app's document.
+  await page.frameLocator("iframe").locator("#field").focus();
+  await page.keyboard.press("Escape");
+
+  await page.waitForFunction(
+    () => document.querySelector(":popover-open") === null,
+  );
+  expect(await blockingClaimed(page)).toBe(false);
+  // The host took the key; the app's own field never saw it.
+  expect(await escapesSeen(page)).toBe(0);
+});
+
+test("Escape inside an inline app stays the app's", async ({ page }) => {
+  await page.goto(`${fixture("mcp-app-fullscreen")}?scenario=inline-escape`);
+  const field = page.frameLocator("iframe").locator("#field");
+  await field.focus();
+  await page.keyboard.press("Escape");
+
+  await page.waitForFunction(
+    () => Number(document.body.dataset.escapes ?? "0") === 1,
+  );
+  expect(await popoverOpen(page)).toBe(false);
+  expect(await blockingClaimed(page)).toBe(false);
+});

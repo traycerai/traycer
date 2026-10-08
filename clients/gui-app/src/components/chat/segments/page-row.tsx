@@ -1,12 +1,5 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
-import {
-  Download,
-  FileCode,
-  Globe,
-  Layers,
-  Maximize2,
-  MoreHorizontal,
-} from "lucide-react";
+import { useCallback, useState, type ReactNode } from "react";
+import { Download, FileCode, Globe, Layers, Maximize2 } from "lucide-react";
 import type {
   ToolCallPageStamp,
   ToolInputDetail,
@@ -18,14 +11,6 @@ import {
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
 import { useScrollToChatPage } from "@/components/chat/chat-scroll-to-block";
 import { HtmlViewer } from "@/components/files/viewers/html-viewer";
-import { Button } from "@/components/ui/button";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerTitle,
-  DrawerDescription,
-  DrawerTrigger,
-} from "@/components/ui/drawer";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { Shimmer } from "@/components/ui/shimmer";
 import { BlockFloatingToolbar } from "@/editor-core/nodes/shared/block-floating-toolbar";
@@ -37,12 +22,11 @@ import {
   useEpicFileOpenInBrowser,
 } from "@/hooks/files/use-epic-file-mutations";
 import type { EpicFileAddress } from "@/hooks/files/use-epic-file-text-query";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
-import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { makeEpicFileTileRef } from "@/stores/epics/canvas/tile-schema/epic-file-tile";
-import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
-import "@/components/layout/shell/mobile-shell-touch-targets.css";
+import { TouchActionsSheet } from "./touch-actions-sheet";
 
 const SHOW_PAGE_TOOL_LABEL = "traycer_show_page";
 
@@ -209,8 +193,12 @@ function usePageActions(
   const { openTile } = useEpicTileNavigation();
   const openInBrowser = useEpicFileOpenInBrowser(address);
   const download = useEpicFileDownload(hostId, address);
+  const track = (action: "expand" | "download" | "open_browser"): void => {
+    Analytics.getInstance().track(AnalyticsEvent.PageAction, { action });
+  };
   return {
-    expand: () =>
+    expand: () => {
+      track("expand");
       openTile(
         tileIntent(
           makeEpicFileTileRef({
@@ -224,10 +212,17 @@ function usePageActions(
           "explicit",
           "direct_ui",
         ),
-      ),
-    openInBrowser: () => openInBrowser.mutate(),
+      );
+    },
+    openInBrowser: () => {
+      track("open_browser");
+      openInBrowser.mutate();
+    },
     openInBrowserPending: openInBrowser.isPending,
-    download: () => download.mutation.mutate(),
+    download: () => {
+      track("download");
+      download.mutation.mutate();
+    },
     downloadPending: download.mutation.isPending,
   };
 }
@@ -353,115 +348,46 @@ function DerivedFromCaption(props: {
   );
 }
 
-/**
- * A coarse pointer has no hover to reveal the bar with, so the page wears an
- * always-visible round actions button that opens a sheet (D40, MobileChat and
- * MobileActions).
- */
 function PageTouchActions(props: {
   readonly title: string;
   readonly actions: PageActions;
 }) {
   const { actions } = props;
-  const [open, setOpen] = useState(false);
-  // Closing hands focus back to the … button, except after Expand: the tile it
-  // opened takes focus, and the button pulling it back would undo that.
-  const keepFocusAwayRef = useRef(false);
-  const actionsRef = useRef<HTMLDivElement>(null);
-  // The drawer portals to <body>; re-assert the theme there, as every sheet
-  // does (`ComposerOptionsSheet`).
-  const { resolvedTheme, themePreset } = useResolvedTheme();
-  const run = (action: () => void, navigates: boolean): void => {
-    keepFocusAwayRef.current = navigates;
-    setOpen(false);
-    action();
-  };
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
-      <DrawerTrigger asChild>
-        <Button
-          variant="muted-outline"
-          size="icon-round"
-          aria-label="Page actions"
-          className="absolute -top-0.5 -right-1 z-10 hidden pointer-coarse:inline-flex"
-          onClick={() => {
-            keepFocusAwayRef.current = false;
-          }}
-        >
-          <MoreHorizontal aria-hidden />
-        </Button>
-      </DrawerTrigger>
-      <DrawerContent
-        // The sheet takes focus on open, on its first action. `vaul` leaves it
-        // on the page behind unless told otherwise.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          actionsRef.current?.querySelector("button")?.focus();
-        }}
-        onCloseAutoFocus={(event) => {
-          if (keepFocusAwayRef.current) event.preventDefault();
-        }}
-        data-mobile-shell-touch-scope=""
-        data-testid="page-actions-sheet"
-        data-theme={themePreset}
-        className={cn(resolvedTheme === "dark" && "dark")}
-      >
-        {/* Not a DrawerHeader: the artboard draws an icon beside the title
-              and a rule under both, which that header's own shape has no
-              room for. */}
-        <div className="flex items-center gap-3 border-b border-canvas-border/70 p-4">
-          <FileCode
-            className="size-4 shrink-0 text-[var(--term-ansi-yellow)]"
-            aria-hidden
-          />
-          <div className="min-w-0">
-            <DrawerTitle className="truncate">{props.title}</DrawerTitle>
-            <DrawerDescription>Page · shared with the task</DrawerDescription>
-          </div>
-        </div>
-        <div
-          ref={actionsRef}
-          className="flex flex-col px-2 pt-1 pb-safe-bottom-gutter"
-        >
-          <SheetActionRow
-            icon={<Maximize2 aria-hidden />}
-            label="Open full screen"
-            disabled={false}
-            onSelect={() => run(actions.expand, true)}
-          />
-          <SheetActionRow
-            icon={<Globe aria-hidden />}
-            label="Open in browser"
-            disabled={actions.openInBrowserPending}
-            onSelect={() => run(actions.openInBrowser, false)}
-          />
-          <SheetActionRow
-            icon={<Download aria-hidden />}
-            label="Save HTML file"
-            disabled={actions.downloadPending}
-            onSelect={() => run(actions.download, false)}
-          />
-        </div>
-      </DrawerContent>
-    </Drawer>
-  );
-}
-
-function SheetActionRow(props: {
-  readonly icon: ReactNode;
-  readonly label: string;
-  readonly disabled: boolean;
-  readonly onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={props.disabled}
-      className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-ui-sm text-foreground transition-colors active:bg-accent/60 disabled:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0"
-      onClick={props.onSelect}
-    >
-      {props.icon}
-      {props.label}
-    </button>
+    <TouchActionsSheet
+      triggerLabel="Page actions"
+      icon={
+        <FileCode
+          className="size-4 shrink-0 text-[var(--term-ansi-yellow)]"
+          aria-hidden
+        />
+      }
+      title={props.title}
+      description="Page · shared with the task"
+      testId="page-actions-sheet"
+      actions={[
+        {
+          icon: <Maximize2 aria-hidden />,
+          label: "Open full screen",
+          disabled: false,
+          onSelect: actions.expand,
+          navigates: true,
+        },
+        {
+          icon: <Globe aria-hidden />,
+          label: "Open in browser",
+          disabled: actions.openInBrowserPending,
+          onSelect: actions.openInBrowser,
+          navigates: false,
+        },
+        {
+          icon: <Download aria-hidden />,
+          label: "Save HTML file",
+          disabled: actions.downloadPending,
+          onSelect: actions.download,
+          navigates: false,
+        },
+      ]}
+    />
   );
 }

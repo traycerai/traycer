@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AppWindow,
   CloudDownload,
@@ -20,6 +20,7 @@ import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-
 import { SidebarGroup, SidebarGroupContent } from "@/components/ui/sidebar";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import { useOpenEpicFileTile } from "@/hooks/files/use-open-epic-file-tile";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicFiles } from "@/lib/epic-selectors";
 import {
   buildEpicFilesGroups,
@@ -84,6 +85,10 @@ function groupDisplay(group: EpicFilesGroup): GroupDisplay {
 export function FilesPanelBody(props: LeftPanelSlotProps): ReactNode {
   const { epicId, tabId } = props;
   const files = useEpicFiles();
+  // The body mounts when the panel is shown and expanded: that is an open.
+  useEffect(() => {
+    Analytics.getInstance().track(AnalyticsEvent.FilesPanelOpened, null);
+  }, []);
   const groups = useMemo(
     () => buildEpicFilesGroups(files.records),
     [files.records],

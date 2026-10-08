@@ -108,7 +108,7 @@ function BlobNotDownloaded(props: {
   readonly address: EpicFileAddress;
   readonly noun: string;
 }): ReactNode {
-  const copy = useEpicFileCopy(props.hostId, props.address);
+  const copy = useEpicFileCopy(props.hostId, props.address, null);
   const record = useEpicFileRecord(props.address.path);
   return (
     <EpicFileNotDownloaded

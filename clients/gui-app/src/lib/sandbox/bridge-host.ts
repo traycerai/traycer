@@ -130,6 +130,15 @@ const APP_METHODS: ReadonlySet<string> = new Set([
   "ui/download-file",
 ]);
 
+/** The page forwards this while fullscreen (`host-context-changed`). */
+const FULLSCREEN_EXIT: ForwardedShortcut = {
+  code: "Escape",
+  ctrl: false,
+  meta: false,
+  alt: false,
+  shift: false,
+};
+
 const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
@@ -448,8 +457,14 @@ export class SandboxBridgeHost {
         return;
       case "traycer/notifications/shortcut": {
         const press = parseShortcutPress(params);
+        if (press === null) return;
         const forwarded = this.options.resource.forwardedShortcuts;
-        if (press !== null && isForwardedShortcut(forwarded, press)) {
+        // Bare Escape only from the proven page, and only while fullscreen.
+        const exitsFullscreen =
+          this.phase === "ready" &&
+          this.hostContext.displayMode === "fullscreen" &&
+          isForwardedShortcut([FULLSCREEN_EXIT], press);
+        if (exitsFullscreen || isForwardedShortcut(forwarded, press)) {
           this.options.events.onShortcut(press);
         }
         return;
@@ -594,6 +609,16 @@ export class SandboxBridgeHost {
       return;
     }
     this.options.events.onStatus("ready");
+    // What changed while the page loaded (`updateHostContext` waits for
+    // ready): a fullscreen entered then must still reach its bootstrap.
+    const missed = changedContext(this.options.hostContext, this.hostContext);
+    if (Object.keys(missed).length > 0) {
+      this.post({
+        jsonrpc: "2.0",
+        method: "ui/notifications/host-context-changed",
+        params: missed,
+      });
+    }
     this.request("ping", {}, PING_TIMEOUT_MS, (answered) => {
       if (!answered) this.markCrashed();
     });

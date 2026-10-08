@@ -37,10 +37,16 @@ export interface EpicFileCopy {
  * `fetchFile` that said `downloading` means copying, and the reads are asked
  * again on that host until they stop saying `not-downloaded` - which unmounts
  * the caller.
+ *
+ * `failedAt` is when the caller's read last answered `failed` (`null` when it
+ * did not). A `fetchFile` that re-runs a failed carriage answers `downloading`
+ * whatever happens next, so a read still saying `failed` a recheck after the
+ * host took the copy means it failed again: the copy ends and Retry is back.
  */
 export function useEpicFileCopy(
   hostId: string,
   address: EpicFileAddress,
+  failedAt: number | null,
 ): EpicFileCopy {
   const queryClient = useQueryClient();
   const local = useEpicFileLocalState(hostId, address);
@@ -58,7 +64,23 @@ export function useEpicFileCopy(
     }
   }, [state, queryClient, hostId, path, sha256]);
 
-  const recheck = local === null && fetchFile.data?.kind === "downloading";
+  const accepted = fetchFile.data?.kind === "downloading";
+  const acceptedAt = useRef<number | null>(null);
+  useEffect(() => {
+    acceptedAt.current = accepted ? Date.now() : null;
+  }, [accepted]);
+  const { reset } = fetchFile;
+  useEffect(() => {
+    const since = acceptedAt.current;
+    if (failedAt === null || since === null) return;
+    // The read right after the accept can still say `failed`; only a
+    // recheck's answer speaks for the copy.
+    if (failedAt < since + COPY_RECHECK_MS) return;
+    acceptedAt.current = null;
+    reset();
+  }, [failedAt, reset]);
+
+  const recheck = local === null && accepted;
   useEffect(() => {
     if (!recheck) return;
     const timer = window.setInterval(() => {
@@ -72,7 +94,7 @@ export function useEpicFileCopy(
       ? { received: local.received, total: local.total }
       : null;
   return {
-    copying: progress !== null || fetchFile.data?.kind === "downloading",
+    copying: progress !== null || accepted,
     progress,
     start: () => fetchFile.mutate(),
     startPending: fetchFile.isPending,

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import {
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
+import { useBlockingLayerClaim } from "@/components/layout/shell/blocking-layer-claim";
 import { SandboxFrame } from "@/components/sandbox/sandbox-frame";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -46,6 +48,7 @@ import { ToolbarButton } from "@/editor-core/toolbar/toolbar-button";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { useEpicFileTextQuery } from "@/hooks/files/use-epic-file-text-query";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { formatByteSize } from "@/lib/format-byte-size";
 import {
   canDownloadToDevice,
@@ -80,6 +83,7 @@ import type { SandboxPermission } from "@/lib/sandbox/sandbox-url";
 import { deriveToolInputSummary } from "@/lib/segment-summary";
 import { cn } from "@/lib/utils";
 import { insertAppMessageDraft } from "@/stores/composer/app-message-draft-store";
+import { TouchActionsSheet } from "./touch-actions-sheet";
 
 export interface McpAppRowProps {
   readonly id: string;
@@ -92,6 +96,18 @@ export interface McpAppRowProps {
 const INITIAL_APP_HEIGHT_PX = 160;
 const MIN_APP_HEIGHT_PX = 40;
 const MAX_APP_HEIGHT_PX = 4000;
+/**
+ * Phone Fit: on a phone an app sits in a box of this height whatever it
+ * reports, and scrolls inside it; Expand gives it the screen. A fixed number
+ * rather than a share of the viewport, so the soft keyboard opening does not
+ * resize, and re-lay out, every app in the transcript.
+ */
+const PHONE_APP_HEIGHT_PX = 420;
+
+/** The inline row's height: the app's own, or Phone Fit's fixed box. */
+function inlineAppHeight(phone: boolean, reported: number): number {
+  return phone ? PHONE_APP_HEIGHT_PX : reported;
+}
 /** A host call slower than this is shown as waking the agent session. */
 const WAKING_AFTER_MS = 700;
 
@@ -177,6 +193,7 @@ function LiveMcpApp(props: {
 
   const [displayMode, setDisplayMode] = useState<SandboxDisplayMode>("inline");
   const [height, setHeight] = useState(INITIAL_APP_HEIGHT_PX);
+  const inlineHeight = inlineAppHeight(useIsMobileViewport(), height);
   const [generation, setGeneration] = useState(0);
   const [crashed, setCrashed] = useState(false);
   const [closed, setClosed] = useState(false);
@@ -238,6 +255,12 @@ function LiveMcpApp(props: {
     claimRef.current = claim;
     setDisplayMode("fullscreen");
     return true;
+  };
+  /** The reader's Expand: takes the window's fullscreen from another app. */
+  const expand = (): void => {
+    if (enterFullscreen()) return;
+    yieldFullscreen();
+    enterFullscreen();
   };
 
   // Everything the app's requests reach, read at call time: the request
@@ -350,6 +373,21 @@ function LiveMcpApp(props: {
     else element.hidePopover();
   }, [displayMode]);
 
+  // Full screen is a screen of its own, the phone's route for an app: the
+  // shell's back gesture stands down while it is up, and the back button
+  // (which asks a covering layer to dismiss with Escape, `useSystemBack`) or
+  // Escape leaves it rather than moving the transcript behind it.
+  useBlockingLayerClaim(displayMode === "fullscreen");
+  const exitOnEscape = useEffectEvent((event: KeyboardEvent) => {
+    if (event.key === "Escape" && !event.defaultPrevented) leaveFullscreen();
+  });
+  useEffect(() => {
+    if (displayMode !== "fullscreen") return;
+    const onKeyDown = (event: KeyboardEvent): void => exitOnEscape(event);
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [displayMode]);
+
   // Unmounting ends the document's requests, answers whatever the app still
   // waits on, and gives up the window's fullscreen.
   useEffect(() => {
@@ -446,7 +484,7 @@ function LiveMcpApp(props: {
         <Skeleton
           aria-hidden
           className="w-full opacity-60"
-          style={{ height: INITIAL_APP_HEIGHT_PX }}
+          style={{ height: inlineHeight }}
         />
       </AppFigure>
     );
@@ -468,7 +506,7 @@ function LiveMcpApp(props: {
       ) : (
         <div
           // Holds the row's place while the app is in the top layer.
-          style={fullscreen ? { height } : undefined}
+          style={fullscreen ? { height: inlineHeight } : undefined}
         >
           <div
             ref={appRef}
@@ -477,7 +515,9 @@ function LiveMcpApp(props: {
             className={cn(
               // `tc-node-page` lends the agent-page hover bar.
               "tc-node-page relative inset-auto m-0 block h-auto w-full overflow-visible border-0 bg-transparent p-0 text-inherit",
-              "open:fixed open:inset-0 open:flex open:size-full open:flex-col open:bg-background",
+              // The top layer escapes `#root`'s safe-area reservation, so the
+              // surface restores all four insets itself.
+              "open:fixed open:inset-0 open:flex open:size-full open:flex-col open:bg-background open:pt-safe-top open:pr-safe-right open:pb-safe-bottom open:pl-safe-left",
             )}
           >
             {fullscreen ? (
@@ -495,26 +535,29 @@ function LiveMcpApp(props: {
                 </Button>
               </div>
             ) : (
-              <BlockFloatingToolbar label="App actions">
-                <ToolbarButton
-                  icon={<Maximize2 className="size-4" aria-hidden />}
-                  label="Expand"
-                  active={false}
-                  onClick={() => {
-                    if (enterFullscreen()) return;
-                    // Another app holds the window's fullscreen: take it over,
-                    // the way an explicit click should.
-                    yieldFullscreen();
-                    enterFullscreen();
-                  }}
-                  className="tc-editor-toolbar-button"
-                />
-                <AppMoreMenu
+              <>
+                <BlockFloatingToolbar label="App actions">
+                  <ToolbarButton
+                    icon={<Maximize2 className="size-4" aria-hidden />}
+                    label="Expand"
+                    active={false}
+                    onClick={expand}
+                    className="tc-editor-toolbar-button"
+                  />
+                  <AppMoreMenu
+                    showDetails={showDetails}
+                    onToggleDetails={() => setShowDetails((value) => !value)}
+                    onReload={reload}
+                  />
+                </BlockFloatingToolbar>
+                <AppTouchActions
+                  app={app}
                   showDetails={showDetails}
-                  onToggleDetails={() => setShowDetails((value) => !value)}
+                  onExpand={expand}
                   onReload={reload}
+                  onToggleDetails={() => setShowDetails((value) => !value)}
                 />
-              </BlockFloatingToolbar>
+              </>
             )}
             <div
               className={cn(
@@ -535,7 +578,7 @@ function LiveMcpApp(props: {
                 permissions={grantedPermissions(app)}
                 appRequests={appRequests}
                 className=""
-                height={fullscreen ? null : height}
+                height={fullscreen ? null : inlineHeight}
                 onSize={handleSize}
                 onStatus={handleStatus}
                 onRequestTeardown={() => tearDown(() => setClosed(true))}
@@ -619,6 +662,55 @@ function AppLabelLine(props: {
         </span>
       )}
     </div>
+  );
+}
+
+/** The hover bar's actions, for a coarse pointer (D40). */
+function AppTouchActions(props: {
+  readonly app: ToolCallMcpAppStamp;
+  readonly showDetails: boolean;
+  readonly onExpand: () => void;
+  readonly onReload: () => void;
+  readonly onToggleDetails: () => void;
+}) {
+  return (
+    <TouchActionsSheet
+      triggerLabel="App actions"
+      icon={
+        <AppWindow
+          className="size-4 shrink-0 text-[var(--term-ansi-magenta)]"
+          aria-hidden
+        />
+      }
+      title={props.app.server}
+      description={props.app.tool}
+      testId="app-actions-sheet"
+      actions={[
+        {
+          icon: <Maximize2 aria-hidden />,
+          label: "Open full screen",
+          disabled: false,
+          onSelect: props.onExpand,
+          navigates: true,
+        },
+        {
+          icon: <RotateCw aria-hidden />,
+          label: "Reload app",
+          disabled: false,
+          onSelect: props.onReload,
+          navigates: false,
+        },
+        {
+          icon: <Code2 aria-hidden />,
+          label: props.showDetails
+            ? "Hide original tool call"
+            : "Show original tool call",
+          disabled: false,
+          onSelect: props.onToggleDetails,
+          navigates: false,
+        },
+      ]}
+    />
   );
 }
 

@@ -70,9 +70,17 @@ export function HtmlViewer(props: HtmlViewerProps) {
     );
   }
   const response = query.data;
-  if (response.kind === "unavailable" && response.reason === "not-downloaded") {
+  if (
+    response.kind === "unavailable" &&
+    (response.reason === "not-downloaded" || response.reason === "failed")
+  ) {
     return (
-      <HtmlNotDownloaded hostId={hostId} address={address} title={title} />
+      <HtmlNotDownloaded
+        hostId={hostId}
+        address={address}
+        title={title}
+        failedAt={response.reason === "failed" ? query.dataUpdatedAt : null}
+      />
     );
   }
   if (response.kind === "unavailable") {
@@ -166,22 +174,28 @@ export function HtmlViewer(props: HtmlViewerProps) {
 }
 
 /**
- * PageStates 5, the too-big-to-mirror case: nothing copies the page until
- * someone asks, so Retry alone would wait forever. Where the files lane speaks
- * for this host it reports the copy's progress, so a copy started elsewhere
- * shows here too.
+ * PageStates 5, the too-big-to-mirror case and the failed copy: nothing copies
+ * the page until someone asks, so re-reading alone would wait forever.
+ * `epic.fetchFile` is the ask - for a fork's failed carriage it re-runs the
+ * carriage. Where the files lane speaks for this host it reports the copy's
+ * progress, so a copy started elsewhere shows here too.
  */
 function HtmlNotDownloaded(props: {
   readonly hostId: string;
   readonly address: EpicFileAddress;
   readonly title: string;
+  /** When the read last answered `failed`; `null` for not downloaded. */
+  readonly failedAt: number | null;
 }) {
-  const { hostId, address, title } = props;
-  const copy = useEpicFileCopy(hostId, address);
+  const { hostId, address, title, failedAt } = props;
+  const failed = failedAt !== null;
+  const copy = useEpicFileCopy(hostId, address, failedAt);
   const record = useEpicFileRecord(address.path);
   const { progress } = copy;
   const size = record === null ? null : formatByteSize(record.entry.byteLength);
-  let detail = epicFileUnavailableMessage("not-downloaded");
+  let detail = epicFileUnavailableMessage(failed ? "failed" : "not-downloaded");
+  let startLabel = size === null ? "Download" : `Download ${size}`;
+  if (failed) startLabel = "Retry";
   if (progress !== null) {
     detail = `Copying it to this device: ${formatByteSize(progress.received)} of ${formatByteSize(progress.total)}.`;
   } else if (copy.copying) {
@@ -203,8 +217,8 @@ function HtmlNotDownloaded(props: {
       disabled={copy.startPending}
       onClick={copy.start}
     >
-      <Download aria-hidden />
-      {size === null ? "Download" : `Download ${size}`}
+      {failed ? <RotateCw aria-hidden /> : <Download aria-hidden />}
+      {startLabel}
       {copy.startPending ? (
         <AgentSpinningDots
           className={undefined}

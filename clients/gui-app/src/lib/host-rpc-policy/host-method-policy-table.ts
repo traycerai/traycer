@@ -2212,6 +2212,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.visualization.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.worktrees.get": { ...LATEST_SCHEDULING, poll: null },
   "config.worktrees.set": {
     mode: "fifo",

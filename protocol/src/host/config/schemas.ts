@@ -367,3 +367,38 @@ export const configWorktreesSetResponseSchema = configWorktreesResponseSchema;
 export type ConfigWorktreesSetResponse = z.infer<
   typeof configWorktreesSetResponseSchema
 >;
+
+/**
+ * Reads whether agents get the page tools (`visualization.agentPages`).
+ * Machine-user-global like the browser switch, and read at agent launch, so a
+ * change applies to agents started after it.
+ */
+export const configVisualizationGetRequestSchema = emptyRequestSchema;
+export type ConfigVisualizationGetRequest = z.infer<
+  typeof configVisualizationGetRequestSchema
+>;
+
+export const configVisualizationResponseSchema = lazySchema(() =>
+  z.object({
+    agentPages: z.boolean(),
+  }),
+);
+export type ConfigVisualizationResponse = z.infer<
+  typeof configVisualizationResponseSchema
+>;
+
+/** Turns the page tools on or off for agents launched from now on. */
+export const configVisualizationSetRequestSchema = lazySchema(() =>
+  z.object({
+    agentPages: z.boolean(),
+  }),
+);
+export type ConfigVisualizationSetRequest = z.infer<
+  typeof configVisualizationSetRequestSchema
+>;
+
+export const configVisualizationSetResponseSchema =
+  configVisualizationResponseSchema;
+export type ConfigVisualizationSetResponse = z.infer<
+  typeof configVisualizationSetResponseSchema
+>;

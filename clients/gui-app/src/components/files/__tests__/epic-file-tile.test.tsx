@@ -55,9 +55,15 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => HOST_ID,
-}));
+vi.mock(
+  "@/components/epic-canvas/hooks/use-tab-host-id",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-canvas/hooks/use-tab-host-id")
+    >()),
+    useTabHostId: () => HOST_ID,
+  }),
+);
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => mocks.reachability.current,

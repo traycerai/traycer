@@ -29,6 +29,8 @@ import {
   worktreesOnlyConfigSchema,
   type AgentWorktreeCreatePolicy,
   type WorktreesConfig,
+  visualizationOnlyConfigSchema,
+  type VisualizationConfig,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
 import { annotateWslHealth, probeWslHealthCached } from "./wsl-health";
@@ -1076,6 +1078,42 @@ export async function setAgentWorktreeCreatePolicy(
   await writeCliConfig({
     ...current,
     worktrees: { ...current.worktrees, agentCreate: policy },
+  });
+}
+
+/**
+ * The `visualization` block. Throws on a malformed block, like
+ * `readBrowserConfig`, so the Settings row shows an error rather than a false
+ * "on".
+ */
+export async function readVisualizationConfig(): Promise<VisualizationConfig> {
+  return visualizationOnlyConfigSchema.parse(await readCliConfig())
+    .visualization;
+}
+
+/**
+ * Best-effort synchronous read for the launch-time gate on the page tools.
+ * Fails OPEN to `agentPages: true`, for the reason `readBrowserConfigSync`
+ * does.
+ */
+export function readVisualizationConfigSync(): VisualizationConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = visualizationOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) return result.data.visualization;
+  } catch {
+    // An unreadable config must not take the tools away.
+  }
+  return { agentPages: true };
+}
+
+/** Turns the page tools on or off while preserving the rest of the config. */
+export async function setAgentPages(enabled: boolean): Promise<void> {
+  const current = await readCliConfig();
+  const { visualization } = visualizationOnlyConfigSchema.parse(current);
+  await writeCliConfig({
+    ...current,
+    visualization: { ...visualization, agentPages: enabled },
   });
 }
 

@@ -490,6 +490,43 @@ describe("page requests", () => {
     harness.host.receive(press("KeyJ", true));
     expect(harness.onShortcut).toHaveBeenCalledTimes(1);
   });
+
+  it("takes bare Escape only from the proven page while fullscreen", () => {
+    const escape = (shift: boolean): Sent =>
+      notification("traycer/notifications/shortcut", {
+        key: "Escape",
+        code: "Escape",
+        ctrl: false,
+        meta: false,
+        alt: false,
+        shift,
+      });
+    const fullscreen: SandboxHostContext = {
+      ...HOST_CONTEXT,
+      displayMode: "fullscreen",
+    };
+
+    // Before the page proves its nonce, fullscreen or not.
+    const loading = createHarness({ appRequests: null, openLink: OPENS });
+    loading.host.receive(proxyReady());
+    loading.host.updateHostContext(fullscreen);
+    loading.host.receive(escape(false));
+    expect(loading.onShortcut).not.toHaveBeenCalled();
+
+    const harness = ready(null, OPENS);
+    harness.host.receive(escape(false));
+    expect(harness.onShortcut).not.toHaveBeenCalled();
+
+    harness.host.updateHostContext(fullscreen);
+    harness.host.receive(escape(true));
+    expect(harness.onShortcut).not.toHaveBeenCalled();
+    harness.host.receive(escape(false));
+    expect(harness.onShortcut).toHaveBeenCalledTimes(1);
+
+    harness.host.updateHostContext(HOST_CONTEXT);
+    harness.host.receive(escape(false));
+    expect(harness.onShortcut).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("app-to-page notifications", () => {
@@ -539,12 +576,17 @@ describe("host context changes", () => {
     const harness = createHarness({ appRequests: null, openLink: OPENS });
     harness.host.receive(proxyReady());
     harness.host.updateHostContext({ ...HOST_CONTEXT, theme: "dark" });
+    expect(harness.all("ui/notifications/host-context-changed")).toEqual([]);
     harness.host.receive(documentReady(NONCE, 120));
     harness.host.receive(request(1, "ui/initialize", {}));
     expect(harness.responseTo(1)?.result).toMatchObject({
       hostContext: { theme: "dark" },
     });
-    expect(harness.all("ui/notifications/host-context-changed")).toEqual([]);
+    // The page's bootstrap was handed the context at mount: what changed
+    // while it loaded is sent once, when it proves itself.
+    expect(
+      harness.all("ui/notifications/host-context-changed").map((m) => m.params),
+    ).toEqual([{ theme: "dark" }]);
   });
 });
 

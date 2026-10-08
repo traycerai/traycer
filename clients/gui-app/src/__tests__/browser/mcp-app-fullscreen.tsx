@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatAttachmentScopeContext } from "@/components/chat/chat-attachment-scope-context";
 import { McpAppRow } from "@/components/chat/segments/mcp-app-row";
+import { blockingLayerClaimed } from "@/components/layout/shell/blocking-layer-claim";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,6 +20,7 @@ import {
   type EpicFileRpc,
 } from "@/lib/files/epic-file-rpc";
 import { McpAppRpcContext, type McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import "@/lib/theme-applier";
 import "@/index.css";
 
@@ -38,6 +40,12 @@ import "@/index.css";
  * `body[data-opens]`.
  *
  * `?scenario=dialog` opens a dialog before the row mounts.
+ *
+ * `?scenario=escape` swaps in a CALM app with a text field that asks for
+ * fullscreen once, and `?scenario=inline-escape` the same app staying inline.
+ * The app reports each Escape its field receives (`body[data-escapes]`) and
+ * the bootstrap telling it it is fullscreen (`body[data-app-fullscreen]`);
+ * `window.blockingLayerClaimed` reads the shell's blocking claim.
  * `browser-tests/mcp-app-fullscreen.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
@@ -71,6 +79,35 @@ setInterval(async () => {
 }, 30);
 </script>`;
 
+function calmApp(askFullscreen: boolean): string {
+  return `<main style="height:240px;padding:16px"><input id="field" aria-label="Field"></main>
+<script>
+let next = 0;
+function ask(method, params) {
+  parent.postMessage({ jsonrpc: "2.0", id: "app-" + (++next), method, params }, "*");
+}
+addEventListener("message", (event) => {
+  const data = event.data;
+  if (data && data.method === "ui/notifications/host-context-changed" &&
+      data.params.displayMode === "fullscreen") {
+    ask("resources/read", { uri: "ui://fullscreen" });
+  }
+});
+document.getElementById("field").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") ask("resources/read", { uri: "ui://escape" });
+});
+${askFullscreen ? 'ask("ui/request-display-mode", { mode: "fullscreen" });' : ""}
+</script>`;
+}
+
+const scenario = new URLSearchParams(window.location.search).get("scenario");
+
+function appHtml(): string {
+  if (scenario === "escape") return calmApp(true);
+  if (scenario === "inline-escape") return calmApp(false);
+  return HOSTILE_APP;
+}
+
 const STAMP: ToolCallMcpAppStamp = {
   server: "Hostile",
   tool: "show",
@@ -94,7 +131,7 @@ const fileRpc: EpicFileRpc = {
   readFile: () =>
     Promise.resolve({
       kind: "text",
-      text: HOSTILE_APP,
+      text: appHtml(),
       mediaType: "text/html",
       networkPolicy: "https-only",
     }),
@@ -118,8 +155,12 @@ const mcpRpc: McpAppRpc = {
         : { kind: "result", result: { content: [] } },
     );
   },
-  readResource: () => {
+  readResource: (params) => {
     const body = document.body;
+    if (params.uri === "ui://escape") {
+      body.dataset.escapes = String(Number(body.dataset.escapes ?? "0") + 1);
+    }
+    if (params.uri === "ui://fullscreen") body.dataset.appFullscreen = "true";
     body.dataset.reads = String(Number(body.dataset.reads ?? "0") + 1);
     return Promise.resolve({
       kind: "result",
@@ -162,36 +203,41 @@ document.addEventListener(
   true,
 );
 
-const scenario = new URLSearchParams(window.location.search).get("scenario");
+Reflect.set(window, "blockingLayerClaimed", blockingLayerClaimed);
+
 const client = new QueryClient();
 const container = document.getElementById("root");
 if (container !== null) {
   createRoot(container).render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <ChatAttachmentScopeContext.Provider
-          value={{
-            epicId: "epic-1",
-            chatId: "chat-1",
-            hostId: "host-1",
-            hostVersion: null,
-            client: null,
-          }}
-        >
-          <EpicFileRpcContext.Provider value={fileRpc}>
-            <McpAppRpcContext.Provider value={mcpRpc}>
-              {scenario === "dialog" ? <AlreadyOpenDialog /> : null}
-              <div className="mx-auto w-full max-w-2xl p-6">
-                <McpAppRow
-                  id="block-1"
-                  app={STAMP}
-                  fallback={<div>no app</div>}
-                />
-              </div>
-            </McpAppRpcContext.Provider>
-          </EpicFileRpcContext.Provider>
-        </ChatAttachmentScopeContext.Provider>
-      </TooltipProvider>
+      <ResolvedThemeContext.Provider
+        value={{ resolvedTheme: "light", themePreset: "traycer-green" }}
+      >
+        <TooltipProvider>
+          <ChatAttachmentScopeContext.Provider
+            value={{
+              epicId: "epic-1",
+              chatId: "chat-1",
+              hostId: "host-1",
+              hostVersion: null,
+              client: null,
+            }}
+          >
+            <EpicFileRpcContext.Provider value={fileRpc}>
+              <McpAppRpcContext.Provider value={mcpRpc}>
+                {scenario === "dialog" ? <AlreadyOpenDialog /> : null}
+                <div className="mx-auto w-full max-w-2xl p-6">
+                  <McpAppRow
+                    id="block-1"
+                    app={STAMP}
+                    fallback={<div>no app</div>}
+                  />
+                </div>
+              </McpAppRpcContext.Provider>
+            </EpicFileRpcContext.Provider>
+          </ChatAttachmentScopeContext.Provider>
+        </TooltipProvider>
+      </ResolvedThemeContext.Provider>
     </QueryClientProvider>,
   );
 }

@@ -28,6 +28,7 @@ import {
 } from "@/components/chat/chat-attachment-scope-context";
 import { ChatScrollToPageContext } from "@/components/chat/chat-scroll-to-block";
 import { PageRow } from "@/components/chat/segments/page-row";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import {
   EpicFileRpcContext,
@@ -442,6 +443,31 @@ describe("<PageRow /> when the page cannot be read", () => {
     expect(rpc.readFile).toHaveBeenCalledTimes(2);
   });
 
+  it("offers Retry, not Download, for a failed carriage, and Retry asks the host to fetch it again", async () => {
+    const rpc = makeRpc(textResponse("open"));
+    rpc.readFile.mockResolvedValueOnce({
+      kind: "unavailable",
+      reason: "failed",
+    });
+    rpc.fetchFile.mockResolvedValueOnce({ kind: "present" });
+    renderRow(rpc, SHOWN, null);
+
+    const notice = await screen.findByRole("status");
+    expect(
+      within(notice).queryByRole("button", { name: "Download" }),
+    ).toBeNull();
+
+    fireEvent.click(within(notice).getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByTestId("sandbox-frame")).toBeTruthy();
+    expect(rpc.fetchFile).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      path: STAMP.path,
+      sha256: STAMP.sha256,
+    });
+    expect(rpc.readFile).toHaveBeenCalledTimes(2);
+  });
+
   it("says the copy is running while the host is still downloading it", async () => {
     const rpc = makeRpc({ kind: "unavailable", reason: "not-downloaded" });
     renderRow(rpc, SHOWN, null);
@@ -455,6 +481,40 @@ describe("<PageRow /> when the page cannot be read", () => {
       );
     });
     expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+  });
+
+  it("brings Retry back when the re-run carriage fails again, every time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // The host takes each copy (`downloading`), and every read says it failed.
+      const rpc = makeRpc({ kind: "unavailable", reason: "failed" });
+      renderRow(rpc, SHOWN, null);
+
+      for (const round of [1, 2]) {
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+        // The read right after the accept still says failed: not yet terminal.
+        await waitFor(() => {
+          expect(rpc.readFile).toHaveBeenCalledTimes(round * 2);
+        });
+        expect(screen.getByRole("status").textContent).toContain(
+          "It shows here when it lands",
+        );
+        expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+
+        // A recheck's answer is: the copy ends and Retry is offered again.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(
+          await screen.findByRole("button", { name: "Retry" }),
+        ).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+        expect(screen.getByRole("status").textContent).toContain(
+          "Copying it to this device failed.",
+        );
+        expect(rpc.fetchFile).toHaveBeenCalledTimes(round);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -614,6 +674,55 @@ describe("<PageRow /> on a coarse pointer", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(opener);
     });
+  });
+});
+
+describe("<PageRow /> page_action analytics (D31)", () => {
+  it("counts each hover-bar action once, by name only", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    renderRow(makeRpc(textResponse("open")), SHOWN, null);
+    await screen.findByTestId("sandbox-frame");
+    const toolbar = screen.getByRole("toolbar", { name: "Page actions" });
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Expand" }));
+    fireEvent.click(
+      within(toolbar).getByRole("button", { name: "Download HTML" }),
+    );
+    fireEvent.click(
+      within(toolbar).getByRole("button", { name: "Open in browser" }),
+    );
+
+    expect(track.mock.calls).toEqual([
+      [AnalyticsEvent.PageAction, { action: "expand" }],
+      [AnalyticsEvent.PageAction, { action: "download" }],
+      [AnalyticsEvent.PageAction, { action: "open_browser" }],
+    ]);
+  });
+
+  it("counts the same actions from the touch sheet", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    renderRow(makeRpc(textResponse("open")), SHOWN, null);
+    await screen.findByTestId("sandbox-frame");
+
+    const sheetActions: ReadonlyArray<
+      readonly [string, "expand" | "download" | "open_browser"]
+    > = [
+      ["Open full screen", "expand"],
+      ["Save HTML file", "download"],
+      ["Open in browser", "open_browser"],
+    ];
+    for (const [label, action] of sheetActions) {
+      fireEvent.click(screen.getByRole("button", { name: "Page actions" }));
+      const sheet = await screen.findByTestId("page-actions-sheet");
+      fireEvent.click(within(sheet).getByRole("button", { name: label }));
+      await waitFor(() => {
+        expect(screen.queryByTestId("page-actions-sheet")).toBeNull();
+      });
+      expect(track).toHaveBeenLastCalledWith(AnalyticsEvent.PageAction, {
+        action,
+      });
+    }
+    expect(track).toHaveBeenCalledTimes(3);
   });
 });
 

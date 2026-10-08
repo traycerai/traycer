@@ -22,4 +22,5 @@ export const configMutationKeys = {
   logLevelsSet: () => ["config.logLevels.set"] as const,
   browserSet: () => ["config.browser.set"] as const,
   worktreesSet: () => ["config.worktrees.set"] as const,
+  visualizationSet: () => ["config.visualization.set"] as const,
 };

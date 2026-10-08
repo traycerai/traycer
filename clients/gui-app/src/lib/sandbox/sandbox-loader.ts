@@ -63,6 +63,9 @@ function bootstrapMain(config: BootstrapConfig): void {
   let lastWidth = -1;
   let lastHeight = -1;
   let linkRequestId = 0;
+  // While the app holds the window's fullscreen, bare Escape is the host's:
+  // it is how the reader (and the phone's back button) leaves.
+  let fullscreen = false;
 
   const measureHeight = (): number => {
     // `document.body` is typed non-null but is absent in a frameset.
@@ -96,6 +99,12 @@ function bootstrapMain(config: BootstrapConfig): void {
   // variables the first paint took from the loader, applied to :root.
   const applyHostContext = (context: Record<string, unknown>): void => {
     const root = document.documentElement;
+    if (
+      context.displayMode === "inline" ||
+      context.displayMode === "fullscreen"
+    ) {
+      fullscreen = context.displayMode === "fullscreen";
+    }
     if (context.theme === "light" || context.theme === "dark") {
       root.style.colorScheme = context.theme;
     }
@@ -133,7 +142,8 @@ function bootstrapMain(config: BootstrapConfig): void {
   });
 
   // Capture phase, registered before any page script: a forwarded app chord
-  // never reaches the page. Every other key stays the page's.
+  // (and bare Escape while fullscreen) never reaches the page. Every other
+  // key stays the page's.
   window.addEventListener(
     "keydown",
     (event) => {
@@ -145,7 +155,14 @@ function bootstrapMain(config: BootstrapConfig): void {
           event.altKey === chord.alt &&
           event.shiftKey === chord.shift,
       );
-      if (!match) return;
+      const exitFullscreen =
+        fullscreen &&
+        event.code === "Escape" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey;
+      if (!match && !exitFullscreen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       notify("traycer/notifications/shortcut", {

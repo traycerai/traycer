@@ -8,6 +8,7 @@ import type {
   SandboxAppRequestHandler,
   SandboxDisplayMode,
 } from "@/lib/sandbox/bridge-host";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 
 /**
@@ -332,19 +333,32 @@ export function createMcpAppRequestHandler(
     throw new Error(response.message ?? ERROR_TEXT[response.code]);
   };
 
+  // D31: how each call ended, and nothing about what it was.
+  const trackCall = (outcome: "approved" | "denied" | "refused"): void => {
+    Analytics.getInstance().track(AnalyticsEvent.McpAppCall, { outcome });
+  };
   const callTool = async (params: unknown): Promise<unknown> => {
     const { name, args } = toolCallParams(params);
     const first = await hostCall(() =>
       rpc.callTool({ ...block, name, arguments: args, approvalToken: null }),
     );
-    if (first.kind === "error") return refuse(first);
-    if (first.kind === "result") return first.result;
+    if (first.kind === "error") {
+      trackCall("refused");
+      return refuse(first);
+    }
+    if (first.kind === "result") {
+      trackCall("approved");
+      return first.result;
+    }
     const approved = await handlers.askApproval({
       tool: name,
       title: first.title,
       args: first.args,
     });
-    if (!approved) throw new Error("The user declined this tool call");
+    if (!approved) {
+      trackCall("denied");
+      throw new Error("The user declined this tool call");
+    }
     ensureLive();
     const second = await hostCall(() =>
       rpc.callTool({
@@ -354,8 +368,15 @@ export function createMcpAppRequestHandler(
         approvalToken: first.token,
       }),
     );
-    if (second.kind === "error") return refuse(second);
-    if (second.kind === "result") return second.result;
+    if (second.kind === "error") {
+      trackCall("refused");
+      return refuse(second);
+    }
+    if (second.kind === "result") {
+      trackCall("approved");
+      return second.result;
+    }
+    trackCall("refused");
     throw new Error("The approval expired");
   };
 

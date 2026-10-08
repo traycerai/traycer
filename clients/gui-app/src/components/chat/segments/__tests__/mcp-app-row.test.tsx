@@ -38,6 +38,8 @@ import {
 } from "@/components/chat/chat-attachment-scope-context";
 import { AppMessageDraftPill } from "@/components/chat/composer/app-message-draft-pill";
 import { McpAppRow } from "@/components/chat/segments/mcp-app-row";
+import { blockingLayerClaimed } from "@/components/layout/shell/blocking-layer-claim";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   EpicFileRpcContext,
   type EpicFileRpc,
@@ -45,6 +47,7 @@ import {
 import {
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
+  type SandboxSize,
   type SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
 import { McpAppRpcContext, type McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
@@ -52,6 +55,10 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import {
+  ResolvedThemeContext,
+  type ResolvedThemeContextValue,
+} from "@/providers/use-resolved-theme";
 
 interface FrameProps {
   readonly html: string;
@@ -60,6 +67,8 @@ interface FrameProps {
   readonly networkPolicy: string;
   readonly appCsp: unknown;
   readonly appRequests: SandboxAppRequestHandler | null;
+  readonly height: number | null;
+  readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onRequestTeardown: () => void;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
@@ -250,6 +259,12 @@ function makeMcpRpc(): FakeMcpRpc {
   };
 }
 
+/** The touch actions sheet re-asserts the theme where it portals. */
+const THEME: ResolvedThemeContextValue = {
+  resolvedTheme: "light",
+  themePreset: "traycer-green",
+};
+
 function renderRow(
   fileRpc: EpicFileRpc,
   mcpRpc: McpAppRpc,
@@ -261,13 +276,15 @@ function renderRow(
   });
   const wrap = (children: ReactNode): ReactNode => (
     <QueryClientProvider client={client}>
-      <ChatAttachmentScopeContext.Provider value={scope}>
-        <EpicFileRpcContext.Provider value={fileRpc}>
-          <McpAppRpcContext.Provider value={mcpRpc}>
-            {children}
-          </McpAppRpcContext.Provider>
-        </EpicFileRpcContext.Provider>
-      </ChatAttachmentScopeContext.Provider>
+      <ResolvedThemeContext.Provider value={THEME}>
+        <ChatAttachmentScopeContext.Provider value={scope}>
+          <EpicFileRpcContext.Provider value={fileRpc}>
+            <McpAppRpcContext.Provider value={mcpRpc}>
+              {children}
+            </McpAppRpcContext.Provider>
+          </EpicFileRpcContext.Provider>
+        </ChatAttachmentScopeContext.Provider>
+      </ResolvedThemeContext.Provider>
     </QueryClientProvider>
   );
   render(
@@ -324,6 +341,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setPhoneLayoutOnly(false);
   vi.useRealTimers();
   vi.restoreAllMocks();
   mocks.openLink.mockReset();
@@ -367,6 +385,108 @@ describe("<McpAppRow /> running the app", () => {
     expect(
       screen.getByTestId("sandbox-frame").parentElement?.className,
     ).toMatch(/\bborder\b/);
+  });
+});
+
+// jsdom has no popover; the row's fullscreen surface is one, so the calls are
+// stood in for and the tests read the row's own state instead.
+function stubPopover(): void {
+  Object.defineProperty(HTMLElement.prototype, "showPopover", {
+    configurable: true,
+    value: () => undefined,
+  });
+  Object.defineProperty(HTMLElement.prototype, "hidePopover", {
+    configurable: true,
+    value: () => undefined,
+  });
+}
+
+/**
+ * The … button, found past jsdom's `display: none` for a popover that is not
+ * open: the row's surface is a manual popover that jsdom never shows.
+ */
+function appActionsButton(): HTMLElement {
+  return screen.getByRole("button", { name: "App actions", hidden: true });
+}
+
+describe("<McpAppRow /> on a phone", () => {
+  const INLINE_HEIGHT_PX = 160;
+  const PHONE_HEIGHT_PX = 420;
+
+  it("holds the app to a fixed 420 px box whatever height it reports", async () => {
+    setPhoneLayoutOnly(true);
+    await renderRunningApp(makeMcpRpc(), STAMP);
+    expect(frameProps().height).toBe(PHONE_HEIGHT_PX);
+
+    act(() => {
+      frameProps().onSize({ width: null, height: 900 });
+    });
+
+    expect(frameProps().height).toBe(PHONE_HEIGHT_PX);
+  });
+
+  it("sizes the app to what it reports on a wide screen", async () => {
+    await renderRunningApp(makeMcpRpc(), STAMP);
+    expect(frameProps().height).toBe(INLINE_HEIGHT_PX);
+
+    act(() => {
+      frameProps().onSize({ width: null, height: 900 });
+    });
+
+    expect(frameProps().height).toBe(900);
+  });
+
+  it("offers the hover bar's actions in an App actions sheet, and Open full screen enters fullscreen", async () => {
+    stubPopover();
+    setPhoneLayoutOnly(true);
+    await renderRunningApp(makeMcpRpc(), STAMP);
+    expect(blockingLayerClaimed()).toBe(false);
+
+    fireEvent.click(appActionsButton());
+    const sheet = await screen.findByTestId("app-actions-sheet");
+    expect(
+      within(sheet)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Open full screen", "Reload app", "Show original tool call"]);
+
+    fireEvent.click(
+      within(sheet).getByRole("button", { name: "Open full screen" }),
+    );
+
+    await waitFor(() => {
+      expect(frameProps().height).toBeNull();
+    });
+    expect(blockingLayerClaimed()).toBe(true);
+  });
+
+  it("leaves fullscreen on Escape and gives the back gesture back", async () => {
+    stubPopover();
+    setPhoneLayoutOnly(true);
+    await renderRunningApp(makeMcpRpc(), STAMP);
+    fireEvent.click(appActionsButton());
+    fireEvent.click(
+      within(await screen.findByTestId("app-actions-sheet")).getByRole(
+        "button",
+        { name: "Open full screen" },
+      ),
+    );
+    await waitFor(() => {
+      expect(blockingLayerClaimed()).toBe(true);
+    });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(blockingLayerClaimed()).toBe(false);
+    });
+    expect(frameProps().height).toBe(PHONE_HEIGHT_PX);
+  });
+
+  it("claims no blocking layer for an app that stays inline", async () => {
+    await renderRunningApp(makeMcpRpc(), STAMP);
+
+    expect(blockingLayerClaimed()).toBe(false);
   });
 });
 
@@ -831,15 +951,17 @@ describe("<McpAppRow /> when the agent session cannot be reached", () => {
     const client = new QueryClient();
     render(
       <QueryClientProvider client={client}>
-        <ChatAttachmentScopeContext.Provider value={SCOPE}>
-          <EpicFileRpcContext.Provider value={fileRpc}>
-            <McpAppRow
-              id={BLOCK_ID}
-              app={STAMP}
-              fallback={<div data-testid="ordinary-tool-row" />}
-            />
-          </EpicFileRpcContext.Provider>
-        </ChatAttachmentScopeContext.Provider>
+        <ResolvedThemeContext.Provider value={THEME}>
+          <ChatAttachmentScopeContext.Provider value={SCOPE}>
+            <EpicFileRpcContext.Provider value={fileRpc}>
+              <McpAppRow
+                id={BLOCK_ID}
+                app={STAMP}
+                fallback={<div data-testid="ordinary-tool-row" />}
+              />
+            </EpicFileRpcContext.Provider>
+          </ChatAttachmentScopeContext.Provider>
+        </ResolvedThemeContext.Provider>
       </QueryClientProvider>,
     );
     await screen.findByTestId("sandbox-frame");

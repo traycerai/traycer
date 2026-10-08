@@ -67,10 +67,7 @@ import type {
   EpicStateTrustChangedFrame,
 } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
-import {
-  epicStateFilesProjectionSchema,
-  type EpicStateFilesProjection,
-} from "@traycer/protocol/host/epic/files";
+import type { EpicStateFilesProjection } from "@traycer/protocol/host/epic/files";
 import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   COMMENT_THREAD_REMOVE_REASON,
@@ -145,20 +142,15 @@ export interface EpicStateLaneAdapter extends LaneAdapter<EpicStateLaneEvent> {
 }
 
 /**
- * The files arm of a frame, or `null` when the frame carries none.
- *
- * Read structurally and validated here, because the stream client still types
- * its frames at `@1.1` and an `@1.1` frame has no such key. A host older than
- * `@1.2` never sends one, and a malformed one is dropped like any other
- * unparseable arm rather than failing the frame that carries it. Once the
- * client's frame types move to `@1.2` this is a plain field read.
+ * The files arm of a frame, or `null` when the frame carries none: an `@1.1`
+ * frame (a host older than `@1.2`) has no such key, and an `@1.2` delta that
+ * did not touch files carries `null`. The stream client already decoded the
+ * arm against the negotiated schema.
  */
 export function filesProjectionOf(
   frame: EpicStateSnapshotFrame | EpicStateDeltaFrame,
 ): EpicStateFilesProjection | null {
-  if (!("files" in frame)) return null;
-  const parsed = epicStateFilesProjectionSchema.safeParse(frame.files);
-  return parsed.success ? parsed.data : null;
+  return "files" in frame ? frame.files : null;
 }
 
 export function createEpicStateLaneAdapter(

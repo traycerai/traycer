@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ChatMcpAppCallToolRequest,
@@ -122,6 +131,10 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 beforeEach(() => {
   rpc = makeRpc();
   handlers = makeHandlers();
@@ -231,6 +244,85 @@ describe("tools/call", () => {
   ])("rejects malformed params %j without calling the host", async (params) => {
     await expect(request("tools/call", params)).rejects.toThrow();
     expect(rpc.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("tools/call analytics (D31)", () => {
+  const NEEDS_APPROVAL: ChatMcpAppCallToolResponse = {
+    kind: "needsApproval",
+    token: "t",
+    title: "Delete",
+    args: {},
+  };
+  const CALL = { name: "delete", arguments: { id: 7 } };
+
+  it("counts a result the host ran without asking as approved, carrying nothing about the call", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+
+    await request("tools/call", CALL);
+
+    expect(track.mock.calls).toEqual([
+      [AnalyticsEvent.McpAppCall, { outcome: "approved" }],
+    ]);
+  });
+
+  it("counts a call the reader approved once, not once per host round trip", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    rpc.callTool.mockResolvedValueOnce(NEEDS_APPROVAL);
+
+    await request("tools/call", CALL);
+
+    expect(track.mock.calls).toEqual([
+      [AnalyticsEvent.McpAppCall, { outcome: "approved" }],
+    ]);
+  });
+
+  it("counts a declined approval as denied", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    rpc.callTool.mockResolvedValueOnce(NEEDS_APPROVAL);
+    handlers.askApproval.mockResolvedValueOnce(false);
+
+    await expect(request("tools/call", CALL)).rejects.toThrow("declined");
+
+    expect(track.mock.calls).toEqual([
+      [AnalyticsEvent.McpAppCall, { outcome: "denied" }],
+    ]);
+  });
+
+  it("counts an error answer as refused", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    rpc.callTool.mockResolvedValueOnce({
+      kind: "error",
+      code: "session-changed",
+      message: null,
+    });
+
+    await expect(request("tools/call", CALL)).rejects.toThrow();
+
+    expect(track.mock.calls).toEqual([
+      [AnalyticsEvent.McpAppCall, { outcome: "refused" }],
+    ]);
+  });
+
+  it("counts an expired approval as refused", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    rpc.callTool.mockResolvedValue(NEEDS_APPROVAL);
+
+    await expect(request("tools/call", CALL)).rejects.toThrow(
+      "approval expired",
+    );
+
+    expect(track.mock.calls).toEqual([
+      [AnalyticsEvent.McpAppCall, { outcome: "refused" }],
+    ]);
+  });
+
+  it("counts nothing for a call that never reached the host", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+
+    await expect(request("tools/call", { arguments: {} })).rejects.toThrow();
+
+    expect(track.mock.calls).toEqual([]);
   });
 });
 
