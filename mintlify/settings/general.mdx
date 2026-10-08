@@ -21,9 +21,12 @@ To hide the mic button but keep the dictation shortcut, set **Microphone** to **
 
 ## Automatically Archive Idle Chats
 
-In **General › Agents**, enable **Archive idle agents automatically** and enter an idle threshold in seconds. It is off by default. The setting applies across your hosts and initially includes only chats created by agents.
+In **General › Agents**, turn on **Archive idle agents automatically**. It is off by default. The setting applies across your hosts and initially includes only chats started by agents. While it is on, two options appear under it:
 
-Turn on **Also archive chats I created** to include your own chats. Terminal agents count as yours, so they are included only with this option enabled.
+- **Archive after** sets how long a chat must be idle. Pick a preset from 1 hour to 30 days, or choose **Custom…** to enter a number of minutes, hours or days.
+- **Include chats I started** archives your own chats too. Terminal agent chats count as yours, so they are included only with this option on.
+
+Turning the setting off hides the options and keeps your choices for the next time you turn it on.
 
 The host skips chats that are being viewed or still have work running. Archiving is applied when a host next looks at the chat's Task, rather than at an exact deadline. Sending a new message unarchives the chat.
 
