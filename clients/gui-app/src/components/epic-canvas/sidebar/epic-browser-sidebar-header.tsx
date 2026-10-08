@@ -33,6 +33,7 @@ import { HostOptionRow } from "@/components/settings/host-scope/host-option-row"
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   isHostOptionSelectable,
+  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
@@ -199,6 +200,9 @@ export function BrowserHostFilterChoices(props: {
   const options = useHostOptions();
   const hostPin = useSurfaceHostPin(props.surfaceKey);
   const value = hostPin.selection ?? FOLLOW_TASK_HOST_VALUE;
+  // A picker: no burst sandbox (see `pickableHostOptions`); the pinned host
+  // always keeps its row.
+  const pickableHosts = pickableHostOptions(options.hosts, hostPin.selection);
   const followingHostName =
     options.hosts.find((host) => host.hostId === hostPin.followingHostId)
       ?.name ?? "Task host";
@@ -216,8 +220,8 @@ export function BrowserHostFilterChoices(props: {
           <span className="min-w-0 flex-1 truncate">Follow task host</span>
           <DropdownMenuShortcut>{followingHostName}</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
-        {options.hosts.length > 0 ? <DropdownMenuSeparator /> : null}
-        {options.hosts.map((host) => (
+        {pickableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
+        {pickableHosts.map((host) => (
           <DropdownMenuRadioItem
             key={host.hostId}
             value={host.hostId}

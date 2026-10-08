@@ -1,5 +1,9 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import type {
+  HostScopeOption,
+  HostScopeSandbox,
+} from "@/components/settings/host-scope/host-scope-model";
 import type {
   FleetUpdateView,
   FleetUpdateViewKind,
@@ -173,6 +177,11 @@ export function hostOptionStatusWord(
   // THAT machine, and invites trying another one when no other one can help.
   if (surfaceState.kind === "inert") return null;
   if (host.settingUp) return "setting up";
+  // A sandbox speaks its lifecycle instead of connectivity: "suspended" is
+  // why it is not answering, which "offline" would hide.
+  const sandboxWord =
+    host.sandbox === null ? null : sandboxStateWord(host.sandbox);
+  if (sandboxWord !== null) return sandboxWord;
   const statusWord = STATUS_WORD[host.health.state];
   if (statusWord !== null) return statusWord;
   return surfaceState.kind === "refused" ? surfaceState.word : null;
@@ -345,7 +354,107 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
  */
 export function hostOptionKindLabel(host: HostScopeOption): string {
   if (host.isLocalMachine) return "This machine";
+  if (host.sandbox !== null) return "Sandbox";
   if (host.entry?.kind === "remote") return "Remote host";
   if (host.entry?.kind === "mock") return "Mock host";
   return "Host";
+}
+
+/**
+ * A sandbox's lifecycle, as the one word a row carries in place of the
+ * connectivity it would otherwise show. Every state has a word, `awake`
+ * included: a sandbox is billed by state, so "awake" is information a person
+ * scanning the list acts on, where a personal host's "online" is not.
+ * `frozen` leads, because it is why a suspended or stopped sandbox will not
+ * wake.
+ */
+const SANDBOX_STATE_WORD: Record<HostSandboxState, string> = {
+  creating: "creating",
+  awake: "awake",
+  suspending: "suspending",
+  suspended: "suspended",
+  resuming: "resuming",
+  stopping: "stopping",
+  stopped: "stopped",
+  starting: "starting",
+  destroying: "destroying",
+  destroyed: "destroyed",
+  failed: "failed",
+  released: "released",
+};
+
+export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
+  if (sandbox.frozen) return "frozen";
+  return sandbox.state === null ? null : SANDBOX_STATE_WORD[sandbox.state];
+}
+
+/**
+ * Where a row sits in a host list:
+ *
+ * - `personal`: the user's own machines, the list's first group.
+ * - `sandbox`: a sandbox the user created, in a collapsible group below them.
+ * - `agent-sandbox`: a burst sandbox an agent created for one task. Shown ONLY
+ *   by the host list, in a collapsed sub-group; never offered by a picker,
+ *   where starting work on it would outlive the task it was made for.
+ * - `hidden`: left out of this list.
+ *
+ * `listsAgentSandboxes` is the host list (Settings), every other surface is a
+ * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
+ * answered (`summary === null`): until `GET /api/sandboxes` says it is not
+ * burst, it might be, and a burst sandbox offered once is the leak.
+ */
+export type HostPickerGroup = "personal" | "sandbox" | "agent-sandbox" | "hidden";
+
+export function hostOptionPickerGroup(
+  host: HostScopeOption,
+  listsAgentSandboxes: boolean,
+): HostPickerGroup {
+  if (host.sandbox === null) return "personal";
+  const summary = host.sandbox.summary;
+  if (summary === null) return listsAgentSandboxes ? "sandbox" : "hidden";
+  if (summary.burst) return listsAgentSandboxes ? "agent-sandbox" : "hidden";
+  return "sandbox";
+}
+
+export interface HostPickerGroups {
+  readonly personal: readonly HostScopeOption[];
+  readonly sandboxes: readonly HostScopeOption[];
+  readonly agentSandboxes: readonly HostScopeOption[];
+}
+
+/**
+ * Splits a list into its groups, in the list's own order. `keepHostId` is the
+ * row the surface is pointed at: it is never dropped, because hiding the
+ * current answer is not the same thing as not offering it (a composer fixed to
+ * a burst sandbox's tab still shows that tab's host).
+ */
+export function groupHostOptions(
+  hosts: readonly HostScopeOption[],
+  listsAgentSandboxes: boolean,
+  keepHostId: string | null,
+): HostPickerGroups {
+  const personal: HostScopeOption[] = [];
+  const sandboxes: HostScopeOption[] = [];
+  const agentSandboxes: HostScopeOption[] = [];
+  for (const host of hosts) {
+    const group = hostOptionPickerGroup(host, listsAgentSandboxes);
+    if (group === "personal") personal.push(host);
+    else if (group === "sandbox") sandboxes.push(host);
+    else if (group === "agent-sandbox") agentSandboxes.push(host);
+    else if (host.hostId === keepHostId) sandboxes.push(host);
+  }
+  return { personal, sandboxes, agentSandboxes };
+}
+
+/**
+ * {@link groupHostOptions} flattened for a surface that draws one flat list
+ * (the account menu, the browser sidebar): personal hosts first, then the
+ * pickable sandboxes, never a burst one.
+ */
+export function pickableHostOptions(
+  hosts: readonly HostScopeOption[],
+  keepHostId: string | null,
+): readonly HostScopeOption[] {
+  const groups = groupHostOptions(hosts, false, keepHostId);
+  return [...groups.personal, ...groups.sandboxes];
 }

@@ -5,6 +5,7 @@ import {
   HostGlyph,
   HostPresenceDot,
 } from "@/components/settings/host-scope/host-glyph";
+import { sandboxStateWord } from "@/components/settings/host-scope/host-option-model";
 import {
   formatArchitecture,
   formatHostVersion,
@@ -183,10 +184,7 @@ export function HostIdentityCard(props: {
                   the two surfaces described one fleet in two languages. A
                   remote host now gets a tag too — the absence of one was never
                   a deliberate signal, just the local-only branch showing. */}
-              <HostTag
-                label={host.isLocalMachine ? "Local" : "Remote"}
-                tone={undefined}
-              />
+              <HostTag label={hostKindTag(host)} tone={undefined} />
             </div>
             {/* The window binding used to be an `Active` tag here and a verb in
                 the footer, with nothing tying them together. Both are now one
@@ -195,24 +193,19 @@ export function HostIdentityCard(props: {
             {props.actions}
           </div>
           <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span className="flex items-center gap-1.5 text-ui-sm">
-              <HostPresenceDot
-                tone={host.health.tone}
-                animate={host.health.live}
-                className={undefined}
-              />
+            {host.sandbox === null ? (
+              <HostIdentityHealth host={host} />
+            ) : (
+              // A sandbox's state word stands where the connectivity dot
+              // would: "suspended" is why it is not answering, and a grey
+              // dot would only say that it is not.
               <span
-                className={cn(
-                  "font-medium",
-                  host.health.tone === "live" && "text-success-foreground",
-                  host.health.tone === "warn" && "text-warning-foreground",
-                  host.health.tone === "idle" && "text-muted-foreground",
-                )}
-                data-testid="host-identity-health"
+                className="text-ui-sm font-medium text-muted-foreground"
+                data-testid="host-identity-sandbox-state"
               >
-                {host.health.label}
+                {capitalizeWord(sandboxStateWord(host.sandbox) ?? "sandbox")}
               </span>
-            </span>
+            )}
             {/* `health.detail` renders for the NON-live states only. Live
                 details are the redundant ones — "Running on this computer."
                 repeats the `Local` tag, and the relay route line was
@@ -323,4 +316,39 @@ export function HostTag(props: {
       {props.label}
     </span>
   );
+}
+
+function HostIdentityHealth(props: {
+  readonly host: HostScopeOption;
+}): ReactNode {
+  const { host } = props;
+  return (
+    <span className="flex items-center gap-1.5 text-ui-sm">
+      <HostPresenceDot
+        tone={host.health.tone}
+        animate={host.health.live}
+        className={undefined}
+      />
+      <span
+        className={cn(
+          "font-medium",
+          host.health.tone === "live" && "text-success-foreground",
+          host.health.tone === "warn" && "text-warning-foreground",
+          host.health.tone === "idle" && "text-muted-foreground",
+        )}
+        data-testid="host-identity-health"
+      >
+        {host.health.label}
+      </span>
+    </span>
+  );
+}
+
+function hostKindTag(host: HostScopeOption): string {
+  if (host.isLocalMachine) return "Local";
+  return host.sandbox === null ? "Remote" : "Sandbox";
+}
+
+function capitalizeWord(word: string): string {
+  return word.length === 0 ? word : word[0].toUpperCase() + word.slice(1);
 }

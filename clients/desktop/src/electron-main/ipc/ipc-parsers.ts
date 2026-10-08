@@ -522,37 +522,38 @@ export function parseSandboxCreateRequest(value: unknown): SandboxCreateRequest 
     throw new Error("createSandbox.request.cpus must be a positive number");
   }
   return {
-    name: requireNonEmptyString(obj.name, "createSandbox.request.name"),
     os,
     cpus,
     memoryMb: requirePositiveInteger(
       obj.memoryMb,
       "createSandbox.request.memoryMb",
     ),
-    region: requireNonEmptyString(obj.region, "createSandbox.request.region"),
-    idleMinutes:
-      obj.idleMinutes === null
-        ? null
-        : requirePositiveInteger(
-            obj.idleMinutes,
-            "createSandbox.request.idleMinutes",
-          ),
+    diskMb: nullOr(obj.diskMb, (v) =>
+      requirePositiveInteger(v, "createSandbox.request.diskMb"),
+    ),
+    region: nullOr(obj.region, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.region"),
+    ),
+    displayName: requireNonEmptyString(
+      obj.displayName,
+      "createSandbox.request.displayName",
+    ),
+    idleMinutes: nullOr(obj.idleMinutes, (v) =>
+      requirePositiveInteger(v, "createSandbox.request.idleMinutes"),
+    ),
     burst,
-    createdByHostId:
-      obj.createdByHostId === null
-        ? null
-        : requireNonEmptyString(
-            obj.createdByHostId,
-            "createSandbox.request.createdByHostId",
-          ),
-    createdByAgentId:
-      obj.createdByAgentId === null
-        ? null
-        : requireNonEmptyString(
-            obj.createdByAgentId,
-            "createSandbox.request.createdByAgentId",
-          ),
+    createdByHostId: nullOr(obj.createdByHostId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByHostId"),
+    ),
+    createdByAgentId: nullOr(obj.createdByAgentId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByAgentId"),
+    ),
   };
+}
+
+/** `null` stays `null` (the server's default); anything else must parse. */
+function nullOr<T>(value: unknown, parse: (value: unknown) => T): T | null {
+  return value === null ? null : parse(value);
 }
 
 function requireNonEmptyString(value: unknown, name: string): string {

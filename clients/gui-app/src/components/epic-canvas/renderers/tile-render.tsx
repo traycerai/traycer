@@ -8,6 +8,7 @@
  * no per-kind branching outside this table.
  */
 import type { ReactNode } from "react";
+import { SandboxWakeOnTileOpen } from "@/components/hosts/sandbox-wake-on-tile-open";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
@@ -218,6 +219,10 @@ function tileRenderer<K extends TileKindId>(
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
+      <SandboxWakeOnTileOpen
+        hostId={args.node.hostId}
+        instanceId={args.node.instanceId}
+      />
       <BrowserSessionsHostBoundary
         hostId={args.node.hostId}
         scope={{ kind: "epic", epicId: args.epicId }}

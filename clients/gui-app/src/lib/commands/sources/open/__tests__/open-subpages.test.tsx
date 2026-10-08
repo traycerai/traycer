@@ -368,6 +368,7 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
         isActive: true,
         connectable: true,
         settingUp: false,
+        sandbox: null,
         health: { state: "online" },
       },
       {
@@ -376,6 +377,7 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
         isActive: false,
         connectable: true,
         settingUp: false,
+        sandbox: null,
         health: { state: "online" },
       },
     ],

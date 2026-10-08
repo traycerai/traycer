@@ -1,4 +1,5 @@
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
+import { SandboxCard } from "@/components/hosts/sandbox-card";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -1880,6 +1881,9 @@ export function HostOverviewPanel(props: {
 
   return (
     <>
+      {host.sandbox === null ? null : (
+        <SandboxCard hostName={displayName} sandbox={host.sandbox} />
+      )}
       <HostIdentityCard
         host={host}
         displayName={displayName}

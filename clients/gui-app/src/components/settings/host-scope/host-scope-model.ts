@@ -1,8 +1,15 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   HostListItem,
+  HostRegistryKind,
+  HostSandboxState,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
@@ -65,6 +72,27 @@ export interface HostScopeOption {
   readonly entry: HostDirectoryEntry | null;
   /** The registry row, when there is one — needed for update policy writes. */
   readonly item: HostListItem | null;
+  /**
+   * The registry's kind (`personal` or `sandbox`), from the registry row or,
+   * when only the directory has the host, from whether its entry carries
+   * sandbox facts. `null` when neither says.
+   */
+  readonly kind: HostRegistryKind | null;
+  /** The sandbox facts of a `kind: sandbox` row, else `null`. */
+  readonly sandbox: HostScopeSandbox | null;
+}
+
+/**
+ * What a sandbox row knows about its sandbox. `state` and `frozen` come with
+ * the host list; `summary` is the control plane's row (`GET /api/sandboxes`),
+ * which alone says whether the sandbox is `burst`, and is `null` until that
+ * list has answered. A picker reads `null` as "might be burst" and leaves the
+ * row out (see `hostOptionPickerGroup`).
+ */
+export interface HostScopeSandbox {
+  readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
+  readonly summary: SandboxSummary | null;
 }
 
 export interface BuildHostScopeOptionsInput {
@@ -99,6 +127,12 @@ export interface BuildHostScopeOptionsInput {
    * the selection authority's ensure, or a user's Retry asked for it.
    */
   readonly localHostSettingUp: boolean;
+  /**
+   * The control plane's sandbox rows, or `null` until `GET /api/sandboxes`
+   * has answered (or while it fails), which keeps every sandbox's `summary`
+   * unknown rather than inventing "not burst".
+   */
+  readonly sandboxes: readonly SandboxSummary[] | null;
   readonly nowMs: number;
 }
 
@@ -108,6 +142,10 @@ export function buildHostScopeOptions(
   const entries = new Map(input.directory.map((e) => [e.hostId, e]));
   const items = new Map(input.registry.map((i) => [i.hostId, i]));
   const leases = new Map(input.leases.map((l) => [l.hostId, l]));
+  const sandboxes =
+    input.sandboxes === null
+      ? null
+      : new Map(input.sandboxes.map((s) => [s.hostId, s]));
   const hostIds = [...new Set([...entries.keys(), ...items.keys()])];
 
   const options = hostIds.map((hostId): HostScopeOption => {
@@ -137,10 +175,55 @@ export function buildHostScopeOptions(
       updateState: item?.status.updateState ?? null,
       entry,
       item,
+      ...sandboxFactsOf(entry, item, sandboxes?.get(hostId) ?? null),
     };
   });
 
   return options.sort(compareHostOptions);
+}
+
+/**
+ * The registry kind and sandbox facts of one row. The registry row speaks
+ * first (it is what `include=sandboxState` answered); a directory-only row
+ * falls back to its entry's own copy of the same answer.
+ */
+function sandboxFactsOf(
+  entry: HostDirectoryEntry | null,
+  item: HostListItem | null,
+  summary: SandboxSummary | null,
+): Pick<HostScopeOption, "kind" | "sandbox"> {
+  const entryFacts =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
+  const kind = item === null ? kindOfEntryFacts(entryFacts) : item.kind;
+  if (kind !== "sandbox") {
+    return { kind, sandbox: null };
+  }
+  const listed = item === null ? null : listedSandboxFacts(item);
+  const known = listed ?? entryFacts;
+  return {
+    kind,
+    sandbox: {
+      state: known?.state ?? summary?.state ?? null,
+      frozen: known?.frozen ?? summary?.frozen ?? false,
+      summary,
+    },
+  };
+}
+
+function kindOfEntryFacts(
+  facts: RemoteHostSandboxFacts | null,
+): HostRegistryKind | null {
+  return facts === null ? null : "sandbox";
+}
+
+/** The registry row's own sandbox facts, or `null` when it carried none. */
+function listedSandboxFacts(
+  item: HostListItem,
+): Pick<RemoteHostSandboxFacts, "state" | "frozen"> | null {
+  if (item.sandboxState === undefined || item.sandboxState === null) {
+    return null;
+  }
+  return { state: item.sandboxState, frozen: item.sandboxFrozen === true };
 }
 
 /**
@@ -438,5 +521,7 @@ export function unavailableHostOption(
     updateState: null,
     entry: null,
     item: null,
+    kind: null,
+    sandbox: null,
   };
 }

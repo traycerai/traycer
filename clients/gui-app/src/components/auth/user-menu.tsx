@@ -19,6 +19,7 @@ import {
   ACTIVATE_HOST_HINT,
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   isHostOptionSelectable,
+  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-scope";
@@ -328,7 +329,10 @@ function UserMenuHostSection(props: {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   useRegisteredHostsPollLiveness();
-  const { hosts, activeHostId } = useHostOptions();
+  const { hosts: allHosts, activeHostId } = useHostOptions();
+  // A picker: no burst sandbox, and no sandbox the control plane has not yet
+  // confirmed is not one. The active host always keeps its row.
+  const hosts = pickableHostOptions(allHosts, activeHostId);
   const { makeActive, activatingHostId } = useMakeActiveHost(hosts);
   if (hosts.length === 0) return null;
   return (

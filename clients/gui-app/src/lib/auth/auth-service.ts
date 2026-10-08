@@ -37,6 +37,14 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+  SandboxWakeVerb,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -2901,6 +2909,58 @@ export class AuthService {
       throw new Error("Sign in to remove this host.");
     }
     return this.runnerHost.deregisterHostFromAccount(bearer, hostId);
+  }
+
+  /**
+   * The sandbox control plane (`/api/sandboxes` on traycer-server) via the
+   * runner host, which runs it where {@link fetchRegisteredHosts} runs (Electron
+   * main on desktop, for CORS). The reads answer `unauthorized` with no cloud
+   * bearer, the way a list has an empty state to render; the writes throw, for
+   * the reason {@link updateHostVersionPolicy} gives.
+   */
+  async listSandboxes(): Promise<SandboxListFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.listSandboxes(bearer);
+  }
+
+  async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCatalogue(bearer);
+  }
+
+  async createSandbox(
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to create a sandbox.");
+    }
+    return this.runnerHost.createSandbox(bearer, request);
+  }
+
+  async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to destroy this sandbox.");
+    }
+    return this.runnerHost.destroySandbox(bearer, sandboxId);
+  }
+
+  async wakeSandbox(
+    sandboxId: string,
+    verb: SandboxWakeVerb,
+  ): Promise<SandboxVerbFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.wakeSandbox(bearer, sandboxId, verb);
   }
 
   private async revalidateCurrentContextOnce(

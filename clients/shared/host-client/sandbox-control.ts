@@ -1,7 +1,6 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
-  SANDBOX_REFUSAL_CODE_FROZEN,
-  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDITS,
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
   sandboxCatalogueSchema,
   sandboxCreateAcceptedSchema,
@@ -26,8 +25,19 @@ import {
  * so it crosses the Electron IPC boundary unchanged.
  */
 
-/** Per-request budget, mirrors `HOST_LIST_FETCH_TIMEOUT_MS`. */
+/** Per-request budget of the reads and the 501-answering verbs. */
 const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * A create waits for the provider's capacity, its boot and the boot-token
+ * delivery: the server runs it on its 360 s `transfer` forward tier. Ten
+ * seconds over it, so the server's own answer (or its forward timeout) is
+ * what the client reads, never a client abort first.
+ */
+const SANDBOX_CREATE_FETCH_TIMEOUT_MS = 370_000;
+
+/** A destroy runs on the server's 180 s `part-verify` tier; same margin. */
+const SANDBOX_DESTROY_FETCH_TIMEOUT_MS = 190_000;
 
 /**
  * A non-`ok` answer:
@@ -45,9 +55,11 @@ export type SandboxControlFailure =
       readonly kind: "refused";
       readonly status: number;
       readonly code: string;
-      readonly message: string | null;
+      /** The code's own detail (`shape_not_offered`'s bound, the gate's verdict). */
+      readonly reason: string | null;
       readonly shortfallMc: number | null;
-      readonly burnMcPerHour: number | null;
+      readonly newRateMcPerHour: number | null;
+      readonly currentAwakeBurnMcPerHour: number | null;
     }
   | { readonly kind: "network-error"; readonly detail: string };
 
@@ -82,7 +94,11 @@ type RawCall =
 
 async function call(
   url: string,
-  init: { readonly method: string; readonly body: string | null },
+  init: {
+    readonly method: string;
+    readonly body: string | null;
+    readonly timeoutMs: number;
+  },
   bearerToken: string,
 ): Promise<RawCall> {
   let response: Response;
@@ -101,7 +117,7 @@ async function call(
               "Content-Type": "application/json",
             },
       body: init.body,
-      signal: AbortSignal.timeout(SANDBOX_CONTROL_FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(init.timeoutMs),
     });
   } catch (error: unknown) {
     return {
@@ -135,9 +151,10 @@ function failureOf(status: number, body: unknown): SandboxControlFailure {
       kind: "refused",
       status,
       code: refusal.data.code,
-      message: refusal.data.message ?? null,
+      reason: refusal.data.reason ?? null,
       shortfallMc: refusal.data.shortfallMc ?? null,
-      burnMcPerHour: refusal.data.burnMcPerHour ?? null,
+      newRateMcPerHour: refusal.data.newRateMcPerHour ?? null,
+      currentAwakeBurnMcPerHour: refusal.data.currentAwakeBurnMcPerHour ?? null,
     };
   }
   return {
@@ -157,7 +174,7 @@ export async function listSandboxesViaHttp(
 ): Promise<SandboxListFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, ""),
-    { method: "GET", body: null },
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
   );
   if (raw.kind === "network-error") return raw;
@@ -179,7 +196,7 @@ export async function fetchSandboxCatalogueViaHttp(
 ): Promise<SandboxCatalogueFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, "/catalogue"),
-    { method: "GET", body: null },
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
   );
   if (raw.kind === "network-error") return raw;
@@ -202,7 +219,11 @@ export async function createSandboxViaHttp(
 ): Promise<SandboxCreateFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, ""),
-    { method: "POST", body: JSON.stringify(request) },
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+      timeoutMs: SANDBOX_CREATE_FETCH_TIMEOUT_MS,
+    },
     bearerToken,
   );
   if (raw.kind === "network-error") return raw;
@@ -217,7 +238,11 @@ export async function createSandboxViaHttp(
   return { kind: "ok", accepted: parsed.data };
 }
 
-/** `DELETE /api/sandboxes/:id`. */
+/**
+ * `DELETE /api/sandboxes/:id`: `200` destroyed, `202` still destroying (both
+ * `ok`; the list shows the rest), `404 sandbox_not_found` when it is already
+ * gone, which the caller decides how to read.
+ */
 export async function destroySandboxViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
@@ -225,7 +250,11 @@ export async function destroySandboxViaHttp(
 ): Promise<SandboxVerbFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}`),
-    { method: "DELETE", body: null },
+    {
+      method: "DELETE",
+      body: null,
+      timeoutMs: SANDBOX_DESTROY_FETCH_TIMEOUT_MS,
+    },
     bearerToken,
   );
   if (raw.kind === "network-error") return raw;
@@ -246,7 +275,11 @@ export async function wakeSandboxViaHttp(
 ): Promise<SandboxVerbFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, `/${encodeURIComponent(sandboxId)}/${verb}`),
-    { method: "POST", body: null },
+    {
+      method: "POST",
+      body: null,
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+    },
     bearerToken,
   );
   if (raw.kind === "network-error") return raw;
@@ -268,9 +301,10 @@ export interface SandboxDialFacts {
 /**
  * The outcome of {@link ensureSandboxAwake}:
  *  - `awake`              — dial it.
- *  - `refused`            — the typed `SANDBOX_FROZEN` refusal: frozen for lack
- *                           of credits, so a dial would only wait out relay
- *                           timeouts against a host that is down on purpose.
+ *  - `refused`            — the typed `SANDBOX_FROZEN` refusal, from the row's
+ *                           own `frozen` flag: frozen for lack of credits, so
+ *                           a dial would only wait out relay timeouts against
+ *                           a host that is down on purpose.
  *  - `credit-gate`        — the wake gate refused for lack of credits.
  *  - `wake-not-available` — this control plane does not serve the lifecycle
  *                           verbs yet (`501 verb_not_available`).
@@ -416,18 +450,11 @@ function outcomeOfWakeFailure(
   if (failure.code === SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE) {
     return { kind: "wake-not-available" };
   }
-  if (failure.code === SANDBOX_REFUSAL_CODE_FROZEN) {
-    return {
-      kind: "refused",
-      code: "SANDBOX_FROZEN",
-      message: SANDBOX_FROZEN_MESSAGE,
-    };
-  }
-  if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDITS) {
+  if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
     return {
       kind: "credit-gate",
       shortfallMc: failure.shortfallMc,
-      burnMcPerHour: failure.burnMcPerHour,
+      burnMcPerHour: failure.currentAwakeBurnMcPerHour,
     };
   }
   return {

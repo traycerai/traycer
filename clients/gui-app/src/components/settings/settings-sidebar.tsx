@@ -6,7 +6,7 @@ import {
 import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
@@ -29,6 +29,9 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
+import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
+import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
+import { Button } from "@/components/ui/button";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
@@ -152,6 +155,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           race its open state, and unmounting it while a search runs would tear
           down a dialog that is open. */}
       <AddHostDialog />
+      <SandboxCreateDialog />
     </aside>
   );
 }
@@ -168,6 +172,7 @@ function SettingsSidebarHostPicker(props: {
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+  const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
@@ -201,6 +206,17 @@ function SettingsSidebarHostPicker(props: {
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
       />
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="justify-start"
+        data-testid="settings-new-sandbox"
+        onClick={openCreateSandbox}
+      >
+        <Plus className="size-3.5 shrink-0" aria-hidden />
+        New sandbox…
+      </Button>
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
           surface can be in, so it never waits to be noticed.

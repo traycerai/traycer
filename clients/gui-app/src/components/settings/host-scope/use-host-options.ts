@@ -22,6 +22,7 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { hostListReadiness } from "@/components/settings/host-scope/host-scope-status";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 
 /** The cadence relative-time labels in the host pickers refresh at. */
 const HOST_OPTION_LABEL_TICK_MS = 60_000;
@@ -243,6 +244,11 @@ export function useHostOptions(): HostOptions {
   // the fleet on every cold start.
   const leases = useHostLeases();
   const authorityAttached = useSelectionAuthorityAttached();
+  // `null` until the control plane answers, and kept at the last good answer
+  // through a failed refetch: a picker must never learn "not burst" from a
+  // list that did not come back.
+  const sandboxList = useSandboxList().data;
+  const sandboxes = sandboxList?.sandboxes ?? null;
 
   const hosts = useMemo(
     () =>
@@ -256,6 +262,7 @@ export function useHostOptions(): HostOptions {
         leases,
         authorityAttached,
         localHostSettingUp,
+        sandboxes,
         nowMs,
       }),
     [
@@ -268,6 +275,7 @@ export function useHostOptions(): HostOptions {
       leases,
       authorityAttached,
       localHostSettingUp,
+      sandboxes,
       nowMs,
     ],
   );

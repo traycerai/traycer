@@ -1,4 +1,5 @@
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { pickableHostOptions } from "@/components/settings/host-scope/host-option-model";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 
 /**
@@ -90,7 +91,9 @@ export function buildSweepHostPickerRows(input: {
   readonly hosts: readonly HostScopeOption[];
   readonly defaultHostId: string | null;
 }): readonly SweepHostPickerRow[] {
-  return input.hosts.map((host) => ({
+  // A picker like any other: no burst sandbox, and a sandbox only once the
+  // control plane has said it is not one (`pickableHostOptions`).
+  return pickableHostOptions(input.hosts, input.defaultHostId).map((host) => ({
     host,
     isDefault: host.hostId === input.defaultHostId,
   }));

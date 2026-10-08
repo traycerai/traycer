@@ -10,9 +10,10 @@ import {
  * (`/api/sandboxes`), the routes a client calls with the user bearer to list,
  * price, create, destroy and wake on-demand sandbox hosts.
  *
- * ⚠️ CROSS-REPO MIRROR of `traycer-server/src/routes/api/sandboxes/`. The OSS
- * clients cannot import the server's types, so the wire shape is mirrored here,
- * where the host's agent tools can read it too.
+ * ⚠️ CROSS-REPO MIRROR of `traycer-server/src/routes/api/sandboxes/index.ts`
+ * and `services/sandboxes/{sandbox-view,catalogue}.ts`. The OSS clients cannot
+ * import the server's types, so the wire shape is mirrored here, where the
+ * host's agent tools can read it too.
  *
  * Unlike `host-status.ts`, these objects are NOT `.strict()`. That file guards
  * a response every RELEASED client parses, where a silently stripped field is
@@ -35,48 +36,61 @@ export const sandboxKindSchema = lazySchema(() =>
   z.enum(["agent", "automation"]),
 );
 
-/** Price per hour of one sandbox in each billed state, in millicredits. */
-export interface SandboxRate {
-  readonly awakeMcPerHour: number;
-  readonly suspendedMcPerHour: number;
-  readonly stoppedMcPerHour: number;
+/**
+ * Price per hour of one sandbox in each billed state, in millicredits: a
+ * created sandbox's `priceMcPerHour`, and a catalogue region's "from" price.
+ */
+export interface SandboxHourlyPrice {
+  readonly awakeMc: number;
+  readonly suspendedMc: number;
+  readonly stoppedMc: number;
 }
 
-export const sandboxRateSchema: z.ZodType<SandboxRate> = lazySchema(() =>
-  z.object({
-    awakeMcPerHour: z.number().nonnegative(),
-    suspendedMcPerHour: z.number().nonnegative(),
-    stoppedMcPerHour: z.number().nonnegative(),
-  }),
-);
+export const sandboxHourlyPriceSchema: z.ZodType<SandboxHourlyPrice> =
+  lazySchema(() =>
+    z.object({
+      awakeMc: z.number().nonnegative(),
+      suspendedMc: z.number().nonnegative(),
+      stoppedMc: z.number().nonnegative(),
+    }),
+  );
 
-/** One sandbox as `GET /api/sandboxes` and `GET /api/sandboxes/:id` return it. */
+/**
+ * One sandbox as `GET /api/sandboxes`, `GET /api/sandboxes/:id` and the
+ * create and destroy answers carry it (the server's `SandboxView`). The list
+ * excludes destroyed rows.
+ */
 export interface SandboxSummary {
   /** The sandbox id: the path segment of every `/api/sandboxes/:id` verb. */
   readonly id: string;
   /** The host id the sandbox enrolled under; joins the host list row. */
   readonly hostId: string;
   readonly kind: SandboxKind;
+  /** `tensorlake`, `daytona`, `gke-automation`; read as text, never branched on. */
   readonly provider: string;
+  readonly region: string;
   readonly os: SandboxOs;
   readonly cpus: number;
   readonly memoryMb: number;
   readonly diskMb: number;
-  readonly region: string;
   readonly displayName: string;
   readonly state: HostSandboxState;
   readonly frozen: boolean;
-  /** `null` = never suspended for idleness. */
+  /** The vendor's or the lifecycle's code on a `failed` row, else `null`. */
+  readonly failureCode: string | null;
+  /** `null` = the default idle period (30 minutes). */
   readonly idleMinutes: number | null;
   /** Created by an agent for one task; offered in no picker. */
   readonly burst: boolean;
-  readonly rate: SandboxRate;
+  readonly createdByHostId: string | null;
+  readonly createdByAgentId: string | null;
   /** Epoch milliseconds. */
   readonly createdAt: number;
-  /** Epoch milliseconds of the last activity heartbeat, `null` before one. */
+  readonly lastTransitionAt: number;
   readonly lastActivityAt: number | null;
-  /** The vendor's or the lifecycle's code on a `failed` row, else `null`. */
-  readonly failureCode: string | null;
+  readonly destroyedAt: number | null;
+  /** `null` when this server has no price configured for the provider. */
+  readonly priceMcPerHour: SandboxHourlyPrice | null;
 }
 
 export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
@@ -85,20 +99,24 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     hostId: z.string().min(1),
     kind: sandboxKindSchema,
     provider: z.string(),
+    region: z.string(),
     os: sandboxOsSchema,
     cpus: z.number().positive(),
     memoryMb: z.number().int().positive(),
     diskMb: z.number().int().nonnegative(),
-    region: z.string(),
     displayName: z.string(),
     state: z.enum(HOST_SANDBOX_STATES),
     frozen: z.boolean(),
+    failureCode: z.string().nullable(),
     idleMinutes: z.number().int().positive().nullable(),
     burst: z.boolean(),
-    rate: sandboxRateSchema,
+    createdByHostId: z.string().nullable(),
+    createdByAgentId: z.string().nullable(),
     createdAt: z.number(),
+    lastTransitionAt: z.number(),
     lastActivityAt: z.number().nullable(),
-    failureCode: z.string().nullable(),
+    destroyedAt: z.number().nullable(),
+    priceMcPerHour: sandboxHourlyPriceSchema.nullable(),
   }),
 );
 
@@ -114,8 +132,9 @@ export const sandboxListResponseSchema: z.ZodType<SandboxListResponse> =
   );
 
 /**
- * Free-form shape bounds of one provider: vCPU in `cpuStep` increments between
- * the bounds, memory as a per-vCPU ratio range.
+ * Free-form shape bounds of one provider. The server rounds a request UP to
+ * `cpuStep` / `memoryStepMb` from the minimums, then checks the memory per
+ * vCPU of the ROUNDED shape against the ratio range.
  */
 export interface SandboxShapeBounds {
   readonly cpuMin: number;
@@ -123,7 +142,12 @@ export interface SandboxShapeBounds {
   readonly cpuStep: number;
   readonly memoryPerCpuMinMb: number;
   readonly memoryPerCpuMaxMb: number;
+  readonly memoryMinMb: number;
+  readonly memoryMaxMb: number;
   readonly memoryStepMb: number;
+  readonly diskMinMb: number;
+  readonly diskMaxMb: number;
+  readonly diskDefaultMb: number;
 }
 
 export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
@@ -134,37 +158,20 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
       cpuStep: z.number().positive(),
       memoryPerCpuMinMb: z.number().positive(),
       memoryPerCpuMaxMb: z.number().positive(),
+      memoryMinMb: z.number().int().positive(),
+      memoryMaxMb: z.number().int().positive(),
       memoryStepMb: z.number().int().positive(),
-    }),
-  );
-
-/**
- * A region's price per hour, linear in the shape: the server's catalogue
- * computes `awake = cpus × awakeMcPerCpuHour + memoryGib × awakeMcPerGibHour`
- * and the parked states from memory and disk alone. Carried as components so
- * a form can price a free-form shape without a round trip per keystroke.
- */
-export interface SandboxRegionPricing {
-  readonly awakeMcPerCpuHour: number;
-  readonly awakeMcPerGibHour: number;
-  readonly suspendedMcPerGibHour: number;
-  readonly stoppedMcPerGibHour: number;
-}
-
-export const sandboxRegionPricingSchema: z.ZodType<SandboxRegionPricing> =
-  lazySchema(() =>
-    z.object({
-      awakeMcPerCpuHour: z.number().nonnegative(),
-      awakeMcPerGibHour: z.number().nonnegative(),
-      suspendedMcPerGibHour: z.number().nonnegative(),
-      stoppedMcPerGibHour: z.number().nonnegative(),
+      diskMinMb: z.number().int().positive(),
+      diskMaxMb: z.number().int().positive(),
+      diskDefaultMb: z.number().int().positive(),
     }),
   );
 
 export interface SandboxCatalogueRegion {
   readonly id: string;
   readonly label: string;
-  readonly pricing: SandboxRegionPricing;
+  /** The price of the provider's SMALLEST shape here, for a "from" line. */
+  readonly fromPriceMcPerHour: SandboxHourlyPrice;
 }
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
@@ -172,7 +179,7 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
     z.object({
       id: z.string().min(1),
       label: z.string(),
-      pricing: sandboxRegionPricingSchema,
+      fromPriceMcPerHour: sandboxHourlyPriceSchema,
     }),
   );
 
@@ -180,6 +187,12 @@ export interface SandboxCatalogueProvider {
   readonly provider: string;
   readonly os: readonly SandboxOs[];
   readonly shape: SandboxShapeBounds;
+  /** What a suspend keeps: memory and disk, disk only, or nothing. */
+  readonly suspendFidelity: string;
+  readonly stoppedStorage: string;
+  readonly wakeClass: string;
+  readonly dockerInGuest: boolean;
+  /** Regions with a configured price only; the FIRST is the server's default. */
   readonly regions: readonly SandboxCatalogueRegion[];
 }
 
@@ -189,6 +202,10 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
       provider: z.string().min(1),
       os: z.array(sandboxOsSchema),
       shape: sandboxShapeBoundsSchema,
+      suspendFidelity: z.string(),
+      stoppedStorage: z.string(),
+      wakeClass: z.string(),
+      dockerInGuest: z.boolean(),
       regions: z.array(sandboxCatalogueRegionSchema),
     }),
   );
@@ -196,39 +213,45 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
 /** `GET /api/sandboxes/catalogue`. */
 export interface SandboxCatalogue {
   readonly providers: readonly SandboxCatalogueProvider[];
-  /** The region nearest the caller as the server judged it, or `null`. */
-  readonly nearestRegionId: string | null;
 }
 
 export const sandboxCatalogueSchema: z.ZodType<SandboxCatalogue> = lazySchema(
   () =>
     z.object({
       providers: z.array(sandboxCatalogueProviderSchema),
-      nearestRegionId: z.string().nullable(),
     }),
 );
 
+/** The longest idle period a create may set: one week, in minutes. */
+export const SANDBOX_MAX_IDLE_MINUTES = 7 * 24 * 60;
+
 /**
- * `POST /api/sandboxes` body. `createdByHostId` / `createdByAgentId` name the
- * host and agent that asked (both `null` from the GUI form); `burst` is false
- * from the form (an agent-created sandbox defaults to burst).
+ * `POST /api/sandboxes` body. Every `null` takes the server's default:
+ * `diskMb` the provider's default disk, `region` the provider's first priced
+ * region, `idleMinutes` 30 minutes. `createdByHostId` / `createdByAgentId`
+ * name the host and agent that asked (both `null` from the GUI form); `burst`
+ * is false from the form.
  */
 export interface SandboxCreateRequest {
-  readonly name: string;
   readonly os: SandboxOs;
   readonly cpus: number;
   readonly memoryMb: number;
-  readonly region: string;
+  readonly diskMb: number | null;
+  readonly region: string | null;
+  /** 1 to 191 characters. */
+  readonly displayName: string;
+  /** 1 to {@link SANDBOX_MAX_IDLE_MINUTES}, or `null` for the default. */
   readonly idleMinutes: number | null;
   readonly burst: boolean;
   readonly createdByHostId: string | null;
   readonly createdByAgentId: string | null;
 }
 
-/** `202` body of `POST /api/sandboxes`. */
+/** `202` body of `POST /api/sandboxes`: the row exists, in `creating`. */
 export interface SandboxCreateAccepted {
   readonly sandboxId: string;
   readonly hostId: string;
+  readonly sandbox: SandboxSummary;
 }
 
 export const sandboxCreateAcceptedSchema: z.ZodType<SandboxCreateAccepted> =
@@ -236,42 +259,51 @@ export const sandboxCreateAcceptedSchema: z.ZodType<SandboxCreateAccepted> =
     z.object({
       sandboxId: z.string().min(1),
       hostId: z.string().min(1),
+      sandbox: sandboxSummarySchema,
     }),
   );
 
 /**
- * The control plane's typed refusal body: `{ code, ... }`. Known codes:
+ * The control plane's typed refusal body: `{ code, ... }`, the rest per code.
+ * Known codes:
  *
+ *  - `shape_not_offered` (`400`): `reason` names which bound the shape broke
+ *    (`os-not-offered`, `region-not-offered`, `cpus-out-of-range`,
+ *    `memory-out-of-range`, `memory-per-cpu-out-of-range`, `disk-out-of-range`).
+ *  - `insufficient_credit` (`402`): the create gate refused; `reason`
+ *    (`denied`, `unverified`, `unsupported-subscription`), the shortfall
+ *    (`null` when the balance is unknown) and the burn it was computed from.
+ *  - `provider_unavailable` (`503`), `provider_failed` (`502`, with the row,
+ *    now `failed`).
+ *  - `sandbox_transition_conflict` (`409`): the row is mid-transition.
+ *  - `sandbox_not_found` (`404`).
  *  - `verb_not_available` (`501`): the lifecycle verb (suspend, resume, stop,
  *    start) is not served by this server yet.
- *  - `sandbox_frozen`: the sandbox is frozen for lack of credits.
- *  - `insufficient_credits` (`402`): the create or wake gate refused; the
- *    body names the shortfall and the hourly burn the gate counted.
- *  - `shape_outside_catalogue` (`400`): the requested shape is outside the
- *    catalogue's bounds.
- *  - `sandbox_transition_conflict` (`409`): the row is mid-transition.
  */
 export interface SandboxRefusalBody {
   readonly code: string;
-  readonly message?: string | null;
+  readonly reason?: string | null;
   readonly shortfallMc?: number | null;
-  readonly burnMcPerHour?: number | null;
+  readonly newRateMcPerHour?: number | null;
+  readonly currentAwakeBurnMcPerHour?: number | null;
 }
 
 export const sandboxRefusalBodySchema: z.ZodType<SandboxRefusalBody> =
   lazySchema(() =>
     z.object({
       code: z.string().min(1),
-      message: z.string().nullable().optional(),
+      reason: z.string().nullable().optional(),
       shortfallMc: z.number().nullable().optional(),
-      burnMcPerHour: z.number().nullable().optional(),
+      newRateMcPerHour: z.number().nullable().optional(),
+      currentAwakeBurnMcPerHour: z.number().nullable().optional(),
     }),
   );
 
-export const SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE = "verb_not_available";
-export const SANDBOX_REFUSAL_CODE_FROZEN = "sandbox_frozen";
-export const SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDITS = "insufficient_credits";
-export const SANDBOX_REFUSAL_CODE_SHAPE_OUTSIDE_CATALOGUE =
-  "shape_outside_catalogue";
+export const SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED = "shape_not_offered";
+export const SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT = "insufficient_credit";
+export const SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE = "provider_unavailable";
+export const SANDBOX_REFUSAL_CODE_PROVIDER_FAILED = "provider_failed";
 export const SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT =
   "sandbox_transition_conflict";
+export const SANDBOX_REFUSAL_CODE_NOT_FOUND = "sandbox_not_found";
+export const SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE = "verb_not_available";
