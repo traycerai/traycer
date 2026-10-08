@@ -54,6 +54,7 @@ import type {
   OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import {
   isReceivedAgentResponse,
   queuePausedAfterError,
@@ -1003,7 +1004,8 @@ const CONTENT_SCROLL_FULL = "max-h-[calc(3lh+--spacing(1))] overflow-y-auto";
  */
 const CONTENT_SCROLL_COMPACT = "flow-root";
 /**
- * The folded prose: one line, ellipsized, never taller than that line. It is
+ * The folded prose (plain text): one line, ellipsized, never taller than that
+ * line. It is
  * a formatting context of its own, so it sits BESIDE the floats; `min-w-24`
  * is what sends it below them, at full width, once the space beside them is
  * too narrow to read (a 239px pane), rather than shrinking it to nothing.
@@ -1026,15 +1028,29 @@ function QueuedMessageRowText(props: {
     // are content-free: the label is all they carry.
     return <span className="text-muted-foreground">{item.description}</span>;
   }
+  if (agentFoldCompact(props.agentFold)) {
+    // Plain text, not the rich preview: a clamped rich preview still renders
+    // every link in the message, so a link past the one visible line would be
+    // focusable and activatable with nothing on screen to show it (#2441, PR
+    // review). The folded row is something to click open, not to act inside.
+    return (
+      <QueuedMessageAgentFoldToggle fold={props.agentFold}>
+        <div
+          className={cn("text-foreground", COMPACT_PREVIEW)}
+          data-testid="queued-message-content-preview"
+        >
+          {composerDisplayPlainText(item.message.content) || "Queued message"}
+        </div>
+      </QueuedMessageAgentFoldToggle>
+    );
+  }
   return (
     <QueuedMessageAgentFoldToggle fold={props.agentFold}>
       <ComposerContentPreview
         content={item.message.content}
         emptyLabel="Queued message"
         testId="queued-message-content-preview"
-        className={
-          agentFoldCompact(props.agentFold) ? COMPACT_PREVIEW : undefined
-        }
+        className={undefined}
       />
     </QueuedMessageAgentFoldToggle>
   );

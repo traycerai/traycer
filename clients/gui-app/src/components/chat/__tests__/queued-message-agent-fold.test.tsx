@@ -280,28 +280,42 @@ describe("the agent fold's nested controls and key repeat (#2441)", () => {
     return within(row).getByRole("link", { name: "the PR" });
   }
 
-  it("does not toggle when a Markdown link inside the message is clicked", () => {
+  it("renders a folded row as plain text with no anchor to focus or activate", () => {
     renderPanel([linkedAgentItem("q-link")]);
     const row = screen.getByTestId("queued-message-row");
     const fold = within(row).getByTestId("queued-message-agent-fold");
+
+    expect(within(row).queryByRole("link")).toBeNull();
+    expect(row.querySelector("a")).toBeNull();
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(fold.textContent).toBe("see the PR for details");
+  });
+
+  it("brings the anchor back once unfolded, and a click on it opens the link without folding", () => {
+    renderPanel([linkedAgentItem("q-link")]);
+    const row = screen.getByTestId("queued-message-row");
+    const fold = within(row).getByTestId("queued-message-agent-fold");
+    fireEvent.click(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
 
     fireEvent.click(linkOf(row));
 
     expect(openLinkSpy).toHaveBeenCalledTimes(1);
-    expect(fold.getAttribute("aria-expanded")).toBe("false");
-    expect(scrollOf(row).getAttribute("data-compact")).toBe("true");
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(scrollOf(row).getAttribute("data-compact")).toBe("false");
   });
 
-  it("does not toggle, or swallow the key, when Enter is pressed on the link", () => {
+  it("does not fold, or swallow the key, when Enter is pressed on the unfolded link", () => {
     renderPanel([linkedAgentItem("q-link")]);
     const row = screen.getByTestId("queued-message-row");
     const fold = within(row).getByTestId("queued-message-agent-fold");
+    fireEvent.click(fold);
 
     const notPrevented = fireEvent.keyDown(linkOf(row), { key: "Enter" });
 
     expect(notPrevented).toBe(true);
-    expect(fold.getAttribute("aria-expanded")).toBe("false");
-    expect(scrollOf(row).getAttribute("data-compact")).toBe("true");
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(scrollOf(row).getAttribute("data-compact")).toBe("false");
   });
 
   it("still unfolds when the message's plain text is clicked", () => {
