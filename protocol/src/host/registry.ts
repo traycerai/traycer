@@ -346,6 +346,7 @@ import {
   chatSubscribeV119,
   chatSubscribeV120,
   chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -13203,7 +13204,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 21,
+      latestMinor: 22,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13332,8 +13333,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (Command Code). No shape of its own: a row context's session anchor
         // takes the live union here and the 1.5.0 one on 1.9-1.20, and the
         // host refuses such a chat to a subscriber below this minor.
+        // Frozen at the pre-page message bodies since @1.22 opened above it.
         21: {
           contract: chatSubscribeV121,
+        },
+        // @1.22 adds `page` and `mcpApp` on a tool call (the block and its
+        // `tool_call.completed` event): an agent page and an MCP App. Every
+        // older line binds the pre-page block and event, and the host deletes
+        // both keys by name for a subscriber below this minor.
+        22: {
+          contract: chatSubscribeV122,
         },
       },
     },

@@ -158,6 +158,7 @@ import {
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
+import { epicStateFilesProjectionSchema } from "@traycer/protocol/host/epic/files";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -770,6 +771,8 @@ type EmptinessCheckedFrame =
       readonly commentThreadRemovals: readonly unknown[];
       readonly epicMeta: unknown;
       readonly roleClaims: unknown;
+      /** `@1.2` and later; absent on the older frames. */
+      readonly files?: unknown;
     }
   | { readonly kind: "snapshot" }
   | { readonly kind: "resumed" }
@@ -797,7 +800,8 @@ function refineDeltaCarriesChange(
     frame.commentThreadUpserts.length > 0 ||
     frame.commentThreadRemovals.length > 0 ||
     frame.epicMeta !== null ||
-    frame.roleClaims !== null;
+    frame.roleClaims !== null ||
+    (frame.files !== undefined && frame.files !== null);
   if (carriesChange) return;
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
@@ -900,5 +904,52 @@ export const epicStateSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV11,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * `@1.2`: the `@1.1` frames plus the epic's FILES - the manifest of agent
+ * pages, MCP App snapshots and drop-zone files, each with this host's
+ * `localState` (whether its bytes are here, or downloading).
+ *
+ * Revisioned as a whole SET, like `roleClaims` (see
+ * {@link epicStateFilesProjectionSchema}): required on the snapshot, `null` on
+ * a delta that did not touch files. The host gates the arm on the negotiated
+ * minor, so an `@1.1` subscriber is never sent it; every other frame, the
+ * open request and the client frames are `@1.1`'s by reference.
+ */
+const epicStateSubscribeSnapshotFrameSchemaV12 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV11.extend({
+    files: epicStateFilesProjectionSchema,
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV12 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV11.extend({
+    files: epicStateFilesProjectionSchema.nullable(),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV12,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV12,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({
+        kind: z.literal("pong"),
+        ...epicLaneTextFrameFields,
+      }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
+export type EpicStateSubscribeServerFrameV12 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV12
+>;
+
+export const epicStateSubscribeV12 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV12,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

@@ -4,6 +4,7 @@ import {
   contentBlockSchema,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
+  contentBlockSchemaPrePage,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
@@ -832,6 +833,39 @@ export const messageSchemaPreReceipt = lazySchema(() =>
   z.discriminatedUnion("role", [
     userMessageSchema,
     assistantMessageSchemaPreReceipt,
+  ]),
+);
+
+// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+// Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
+// complete live shape with `blocks` swapped for `contentBlockSchemaPrePage`, so
+// a tool call's `page` / `mcpApp` stamps (`1.22`) cannot reach them. Same key
+// order as the live `.extend()` result, because the order is part of the
+// captured digest.
+export const assistantMessageSchemaPrePage = lazySchema(() =>
+  z.object({
+    role: z.literal("assistant"),
+    messageId: z.string().min(1),
+    sender: agentSenderSchema,
+    blocks: z.array(contentBlockSchemaPrePage),
+    startedAt: z.number().nullable().default(null),
+    blocksVersion: z.number().int().nonnegative().optional(),
+    timestamp: z.number(),
+    turnId: z.string().nullable(),
+    usage: tokenUsageSchema.nullable(),
+    reasoningEffort: z.string().nullable().default(null),
+    serviceTier: z.string().nullable().default(null),
+    envCredentialVar: z.string().nullable().default(null),
+    imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+    turnProfile: assistantTurnProfileSchema.optional(),
+  }),
+);
+
+/** The message union shipped on chat.subscribe `1.18` through `1.21`. */
+export const messageSchemaPrePage = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchema,
+    assistantMessageSchemaPrePage,
   ]),
 );
 

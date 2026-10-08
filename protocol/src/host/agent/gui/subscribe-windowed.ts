@@ -8,6 +8,7 @@ import {
   messageSchemaPreMessageDelivery,
   messageSchemaPreBrowser,
   messageSchemaPreFallback,
+  messageSchemaPrePage,
   messageSchemaPreReceipt,
   messageSchemaPreShellHost,
 } from "@traycer/protocol/persistence/epic/messages";
@@ -871,10 +872,28 @@ export const chatTranscriptWindowSchemaPreReceipt = lazySchema(() =>
 );
 
 /**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.21`: the live tail
+ * with `messages` swapped for `messageSchemaPrePage`, so a tool call's `page` /
+ * `mcpApp` stamps (`1.22`) reach none of that line's body channels.
+ * Hand-frozen field-for-field, in the live key order.
+ */
+export const chatTranscriptWindowSchemaPrePage = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPrePage),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
+
+/**
  * Wire-freeze copy of the tail bound to `chat.subscribe@1.18`-`@1.20`: the
  * live tail with `rowContext` taking the anchor union the 1.5.0 tags shipped
  * (`transcriptRowContextSchemaPreCommandCode`), so a session anchor of a
- * harness added since reaches none of those lines through it. Hand-frozen
+ * harness added since reaches none of those lines through it, and with the
+ * pre-page message bodies (`1.22`'s tool-call stamps). Hand-frozen
  * field-for-field, in the live key order.
  */
 export const chatTranscriptWindowSchemaPreCommandCode = lazySchema(() =>
@@ -882,7 +901,7 @@ export const chatTranscriptWindowSchemaPreCommandCode = lazySchema(() =>
     fromOrdinal: z.number().int().nonnegative(),
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
-    messages: z.array(messageSchema),
+    messages: z.array(messageSchemaPrePage),
     events: z.array(chatEventSchema),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
@@ -1091,6 +1110,28 @@ export const chatRangeResponseSchema = lazySchema(() =>
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
 
 /**
+ * Wire-freeze copy of the range response bound to `chat.subscribe@1.21`, for
+ * the reason {@link chatTranscriptWindowSchemaPrePage} exists: a scrolled-back
+ * range is the second channel a message body reaches that line on.
+ * Hand-frozen field-for-field, in the live key order.
+ */
+export const chatRangeResponseSchemaPrePage = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPrePage),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
+
+/**
  * Wire-freeze copy of the range response bound to `chat.subscribe@1.18`-
  * `@1.20`, for the reason {@link chatTranscriptWindowSchemaPreCommandCode}
  * exists: a scrolled-back range is the second channel a row's context reaches
@@ -1103,7 +1144,7 @@ export const chatRangeResponseSchemaPreCommandCode = lazySchema(() =>
     fromOrdinal: z.number().int().nonnegative(),
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
-    messages: z.array(messageSchema),
+    messages: z.array(messageSchemaPrePage),
     events: z.array(chatEventSchema),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
