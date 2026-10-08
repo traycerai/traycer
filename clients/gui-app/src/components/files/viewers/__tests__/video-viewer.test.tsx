@@ -204,4 +204,19 @@ describe("<VideoViewer /> recovery", () => {
     );
     expect(rangeReads(rpc)).toBe(1);
   });
+
+  it("returns to the signed URL once the file is published", async () => {
+    const rpc = host([
+      answer({ kind: "unavailable", reason: "upload-pending" }),
+      answer(signed(URL_A)),
+    ]);
+    const client = renderViewer(rpc);
+    await waitFor(() =>
+      expect(video().getAttribute("src")).toMatch(/^blob:video-/),
+    );
+
+    await act(() => client.refetchQueries());
+
+    await waitFor(() => expect(video().getAttribute("src")).toBe(URL_A));
+  });
 });

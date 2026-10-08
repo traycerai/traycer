@@ -389,4 +389,54 @@ describe("<EpicFileTile /> availability is the tile host's", () => {
       false,
     );
   });
+
+  it("shows Download again when the lane's host stops copying, and it works again", async () => {
+    const laneSays = (localState: EpicStateFileRecord["localState"]): void => {
+      mocks.handle.current = {
+        hostId: HOST_ID,
+        records: [{ ...copyingOnLaneHost, localState }],
+      };
+    };
+    laneSays({ kind: "absent" });
+    const rpc = absent();
+    vi.mocked(rpc.fetchFile).mockResolvedValue({ kind: "downloading" });
+    const view = renderTile(PATH, rpc);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download 100 B" }),
+    );
+    laneSays({ kind: "downloading", received: 50, total: 100 });
+    view.rerender();
+    await screen.findByRole("progressbar");
+
+    laneSays({ kind: "absent" });
+    view.rerender();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download 100 B" }),
+    );
+    await waitFor(() => expect(rpc.fetchFile).toHaveBeenCalledTimes(2));
+    await screen.findByText(/Copying to this device/);
+  });
+
+  it("shows Download again when the lane never saw the copy start", async () => {
+    mocks.handle.current = {
+      hostId: HOST_ID,
+      records: [{ ...copyingOnLaneHost, localState: { kind: "absent" } }],
+    };
+    const rpc = absent();
+    vi.mocked(rpc.fetchFile).mockResolvedValue({ kind: "downloading" });
+    renderTile(PATH, rpc);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download 100 B" }),
+    );
+    await screen.findByText(/Copying to this device/);
+
+    await screen.findByRole(
+      "button",
+      { name: "Download 100 B" },
+      { timeout: 4_000 },
+    );
+  });
 });

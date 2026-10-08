@@ -38,6 +38,10 @@ export interface EpicFileCopy {
  * again on that host until they stop saying `not-downloaded` - which unmounts
  * the caller.
  *
+ * A copy the lane stops calling `downloading` ends. Where the lane cannot
+ * speak, a read still saying `not-downloaded` looks the same whether the copy
+ * runs or died, so only Cancel (or the bytes landing) ends it.
+ *
  * `failedAt` is when the caller's read last answered `failed` (`null` when it
  * did not). A `fetchFile` that re-runs a failed carriage answers `downloading`
  * whatever happens next, so a read still saying `failed` a recheck after the
@@ -79,6 +83,29 @@ export function useEpicFileCopy(
     acceptedAt.current = null;
     reset();
   }, [failedAt, reset]);
+
+  // Where the lane speaks for the host it is the last word: a copy it saw
+  // downloading and now calls absent has ended (retries exhausted, or cancelled
+  // from elsewhere), and one it still calls absent a recheck after the accept
+  // never took. Either way the accept is stale and Download comes back.
+  const sawDownloading = useRef(false);
+  useEffect(() => {
+    if (!accepted) {
+      sawDownloading.current = false;
+      return;
+    }
+    if (state === "downloading") {
+      sawDownloading.current = true;
+      return;
+    }
+    if (state !== "absent") return;
+    if (sawDownloading.current) {
+      reset();
+      return;
+    }
+    const timer = window.setTimeout(reset, COPY_RECHECK_MS);
+    return () => window.clearTimeout(timer);
+  }, [accepted, state, reset]);
 
   const recheck = local === null && accepted;
   useEffect(() => {

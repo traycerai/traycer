@@ -1,4 +1,10 @@
-import { useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { AlertTriangle, RotateCw } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -47,7 +53,8 @@ interface Playback {
  *   (§2.4) - and reloads the element even when the host answers the same URL.
  *   A second error before the element loads again falls through to the Blob.
  * - An unpublished file goes straight to the Blob: spans into memory up to the
- *   platform cap. A Blob the element cannot play leaves Download only.
+ *   platform cap. A Blob the element cannot play leaves Download only. The
+ *   URL stays watched meanwhile, and the stream takes over once it publishes.
  *
  * A background renewal that fails, or answers `unavailable`, never unmounts an
  * element that is playing: the last good URL stays. Position and play state
@@ -71,7 +78,7 @@ export function VideoViewer(props: VideoViewerProps): ReactNode {
     endRecovery,
     retry,
     fail,
-  } = useVideoSource(hostId, address);
+  } = useVideoSource(hostId, address, playbackRef);
 
   if (source === "download-only") {
     return (
@@ -177,20 +184,37 @@ function readUrlAnswer(url: UseQueryResult<SignedUrlAnswer, HostRpcError>): {
 function useVideoSource(
   hostId: string,
   address: EpicFileAddress,
+  playbackRef: RefObject<Playback>,
 ): VideoSourceMachine {
   const [source, setSource] = useState<VideoSource>("url");
   const [refreshUsed, setRefreshUsed] = useState(false);
   const [refreshAskedAt, setRefreshAskedAt] = useState<number | null>(null);
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
-  const url = useEpicFileSignedUrl(hostId, address, source === "url");
+  // Set when the fallback was "no URL yet": the URL is then still watched, and
+  // the stream takes over once the file is published.
+  const [awaitingUrl, setAwaitingUrl] = useState(false);
+  const url = useEpicFileSignedUrl(
+    hostId,
+    address,
+    source === "url" || awaitingUrl,
+  );
 
   const { latestUrl, noUrl } = readUrlAnswer(url);
   if (latestUrl !== null && latestUrl !== activeUrl) setActiveUrl(latestUrl);
   // Never published (or no URL ever arrived): the Blob is the only way in.
   if (source === "url" && activeUrl === null && noUrl) {
     setSource("blob");
+    setAwaitingUrl(true);
   }
+  // Published since: back to the stream, which resumes where playback stopped.
+  // A Blob that is playing right now is left alone until a later renewal.
+  useEffect(() => {
+    if (!awaitingUrl || source === "url" || latestUrl === null) return;
+    if (playbackRef.current.playing) return;
+    setAwaitingUrl(false);
+    setSource("url");
+  }, [awaitingUrl, source, latestUrl, playbackRef]);
   // The refresh a media error asked for has answered.
   if (refreshAskedAt !== null && url.dataUpdatedAt > refreshAskedAt) {
     setRefreshAskedAt(null);
@@ -220,6 +244,7 @@ function useVideoSource(
       setRefreshUsed(false);
       setRefreshAskedAt(null);
       setActiveUrl(null);
+      setAwaitingUrl(false);
       setSource("url");
     },
     fail: () => setSource("download-only"),
