@@ -20,8 +20,14 @@ interface QueryState {
   isPending: boolean;
 }
 
+/**
+ * The per-call options the row passes to every `mutate`: `onError` is the
+ * rejection handler for the one write whose control holds local state (else
+ * `undefined`), and `onSettled` is how the row forgets its unsettled write.
+ */
 interface MutateCallOptions {
-  onError?: (error: Error) => void;
+  onError: ((error: Error) => void) | undefined;
+  onSettled: (() => void) | undefined;
 }
 
 type MutateFn = (
@@ -36,6 +42,12 @@ interface Harness {
   query: QueryState;
   mutate: Mock<MutateFn>;
   mutationPending: boolean;
+  /**
+   * The mutation result's `variables`: the newest save's request. Like the
+   * real result it keeps the last request after a save settles, and the row
+   * reads it only while `mutationPending` is true.
+   */
+  mutationVariables: ChatAutoArchiveSetRequest | undefined;
   trackSettingChanged: Mock<(section: string, setting: string) => void>;
 }
 
@@ -50,6 +62,7 @@ const harness = vi.hoisted((): Harness => ({
   },
   mutate: vi.fn<MutateFn>(),
   mutationPending: false,
+  mutationVariables: undefined,
   trackSettingChanged: vi.fn(),
 }));
 
@@ -77,6 +90,7 @@ vi.mock("@/hooks/chat-auto-archive/use-chat-auto-archive-set-mutation", () => ({
   useChatAutoArchiveSetMutation: () => ({
     mutate: harness.mutate,
     isPending: harness.mutationPending,
+    variables: harness.mutationVariables,
   }),
 }));
 
@@ -222,6 +236,95 @@ function expectNoWrite(): void {
   expect(harness.trackSettingChanged).not.toHaveBeenCalled();
 }
 
+/** The request of the nth `mutate` call; a missing call fails the test. */
+function writeAt(index: number): ChatAutoArchiveSetRequest {
+  const call = harness.mutate.mock.calls.at(index);
+  if (call === undefined) {
+    throw new Error(`mutate call ${index} was never made`);
+  }
+  return call[0];
+}
+
+/** The per-call options of the nth `mutate` call; a missing call or options fail the test. */
+function optionsAt(index: number): MutateCallOptions {
+  const call = harness.mutate.mock.calls.at(index);
+  const options = call?.[1];
+  if (options === undefined) {
+    throw new Error(`mutate call ${index} was made without options`);
+  }
+  return options;
+}
+
+/**
+ * Settles the nth `mutate` call the way the real observer does once its save
+ * is over: the call's own `onSettled`, which is how the row stops building on
+ * that write.
+ */
+function settleWriteAt(index: number): void {
+  const onSettled = optionsAt(index).onSettled;
+  if (onSettled === undefined) {
+    throw new Error(`mutate call ${index} has no onSettled`);
+  }
+  onSettled();
+}
+
+/**
+ * A `mutate` that rejects every save. Like the real observer it settles the
+ * call right after its error callback, and the row clears its unsettled write
+ * only there: without it a later write would build on the refused request.
+ */
+function rejectEverySave(
+  _request: ChatAutoArchiveSetRequest,
+  options: MutateCallOptions | undefined,
+): void {
+  options?.onError?.(new Error("rejected"));
+  options?.onSettled?.();
+}
+
+/**
+ * Marks `request` as the save in flight. The mutate mock settles nothing, so a
+ * test declares the pending state itself, then rerenders.
+ */
+function setWritePending(request: ChatAutoArchiveSetRequest): void {
+  harness.mutationPending = true;
+  harness.mutationVariables = request;
+}
+
+/**
+ * The state a switch click lands in when someone types a number and clicks a
+ * switch without pausing: the field saved 5 hours as focus left it, and that
+ * save is still in flight. Starts from the saved 1 hour preset.
+ */
+function renderWithCustomFieldSavePending(): void {
+  harness.query.data = SAVED_ENABLED_PRESET;
+  const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+  pickOption(archiveAfterSelect(), "Custom…");
+  typeCustom("5");
+  fireEvent.blur(customInput(), { relatedTarget: null });
+  expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 18_000 });
+
+  setWritePending(writeAt(0));
+  rerender(<ChatAutoArchiveSettingsRow />);
+}
+
+/**
+ * The touch-tap ordering: the custom field saved 5 hours as focus left it, and
+ * the switch click arrives in the SAME task, before React has rendered
+ * anything from that save. Nothing is rerendered, the mutation result is not
+ * pending, and the row still shows the saved 1 hour: only the write the row
+ * remembers sending stands between the click and the old threshold. Starts
+ * from the saved 1 hour preset.
+ */
+function renderWithCustomFieldLeaveBlurSaved(): void {
+  harness.query.data = SAVED_ENABLED_PRESET;
+  renderRow();
+  pickOption(archiveAfterSelect(), "Custom…");
+  typeCustom("5");
+  fireEvent.blur(customInput(), { relatedTarget: null });
+  expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 18_000 });
+  expect(harness.mutationPending).toBe(false);
+}
+
 describe("<ChatAutoArchiveSettingsRow />", () => {
   beforeEach(() => {
     harness.viewerUserId = "user-a";
@@ -234,6 +337,7 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
     };
     harness.mutate.mockReset();
     harness.mutationPending = false;
+    harness.mutationVariables = undefined;
     harness.trackSettingChanged.mockReset();
   });
 
@@ -516,9 +620,10 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
       pickOption(unitSelect(), "days");
       expectWrite({ ...ENABLED_PRESET_WRITE, idleSeconds: 86_400 });
 
-      // The save is now in flight; the saved prop has not moved, so only the
-      // pending guard stands between this blur and a second identical write.
-      harness.mutationPending = true;
+      // The save is now in flight; the saved policy has not moved, so only the
+      // in-flight threshold the row builds on stands between this blur and a
+      // second identical write.
+      setWritePending(writeAt(0));
       rerender(<ChatAutoArchiveSettingsRow />);
       fireEvent.blur(unitSelect(), { relatedTarget: null });
       expect(harness.mutate).toHaveBeenCalledTimes(1);
@@ -679,14 +784,7 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
 
     it("restores the saved value in the field after a rejected save", () => {
       harness.query.data = SAVED_ENABLED_CUSTOM;
-      harness.mutate.mockImplementation(
-        (
-          _request: ChatAutoArchiveSetRequest,
-          options: MutateCallOptions | undefined,
-        ) => {
-          options?.onError?.(new Error("rejected"));
-        },
-      );
+      harness.mutate.mockImplementation(rejectEverySave);
       renderRow();
       typeCustom("45");
       fireEvent.blur(customInput());
@@ -708,14 +806,7 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
 
     it("restores the saved unit after a rejected unit change", () => {
       harness.query.data = SAVED_ENABLED_CUSTOM;
-      harness.mutate.mockImplementation(
-        (
-          _request: ChatAutoArchiveSetRequest,
-          options: MutateCallOptions | undefined,
-        ) => {
-          options?.onError?.(new Error("rejected"));
-        },
-      );
+      harness.mutate.mockImplementation(rejectEverySave);
       renderRow();
       pickOption(unitSelect(), "hours");
 
@@ -728,7 +819,10 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
       harness.query.data = SAVED_ENABLED_PRESET;
       renderRow();
       pickOption(archiveAfterSelect(), "1 day");
-      expect(harness.mutate.mock.calls[0]?.[1]).toBeUndefined();
+      // Every write carries options (the row's `onSettled`); a preset pick
+      // has no `onError` in them.
+      expect(optionsAt(0).onError).toBeUndefined();
+      expect(optionsAt(0).onSettled).toBeTypeOf("function");
     });
   });
 
@@ -771,24 +865,125 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
   });
 
   describe("while a write is pending", () => {
-    it("disables the main switch and shows the spinner", () => {
-      harness.query.data = NEVER_SAVED;
-      harness.mutationPending = true;
+    it("keeps every control live and shows the spinner while a write is pending", () => {
+      harness.query.data = SAVED_ENABLED_CUSTOM;
+      setWritePending(ENABLED_CUSTOM_WRITE);
       renderRow();
-      expect(mainSwitch().disabled).toBe(true);
+      expect(mainSwitch().disabled).toBe(false);
+      expect(archiveAfterSelect().disabled).toBe(false);
+      expect(includeSwitch().disabled).toBe(false);
+      // SAVED_ENABLED_CUSTOM opens the custom field, so both its controls show.
+      expect(customInput().disabled).toBe(false);
+      expect(unitSelect().disabled).toBe(false);
       expect(screen.getByTestId("chat-auto-archive-spinner")).toBeTruthy();
     });
 
-    it("disables every option too", () => {
-      harness.query.data = SAVED_ENABLED_CUSTOM;
-      harness.mutationPending = true;
+    it("shows the newest save's policy while it is in flight", () => {
+      // Saved: include off, 1 hour. The save in flight: include on, 1 day.
+      harness.query.data = SAVED_ENABLED_PRESET;
+      setWritePending({
+        enabled: true,
+        includeUserCreated: true,
+        idleSeconds: 86_400,
+      });
       renderRow();
-      expect(mainSwitch().disabled).toBe(true);
-      expect(archiveAfterSelect().disabled).toBe(true);
-      expect(customInput().disabled).toBe(true);
-      expect(unitSelect().disabled).toBe(true);
-      expect(includeSwitch().disabled).toBe(true);
-      expect(screen.getByTestId("chat-auto-archive-spinner")).toBeTruthy();
+      expect(includeSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(archiveAfterSelect().textContent).toBe("1 day");
+    });
+
+    it("drops back to the saved policy once a rejected save settles", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      setWritePending({ ...ENABLED_PRESET_WRITE, idleSeconds: 86_400 });
+      const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+      expect(archiveAfterSelect().textContent).toBe("1 day");
+
+      // Rejected: the saved policy never moved. Like the real mutation result,
+      // `variables` still holds the refused request after it settles, so only
+      // the pending flag keeps the row from showing it.
+      harness.mutationPending = false;
+      rerender(<ChatAutoArchiveSettingsRow />);
+      expect(archiveAfterSelect().textContent).toBe("1 hour");
+    });
+
+    it("a switch clicked right after the custom field saved carries the new threshold", () => {
+      renderWithCustomFieldSavePending();
+      expect(includeSwitch().disabled).toBe(false);
+
+      fireEvent.click(includeSwitch());
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+      expect(writeAt(1)).toEqual({
+        enabled: true,
+        includeUserCreated: true,
+        idleSeconds: 18_000,
+      });
+      expect(harness.trackSettingChanged).toHaveBeenCalledTimes(2);
+    });
+
+    it("the main switch, clicked right after the custom field saved, carries the new threshold too", () => {
+      renderWithCustomFieldSavePending();
+      expect(mainSwitch().disabled).toBe(false);
+
+      fireEvent.click(mainSwitch());
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+      expect(writeAt(1)).toEqual({
+        enabled: false,
+        includeUserCreated: false,
+        idleSeconds: 18_000,
+      });
+      expect(harness.trackSettingChanged).toHaveBeenCalledTimes(2);
+    });
+
+    it("a switch clicked in the same task as the custom field's leave-blur still carries the new threshold", () => {
+      renderWithCustomFieldLeaveBlurSaved();
+
+      fireEvent.click(includeSwitch());
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+      expect(writeAt(1)).toEqual({
+        enabled: true,
+        includeUserCreated: true,
+        idleSeconds: 18_000,
+      });
+      expect(harness.trackSettingChanged).toHaveBeenCalledTimes(2);
+    });
+
+    it("the main switch, clicked in the same task as the custom field's leave-blur, carries the new threshold too", () => {
+      renderWithCustomFieldLeaveBlurSaved();
+
+      fireEvent.click(mainSwitch());
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+      expect(writeAt(1)).toEqual({
+        enabled: false,
+        includeUserCreated: false,
+        idleSeconds: 18_000,
+      });
+      expect(harness.trackSettingChanged).toHaveBeenCalledTimes(2);
+    });
+
+    it("a later write builds on the saved policy again once the newest write settled", () => {
+      harness.query.data = SAVED_ENABLED_PRESET;
+      const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+      fireEvent.click(includeSwitch());
+      expect(writeAt(0)).toEqual({
+        ...ENABLED_PRESET_WRITE,
+        includeUserCreated: true,
+      });
+
+      // The save lands: the observer settles the call, and the saved policy
+      // holds the request plus a threshold another host saved since (the
+      // refetch the save triggers). A request left standing as the row's
+      // base would write the old 1 hour back over that threshold.
+      settleWriteAt(0);
+      harness.query.data = savedPolicy(true, true, 86_400, FULL_BOUNDS);
+      rerender(<ChatAutoArchiveSettingsRow />);
+      expect(includeSwitch().getAttribute("aria-checked")).toBe("true");
+
+      fireEvent.click(includeSwitch());
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+      expect(writeAt(1)).toEqual({
+        enabled: true,
+        includeUserCreated: false,
+        idleSeconds: 86_400,
+      });
     });
 
     it("shows no spinner when nothing is pending", () => {
@@ -830,6 +1025,46 @@ describe("<ChatAutoArchiveSettingsRow />", () => {
 
       expect(screen.queryByRole("alert")).toBeNull();
       expect(customInput().value).toBe("90");
+    });
+
+    it("an account switch while a save is in flight shows and writes the new account's policy, not the outgoing one's", () => {
+      // Viewer A saves 1 day through the row; that save is still in flight.
+      harness.query.data = savedPolicy(true, true, 3600, FULL_BOUNDS);
+      const { rerender } = render(<ChatAutoArchiveSettingsRow />);
+      pickOption(archiveAfterSelect(), "1 day");
+      const outgoingWrite = writeAt(0);
+      expect(outgoingWrite).toEqual({
+        enabled: true,
+        includeUserCreated: true,
+        idleSeconds: 86_400,
+      });
+      setWritePending(outgoingWrite);
+      rerender(<ChatAutoArchiveSettingsRow />);
+      expect(includeSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(archiveAfterSelect().textContent).toBe("1 day");
+
+      // Viewer B arrives with a different saved policy. The harness's pending
+      // flag is global, so B's fresh mutation observer (what the viewer key
+      // gives the remounted body) is modelled by clearing it. The key's other
+      // reach, the row's unsettled write, is real here: A's save was sent
+      // through the row and never settled.
+      harness.viewerUserId = "user-b";
+      harness.query.data = savedPolicy(true, false, 3600, FULL_BOUNDS);
+      harness.mutationPending = false;
+      harness.mutationVariables = undefined;
+      rerender(<ChatAutoArchiveSettingsRow />);
+
+      expect(includeSwitch().getAttribute("aria-checked")).toBe("false");
+      expect(archiveAfterSelect().textContent).toBe("1 hour");
+
+      // B's write is built on B's policy, not on A's unsettled 1 day.
+      fireEvent.click(includeSwitch());
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+      expect(writeAt(1)).toEqual({
+        enabled: true,
+        includeUserCreated: true,
+        idleSeconds: 3600,
+      });
     });
 
     it("closes a custom field the outgoing viewer opened by hand", () => {

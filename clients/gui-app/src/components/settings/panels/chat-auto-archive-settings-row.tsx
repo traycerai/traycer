@@ -58,33 +58,67 @@ export function ChatAutoArchiveSettingsRow(): ReactNode {
   const hostId = useAddressableHostId();
   const getSupported = useHostMethodSupport(hostId, "chatAutoArchive.get");
   const setSupported = useHostMethodSupport(hostId, "chatAutoArchive.set");
+  const viewerUserId = useCloudChatViewerId();
   if (getSupported !== true || setSupported !== true) return null;
-  return <ChatAutoArchiveSettingsRowBody />;
+  // Keyed by the viewer: the custom draft, the row's unsettled write and the
+  // mutation observer all belong to the person using the row. The mutation
+  // key and scope are not per-viewer, so without a remount an account switch
+  // with Settings open would keep following the outgoing account's in-flight
+  // save, show its policy and build the next write on it. The scope still
+  // queues the new account's writes behind the old one's.
+  return <ChatAutoArchiveSettingsRowBody key={viewerUserId} />;
 }
 
 function ChatAutoArchiveSettingsRowBody(): ReactNode {
   const query = useChatAutoArchivePolicyQuery();
   const setPolicy = useChatAutoArchiveSetMutation();
-  const viewerUserId = useCloudChatViewerId();
 
   // `undefined` until the read lands, which covers the unresolved viewer (the
   // read is disabled there), a read in flight and a failed read: every
   // control waits for a policy it can write over.
   const data = query.data;
-  const current = chatAutoArchiveShownPolicy(data);
-  const disabled = data === undefined || setPolicy.isPending;
+  // What the row shows: the newest save's policy while one is in flight,
+  // else the saved one. Saves queue in order (`chatAutoArchiveWriteScope`),
+  // so the controls stay live while one is pending instead of following the
+  // usual disabled-while-pending rule: a click then is the user's newest
+  // choice, and a disabled switch would swallow the click that lands right
+  // after the threshold field saved on its way out. When the newest save is
+  // rejected the row drops back to the saved policy.
+  const current = setPolicy.isPending
+    ? setPolicy.variables
+    : chatAutoArchiveShownPolicy(data);
+  const disabled = data === undefined;
 
-  // `onRejected` runs after the hook's own error toast, for the one write
-  // whose control holds local state: the custom threshold field.
+  // The newest write this row sent that has not settled. Writes are BUILT on
+  // it, at event time, not on `current`: the mutation reaches React a timer
+  // tick after `mutate`, and a touch tap delivers the threshold field's
+  // leave-blur and the switch's click in one task, so a click built on the
+  // rendered `current` would carry the old threshold and, queued last, put
+  // it back. Read only in handlers, never during render.
+  const unsettled = useRef<ChatAutoArchiveSetRequest | null>(null);
+
+  // `build` gets the policy to write over and returns the write, or `null`
+  // when there is nothing to send. `onRejected` runs after the hook's own
+  // error toast, for the one write whose control holds local state: the
+  // custom threshold field.
   const save = (
-    next: ChatAutoArchiveSetRequest,
+    build: (
+      base: ChatAutoArchiveSetRequest,
+    ) => ChatAutoArchiveSetRequest | null,
     onRejected: (() => void) | null,
   ): void => {
+    const next = build(unsettled.current ?? current);
+    if (next === null) return;
+    unsettled.current = next;
     trackSettingChanged("general", "chatAutoArchive");
-    setPolicy.mutate(
-      next,
-      onRejected === null ? undefined : { onError: onRejected },
-    );
+    setPolicy.mutate(next, {
+      onError: onRejected ?? undefined,
+      // Per-call callbacks run only for the observer's newest `mutate`, the
+      // only one `unsettled` can still name.
+      onSettled: () => {
+        if (unsettled.current === next) unsettled.current = null;
+      },
+    });
   };
 
   return (
@@ -112,14 +146,14 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
             disabled={disabled}
             aria-label="Archive idle agents automatically"
             onCheckedChange={(enabled) => {
-              save({ ...current, enabled }, null);
+              save((base) => ({ ...base, enabled }), null);
             }}
           />
         </div>
       }
       // The options configure what the switch turns on, so they are drawn
-      // only while it is on. Closing them writes nothing: the saved threshold
-      // and include choice are where they were when the switch comes back.
+      // only while it is on. Closing them writes nothing: the threshold and
+      // include choice are where they were when the switch comes back.
       details={
         data !== undefined && current.enabled ? (
           <div className="flex flex-col gap-2.5">
@@ -131,19 +165,20 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
                 label="Archive after"
                 hint="Time since the chat's last activity"
                 renderControl={(controlId, hintId) => (
-                  // Keyed by the viewer: the custom draft and its error belong
-                  // to the person typing, and an account switch with Settings
-                  // open must neither show nor commit the outgoing account's
-                  // edit. The query partition cannot reach component state.
                   <IdleThresholdControl
-                    key={viewerUserId}
                     controlId={controlId}
                     hintId={hintId}
                     idleSeconds={current.idleSeconds}
                     bounds={data.bounds}
                     disabled={disabled}
                     onCommit={(idleSeconds, onRejected) => {
-                      save({ ...current, idleSeconds }, onRejected);
+                      save(
+                        (base) =>
+                          base.idleSeconds === idleSeconds
+                            ? null
+                            : { ...base, idleSeconds },
+                        onRejected,
+                      );
                     }}
                   />
                 )}
@@ -158,7 +193,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
                     disabled={disabled}
                     aria-describedby={hintId}
                     onCheckedChange={(includeUserCreated) => {
-                      save({ ...current, includeUserCreated }, null);
+                      save((base) => ({ ...base, includeUserCreated }), null);
                     }}
                   />
                 )}
@@ -203,8 +238,10 @@ function ChatAutoArchiveOptionLine(props: {
 
 /**
  * The threshold: a named preset, or "Custom…", which opens a number-and-unit
- * field shown in the largest unit that states the saved seconds exactly. A
- * saved value that is not a preset shows as Custom with its field open.
+ * field in the largest unit that states the shown seconds exactly.
+ * `idleSeconds` is the threshold the row shows: the newest save's while one
+ * is in flight, else the saved one. A shown value that is not a preset shows
+ * as Custom with its field open.
  *
  * The preset picker and the custom field are ONE value, so one action is one
  * write. A preset commits on pick; the custom value commits on a unit pick, on
@@ -238,20 +275,21 @@ function IdleThresholdControl(props: {
   const [pickedCustom, setPickedCustom] = useState(false);
   const custom = pickedCustom || !presets.includes(idleSeconds);
 
-  const savedUnit = idleUnitFor(idleSeconds);
-  const savedAmount = String(idleSeconds / IDLE_UNIT_SECONDS[savedUnit]);
-  const [draft, setDraft] = useState(savedAmount);
-  const [unit, setUnit] = useState<IdleUnit>(savedUnit);
+  const shownUnit = idleUnitFor(idleSeconds);
+  const shownAmount = String(idleSeconds / IDLE_UNIT_SECONDS[shownUnit]);
+  const [draft, setDraft] = useState(shownAmount);
+  const [unit, setUnit] = useState<IdleUnit>(shownUnit);
   const [error, setError] = useState<string | null>(null);
   const resetDraft = (): void => {
-    setDraft(savedAmount);
-    setUnit(savedUnit);
+    setDraft(shownAmount);
+    setUnit(shownUnit);
     setError(null);
   };
-  // Adjusted during render, keyed on the SAVED value changing rather than on
-  // the draft differing from it: a committed draft stays on screen while its
-  // save is in flight instead of snapping back to the old value, and a value
-  // saved elsewhere still reaches the field when it lands.
+  // Adjusted during render, keyed on the SHOWN value changing rather than on
+  // the draft differing from it: a commit re-states its own value in the
+  // largest exact unit as soon as it is sent ("120 minutes" reads "2 hours"),
+  // a rejected newest save puts the saved value back, and a value saved
+  // elsewhere reaches the field when it lands.
   const [syncedIdleSeconds, setSyncedIdleSeconds] = useState(idleSeconds);
   if (syncedIdleSeconds !== idleSeconds) {
     setSyncedIdleSeconds(idleSeconds);
@@ -259,19 +297,17 @@ function IdleThresholdControl(props: {
   }
 
   const commitCustom = (value: string, nextUnit: IdleUnit): void => {
-    // A save is in flight, and every control here has been disabled since it
-    // left, so nothing new can have been entered: a commit now (focus leaving
-    // after a pick) could only send the same value twice.
-    if (disabled) return;
     const validationError = idleDurationError(value, nextUnit, bounds);
     setError(validationError);
     if (validationError !== null) return;
     const next = Number(value.trim()) * IDLE_UNIT_SECONDS[nextUnit];
+    // `idleSeconds` is the newest save's threshold while one is in flight, so
+    // focus leaving right after a unit pick does not send that pick twice.
     if (next === idleSeconds) return;
-    // A rejected save restores the SAVED threshold rather than leaving the
-    // refused draft on screen: the switches write the saved value, so a kept
-    // draft would show one threshold while the host applies another. The
-    // toast says why; the field says what is in force.
+    // A rejected save restores the threshold shown before it rather than
+    // leaving the refused draft on screen: the switches write the shown
+    // threshold, so a kept draft would show one value while another is in
+    // force. The toast says why; the field says what is in force.
     onCommit(next, resetDraft);
   };
 
@@ -373,10 +409,10 @@ function IdleThresholdControl(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent ref={unitListRef}>
-                {/* From the SAVED unit, not the draft's: a saved value in
+                {/* From the SHOWN value's unit, not the draft's: a value in
                     seconds keeps "seconds" listed after the draft moves to
-                    another unit, so the exact saved value stays reachable. */}
-                {idleUnitsFor(savedUnit).map((option) => (
+                    another unit, so the exact value stays reachable. */}
+                {idleUnitsFor(shownUnit).map((option) => (
                   <SelectItem key={option} value={option}>
                     {IDLE_UNIT_LABELS[option]}
                   </SelectItem>

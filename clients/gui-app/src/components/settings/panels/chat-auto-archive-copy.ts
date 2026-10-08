@@ -88,12 +88,13 @@ export function idleUnitFor(totalSeconds: number): IdleUnit {
 }
 
 /**
- * The units the picker lists, from the SAVED value's unit. Seconds only when
- * the saved value needs them: nobody picks a threshold in seconds, but a saved
- * one must still be shown, and reachable again, exactly.
+ * The units the picker lists, from the SHOWN value's unit (the newest save's,
+ * else the saved one). Seconds only when that value needs them: nobody picks a
+ * threshold in seconds, but one in force must still be shown, and reachable
+ * again, exactly.
  */
-export function idleUnitsFor(savedUnit: IdleUnit): readonly IdleUnit[] {
-  return savedUnit === "seconds"
+export function idleUnitsFor(shownUnit: IdleUnit): readonly IdleUnit[] {
+  return shownUnit === "seconds"
     ? ["seconds", "minutes", "hours", "days"]
     : ["minutes", "hours", "days"];
 }
