@@ -22,6 +22,13 @@ import { sandboxMutationKeys } from "@/lib/query-keys";
  * "Suspended, resumes on your next action" with Resume, "Stopped" with Start,
  * or "Resuming" / "Starting" while it comes back.
  *
+ * The greyed body is `inert` while an overlay shows: out of the tab order,
+ * deaf to keystrokes (a terminal's textarea would otherwise take them and
+ * swallow Tab before it reached Resume) and hidden from assistive tech, which
+ * would read the tile as live. The `contents` wrapper is there on every
+ * render of a sandbox tile, overlay or not, so toggling `inert` never
+ * remounts the body.
+ *
  * Reads the tile's own host (`useTabHostId`). A personal host's tile gets its
  * children back unwrapped, so nothing changes for it. A sandbox tile is
  * wrapped from the moment the directory says it is one (the kind is fixed for
@@ -41,7 +48,9 @@ export function SandboxTileStateFrame(props: {
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
       data-sandbox-tile-state={overlay === null ? "live" : overlay.kind}
     >
-      {props.children}
+      <div className="contents" inert={overlay !== null}>
+        {props.children}
+      </div>
       {overlay === null ? null : (
         <SandboxTileOverlayLayer hostId={hostId} overlay={overlay} />
       )}

@@ -30,16 +30,17 @@ const VERB_FAILURE_TITLE: Record<SandboxLifecycleVerb, string> = {
  * `POST /api/sandboxes/:id/{suspend,resume,stop,start}` for one sandbox, the
  * card's lifecycle actions. Bound to the sandbox at hook level, so a
  * re-render cannot re-point a verb already in flight; one mutation key per
- * sandbox, so the card disables every action while any one runs.
+ * sandbox, so the card disables the other verbs while any one runs.
  *
- * `202` (still moving at the server's deadline) is success too: the row says
- * so and the list's next read shows where it landed. Success refreshes the
+ * Resolves to whether the row is at rest (`200`). `202` (still moving at the
+ * server's deadline) is success too, resolving `false`: the row says so and
+ * the list's next read shows where it landed. Success refreshes the
  * host list, the sandbox list, the fleet and the cost view (the burn moved),
  * as a destroy does.
  */
 export function useSandboxVerb(
   sandboxId: string,
-): UseMutationResult<void, Error, SandboxLifecycleVerb, SandboxVerbContext> {
+): UseMutationResult<boolean, Error, SandboxLifecycleVerb, SandboxVerbContext> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
@@ -48,12 +49,12 @@ export function useSandboxVerb(
     onMutate: (): SandboxVerbContext => ({
       directory: binding === null ? null : binding.directory,
     }),
-    mutationFn: async (verb: SandboxLifecycleVerb): Promise<void> => {
+    mutationFn: async (verb: SandboxLifecycleVerb): Promise<boolean> => {
       if (binding === null) {
         throw new Error("Sign in to change this sandbox.");
       }
       const result = await binding.auth.runSandboxVerb(sandboxId, verb);
-      if (result.kind === "ok") return;
+      if (result.kind === "ok") return result.settled;
       throw new Error(sandboxFailureMessage(result));
     },
     onSettled: (_data, _error, _verb, context) => {

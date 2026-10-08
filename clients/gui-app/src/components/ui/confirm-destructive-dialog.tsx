@@ -29,6 +29,9 @@ export interface ConfirmDestructiveDialogProps {
    * caller that can be blocked and a caller that never is must both say so,
    * because the failure of the omitted case is an enabled destructive button.
    *
+   * An EMPTY reason disables confirm without a sentence: a typed
+   * confirmation that has not been typed yet is not a refusal to explain.
+   *
    * For a MULTI-target action the reason must name the blocking targets. A
    * refusal that does not say which row to deselect turns a clean refusal into
    * a dead end - the whole reason refusing beats partially succeeding is that
@@ -141,7 +144,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
                 nested under it.
               </p>
             ) : null}
-            {blockedReason !== null ? (
+            {blockedReason !== null && blockedReason.length > 0 ? (
               <p
                 className="text-ui-sm leading-relaxed font-medium text-destructive wrap-anywhere"
                 data-testid="confirm-blocked-reason"

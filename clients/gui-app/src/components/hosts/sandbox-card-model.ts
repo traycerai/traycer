@@ -26,9 +26,12 @@ const FROZEN_ACTIONS: readonly SandboxCardAction[] = ["destroy"];
 /**
  * What the card offers from each state. Transitional states offer nothing:
  * the control plane refuses a verb on a row that is moving, and the card
- * re-reads the row as it lands. A frozen row offers only destroy - a wake
- * would answer `sandbox_frozen` until credits are added, and deleting a
- * frozen sandbox is allowed at any time.
+ * re-reads the row as it lands. A frozen row offers only destroy, from every
+ * state whose own row includes it - a wake would answer `sandbox_frozen`
+ * until credits are added, and deleting a frozen sandbox is allowed at any
+ * time. That includes `awake`: the meter sets `frozen` first and drives the
+ * suspend afterwards, so a row whose freeze-suspend keeps failing at the
+ * provider is frozen and awake, and the server destroys it from there.
  */
 const ACTIONS_BY_STATE: Record<HostSandboxState, readonly SandboxCardAction[]> =
   {
@@ -43,7 +46,8 @@ const ACTIONS_BY_STATE: Record<HostSandboxState, readonly SandboxCardAction[]> =
     destroying: NO_ACTIONS,
     destroyed: NO_ACTIONS,
     failed: ["destroy"],
-    released: NO_ACTIONS,
+    // The Automations row at rest; the server destroys it like any row.
+    released: ["destroy"],
   };
 
 export function sandboxCardActions(
@@ -51,12 +55,11 @@ export function sandboxCardActions(
   frozen: boolean,
 ): readonly SandboxCardAction[] {
   if (state === null) return NO_ACTIONS;
+  const actions = ACTIONS_BY_STATE[state];
   if (frozen) {
-    return state === "suspended" || state === "stopped"
-      ? FROZEN_ACTIONS
-      : NO_ACTIONS;
+    return actions.includes("destroy") ? FROZEN_ACTIONS : NO_ACTIONS;
   }
-  return ACTIONS_BY_STATE[state];
+  return actions;
 }
 
 /** The label each action's button carries. */

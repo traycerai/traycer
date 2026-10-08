@@ -188,6 +188,9 @@ function SandboxCostView(props: {
   readonly sandboxId: string;
   readonly frozen: boolean;
 }): ReactNode {
+  // Also mounted by the host list's banner; the hook elects one owner, so a
+  // change is still one invalidation (and a phone, which shows the card
+  // without the banner, still refreshes).
   useRefreshSandboxCosts();
   const costs = useSandboxCosts();
   const user = useAuthUser().data ?? null;
@@ -266,6 +269,14 @@ const VERB_DONE_TOAST: Record<SandboxLifecycleVerb, string> = {
   start: "Started",
 };
 
+/** A `202`: the server's deadline passed with the row still moving. */
+const VERB_MOVING_TOAST: Record<SandboxLifecycleVerb, string> = {
+  suspend: "Suspending",
+  resume: "Resuming",
+  stop: "Stopping",
+  start: "Starting",
+};
+
 function SandboxActions(props: {
   readonly summary: SandboxSummary;
   readonly actions: readonly SandboxCardAction[];
@@ -278,12 +289,14 @@ function SandboxActions(props: {
     <>
       {props.actions.map((action) =>
         action === "destroy" ? (
+          // Not gated on a pending verb: a verb can wait out the server's
+          // 300 s deadline, and destroy is the way out of one that will not
+          // land (the server refuses it only while the row is mid-transition).
           <SandboxDestroyAction
             key={action}
             sandboxId={summary.id}
             name={summary.displayName}
             typedConfirmation={props.frozen}
-            disabled={verb.isPending}
           />
         ) : (
           <Button
@@ -297,10 +310,17 @@ function SandboxActions(props: {
             data-testid={`sandbox-card-${action}`}
             onClick={() => {
               verb.mutate(action, {
-                onSuccess: () =>
-                  toast.success(
-                    `${VERB_DONE_TOAST[action]} ${summary.displayName}`,
-                  ),
+                onSuccess: (settled) => {
+                  if (settled) {
+                    toast.success(
+                      `${VERB_DONE_TOAST[action]} ${summary.displayName}`,
+                    );
+                  } else {
+                    toast.info(
+                      `${VERB_MOVING_TOAST[action]} ${summary.displayName}…`,
+                    );
+                  }
+                },
               });
             }}
           >
@@ -324,7 +344,6 @@ function SandboxDestroyAction(props: {
   readonly name: string;
   /** A frozen sandbox asks for its name to be typed (core flows, flow 5). */
   readonly typedConfirmation: boolean;
-  readonly disabled: boolean;
 }): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -337,7 +356,7 @@ function SandboxDestroyAction(props: {
         type="button"
         variant="destructive"
         size="sm"
-        disabled={destroy.isPending || props.disabled}
+        disabled={destroy.isPending}
         data-testid="sandbox-card-destroy"
         onClick={() => {
           setTyped("");
@@ -354,9 +373,11 @@ function SandboxDestroyAction(props: {
         Destroy
       </Button>
       <ConfirmDestructiveDialog
-        blockedReason={
-          mismatch ? `Type ${props.name} above to destroy it.` : null
-        }
+        blockedReason={typedConfirmationReason(
+          props.typedConfirmation,
+          typed,
+          props.name,
+        )}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Destroy ${props.name}?`}
@@ -392,6 +413,20 @@ function SandboxDestroyAction(props: {
       </ConfirmDestructiveDialog>
     </>
   );
+}
+
+/**
+ * What the typed confirmation still needs: `null` once the name matches (or
+ * when none is asked for), an empty reason while nothing is typed (confirm
+ * disabled, no sentence), and the instruction once something is typed.
+ */
+function typedConfirmationReason(
+  required: boolean,
+  typed: string,
+  name: string,
+): string | null {
+  if (!required || typed.trim() === name) return null;
+  return typed.length === 0 ? "" : `Type ${name} below to destroy it.`;
 }
 
 function stateBadgeVariant(

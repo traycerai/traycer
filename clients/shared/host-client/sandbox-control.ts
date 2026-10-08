@@ -93,9 +93,11 @@ export type SandboxCreateFetchResult =
 /**
  * `destroy` and the lifecycle verbs answer with a body the client does not
  * read: the sandbox list is what every surface renders the row from.
+ * `settled` is the status the server chose: `true` for `200` (the row is at
+ * rest), `false` for `202` (still moving at the server's deadline).
  */
 export type SandboxVerbFetchResult =
-  | { readonly kind: "ok" }
+  | { readonly kind: "ok"; readonly settled: boolean }
   | SandboxControlFailure;
 
 /** The two lifecycle verbs a client calls to wake a sandbox before dialing. */
@@ -308,7 +310,7 @@ export async function destroySandboxViaHttp(
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
-  return { kind: "ok" };
+  return { kind: "ok", settled: raw.status !== 202 };
 }
 
 /**
@@ -334,7 +336,7 @@ export async function runSandboxVerbViaHttp(
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
-  return { kind: "ok" };
+  return { kind: "ok", settled: raw.status !== 202 };
 }
 
 // -----------------------------------------------------------------------------
