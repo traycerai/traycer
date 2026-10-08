@@ -5,7 +5,12 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { OpenFrameBearerSource } from "../../../auth/bearer-source";
-import { createRemoteHostTransport } from "../create-remote-transport";
+import {
+  createRemoteHostTransport,
+  remoteOpenAuthFor,
+} from "../create-remote-transport";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { hostListItemToDirectoryEntry } from "../../../host-client/remote-fetcher";
 import { retireAllRemoteSessions } from "../active-remote-sessions";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import type {
@@ -376,4 +381,48 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
     },
     TEST_BUDGET_MS,
   );
+});
+
+describe("remoteOpenAuthFor", () => {
+  function row(overrides: Partial<HostListItem>): HostListItem {
+    return {
+      hostId: "host-1",
+      displayName: null,
+      platform: null,
+      kind: "personal",
+      publicKey: VALID_PUBLIC_KEY,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+      updatePolicy: "manual",
+      ...overrides,
+    };
+  }
+
+  it("presents the user bearer to a personal host", () => {
+    expect(
+      remoteOpenAuthFor(
+        hostListItemToDirectoryEntry(row({}), "wss://relay.invalid"),
+      ),
+    ).toBe("user-bearer");
+  });
+
+  it("presents a session grant, never the user bearer, to a sandbox host in any lifecycle state", () => {
+    for (const sandboxState of ["awake", "suspended", null] as const) {
+      expect(
+        remoteOpenAuthFor(
+          hostListItemToDirectoryEntry(
+            row({ kind: "sandbox", sandboxState, sandboxFrozen: false }),
+            "wss://relay.invalid",
+          ),
+        ),
+      ).toBe("session-grant");
+    }
+  });
 });

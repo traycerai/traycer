@@ -61,6 +61,7 @@ import {
   encodeMuxFrame,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+  OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
   type MuxFrame,
   type MuxFrameTypeValue,
@@ -339,6 +340,11 @@ class FakeRelayHost {
    * missing key it is.
    */
   readonly openIdentities: unknown[] = [];
+  /**
+   * The reserved `authz` slot on every `open`, index-aligned with
+   * `openBearers`. Raw for the reason `openIdentities` is.
+   */
+  readonly openAuthz: unknown[] = [];
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
   /** Schema version carried beside each logical subscribe. */
@@ -870,6 +876,7 @@ class FakeRelayHost {
     const openIndex = this.openBearers.length;
     this.openBearers.push(bearer);
     this.openIdentities.push(message.json?.clientIdentity);
+    this.openAuthz.push(message.json?.authz);
     if (this.stallOpens) {
       // Freeze this attempt mid-flight (the session sits in its opening
       // phase, its own phase timer pending) until the test releases it -
@@ -10616,5 +10623,50 @@ describe("RemoteSession probed silence verdict (D4)", () => {
       }
     },
     SILENCE_PIN_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession sandbox session grant", () => {
+  it(
+    "presents the session grant in authz v2 with an empty bearer, so no user credential reaches the sandbox",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("user-bearer-secret", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        sessionGrant: () => "session-grant-jws",
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers[0]).toBe("");
+        expect(relay.openAuthz[0]).toEqual({
+          v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+          grant: "session-grant-jws",
+        });
+        expect(relay.openBearers).not.toContain("user-bearer-secret");
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps presenting the user bearer, with no authz, to a personal host",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("user-bearer", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers[0]).toBe("user-bearer");
+        expect(relay.openAuthz[0] ?? null).toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
   );
 });

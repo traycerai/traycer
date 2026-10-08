@@ -287,3 +287,66 @@ describe("HostInventoryStreamClient", () => {
     expect(h.session.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("D3: the 1.1 arm carries sandbox rows, the 1.0 arm refuses them", () => {
+  function sandboxRow(hostId: string): HostListItem {
+    return {
+      ...buildRow(hostId),
+      kind: "sandbox",
+      sandboxState: "suspended",
+      sandboxFrozen: true,
+      profile: "agent",
+    };
+  }
+
+  function emitSnapshot(h: Harness, hosts: readonly HostListItem[]): void {
+    h.session.emitFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      hosts,
+      fetchedAtMs: 6_000,
+      stale: false,
+    });
+  }
+
+  it("delivers a sandbox row verbatim, beside a personal row, when the session negotiated 1.1", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+    const hosts = [buildRow("host-1"), sandboxRow("sbx-1")];
+    emitSnapshot(h, hosts);
+
+    expect(h.snapshots).toEqual([{ hosts, fetchedAtMs: 6_000, stale: false }]);
+    h.client.close();
+  });
+
+  it("DROPS a frame whose row carries a sandbox field when the session negotiated only 1.0", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 0 };
+    emitSnapshot(h, [sandboxRow("sbx-1")]);
+
+    // The 1.0 line is frozen on the pre-sandbox row: a host that sent a
+    // sandbox field on it broke the contract, and the poll carries the table.
+    expect(h.snapshots).toEqual([]);
+    h.client.close();
+  });
+
+  it("parses before the handshake settles with the frozen 1.0 row, so a sandbox row waits for the negotiated minor", () => {
+    const h = harness();
+    expect(h.session.negotiatedSchemaVersion).toBeNull();
+    emitSnapshot(h, [sandboxRow("sbx-1")]);
+    expect(h.snapshots).toEqual([]);
+
+    emitSnapshot(h, [buildRow("host-1")]);
+    expect(h.snapshots).toHaveLength(1);
+    h.client.close();
+  });
+
+  it("still delivers a personal-only snapshot on 1.1", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+    const hosts = [buildRow("host-1")];
+    emitSnapshot(h, hosts);
+    expect(h.snapshots).toEqual([{ hosts, fetchedAtMs: 6_000, stale: false }]);
+    h.client.close();
+  });
+});

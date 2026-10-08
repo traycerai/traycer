@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAttachGrantProvider,
+  createSandboxAttachGrantProvider,
   mintAttachGrantViaHttp,
 } from "../grant-client";
 
@@ -412,5 +413,139 @@ describe("mint failure detail", () => {
       expect(result.detail).not.toContain("secret-grant-bytes");
       expect(result.context).toBe("");
     }
+  });
+});
+
+describe("mintAttachGrantViaHttp session grant", () => {
+  it("carries the host-bound session grant authn mints beside the attach grant for a sandbox", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            grant: "jws-abc",
+            role: "client",
+            expires_in: 120,
+            session_grant: "session-jws",
+            session_grant_expires_in: 600,
+          },
+          200,
+        ),
+      ),
+    );
+    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
+      kind: "ok",
+      grant: { grant: "jws-abc", expiresInSeconds: 120 },
+      sessionGrant: "session-jws",
+    });
+  });
+
+  it("rejects an empty session grant as a malformed body rather than reading it as a grant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            grant: "jws-abc",
+            role: "client",
+            expires_in: 120,
+            session_grant: "",
+          },
+          200,
+        ),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result.kind).toBe("network-error");
+  });
+});
+
+describe("createSandboxAttachGrantProvider", () => {
+  const deps = (token: string | null) => ({
+    authnBaseUrl: AUTHN,
+    hostId: HOST_ID,
+    getBearerToken: () => token,
+  });
+
+  it("returns the attach grant and exposes the session grant minted for the same attach", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            grant: "jws-abc",
+            role: "client",
+            expires_in: 120,
+            session_grant: "session-1",
+          },
+          200,
+        ),
+      ),
+    );
+    const source = createSandboxAttachGrantProvider(deps(BEARER));
+    expect(source.readSessionGrant()).toBeNull();
+
+    expect(await source.provider()).toEqual({
+      kind: "ok",
+      grant: { grant: "jws-abc", expiresInSeconds: 120 },
+    });
+    expect(source.readSessionGrant()).toBe("session-1");
+  });
+
+  it("fails closed when authn mints no session grant for a sandbox, never falling back to the user bearer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          { grant: "jws-abc", role: "client", expires_in: 120 },
+          200,
+        ),
+      ),
+    );
+    const source = createSandboxAttachGrantProvider(deps(BEARER));
+    expect(await source.provider()).toEqual({
+      kind: "unavailable",
+      detail: "authn minted no session grant for a sandbox target",
+      context: "",
+    });
+    expect(source.readSessionGrant()).toBeNull();
+  });
+
+  it("keeps the last session grant through a failed re-mint and replaces it on the next good one", async () => {
+    const answers = [
+      jsonResponse(
+        { grant: "g1", role: "client", expires_in: 120, session_grant: "s1" },
+        200,
+      ),
+      jsonResponse({}, 503),
+      jsonResponse(
+        { grant: "g2", role: "client", expires_in: 120, session_grant: "s2" },
+        200,
+      ),
+    ];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => answers[call++]),
+    );
+    const source = createSandboxAttachGrantProvider(deps(BEARER));
+    await source.provider();
+    expect(source.readSessionGrant()).toBe("s1");
+    expect((await source.provider()).kind).toBe("unavailable");
+    expect(source.readSessionGrant()).toBe("s1");
+    await source.provider();
+    expect(source.readSessionGrant()).toBe("s2");
+  });
+
+  it("says there is no user bearer, and calls authn not at all, when signed out", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const source = createSandboxAttachGrantProvider(deps(null));
+    expect(await source.provider()).toEqual({
+      kind: "unavailable",
+      detail: "no user bearer available (signed out?)",
+      context: "",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
