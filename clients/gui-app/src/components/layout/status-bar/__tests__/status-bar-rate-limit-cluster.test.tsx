@@ -19,6 +19,7 @@ import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-config
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { providerDisplayName } from "@/lib/provider-ordering";
+import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -808,5 +809,66 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     });
     fireEvent.wheel(trigger, { deltaY: 40, deltaMode: 0 });
     expect(scroller().scrollLeft).toBe(40);
+  });
+});
+
+describe("<StatusBarRateLimitCluster /> limited banner dismissals", () => {
+  const DISMISSALS_KEY = "traycer-gui-app:limited-banner-dismissals";
+  const DISMISSED_AT = 1_000_000;
+
+  function resetDismissals(): void {
+    useLimitedBannerDismissalsStore.setState({ dismissals: {} });
+    window.localStorage.removeItem(DISMISSALS_KEY);
+  }
+
+  beforeEach(resetDismissals);
+  afterEach(resetDismissals);
+
+  function seedDismissals(
+    dismissals: Record<
+      string,
+      Record<string, { resetsAt: number | null; dismissedAt: number }>
+    >,
+  ): void {
+    window.localStorage.setItem(
+      DISMISSALS_KEY,
+      JSON.stringify({ state: { dismissals }, version: 1 }),
+    );
+    void useLimitedBannerDismissalsStore.persist.rehydrate();
+  }
+
+  /** A live, healthy ambient-login Codex segment read at `readAt`. */
+  function healthyReadAt(readAt: number): StatusBarRateLimitClusterModel {
+    const window: StatusBarRateLimitWindow = {
+      ...windowFixture({ windowKey: "codex:weekly", usedPercent: 10 }),
+      severity: "healthy",
+    };
+    return {
+      kind: "segments",
+      segments: [{ ...segmentFixture("codex", window), readAt }],
+    };
+  }
+
+  it("ends a dismissal once the cluster shows a healthy reading newer than it", () => {
+    seedDismissals({
+      "host-a": { codex: { resetsAt: null, dismissedAt: DISMISSED_AT } },
+    });
+    mocks.cluster = healthyReadAt(DISMISSED_AT + 60_000);
+
+    renderCluster({});
+
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({});
+  });
+
+  it("keeps a dismissal when the healthy reading predates it", () => {
+    const entry = { resetsAt: null, dismissedAt: DISMISSED_AT };
+    seedDismissals({ "host-a": { codex: entry } });
+    mocks.cluster = healthyReadAt(DISMISSED_AT - 60_000);
+
+    renderCluster({});
+
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({
+      "host-a": { codex: entry },
+    });
   });
 });

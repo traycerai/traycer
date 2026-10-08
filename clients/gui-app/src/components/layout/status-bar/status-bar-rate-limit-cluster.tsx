@@ -17,6 +17,7 @@ import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-pr
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
+import { usePruneLimitedBannerDismissals } from "@/hooks/rate-limits/use-prune-limited-banner-dismissals";
 import {
   useStatusBarRateLimitSegments,
   type StatusBarRateLimitCluster as StatusBarRateLimitClusterModel,
@@ -79,6 +80,10 @@ export function StatusBarRateLimitCluster(props: {
     editing: props.editing,
     sample: sampleCold,
   });
+  // The usage panel's anchor while usage lives down here (the header trigger,
+  // which does the same, is not mounted then): a limit that clears and comes
+  // back while the panel is closed must still end its banner dismissal.
+  usePruneLimitedBannerDismissals(props.hostId, cluster);
   return (
     <>
       {/*

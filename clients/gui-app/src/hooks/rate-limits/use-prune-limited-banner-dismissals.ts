@@ -30,9 +30,11 @@ function clearedReadingsOf(signature: string): ReadonlyMap<string, number> {
  * Run wherever the cluster is kept current, not only in the popover: the
  * popover mounts only while it is open, and an account that recovers and
  * hits its next limit while it is closed would otherwise find its new banner
- * still hidden. The usage trigger's glyph is always mounted beside the
- * popover with the same host and accounts, so it runs this too; running it
- * twice is idempotent and writes nothing when nothing changed.
+ * still hidden. The popover has two anchors, one per placement of the usage
+ * controls, and each keeps a live cluster for the same host and accounts:
+ * the header trigger's glyph (`rate-limit-icon.tsx`) and the status-bar
+ * cluster (`status-bar-rate-limit-cluster.tsx`). Both run this; running it
+ * more than once is idempotent and writes nothing when nothing changed.
  */
 export function usePruneLimitedBannerDismissals(
   hostId: string | null,
