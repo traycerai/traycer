@@ -600,6 +600,7 @@ export function analyticsTargetForCanvasTileType(
     case "terminal-agent":
       return "terminal_agent";
     case "workspace-file":
+    case "epic-file":
       return "file";
     case "git-diff":
     case "snapshot-diff":

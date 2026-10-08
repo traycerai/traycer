@@ -149,6 +149,7 @@ function startCard(): ReactNode {
       startedAt={10}
       durationMs={null}
       imageResults={[]}
+      page={null}
       variant="card"
       headerFindUnitId={null}
     />
@@ -186,6 +187,7 @@ function restartCard(): ReactNode {
       startedAt={10}
       durationMs={null}
       imageResults={[]}
+      page={null}
       variant="card"
       headerFindUnitId={null}
     />

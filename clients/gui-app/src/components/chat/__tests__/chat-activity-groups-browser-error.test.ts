@@ -33,6 +33,7 @@ function erroredBrowserToolSegment(
     backgroundOutput: null,
     backgroundTask: false,
     imageResults: [],
+    page: null,
     startedAt: 0,
     durationMs: null,
     parentId: null,

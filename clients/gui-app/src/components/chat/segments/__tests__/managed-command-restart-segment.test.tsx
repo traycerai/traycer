@@ -138,6 +138,7 @@ function renderCall(input: {
         startedAt={10}
         durationMs={null}
         imageResults={[]}
+        page={null}
         variant={input.variant}
         headerFindUnitId={input.headerFindUnitId}
       />,
@@ -456,6 +457,7 @@ describe("the restart shell card", () => {
           startedAt={10}
           durationMs={null}
           imageResults={[]}
+          page={null}
           variant="card"
           headerFindUnitId="restart-only-payload"
         />,
@@ -514,6 +516,7 @@ describe("the restart shell card", () => {
             startedAt={10}
             durationMs={null}
             imageResults={[]}
+            page={null}
             variant="card"
             headerFindUnitId="find-start"
           />
@@ -535,6 +538,7 @@ describe("the restart shell card", () => {
             startedAt={20}
             durationMs={null}
             imageResults={[]}
+            page={null}
             variant="card"
             headerFindUnitId="find-restart-1"
           />
@@ -556,6 +560,7 @@ describe("the restart shell card", () => {
             startedAt={30}
             durationMs={null}
             imageResults={[]}
+            page={null}
             variant="card"
             headerFindUnitId="find-restart-2"
           />
@@ -660,6 +665,7 @@ describe("the restart shell card", () => {
           startedAt={10}
           durationMs={null}
           imageResults={[]}
+          page={null}
           variant="card"
           headerFindUnitId={null}
         />

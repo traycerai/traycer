@@ -3,6 +3,7 @@ import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-noti
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  isPageToolCall,
   reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
@@ -701,6 +702,9 @@ function approvalHeaderSearchText(
 }
 
 function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
+  // A page row paints nothing find can reach: its document is inside a
+  // sandboxed frame, and the row's own chrome is `data-find-skip`.
+  if (isPageToolCall(segment)) return [];
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not
     // indexed: a find hit on it would highlight nothing. The collapsed

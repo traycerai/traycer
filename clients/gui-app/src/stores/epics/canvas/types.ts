@@ -11,6 +11,7 @@ import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import type { EpicFileVia } from "@traycer/protocol/host/epic/files";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -21,6 +22,7 @@ import {
   TILE_KIND_BROWSER_SESSION,
   TILE_KIND_COMM_GRAPH,
   TILE_KIND_DELETED_ARTIFACTS,
+  TILE_KIND_EPIC_FILE,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
@@ -719,6 +721,25 @@ export interface PrDiffTileRef {
   readonly view: PrDiffTileViewState;
 }
 
+/**
+ * One epic file at one sha (`TILE_KIND_EPIC_FILE`). A pointer, never a copy:
+ * the bytes are read by sha through `epic.readFile` on the tab's host. `id` IS
+ * the path, so opening the same file again focuses its tab. `via` is the
+ * transcript row it was expanded from, which the host decides a page's network
+ * policy from; `null` when it was opened from the Files panel.
+ */
+export interface EpicFileTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_EPIC_FILE;
+  /** The page title, or the file name. */
+  readonly name: string;
+  readonly hostId: string;
+  readonly path: string;
+  readonly sha256: string;
+  readonly via: EpicFileVia | null;
+}
+
 export type EpicCanvasTileRef =
   | EpicNodeRef
   | BrowserSessionTileRef
@@ -730,12 +751,19 @@ export type EpicCanvasTileRef =
   | PublishedChatTileRef
   | PrDetailTileRef
   | PrDiffTileRef
+  | EpicFileTileRef
   | BlankTileRef;
 
 export function isPublishedChatTileRef(
   value: EpicCanvasTileRef,
 ): value is PublishedChatTileRef {
   return value.type === TILE_KIND_PUBLISHED_CHAT;
+}
+
+export function isEpicFileTileRef(
+  value: EpicCanvasTileRef,
+): value is EpicFileTileRef {
+  return value.type === TILE_KIND_EPIC_FILE;
 }
 
 export function isBlankTileRef(
