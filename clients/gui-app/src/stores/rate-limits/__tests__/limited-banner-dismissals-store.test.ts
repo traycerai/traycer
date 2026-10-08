@@ -114,6 +114,35 @@ describe("useLimitedBannerDismissalsStore", () => {
     expect(dismissals()).toEqual({});
   });
 
+  it("prune keeps a timed entry for a healthy reading not newer than the dismissal, and drops it for a newer one", () => {
+    const entry = { resetsAt: NOW + 3_600_000, dismissedAt: 1000 };
+    const { prune } = useLimitedBannerDismissalsStore.getState();
+    seed({ "host-a": { "codex:p1": entry } });
+
+    prune("host-a", new Map([["codex:p1", 999]]), NOW);
+    expect(dismissals()).toEqual({ "host-a": { "codex:p1": entry } });
+
+    prune("host-a", new Map([["codex:p1", 1000]]), NOW);
+    expect(dismissals()).toEqual({ "host-a": { "codex:p1": entry } });
+
+    prune("host-a", new Map([["codex:p1", 1001]]), NOW);
+    expect(dismissals()).toEqual({});
+  });
+
+  it("prune does not drop another host's timed entry for a clearing reading of the given host", () => {
+    const entry = { resetsAt: NOW + 3_600_000, dismissedAt: 1000 };
+    seed({
+      "host-a": { "codex:p1": entry },
+      "host-b": { "codex:p1": entry },
+    });
+
+    useLimitedBannerDismissalsStore
+      .getState()
+      .prune("host-a", new Map([["codex:p1", 2000]]), NOW);
+
+    expect(dismissals()).toEqual({ "host-b": { "codex:p1": entry } });
+  });
+
   it("prune writes storage only when it removes something", () => {
     seed({
       "host-a": {

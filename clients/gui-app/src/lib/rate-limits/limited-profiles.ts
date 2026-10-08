@@ -97,20 +97,24 @@ export interface LimitedBannerDismissal {
 
 /**
  * The account a banner speaks for, within one host's dismissals
- * (`limited-banner-dismissals-store.ts` buckets by host). The provider id is
- * a fixed lowercase slug, so the first `:` always ends it whatever the
- * profile id holds.
+ * (`limited-banner-dismissals-store.ts` buckets by host): the provider id
+ * alone for its ambient login, `provider:profile` for a managed profile. The
+ * provider id is a fixed lowercase slug with no `:`, so the two forms never
+ * meet, not even for a profile whose id is the empty string.
  */
 export function limitedBannerKey(
   profile: Pick<LimitedProfile, "providerId" | "profileId">,
 ): string {
-  return `${profile.providerId}:${profile.profileId ?? ""}`;
+  return profile.profileId === null
+    ? profile.providerId
+    : `${profile.providerId}:${profile.profileId}`;
 }
 
 /**
  * The accounts a live reading shows NOT limited, each with when that reading
- * arrived: the evidence that ends a dismissal with no reset time, once it
- * postdates the dismissal. A cold, failed or degraded segment says nothing
+ * arrived: the evidence that ends a dismissal once it postdates it, so a
+ * limit that clears early (a no-reset limit, or a reset credit spent before
+ * the scheduled reset) does not leave its next limit pre-hidden. A cold, failed or degraded segment says nothing
  * about the limit, and neither does one with no receipt time, so none of
  * them is here.
  */

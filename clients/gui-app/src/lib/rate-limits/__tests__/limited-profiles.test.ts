@@ -56,11 +56,18 @@ function segment(input: {
 }
 
 describe("limitedBannerKey", () => {
-  it("joins provider and profile, with an empty profile for the ambient login", () => {
+  it("joins provider and profile, and is the provider alone for the ambient login", () => {
     expect(limitedBannerKey(profile)).toBe("codex:p1");
     expect(limitedBannerKey({ providerId: "codex", profileId: null })).toBe(
-      "codex:",
+      "codex",
     );
+  });
+
+  it("keeps the ambient login and an empty-string profile id apart", () => {
+    const ambient = limitedBannerKey({ providerId: "codex", profileId: null });
+    const empty = limitedBannerKey({ providerId: "codex", profileId: "" });
+    expect(empty).toBe("codex:");
+    expect(ambient).not.toBe(empty);
   });
 });
 
@@ -123,6 +130,14 @@ describe("isLimitedBannerDismissed", () => {
     ).toBe(false);
   });
 
+  it("does not let a dismissal of the ambient login hide an empty-string profile's banner", () => {
+    const emptyProfile: LimitedProfile = { ...profile, profileId: "" };
+    const ambientProfile: LimitedProfile = { ...profile, profileId: null };
+    const bucket = { codex: dismissal(NOW + 100) };
+    expect(isLimitedBannerDismissed(bucket, ambientProfile, NOW)).toBe(true);
+    expect(isLimitedBannerDismissed(bucket, emptyProfile, NOW)).toBe(false);
+  });
+
   it("is false for an undefined bucket or a missing key", () => {
     expect(isLimitedBannerDismissed(undefined, profile, NOW)).toBe(false);
     expect(
@@ -182,7 +197,7 @@ describe("clearedBannerReadings", () => {
     expect(new Map(clearedBannerReadings(cluster))).toEqual(
       new Map([
         ["codex:healthy", 111],
-        ["codex:", 555],
+        ["codex", 555],
       ]),
     );
   });

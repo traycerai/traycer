@@ -17,6 +17,7 @@ import {
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { useRateLimitResolveHostScope } from "@/hooks/rate-limits/use-rate-limit-host-scope";
+import { usePruneLimitedBannerDismissals } from "@/hooks/rate-limits/use-prune-limited-banner-dismissals";
 import {
   useRateLimitProfileSelection,
   type RateLimitProfileSelection,
@@ -177,7 +178,11 @@ function ScopedRateLimitIconButton({
         data-testid="rate-limit-header-button"
       >
         {scopedToOwnHost ? (
-          <LiveRateLimitGlyph profileSelection={profileSelection} form={form} />
+          <LiveRateLimitGlyph
+            hostId={scope.hostId}
+            profileSelection={profileSelection}
+            form={form}
+          />
         ) : (
           <RateLimitTriggerContent cluster={NO_CLUSTER} form={form} />
         )}
@@ -255,9 +260,12 @@ function usageButtonLook(
  * is on too, the query cache and `fetchProviderRateLimits` share one request.
  */
 function LiveRateLimitGlyph({
+  hostId,
   profileSelection,
   form,
 }: {
+  /** The host the popover beside it shows, whose banner dismissals it ends. */
+  readonly hostId: string | null;
   readonly profileSelection: RateLimitProfileSelection;
   readonly form: BarReadingForm;
 }): ReactNode {
@@ -270,6 +278,9 @@ function LiveRateLimitGlyph({
     editing: false,
     sample,
   });
+  // Always mounted, unlike the popover: a limit that clears and comes back
+  // while the popover is closed must still end its dismissal.
+  usePruneLimitedBannerDismissals(hostId, cluster);
   return (
     <>
       <RateLimitTriggerContent cluster={cluster} form={form} />

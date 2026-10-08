@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -32,6 +32,7 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
+import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
 import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 
 const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
@@ -1092,4 +1093,73 @@ describe("<RateLimitIconButton />", () => {
       expect(lastSample).toBe(inside);
     },
   );
+});
+
+describe("<RateLimitIconButton /> limited banner dismissals", () => {
+  const DISMISSALS_KEY = "traycer-gui-app:limited-banner-dismissals";
+  const DISMISSED_AT = 1_000_000;
+
+  function resetDismissals(): void {
+    useLimitedBannerDismissalsStore.setState({ dismissals: {} });
+    window.localStorage.removeItem(DISMISSALS_KEY);
+  }
+
+  beforeEach(resetDismissals);
+  afterEach(resetDismissals);
+
+  function seedDismissals(
+    dismissals: Record<
+      string,
+      Record<string, { resetsAt: number | null; dismissedAt: number }>
+    >,
+  ): void {
+    window.localStorage.setItem(
+      DISMISSALS_KEY,
+      JSON.stringify({ state: { dismissals }, version: 1 }),
+    );
+    void useLimitedBannerDismissalsStore.persist.rehydrate();
+  }
+
+  /** A live, healthy managed-profile segment read at `readAt`. */
+  function healthyReadAt(readAt: number): StatusBarRateLimitCluster {
+    const window = windowFixture({
+      windowKey: "codex:weekly",
+      usedPercent: 10,
+      severity: "healthy",
+    });
+    return segmentsCluster([
+      {
+        ...segmentFixture({ providerId: "codex", windows: [window] }),
+        profileId: "p1",
+        readAt,
+      },
+    ]);
+  }
+
+  it("ends a dismissal with the popover closed once a newer healthy reading arrives", () => {
+    const hostId = scope.hostId;
+    if (hostId === null) throw new Error("the fixture scope names no host");
+    const entry = { resetsAt: null, dismissedAt: DISMISSED_AT };
+    seedDismissals({ [hostId]: { "codex:p1": entry } });
+    cluster = healthyReadAt(DISMISSED_AT + 60_000);
+
+    renderIcon();
+
+    expect(screen.queryByTestId("rate-limit-popover")).toBeNull();
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({});
+  });
+
+  it("keeps a dismissal when the healthy reading predates it", () => {
+    const hostId = scope.hostId;
+    if (hostId === null) throw new Error("the fixture scope names no host");
+    const entry = { resetsAt: null, dismissedAt: DISMISSED_AT };
+    seedDismissals({ [hostId]: { "codex:p1": entry } });
+    cluster = healthyReadAt(DISMISSED_AT - 60_000);
+
+    renderIcon();
+
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({
+      [hostId]: { "codex:p1": entry },
+    });
+  });
 });

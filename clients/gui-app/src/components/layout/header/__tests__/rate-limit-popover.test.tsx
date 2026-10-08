@@ -4300,6 +4300,44 @@ describe("<RateLimitPopover /> limited profiles", () => {
     expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({});
   });
 
+  it("shows a timed banner again when its limit clears early and returns with the same reset time", () => {
+    const resetsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    showLimited(twoLimited(resetsAt));
+    hideOn("pro20x");
+    const dismissedAt =
+      useLimitedBannerDismissalsStore.getState().dismissals[HOST_ID]["codex:p1"]
+        .dismissedAt;
+    expect(bannerTexts()).toHaveLength(1);
+    cleanup();
+
+    const [pro, team] = twoLimited(resetsAt);
+    segmentsState.cluster = {
+      kind: "segments",
+      segments: [
+        withReset(
+          limitedSegment({
+            providerId: "codex",
+            profileId: "p1",
+            label: "pro20x",
+            severity: "healthy",
+            kind: "weekly",
+            readAt: dismissedAt + 60_000,
+          }),
+          resetsAt,
+        ),
+        team,
+      ],
+    };
+    renderPopover();
+    expect(useLimitedBannerDismissalsStore.getState().dismissals).toEqual({});
+    cleanup();
+
+    segmentsState.cluster = { kind: "segments", segments: [pro, team] };
+    renderPopover();
+    expect(bannerTexts()).toHaveLength(2);
+    expect(bannerTexts()[0]).toContain("pro20x");
+  });
+
   it("draws no banner while no profile is limited, even one running low", () => {
     showLimited([
       limitedSegment({

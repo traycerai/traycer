@@ -72,7 +72,6 @@ import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider
 import { useStatusBarRateLimitSegments } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import {
-  clearedBannerReadings,
   isLimitedBannerDismissed,
   limitedBannerKey,
   limitedProfileBannerText,
@@ -80,6 +79,7 @@ import {
   type LimitedProfile,
 } from "@/lib/rate-limits/limited-profiles";
 import { useLimitedBannerDismissalsStore } from "@/stores/rate-limits/limited-banner-dismissals-store";
+import { usePruneLimitedBannerDismissals } from "@/hooks/rate-limits/use-prune-limited-banner-dismissals";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   resolveStatusBarProfileIds,
@@ -844,13 +844,7 @@ function RateLimitPopoverScopedBody({
     sample: false,
   });
   const limited = limitedProfiles(cluster);
-  // By value: `cluster` is rebuilt on every render, and the banners prune
-  // their dismissals only when an account clears or a newer reading arrives.
-  const clearedSignature = JSON.stringify(
-    [...clearedBannerReadings(cluster)].sort(([left], [right]) =>
-      left.localeCompare(right),
-    ),
-  );
+  usePruneLimitedBannerDismissals(displayedHostId, cluster);
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
   const { openSettings } = useSystemTabModalActions();
@@ -971,7 +965,6 @@ function RateLimitPopoverScopedBody({
         <div className="min-h-0 min-w-0 overflow-y-auto p-3">
           <LimitedProfileBanners
             limited={limited}
-            clearedSignature={clearedSignature}
             openTab={resolvedTab}
             displayedHostId={displayedHostId}
           />
@@ -1325,24 +1318,6 @@ function RailTab({
   );
 }
 
-/** The `clearedSignature` the scoped body builds, back to its readings. */
-function clearedReadingsOf(signature: string): ReadonlyMap<string, number> {
-  const parsed: unknown = JSON.parse(signature);
-  const readings = new Map<string, number>();
-  if (!Array.isArray(parsed)) return readings;
-  const entries: ReadonlyArray<unknown> = parsed;
-  for (const entry of entries) {
-    if (!Array.isArray(entry)) continue;
-    const pair: ReadonlyArray<unknown> = entry;
-    const key = pair[0];
-    const readAt = pair[1];
-    if (typeof key === "string" && typeof readAt === "number") {
-      readings.set(key, readAt);
-    }
-  }
-  return readings;
-}
-
 /**
  * One banner per limited profile whose own card is not on the open tab, at
  * the top of the content area. Overview draws a provider's condensed windows
@@ -1358,13 +1333,10 @@ function clearedReadingsOf(signature: string): ReadonlyMap<string, number> {
  */
 function LimitedProfileBanners({
   limited,
-  clearedSignature,
   openTab,
   displayedHostId,
 }: {
   readonly limited: ReadonlyArray<LimitedProfile>;
-  /** `clearedBannerReadings` of the same cluster, as a JSON entry list. */
-  readonly clearedSignature: string;
   readonly openTab: RateLimitPopoverTab;
   /** Dismissals are this host's; `null` remembers nothing and offers no hide. */
   readonly displayedHostId: string | null;
@@ -1374,11 +1346,6 @@ function LimitedProfileBanners({
     displayedHostId === null ? undefined : state.dismissals[displayedHostId],
   );
   const dismiss = useLimitedBannerDismissalsStore((state) => state.dismiss);
-  const prune = useLimitedBannerDismissalsStore((state) => state.prune);
-  useEffect(() => {
-    if (displayedHostId === null) return;
-    prune(displayedHostId, clearedReadingsOf(clearedSignature), now);
-  }, [clearedSignature, displayedHostId, now, prune]);
 
   const shown = limited.filter(
     (profile) =>

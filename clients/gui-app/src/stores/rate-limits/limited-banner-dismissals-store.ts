@@ -28,13 +28,14 @@ interface LimitedBannerDismissalsState {
   ) => void;
   /**
    * Drops every entry that can no longer hide anything: a timed entry whose
-   * reset has passed, on any host, and - on `hostId` only - an entry with no
-   * reset time whose account a live reading received AFTER the dismissal
-   * shows not limited (`clearedReadings`: banner key → when that reading
-   * arrived), so the next limit shows its banner. A reading that predates
-   * the dismissal is not evidence (another window's older cache), and an
-   * account with no live reading (loading, cold, failed) is not either, so
-   * its entry stays.
+   * reset has passed, on any host, and - on `hostId` only - any entry whose
+   * account a live reading received AFTER the dismissal shows not limited
+   * (`clearedReadings`: banner key → when that reading arrived), so the next
+   * limit shows its banner even when it keeps the same reset time (a reset
+   * credit spent mid-window) or has none. A reading that predates the
+   * dismissal is not evidence (another window's older cache), and an account
+   * with no live reading (loading, cold, failed) is not either, so its entry
+   * stays.
    */
   readonly prune: (
     hostId: string,
@@ -136,9 +137,8 @@ export const useLimitedBannerDismissalsStore =
                   ? (clearedReadings.get(bannerKey) ?? null)
                   : null;
               const stale =
-                dismissal.resetsAt === null
-                  ? clearedAt !== null && clearedAt > dismissal.dismissedAt
-                  : dismissal.resetsAt <= now;
+                (clearedAt !== null && clearedAt > dismissal.dismissedAt) ||
+                (dismissal.resetsAt !== null && dismissal.resetsAt <= now);
               if (stale) {
                 changed = true;
               } else {
