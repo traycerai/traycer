@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import {
   modelMatchesPattern,
   type TierCandidate,
@@ -240,6 +241,7 @@ export function useFallbackCatalogOptions(
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
     options: {

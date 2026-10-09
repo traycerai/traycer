@@ -19,6 +19,12 @@ The list on the left shows every provider, with the enabled ones first.
 
 Select a provider to open its tabs.
 
+## Model List Timeout
+
+**Model list timeout**, beside **Refresh all providers**, sets how long Traycer waits for a provider to list its models: when you open the model picker, and when an agent creates another agent. The default is **60 s**. Choose **90 s**, **120 s**, or **180 s** on a slow or heavily loaded machine, where a provider can take longer than a minute to answer.
+
+The setting applies to every provider on the selected host, from the next model list it reads. A model list that arrives after the wait is still kept for the next request. The control is hidden on a host that is running a version without it.
+
 ## Turn A Provider On Or Off
 
 The switch in the provider's header reads **Enabled** or **Disabled**. Only enabled providers appear in the composer's model picker.

@@ -7126,6 +7126,94 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
     WAIT.timeout,
   );
 
+  // The catalog allowance (`CATALOG_LIST_RESPONSE_TIMEOUT_MS`, 210_000 in
+  // gui-app) is a budget LONGER than the shared default. The transport has to
+  // keep the request pending past 30s when asked to, and still fail it at the
+  // budget it was given. Driven on `host.status` because the timer is
+  // method-agnostic and this fixture registers only that method.
+  it(
+    "keeps a request with a 210s budget pending past the 30s default, and fails it at the budget",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const catalogBudgetMs = 210_000;
+        const budgeted = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          null,
+          catalogBudgetMs,
+          false,
+          null,
+        );
+        const defaulted = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          null,
+        );
+        // Observe the unbudgeted rejection as it happens, not after the clock
+        // has already advanced past it.
+        const defaultOutcome: Promise<unknown> = defaulted.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        let budgetedSettled = false;
+        void budgeted.then(
+          () => {
+            budgetedSettled = true;
+          },
+          () => {
+            budgetedSettled = true;
+          },
+        );
+
+        await vi.advanceTimersByTimeAsync(UNARY_RESPONSE_TIMEOUT_MS + 1_000);
+        const defaultError = await defaultOutcome;
+        expect(String(defaultError)).toContain("timed out awaiting a response");
+        // 31s in: the unbudgeted request has failed, the budgeted one has not.
+        expect(budgetedSettled).toBe(false);
+
+        // Still pending one second before its own budget: the transport
+        // honours the 210s allowance, not some shorter fixed bound.
+        await vi.advanceTimersByTimeAsync(
+          catalogBudgetMs - (UNARY_RESPONSE_TIMEOUT_MS + 1_000) - 1_000,
+        );
+        expect(budgetedSettled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(2_000);
+        const budgetedError: unknown = await budgeted.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        expect(String(budgetedError)).toContain(
+          "timed out awaiting a response",
+        );
+        expect(budgetedError).toBeInstanceOf(HostTransportFailureError);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   it(
     "rejects the pending sendUnary promptly with the FATAL's code, and the client CLOSEs the stream",
     async () => {

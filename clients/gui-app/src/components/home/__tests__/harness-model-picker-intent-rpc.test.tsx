@@ -277,6 +277,7 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 import type { HarnessModelSelection } from "@/components/home/data/landing-options";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 function harnessEntry(
   id: GuiHarnessId,
@@ -346,6 +347,8 @@ function createPickerRpcFixture(
   let requestCounter = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    // The app's real policy: catalog reads carry its response allowance.
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

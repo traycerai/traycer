@@ -49,6 +49,9 @@ import {
   readLogLevelsSync,
   readWorktreesConfig,
   readWorktreesConfigSync,
+  readCatalogConfig,
+  readCatalogConfigSync,
+  setCatalogProbeTimeoutSeconds,
   removeShell,
   resetShell,
   revertShellArgs,
@@ -103,6 +106,7 @@ describe("cli config store", () => {
       features: { agentRoles: false, artifactVersioning: false },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" as const },
+      catalog: { probeTimeoutSeconds: 60 },
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
@@ -465,6 +469,7 @@ describe("cli config store", () => {
       features: { agentRoles: false, artifactVersioning: false },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" },
+      catalog: { probeTimeoutSeconds: 60 },
     });
   });
 
@@ -645,6 +650,140 @@ describe("agent worktree create policy", () => {
       worktrees: { agentCreate: "never" },
       futureBlock: { nested: true },
     });
+  });
+});
+
+describe("catalog probe timeout", () => {
+  const BASE = {
+    version: 1,
+    shell: { path: null, args: null },
+    envOverrides: {},
+  };
+
+  it("defaults to 60 for a file without the block, from both readers", async () => {
+    await writeRaw(JSON.stringify(BASE));
+    expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: 60 });
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+  });
+
+  it("defaults to 60 for a catalog block that omits the value", async () => {
+    await writeRaw(JSON.stringify({ ...BASE, catalog: {} }));
+    expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: 60 });
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+  });
+
+  it("round-trips a written value through both readers", async () => {
+    await setCatalogProbeTimeoutSeconds(120);
+    expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: 120 });
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 120 });
+  });
+
+  it("sets the value without changing the other blocks", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setEnvOverride("FOO", "bar");
+    await setLogLevels("debug", "warn");
+    await setAgentBrowserAccess(false);
+    await setAgentWorktreeCreatePolicy("never");
+
+    await setCatalogProbeTimeoutSeconds(120);
+
+    expect(await readCliConfig()).toMatchObject({
+      shell: { path: "/bin/fish", args: ["-l"] },
+      envOverrides: { FOO: "bar" },
+      logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
+      browser: { agentAccess: false },
+      worktrees: { agentCreate: "never" },
+      catalog: { probeTimeoutSeconds: 120 },
+    });
+  });
+
+  it("survives a read-modify-write that does not touch it", async () => {
+    await setCatalogProbeTimeoutSeconds(120);
+    await setAgentWorktreeCreatePolicy("ask");
+    await setShell("/bin/fish", ["-l"]);
+    expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: 120 });
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 120 });
+  });
+
+  it("clamps a stored value into [60, 180] on read, in both readers", async () => {
+    for (const [stored, read] of [
+      [30, 60],
+      [1, 60],
+      [600, 180],
+      [181, 180],
+      [75, 75],
+      [180, 180],
+    ] as const) {
+      await writeRaw(
+        JSON.stringify({ ...BASE, catalog: { probeTimeoutSeconds: stored } }),
+      );
+      expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: read });
+      expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: read });
+    }
+  });
+
+  it("sync read returns 60 for a missing file", () => {
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+  });
+
+  it("sync read returns 60 for invalid JSON", async () => {
+    await writeRaw("{ not json");
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+  });
+
+  it("sync read returns 60 for a non-integer, negative, zero or non-number value", async () => {
+    for (const probeTimeoutSeconds of [90.5, -5, 0, "120", null]) {
+      await writeRaw(
+        JSON.stringify({ ...BASE, catalog: { probeTimeoutSeconds } }),
+      );
+      expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+    }
+  });
+
+  it("sync read returns 60 when the catalog block is not an object", async () => {
+    for (const catalog of ["120", 7, ["120"], null]) {
+      await writeRaw(JSON.stringify({ ...BASE, catalog }));
+      expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+    }
+  });
+
+  it("sync read honours a valid value beside an unrelated defect elsewhere", async () => {
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        worktrees: { agentCreate: "sometimes" },
+        logs: { cliLogLevel: "shouty" },
+        catalog: { probeTimeoutSeconds: 120 },
+      }),
+    );
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 120 });
+  });
+
+  it("async read throws on a malformed file", async () => {
+    await writeRaw("{ not json");
+    await expect(readCatalogConfig()).rejects.toThrow(/not valid JSON/);
+  });
+
+  it("async read throws on a malformed catalog block", async () => {
+    await writeRaw(
+      JSON.stringify({ ...BASE, catalog: { probeTimeoutSeconds: "soon" } }),
+    );
+    await expect(readCatalogConfig()).rejects.toThrow(
+      /does not match the expected schema/,
+    );
+  });
+
+  it("async read throws beside an unrelated defect, unlike the sync read", async () => {
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        worktrees: { agentCreate: "sometimes" },
+        catalog: { probeTimeoutSeconds: 120 },
+      }),
+    );
+    await expect(readCatalogConfig()).rejects.toThrow(
+      /does not match the expected schema/,
+    );
   });
 });
 

@@ -8,6 +8,8 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { CATALOG_PROBE_TIMEOUT_MAX_SECONDS } from "@traycer/protocol/config/schema";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import {
   CHAT_PUBLICATION_WAIT_POLL_LANE,
@@ -206,6 +208,24 @@ describe("host method poll policy table", () => {
     expect(HOST_METHOD_POLL_TABLE["host.status"].joinResponseTimeoutMs).toBe(
       null,
     );
+  });
+
+  it("lets a catalog read outlast the host's longest probe bound", () => {
+    expect(CATALOG_LIST_RESPONSE_TIMEOUT_MS).toBe(210_000);
+    expect(CATALOG_LIST_RESPONSE_TIMEOUT_MS).toBeGreaterThan(
+      CATALOG_PROBE_TIMEOUT_MAX_SECONDS * 1_000,
+    );
+    for (const method of [
+      "agent.gui.listModels",
+      "agent.gui.listCommands",
+    ] as const) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toMatchObject({
+        joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+      });
+      expect(hostRpcSchedulingPolicy.joinResponseTimeoutMs(method)).toBe(
+        CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+      );
+    }
   });
 
   it("keeps ambiguous verbs on their declared side of the command/read boundary", () => {
