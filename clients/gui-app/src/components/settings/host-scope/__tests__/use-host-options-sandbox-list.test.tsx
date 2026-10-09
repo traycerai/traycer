@@ -14,6 +14,7 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { pickableHostOptions } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 
@@ -33,42 +34,47 @@ import { useHostOptions } from "@/components/settings/host-scope/use-host-option
 interface QueryStub<Data> {
   readonly data: Data | undefined;
   readonly isError: boolean;
+  readonly isLoading: boolean;
   readonly refetch: () => void;
 }
 
 const SANDBOX_HOST_ID = "sbx-host";
 
-const registryItem: HostListItem = {
-  hostId: SANDBOX_HOST_ID,
-  displayName: "build-box",
-  platform: "linux",
-  kind: "sandbox",
-  publicKey: "pk",
-  createdAt: "2026-01-01T00:00:00Z",
-  updatePolicy: "manual",
-  status: {
-    connectivity: "connectable",
-    viewerReachability: "unknown",
-    clientCloud: "ok",
-    updateState: "current",
-    appVersion: "1.5.0",
-    lastSeenAt: "2026-01-01T00:00:00Z",
-  },
-  sandboxState: "awake",
-  sandboxFrozen: false,
-  profile: "agent",
-};
+function registryRow(kind: "personal" | "sandbox"): HostListItem {
+  return {
+    hostId: SANDBOX_HOST_ID,
+    displayName: "build-box",
+    platform: "linux",
+    kind,
+    publicKey: "pk",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: "2026-01-01T00:00:00Z",
+    },
+    ...(kind === "sandbox"
+      ? { sandboxState: "awake", sandboxFrozen: false, profile: "agent" }
+      : {}),
+  };
+}
 
 const queries = vi.hoisted<{
   readonly directoryRefetch: Mock;
   readonly registryRefetch: Mock;
   readonly sandboxRefetch: Mock;
   sandboxList: QueryStub<SandboxListResponse> | null;
+  registryHosts: readonly HostListItem[];
 }>(() => ({
   directoryRefetch: vi.fn(),
   registryRefetch: vi.fn(),
   sandboxRefetch: vi.fn(),
   sandboxList: null,
+  registryHosts: [],
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -81,13 +87,15 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({
     data: [mockLocalHostEntry],
     isError: false,
+    isLoading: false,
     refetch: queries.directoryRefetch,
   }),
 }));
 vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
   useRegisteredHosts: () => ({
-    data: { hosts: [registryItem] },
+    data: { hosts: queries.registryHosts },
     isError: false,
+    isLoading: false,
     refetch: queries.registryRefetch,
   }),
 }));
@@ -113,8 +121,9 @@ vi.mock("@/providers/use-runner-host", () => ({
 function sandboxList(
   data: SandboxListResponse | undefined,
   isError: boolean,
+  isLoading: boolean,
 ): QueryStub<SandboxListResponse> {
-  return { data, isError, refetch: queries.sandboxRefetch };
+  return { data, isError, isLoading, refetch: queries.sandboxRefetch };
 }
 
 function renderOptions() {
@@ -146,6 +155,7 @@ function renderOptions() {
 }
 
 beforeEach(() => {
+  queries.registryHosts = [registryRow("sandbox")];
   queries.directoryRefetch.mockClear();
   queries.registryRefetch.mockClear();
   queries.sandboxRefetch.mockClear();
@@ -157,7 +167,7 @@ afterEach(() => {
 
 describe("useHostOptions with a failed sandbox list", () => {
   it("reports the lists failed when the first sandbox read failed, and retryLists asks every list again", () => {
-    queries.sandboxList = sandboxList(undefined, true);
+    queries.sandboxList = sandboxList(undefined, true, false);
     const { result } = renderOptions();
 
     expect(result.current.listsFailed).toBe(true);
@@ -175,14 +185,14 @@ describe("useHostOptions with a failed sandbox list", () => {
   });
 
   it("does not report a failure while the first sandbox read is still loading", () => {
-    queries.sandboxList = sandboxList(undefined, false);
+    queries.sandboxList = sandboxList(undefined, false, false);
     const { result } = renderOptions();
 
     expect(result.current.listsFailed).toBe(false);
   });
 
   it("does not report a failure when the sandbox list answered without that host's row, which stays out of the pickers", () => {
-    queries.sandboxList = sandboxList({ sandboxes: [] }, false);
+    queries.sandboxList = sandboxList({ sandboxes: [] }, false, false);
     const { result } = renderOptions();
 
     expect(result.current.listsFailed).toBe(false);
@@ -192,9 +202,63 @@ describe("useHostOptions with a failed sandbox list", () => {
   });
 
   it("keeps the last good answer through a later failed refetch: no failure to report", () => {
-    queries.sandboxList = sandboxList({ sandboxes: [] }, true);
+    queries.sandboxList = sandboxList({ sandboxes: [] }, true, false);
     const { result } = renderOptions();
 
     expect(result.current.listsFailed).toBe(false);
+  });
+});
+
+describe("useHostOptions while the sandbox list is on its first read", () => {
+  const pendingList = (): QueryStub<SandboxListResponse> =>
+    sandboxList(undefined, false, true);
+
+  it("is still loading, and its lists unresolved, while a listed sandbox has no summary row yet", () => {
+    queries.sandboxList = pendingList();
+    const { result } = renderOptions();
+
+    // The directory and registry are answered; only the sandbox row is owed.
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.listsResolved).toBe(false);
+    expect(result.current.listsFailed).toBe(false);
+  });
+
+  it("is not held by a pending sandbox list when no listed host is a sandbox", () => {
+    queries.registryHosts = [registryRow("personal")];
+    queries.sandboxList = pendingList();
+    const { result } = renderOptions();
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.listsResolved).toBe(true);
+  });
+
+  it("resolves in the same render the list answers, with the sandbox pickable", () => {
+    queries.sandboxList = pendingList();
+    const { result, rerender } = renderOptions();
+    expect(result.current.isLoading).toBe(true);
+    expect(
+      pickableHostOptions(result.current.hosts, null).map((h) => h.hostId),
+    ).not.toContain(SANDBOX_HOST_ID);
+
+    queries.sandboxList = sandboxList(
+      {
+        sandboxes: [
+          sandboxSummaryFixture({
+            id: "sbx_1",
+            hostId: SANDBOX_HOST_ID,
+            burst: false,
+          }),
+        ],
+      },
+      false,
+      false,
+    );
+    rerender();
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.listsResolved).toBe(true);
+    expect(
+      pickableHostOptions(result.current.hosts, null).map((h) => h.hostId),
+    ).toContain(SANDBOX_HOST_ID);
   });
 });

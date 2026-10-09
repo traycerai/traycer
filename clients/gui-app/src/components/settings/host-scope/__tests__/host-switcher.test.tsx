@@ -162,6 +162,45 @@ describe("<HostSwitcher /> empty vs failed", () => {
     expect(onRetryLists).toHaveBeenCalledTimes(1);
   });
 
+  it("says more hosts are loading under rows listed while a list is still on its first read, and not otherwise", () => {
+    const renderRows = (isLoading: boolean) => {
+      render(
+        <HostSwitcher
+          refusalByHostId={NO_HOST_OPTION_REFUSALS}
+          inertExceptHostId={null}
+          hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
+          selected={null}
+          activeHostId={null}
+          onSelect={() => undefined}
+          action={{ kind: "add-host", onSelect: () => undefined }}
+          surface="rail"
+          intent="view"
+          disabled={false}
+          isLoading={isLoading}
+          listsFailed={false}
+          onRetryLists={() => undefined}
+          updateViewForHost={null}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Settings host: none selected" }),
+      );
+    };
+
+    renderRows(true);
+    expect(
+      screen.getByTestId("settings-host-switcher-loading-more").textContent,
+    ).toContain("Loading more hosts…");
+    // The listed row is still offered while more are coming.
+    expect(screen.getByText("Host A")).not.toBeNull();
+    cleanup();
+
+    renderRows(false);
+    expect(
+      screen.queryByTestId("settings-host-switcher-loading-more"),
+    ).toBeNull();
+  });
+
   it("labels a host with no route by its health word 'offline', not 'unreachable'", () => {
     // The row's word comes from `health.state`, not from `connectable` — that
     // decides whether the row can be PICKED, which is a route question, while

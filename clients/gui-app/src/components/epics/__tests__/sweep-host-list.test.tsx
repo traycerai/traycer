@@ -70,6 +70,13 @@ const FROZEN = sandboxOption(
 );
 
 function renderList(hosts: readonly HostScopeOption[]): void {
+  renderListLoading(hosts, false);
+}
+
+function renderListLoading(
+  hosts: readonly HostScopeOption[],
+  isLoading: boolean,
+): void {
   const rows: readonly SweepHostPickerRow[] = hosts.map((host) => ({
     host,
     isDefault: host.hostId === PERSONAL.hostId,
@@ -79,7 +86,7 @@ function renderList(hosts: readonly HostScopeOption[]): void {
       rows={rows}
       selectedEpicIds={new Set(["epic-1"])}
       currentHostCount={null}
-      isLoading={false}
+      isLoading={isLoading}
       listsFailed={false}
       onRetryLists={() => undefined}
       onPick={onPick}
@@ -131,5 +138,29 @@ describe("<SweepHostList /> picking a row", () => {
 
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
     expect(onPick).not.toHaveBeenCalled();
+  });
+});
+
+describe("<SweepHostList /> while a list is still loading", () => {
+  it("says more hosts are loading under the rows it has", () => {
+    renderListLoading([PERSONAL, AWAKE], true);
+
+    expect(screen.getByTestId("sweep-host-loading-more").textContent).toBe(
+      "Loading more hosts…",
+    );
+    expect(row("laptop")).toBeDefined();
+  });
+
+  it("says it is finding hosts, and not that more are coming, when there are no rows yet", () => {
+    renderListLoading([], true);
+
+    expect(screen.getByText("Finding your hosts…")).toBeDefined();
+    expect(screen.queryByTestId("sweep-host-loading-more")).toBeNull();
+  });
+
+  it("says nothing of loading once the lists are in", () => {
+    renderListLoading([PERSONAL, AWAKE], false);
+
+    expect(screen.queryByTestId("sweep-host-loading-more")).toBeNull();
   });
 });

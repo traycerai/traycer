@@ -70,6 +70,14 @@ export function SweepHostList(props: {
         onRetryLists={props.onRetryLists}
         onPick={props.onPick}
       />
+      {props.isLoading && props.rows.length > 0 ? (
+        <p
+          className="shrink-0 text-ui-xs text-muted-foreground"
+          data-testid="sweep-host-loading-more"
+        >
+          Loading more hosts…
+        </p>
+      ) : null}
       {props.listsFailed && !props.isLoading && props.rows.length > 0 ? (
         <div
           className="flex shrink-0 items-center justify-between gap-2"

@@ -370,7 +370,7 @@ describe("<UserMenu /> host section", () => {
       connectable: true,
     });
 
-    it("says hosts may be missing, and retries the lists on click, when a list failed", async () => {
+    it("offers Try loading hosts again with the reason under it, and retries the lists on click, when a list failed", async () => {
       const retryLists = vi.fn();
       hostOptionsRef.value = hostOptionsFixture({
         hosts: [only],
@@ -383,13 +383,16 @@ describe("<UserMenu /> host section", () => {
       await openMenu();
 
       const retry = screen.getByTestId("user-menu-host-retry-lists");
-      expect(retry.textContent).toBe("Some hosts may be missing");
+      expect(retry.textContent).toContain("Try loading hosts again");
+      expect(
+        screen.getByTestId("user-menu-host-retry-lists-reason").textContent,
+      ).toBe("Some hosts may be missing");
       fireEvent.click(retry);
 
       expect(retryLists).toHaveBeenCalledTimes(1);
     });
 
-    it("offers the retry on its own, worded for an empty list, when the failure left no host to pick", async () => {
+    it("offers the retry on its own, with no reason line, when the failure left no host to pick", async () => {
       const retryLists = vi.fn();
       hostOptionsRef.value = hostOptionsFixture({
         hosts: [],
@@ -403,29 +406,41 @@ describe("<UserMenu /> host section", () => {
 
       const retry = screen.getByTestId("user-menu-host-retry-lists");
       expect(retry.textContent).toBe("Try loading hosts again");
+      expect(
+        screen.queryByTestId("user-menu-host-retry-lists-reason"),
+      ).toBeNull();
       fireEvent.click(retry);
 
       expect(retryLists).toHaveBeenCalledTimes(1);
     });
 
-    it("shows no retry when the lists did not fail, or while they are still loading", async () => {
+    it("shows no retry when the lists did not fail", async () => {
       hostOptionsRef.value = hostOptionsFixture({
         hosts: [only],
         activeHostId: only.hostId,
         listsFailed: false,
         isLoading: false,
       });
-      await openMenu();
-      expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
-      cleanup();
 
+      await openMenu();
+
+      expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
+      expect(screen.queryByTestId("user-menu-host-loading-more")).toBeNull();
+    });
+
+    it("says more hosts are loading, in a disabled item and with no retry, while a list is on its first read", async () => {
       hostOptionsRef.value = hostOptionsFixture({
         hosts: [only],
         activeHostId: only.hostId,
         listsFailed: true,
         isLoading: true,
       });
+
       await openMenu();
+
+      const loading = screen.getByTestId("user-menu-host-loading-more");
+      expect(loading.textContent).toContain("Loading more hosts…");
+      expect(loading.getAttribute("aria-disabled")).toBe("true");
       expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
     });
   });

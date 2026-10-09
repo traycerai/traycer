@@ -349,6 +349,9 @@ function UserMenuHostSection(props: {
   // A failed list (a sandbox list included, which hides every sandbox here)
   // is said, with the retry, rather than shown as the whole account.
   const showsRetry = listsFailed && !isLoading;
+  // Rows listed while a list is still on its first read (a sandbox list
+  // withholds its rows until it answers) are not the whole account.
+  const showsLoadingMore = isLoading && hosts.length > 0;
   if (hosts.length === 0 && !showsRetry) return null;
   return (
     <>
@@ -379,6 +382,17 @@ function UserMenuHostSection(props: {
           />
         ))}
       </DropdownMenuRadioGroup>
+      {showsLoadingMore ? (
+        <DropdownMenuItem disabled data-testid="user-menu-host-loading-more">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+            tone="muted"
+          />
+          Loading more hosts…
+        </DropdownMenuItem>
+      ) : null}
       {showsRetry ? (
         <DropdownMenuItem
           onSelect={(event) => {
@@ -388,9 +402,19 @@ function UserMenuHostSection(props: {
           data-testid="user-menu-host-retry-lists"
         >
           <RotateCcw className="size-4" aria-hidden />
-          {hosts.length === 0
-            ? "Try loading hosts again"
-            : "Some hosts may be missing"}
+          {/* The label is the action; with hosts still listed, the line under
+              it says why the action is offered. */}
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span>Try loading hosts again</span>
+            {hosts.length === 0 ? null : (
+              <span
+                className="text-ui-xs text-muted-foreground"
+                data-testid="user-menu-host-retry-lists-reason"
+              >
+                Some hosts may be missing
+              </span>
+            )}
+          </span>
         </DropdownMenuItem>
       ) : null}
       <DropdownMenuSeparator />

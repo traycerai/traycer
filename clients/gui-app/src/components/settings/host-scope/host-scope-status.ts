@@ -108,6 +108,34 @@ export function hostListReadiness(
  * a later failure keeps the last good rows, and an answer without a host's
  * row is the list saying it is not a sandbox to offer.
  */
+/** The sandbox list's outcome, plus whether its first read is in flight. */
+export interface SandboxListOutcome extends HostListOutcome {
+  /** The first read is in flight: no answer yet, and one is coming. */
+  readonly isPending: boolean;
+}
+
+/**
+ * Whether the sandbox list's FIRST read, still in flight, is withholding rows
+ * from the pickers: the loading twin of {@link sandboxSummariesUnread}.
+ *
+ * The directory and registry can answer first, or come from cache, and the
+ * pickers fail closed on an unread sandbox row, so for that window they would
+ * look complete without the sandboxes (or say "No hosts yet") and a pick could
+ * land before the sandboxes appear. Counted as loading only while it withholds
+ * a sandbox row: an account with no sandbox rows never waits on this list.
+ */
+export function sandboxSummariesPending(
+  hosts: readonly HostScopeOption[],
+  sandboxList: SandboxListOutcome,
+): boolean {
+  if (sandboxList.hasData || sandboxList.isError || !sandboxList.isPending) {
+    return false;
+  }
+  return hosts.some(
+    (host) => host.sandbox !== null && host.sandbox.summary === null,
+  );
+}
+
 export function sandboxSummariesUnread(
   hosts: readonly HostScopeOption[],
   sandboxList: HostListOutcome,

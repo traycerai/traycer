@@ -1,3 +1,4 @@
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useState, type ReactNode } from "react";
 import {
   ChevronDown,
@@ -457,6 +458,25 @@ export function HostSwitcher(props: {
             branch above never runs and nothing said the picture was partial:
             the sidebar presented half an account as all of it. The rows stay
             usable; this footer says what is missing and offers the retry. */}
+        {/* Rows can be listed while a list is still on its first read (a
+            sandbox list withholds its rows until it answers): say more are
+            coming, so the rows shown do not read as the whole account. */}
+        {props.isLoading ? (
+          <div
+            className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
+            data-testid="settings-host-switcher-loading-more"
+          >
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+              tone="muted"
+            />
+            <span className="text-ui-xs text-muted-foreground">
+              Loading more hosts…
+            </span>
+          </div>
+        ) : null}
         {props.listsFailed && !props.isLoading ? (
           <div
             className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
