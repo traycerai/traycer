@@ -24,8 +24,14 @@ describe("PROVIDER_ICON_CONFIG", () => {
     expect(PROVIDER_ICON_CONFIG.reasonix.Icon).not.toBe(CommandCodeIcon);
   });
 
-  it("renders the Command Code icon as an svg", () => {
+  it("renders the Command Code logomark with its fixed brand colours", () => {
     const { container } = render(<CommandCodeIcon />);
-    expect(container.querySelector("svg")).not.toBeNull();
+    const svg = container.querySelector("svg");
+    expect(svg).not.toBeNull();
+    // The brand page fixes the logomark's colours: a black tile under a white
+    // glyph in both themes, never `currentColor` following the text colour.
+    expect(svg?.querySelector('path[fill="#000"]')).not.toBeNull();
+    expect(svg?.querySelector('g[fill="#fff"] > path')).not.toBeNull();
+    expect(container.innerHTML).not.toContain("currentColor");
   });
 });
