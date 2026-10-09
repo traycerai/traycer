@@ -280,8 +280,15 @@ export function HostSwitcher(props: {
    */
   readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
   const [search, setSearch] = useState("");
+  // The search lives outside the popover's content, so it outlives a close:
+  // cleared on every close (dismiss, pick or action), or reopening would
+  // restore the old filter and greet the user with "No hosts match".
+  const setOpen = (next: boolean): void => {
+    setOpenState(next);
+    if (!next) setSearch("");
+  };
   const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
     useCoarsePointerOpenAutoFocus();
   const binding = useHostBinding();

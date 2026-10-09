@@ -199,13 +199,30 @@ export function hostOptionStatusWord(
   if (surfaceState.kind === "inert") return null;
   if (host.settingUp) return "setting up";
   // A sandbox speaks its lifecycle instead of connectivity: "suspended" is
-  // why it is not answering, which "offline" would hide.
+  // why it is not answering, which "offline" would hide. Except "awake",
+  // which explains nothing about a row that cannot be reached: there the
+  // health or the refusal word says why, and "awake" is left for the row
+  // that is fine.
   const sandboxWord =
     host.sandbox === null ? null : sandboxStateWord(host.sandbox);
-  if (sandboxWord !== null) return sandboxWord;
+  if (sandboxWord !== null && sandboxWord !== "awake") return sandboxWord;
   const statusWord = STATUS_WORD[host.health.state];
   if (statusWord !== null) return statusWord;
-  return surfaceState.kind === "refused" ? surfaceState.word : null;
+  if (surfaceState.kind === "refused") return surfaceState.word;
+  return sandboxWord;
+}
+
+/**
+ * Whether a sandbox's lifecycle word gives way to its host health: the
+ * sandbox is `awake` (so its lifecycle explains no unreachability) and its
+ * health has a word of its own (offline, restarting, update required...).
+ * Every other lifecycle word (suspended, resuming, stopped, frozen, failed)
+ * is itself why the host is not answering, and keeps the slot.
+ */
+export function sandboxWordYieldsToHealth(host: HostScopeOption): boolean {
+  if (host.sandbox === null) return false;
+  if (sandboxStateWord(host.sandbox) !== "awake") return false;
+  return STATUS_WORD[host.health.state] !== null;
 }
 
 /**

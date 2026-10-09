@@ -5,7 +5,10 @@ import {
   HostGlyph,
   HostPresenceDot,
 } from "@/components/settings/host-scope/host-glyph";
-import { sandboxStateWord } from "@/components/settings/host-scope/host-option-model";
+import {
+  sandboxStateWord,
+  sandboxWordYieldsToHealth,
+} from "@/components/settings/host-scope/host-option-model";
 import {
   formatArchitecture,
   formatHostVersion,
@@ -193,7 +196,9 @@ export function HostIdentityCard(props: {
             {props.actions}
           </div>
           <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            {host.sandbox === null ? (
+            {host.sandbox === null || sandboxWordYieldsToHealth(host) ? (
+              // An awake sandbox that cannot be reached shows its health:
+              // "awake" would explain nothing about why it is not answering.
               <HostIdentityHealth host={host} />
             ) : (
               // A sandbox's state word stands where the connectivity dot
