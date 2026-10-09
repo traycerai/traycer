@@ -450,9 +450,14 @@ const EXISTING_ADMISSION_TABLE: {
     complete: "ran",
     failed: "ran",
     superseded: "ran",
-    downloading: "refuse",
-    "preparing-null": "refuse",
-    "preparing-resume-apply": "refuse",
+    // `ran`, not `refuse`, since the interrupted-updater admission: every
+    // fixture here carries a long-past `updatedAt` and no live holder, which
+    // is the INTERRUPTED shape (`deriveAttemptLiveness`). A record written
+    // within the staleness window, or one whose lock is held, still refuses -
+    // `contender.test.ts` pins both.
+    downloading: "ran",
+    "preparing-null": "ran",
+    "preparing-resume-apply": "ran",
     "preparing-activate": "ran",
     applying: "refuse",
     "waiting-for-work": "ran",

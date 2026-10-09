@@ -178,6 +178,16 @@ no holder exists. A probe failure, an unparseable lock file (which a holder stil
 inside `open()`→`writeFile()` also produces), a future-dated stamp, or a park of
 any age all resolve to something else.
 
+One admission acts on that verdict rather than only projecting it: a
+supervisor relaunch (`supervisor-relaunch-maintenance`, the admission every
+automatic host start takes) is admitted over a pre-placement `downloading` /
+`preparing` record that `deriveAttemptLiveness` calls `interrupted` - the
+updater died after its pre-swap stop and before `applying`, leaving the host
+down. The holder half is the contention itself (the relaunch won the lock), the
+staleness half is `RECOMMENDED_ATTEMPT_STALENESS_MS`. The start runs the
+installed bytes and leaves the record for `host update` to recover;
+`CONTENDER_INVENTORY.md` has the full row.
+
 `probeAttemptHolder` caches its liveness verdict per lock path, fingerprinted on
 the holder's own identity so it expires on content change as well as on time.
 Without that, fleet status polling would spawn `tasklist` per host per read on
