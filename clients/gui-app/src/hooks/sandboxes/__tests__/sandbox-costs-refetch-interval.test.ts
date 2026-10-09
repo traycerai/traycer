@@ -44,6 +44,7 @@ describe("sandboxCostsRefetchInterval", () => {
               currentRateMillicreditsPerHour: rate,
             }),
           ),
+          false,
         ),
       ).toBe(60_000);
     }
@@ -59,6 +60,7 @@ describe("sandboxCostsRefetchInterval", () => {
             currentRateMillicreditsPerHour: 4,
           }),
         ),
+        false,
       ),
     ).toBe(60_000);
     expect(
@@ -67,6 +69,7 @@ describe("sandboxCostsRefetchInterval", () => {
           0,
           costRow("a", { state: "stopped", currentRateMillicreditsPerHour: 2 }),
         ),
+        false,
       ),
     ).toBe(60_000);
   });
@@ -80,6 +83,7 @@ describe("sandboxCostsRefetchInterval", () => {
           costRow("b", { state: "stopped", currentRateMillicreditsPerHour: 2 }),
           costRow("c", { state: "suspended" }),
         ),
+        false,
       ),
     ).toBe(60_000);
   });
@@ -92,18 +96,57 @@ describe("sandboxCostsRefetchInterval", () => {
           costRow("a", { state: "suspended", frozen: true }),
           costRow("b", { state: "awake" }),
         ),
+        false,
       ),
     ).toBe(false);
     // The poll rule reads the rows, not the aggregate.
     expect(
       sandboxCostsRefetchInterval(
         costsOf(500, costRow("a", { state: "awake" })),
+        false,
       ),
     ).toBe(false);
   });
 
   it("does not poll with no rows, or before the cost view has answered", () => {
-    expect(sandboxCostsRefetchInterval(costsOf(0))).toBe(false);
-    expect(sandboxCostsRefetchInterval(null)).toBe(false);
+    expect(sandboxCostsRefetchInterval(costsOf(0), false)).toBe(false);
+    expect(sandboxCostsRefetchInterval(null, false)).toBe(false);
+  });
+
+  describe("after a failed read", () => {
+    it("polls every minute when the read failed and there are no costs to go by", () => {
+      expect(sandboxCostsRefetchInterval(null, true)).toBe(60_000);
+    });
+
+    it("does not poll when nothing failed and there are no costs yet", () => {
+      expect(sandboxCostsRefetchInterval(null, false)).toBe(false);
+    });
+
+    it("does not poll for data with zero accrual that did not fail", () => {
+      expect(
+        sandboxCostsRefetchInterval(
+          costsOf(0, costRow("a", { state: "suspended", frozen: true })),
+          false,
+        ),
+      ).toBe(false);
+    });
+
+    it("polls for data that accrues, whether or not the last read failed", () => {
+      const accruing = costsOf(
+        120,
+        costRow("a", { state: "awake", currentRateMillicreditsPerHour: 120 }),
+      );
+      expect(sandboxCostsRefetchInterval(accruing, false)).toBe(60_000);
+      expect(sandboxCostsRefetchInterval(accruing, true)).toBe(60_000);
+    });
+
+    it("polls when the read failed even though the last good data showed zero accrual", () => {
+      expect(
+        sandboxCostsRefetchInterval(
+          costsOf(0, costRow("a", { state: "suspended", frozen: true })),
+          true,
+        ),
+      ).toBe(60_000);
+    });
   });
 });

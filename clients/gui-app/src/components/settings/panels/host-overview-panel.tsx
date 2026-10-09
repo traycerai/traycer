@@ -12,6 +12,7 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
 import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
@@ -1611,7 +1612,13 @@ export function HostOverviewPanel(props: {
         resetNameDegrade={renameDegrade}
         onRestart={() => openRestartConfirm()}
         onOpenDoctor={() => setDoctorOpen(true)}
-        onMakeActive={() => scope.makeActive(host.hostId)}
+        // None on a management-only row (the Automations pod, a burst or
+        // unconfirmed sandbox): the list shows it, no picker offers it.
+        onMakeActive={
+          hostOptionCanActivate(host)
+            ? () => scope.makeActive(host.hostId)
+            : null
+        }
         activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
         // A phone's name row never wraps: Activate becomes the menu's first

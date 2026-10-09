@@ -454,6 +454,11 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       const rotationSweepSubscription = directory.onChange(
         sweepRotatedHostScopes,
       );
+      // A frozen sandbox's terminal verdict ends once the list shows it
+      // thawed (a top-up), not when its TTL runs out.
+      const thawedVerdictSubscription = directory.onChange(() => {
+        runtimeMessenger?.hostListChanged();
+      });
       void (async () => {
         let phase = "auth.start";
         try {
@@ -529,6 +534,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           runtimeMessenger?.dispose();
           runtimeTransportUnsubscribe();
           rotationSweepSubscription.dispose();
+          thawedVerdictSubscription.dispose();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
@@ -554,6 +560,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         runtimeMessenger?.dispose();
         runtimeTransportUnsubscribe();
         rotationSweepSubscription.dispose();
+        thawedVerdictSubscription.dispose();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();

@@ -468,6 +468,17 @@ export function hostOptionPickerGroup(
   return "sandbox";
 }
 
+/**
+ * Whether Activate may be offered for this row: exactly the rows a picker
+ * offers. The host list keeps the Automations pod, burst sandboxes and an
+ * unconfirmed sandbox (`summary === null`) visible for management. Activating
+ * one would route the window's new work to a scheduled-run pod or a
+ * task-owned sandbox, which every picker hides for that reason.
+ */
+export function hostOptionCanActivate(host: HostScopeOption): boolean {
+  return hostOptionPickerGroup(host, false) !== "hidden";
+}
+
 export interface HostPickerGroups {
   readonly personal: readonly HostScopeOption[];
   readonly sandboxes: readonly HostScopeOption[];

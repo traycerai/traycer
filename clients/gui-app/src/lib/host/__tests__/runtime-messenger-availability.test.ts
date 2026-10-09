@@ -32,7 +32,10 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { buildRuntimeHostMessenger } from "../host-messenger";
+import {
+  buildRuntimeHostMessenger,
+  type RuntimeHostMessengerBinding,
+} from "../host-messenger";
 
 // Only the network boundary is replaced. Every other export of this barrel
 // stays REAL, matching `stream-runtime.test.tsx`.
@@ -994,6 +997,264 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
 
     h.dispose();
+  });
+});
+
+/**
+ * A binding over ONE remote sandbox host whose directory row the test moves.
+ * Every dial the messenger makes is a `createRemoteHostTransport` call, and
+ * each gets a fresh session once the previous one has closed.
+ */
+interface SandboxVerdictRig {
+  readonly binding: RuntimeHostMessengerBinding<HostRpcRegistry>;
+  /** Moves the directory row; `null` is a host the list no longer holds. */
+  readonly setEntry: (entry: HostDirectoryEntry | null) => void;
+  readonly request: () => Promise<unknown>;
+  /** Ends the live session on `fatal`, as the session does: records, closes, notifies. */
+  readonly endSessionOn: (fatal: FatalErrorDetails) => void;
+  readonly dials: () => number;
+}
+
+function sandboxVerdictRig(first: HostDirectoryEntry): SandboxVerdictRig {
+  let current: HostDirectoryEntry | null = first;
+  let live: ControllableSession | null = null;
+  mocks.createRemoteHostTransport.mockImplementation(() => {
+    if (live === null || live.isClosed()) {
+      live = controllableSession();
+    }
+    return {
+      session: live,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    };
+  });
+  const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    resolveTarget: () => current,
+    auth: null,
+    authnBaseUrl: "https://authn.invalid",
+    requestId: () => "req-1",
+    onRemoteAvailabilityRecovered: () => undefined,
+    onRemoteSessionTerminal: () => undefined,
+  });
+  return {
+    binding,
+    setEntry: (entry) => {
+      current = entry;
+    },
+    request: () =>
+      binding.messenger.request(
+        "host.status",
+        {},
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: authorityFor(
+            REMOTE_HOST_ID,
+            remoteEntry.websocketUrl ?? "",
+          ),
+        },
+      ),
+    endSessionOn: (fatal) => {
+      if (live === null) throw new Error("no session has been dialed yet");
+      live.fatal = fatal;
+      live.emitClosed();
+    },
+    dials: () => mocks.createRemoteHostTransport.mock.calls.length,
+  };
+}
+
+function sandboxRow(frozen: boolean): RemoteHostDirectoryEntry {
+  return {
+    ...remoteEntry,
+    sandbox: { state: "awake", frozen, profile: null },
+  };
+}
+
+function rejection(request: Promise<unknown>): Promise<unknown> {
+  return request.then(
+    () => null,
+    (reason: unknown) => reason,
+  );
+}
+
+function expectFrozenVerdict(error: unknown): void {
+  expect(error).toBeInstanceOf(HostTransportFailureError);
+  if (!(error instanceof HostTransportFailureError)) return;
+  expect(error.fatalDetails).toEqual(frozenFatal());
+}
+
+describe("a SANDBOX_FROZEN verdict ends when the list shows the sandbox thawed or gone", () => {
+  it("(a) dials again once the entry flips to not frozen, through the redial gate alone", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    expect(rig.dials()).toBe(1);
+    rig.endSessionOn(frozenFatal());
+
+    // Frozen still: the verdict holds and nothing is dialed.
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    // A top-up: the next request dials instead of waiting out the TTL.
+    rig.setEntry(sandboxRow(false));
+    await rig.request();
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(a) dials again after hostListChanged() sees the flip, with no request in between", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.setEntry(sandboxRow(false));
+    rig.binding.hostListChanged();
+    await rig.request();
+
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(b) a verdict recorded while the entry still said not frozen is kept: the list is merely stale", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    // The list has not yet caught up with the fatal. Refetches landing in
+    // this window must not drop the verdict and mint a doomed grant again.
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+
+  it("(c) stale first, then the list shows frozen, then not frozen: dials", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+    rig.binding.hostListChanged();
+    expect(await rejection(rig.request())).toBeInstanceOf(
+      HostTransportFailureError,
+    );
+
+    // The list agrees with the fatal: confirmed.
+    rig.setEntry(sandboxRow(true));
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    // Now the top-up.
+    rig.setEntry(sandboxRow(false));
+    rig.binding.hostListChanged();
+    await rig.request();
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(c) confirmation by a request through the redial gate counts too", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.setEntry(sandboxRow(true));
+    expectFrozenVerdict(await rejection(rig.request()));
+
+    rig.setEntry(sandboxRow(false));
+    await rig.request();
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(d) a sandbox that is gone from the list ends the verdict: a host listed again dials", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.setEntry(null);
+    rig.binding.hostListChanged();
+    // It comes back (re-created under the same id) and is frozen again: the
+    // old verdict described the old sandbox, so this request dials.
+    rig.setEntry(sandboxRow(true));
+    await rig.request();
+
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(d) a host the list now shows as no sandbox at all dials", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    const noSandbox: RemoteHostDirectoryEntry = {
+      ...remoteEntry,
+      sandbox: null,
+    };
+    rig.setEntry(noSandbox);
+    rig.binding.hostListChanged();
+    await rig.request();
+
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(e) a different fatal on the same key keeps failing fast within the TTL, even when the entry shows not frozen", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(incompatibleFatal());
+
+    rig.binding.hostListChanged();
+    const error = await rejection(rig.request());
+
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    if (error instanceof HostTransportFailureError) {
+      expect(error.fatalDetails).toEqual(incompatibleFatal());
+    }
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+
+  it("(e) nor does a thaw end it when the entry showed frozen at the time", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(incompatibleFatal());
+
+    rig.setEntry(sandboxRow(false));
+    rig.binding.hostListChanged();
+    expect(await rejection(rig.request())).toBeInstanceOf(
+      HostTransportFailureError,
+    );
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+
+  it("a fresh frozen verdict still fails fast while the list agrees, and hostListChanged() with no verdict is harmless", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    rig.binding.hostListChanged();
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.binding.hostListChanged();
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
   });
 });
 

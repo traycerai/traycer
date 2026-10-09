@@ -12,6 +12,7 @@ import {
   credentialTargetHostOptions,
   groupHostOptions,
   hostEntryTakesCredentials,
+  hostOptionCanActivate,
   hostOptionKindLabel,
   hostOptionPickerGroup,
   isHostOptionSelectable,
@@ -186,6 +187,23 @@ describe("sandbox grouping predicates", () => {
     expect(hostOptionPickerGroup(burst, false)).toBe("hidden");
     expect(hostOptionPickerGroup(unanswered, false)).toBe("hidden");
     expect(hostOptionPickerGroup(unanswered, true)).toBe("sandbox");
+  });
+
+  it("offers Activate for exactly the rows a picker offers", () => {
+    const pod = hostScopeOptionFixture({
+      hostId: "a",
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: sandboxSummaryFixture({ hostId: "a", kind: "automation" }),
+      },
+    });
+    expect(hostOptionCanActivate(personal)).toBe(true);
+    expect(hostOptionCanActivate(normal)).toBe(true);
+    expect(hostOptionCanActivate(pod)).toBe(false);
+    expect(hostOptionCanActivate(burst)).toBe(false);
+    expect(hostOptionCanActivate(unanswered)).toBe(false);
   });
 
   it("keeps the list's own order inside each group and never drops the row a surface points at", () => {

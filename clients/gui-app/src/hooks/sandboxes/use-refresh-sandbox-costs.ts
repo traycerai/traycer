@@ -7,6 +7,7 @@ import {
   sandboxCostsRefetchInterval,
   useSandboxCosts,
 } from "@/hooks/sandboxes/use-sandbox-costs-query";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
@@ -85,10 +86,14 @@ export function useRefreshSandboxCosts(): void {
   // refresh it. An observer of the shared credits query, from the owner only,
   // so one poll however many surfaces mount this.
   const signedIn = useAuthStore((s) => s.status === "signed-in");
-  const costs = useSandboxCosts().data ?? null;
+  const costsQuery = useSandboxCosts();
+  const costsUnavailable = useSandboxControlUnavailableReason() !== null;
   useQuery({
     ...authUserQueryOptions(auth, signedIn && isOwner),
-    refetchInterval: sandboxCostsRefetchInterval(costs),
+    refetchInterval: sandboxCostsRefetchInterval(
+      costsQuery.data ?? null,
+      costsQuery.isError && !costsUnavailable,
+    ),
     refetchIntervalInBackground: false,
   });
 

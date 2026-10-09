@@ -7,6 +7,10 @@ import {
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+  credentialedUrlRefusal,
+} from "@/hooks/host/use-host-credential-refusal";
 import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-active-epic-surface-host-pin";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
@@ -196,6 +200,15 @@ export function useBrowserOpenerItems(
   const openNewTab = (url: string): void => {
     if (sessions.lifecycle !== "live" || sessions.hostId === null) {
       toast.error(browserSessionsRefusal(sessions));
+      return;
+    }
+    // A pasted URL reaches the host's browser here: a sandbox's is never sent
+    // one carrying a sign-in.
+    const refusal = credentialedUrlRefusal(hostEntry, url);
+    if (refusal !== null) {
+      toast.warning(refusal, {
+        description: CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+      });
       return;
     }
     const hostId = sessions.hostId;

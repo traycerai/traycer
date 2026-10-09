@@ -47,7 +47,11 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => world.addressableHostId,
 }));
 
-import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import {
+  CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+  credentialedUrlRefusal,
+  useHostCredentialRefusal,
+} from "@/hooks/host/use-host-credential-refusal";
 
 const REFUSAL = "Sandboxes don't take sign-ins";
 
@@ -164,5 +168,48 @@ describe("useHostCredentialRefusal", () => {
 
     act(() => world.directory?.set(remote("host-x", "personal")));
     expect(result.current).toBeNull();
+  });
+});
+
+describe("credentialedUrlRefusal", () => {
+  const CREDENTIALED = "https://alice:token@example.com/";
+  const PLAIN = "https://example.com/docs?page=1#top";
+
+  it("refuses a URL carrying a sign-in on a sandbox's browser", () => {
+    expect(
+      credentialedUrlRefusal(remote("sbx-1", "sandbox"), CREDENTIALED),
+    ).toBe(REFUSAL);
+  });
+
+  it("refuses a user-name-only URL on a sandbox too, because a bare token is a sign-in", () => {
+    expect(
+      credentialedUrlRefusal(
+        remote("sbx-1", "sandbox"),
+        "https://ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/o/r.git",
+      ),
+    ).toBe(REFUSAL);
+  });
+
+  it("lets a plain URL through on a sandbox", () => {
+    expect(
+      credentialedUrlRefusal(remote("sbx-1", "sandbox"), PLAIN),
+    ).toBeNull();
+  });
+
+  it("lets a credentialed URL through on a personal remote host and on this machine's own host", () => {
+    expect(
+      credentialedUrlRefusal(remote("laptop", "personal"), CREDENTIALED),
+    ).toBeNull();
+    expect(credentialedUrlRefusal(mockLocalHostEntry, CREDENTIALED)).toBeNull();
+  });
+
+  it("refuses nothing when there is no entry to judge the host by", () => {
+    expect(credentialedUrlRefusal(null, CREDENTIALED)).toBeNull();
+  });
+
+  it("carries a description that says what to remove", () => {
+    expect(CREDENTIALED_URL_REFUSAL_DESCRIPTION).toBe(
+      "Remove the sign-in from this URL to open it here.",
+    );
   });
 });

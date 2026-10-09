@@ -34,10 +34,17 @@ function accruingMillicreditsPerHour(costs: UserSandboxCost): number {
  * runway warning could cross both thresholds unseen. Paused while the app is
  * in the background (`refetchIntervalInBackground: false` at each use); focus
  * refetches on return.
+ *
+ * `failed`: the cost read is in error while the control plane is available.
+ * It then polls every minute too, so one failed read is retried instead of
+ * leaving "Couldn't load the cost" up, and the balance unpolled, until a
+ * focus event.
  */
 export function sandboxCostsRefetchInterval(
   costs: UserSandboxCost | null,
+  failed: boolean,
 ): number | false {
+  if (failed) return ACCRUING_REFRESH_MS;
   return costs !== null && accruingMillicreditsPerHour(costs) > 0
     ? ACCRUING_REFRESH_MS
     : false;
@@ -71,8 +78,13 @@ function sandboxCostsQueryOptions(
     // every minute while its own answer says a sandbox accrues (the balance
     // it is divided into polls on the same rule there).
     refetchOnWindowFocus: true,
+    // A disabled query (no control plane) never polls, so an error here is
+    // always one with the control plane available.
     refetchInterval: (query) =>
-      sandboxCostsRefetchInterval(query.state.data ?? null),
+      sandboxCostsRefetchInterval(
+        query.state.data ?? null,
+        query.state.status === "error",
+      ),
     refetchIntervalInBackground: false,
   });
 }

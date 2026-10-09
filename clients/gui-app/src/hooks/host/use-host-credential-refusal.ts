@@ -1,5 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { subscribeHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 import {
   hostEntryTakesCredentials,
   SANDBOX_CREDENTIALS_REFUSED,
@@ -56,4 +58,28 @@ export function useHostCredentialRefusal(hostId: string | null): string | null {
     getSnapshot,
   );
   return takesCredentials ? null : SANDBOX_CREDENTIALS_REFUSED;
+}
+
+/** What a refused URL's toast says to do about it. */
+export const CREDENTIALED_URL_REFUSAL_DESCRIPTION =
+  "Remove the sign-in from this URL to open it here.";
+
+/**
+ * Why `url` may not be sent to the browser of the host behind `hostEntry`, or
+ * `null` when it may. A sandbox's browser is never sent a URL that carries a
+ * sign-in (`https://user:token@…`).
+ *
+ * Called before the RPC at every seam that sends a URL a user gave to a
+ * host's browser: the tile's address bar, a link opened in a browser tile,
+ * and the palette's "Open <url>". As with the other credential refusals, the
+ * sandbox's own refusal would come after the secret was already on its
+ * machine.
+ */
+export function credentialedUrlRefusal(
+  hostEntry: HostDirectoryEntry | null,
+  url: string,
+): string | null {
+  return !hostEntryTakesCredentials(hostEntry) && urlCarriesCredentials(url)
+    ? SANDBOX_CREDENTIALS_REFUSED
+    : null;
 }

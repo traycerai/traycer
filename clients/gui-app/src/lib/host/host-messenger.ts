@@ -188,6 +188,12 @@ export interface RuntimeHostMessengerBinding<
   readonly messenger: IHostMessenger<Registry>;
   readonly reset: () => void;
   readonly dispose: () => void;
+  /**
+   * Called on every host list change. Drops a `SANDBOX_FROZEN` verdict once
+   * the list shows that sandbox thawed or gone, so a top-up inside the
+   * verdict's TTL is not still refused locally.
+   */
+  readonly hostListChanged: () => void;
 }
 
 export interface BuildRuntimeHostMessengerParams<
@@ -246,7 +252,26 @@ export function buildRuntimeHostMessenger<
     messenger,
     reset: () => messenger.reset(),
     dispose: () => messenger.dispose(),
+    hostListChanged: () => messenger.dropThawedSandboxVerdicts(),
   };
+}
+
+/**
+ * What the host list says about a frozen-sandbox verdict's host: `frozen`
+ * while the sandbox is listed frozen; `thawed` when it is listed and not
+ * frozen; `gone` when the host or its sandbox is no longer listed.
+ */
+function sandboxFreezeOf(
+  entry: HostDirectoryEntry | null,
+): "frozen" | "thawed" | "gone" {
+  if (
+    entry === null ||
+    !isRemoteHostDirectoryEntry(entry) ||
+    entry.sandbox === null
+  ) {
+    return "gone";
+  }
+  return entry.sandbox.frozen ? "frozen" : "thawed";
 }
 
 class RuntimeHostMessenger<
@@ -308,6 +333,15 @@ class RuntimeHostMessenger<
       readonly fatal: FatalErrorDetails;
       readonly expiresAt: number;
       readonly key: string;
+      /**
+       * `SANDBOX_FROZEN` only: whether the host list has shown the sandbox
+       * frozen since the fatal. The list is usually stale when the fatal
+       * lands (the meter froze the row after the last poll), so "not frozen"
+       * means "thawed" only once the list has been seen to agree with the
+       * fatal first; otherwise every refetch before the refresh lands would
+       * drop the verdict and mint a doomed grant again.
+       */
+      frozenConfirmed: boolean;
     }
   >();
 
@@ -637,6 +671,8 @@ class RuntimeHostMessenger<
           fatal,
           expiresAt: Date.now() + TERMINAL_VERDICT_TTL_MS,
           key: transportKey,
+          frozenConfirmed:
+            sandboxFreezeOf(this.resolveTarget(hostId)) === "frozen",
         });
         this.onRemoteAvailabilityRecovered(hostId);
         this.onRemoteSessionTerminal(hostId, fatal);
@@ -737,6 +773,7 @@ class RuntimeHostMessenger<
     currentKey: string | null,
     method: string,
   ): Promise<never> | null {
+    this.dropVerdictIfThawed(hostId);
     const verdict = this.terminalVerdictByHost.get(hostId);
     if (verdict === undefined) {
       return null;
@@ -759,6 +796,35 @@ class RuntimeHostMessenger<
         fatalDetails: verdict.fatal,
       }),
     );
+  }
+
+  /** See {@link RuntimeHostMessengerBinding.hostListChanged}. */
+  dropThawedSandboxVerdicts(): void {
+    for (const hostId of [...this.terminalVerdictByHost.keys()]) {
+      this.dropVerdictIfThawed(hostId);
+    }
+  }
+
+  /**
+   * A `SANDBOX_FROZEN` verdict holds only while the sandbox is frozen: a
+   * top-up thaws it, and the user's next request must dial rather than wait
+   * out the TTL. The verdict is dropped when the list shows the sandbox gone,
+   * or shows it not frozen after first showing it frozen (`frozenConfirmed`).
+   * Every other fatal keeps its TTL.
+   */
+  private dropVerdictIfThawed(hostId: string): void {
+    const verdict = this.terminalVerdictByHost.get(hostId);
+    if (verdict === undefined || verdict.fatal.code !== "SANDBOX_FROZEN") {
+      return;
+    }
+    const freeze = sandboxFreezeOf(this.resolveTarget(hostId));
+    if (freeze === "frozen") {
+      verdict.frozenConfirmed = true;
+      return;
+    }
+    if (freeze === "gone" || verdict.frozenConfirmed) {
+      this.terminalVerdictByHost.delete(hostId);
+    }
   }
 
   private rejectIfDisposed(method: string): Promise<never> | null {

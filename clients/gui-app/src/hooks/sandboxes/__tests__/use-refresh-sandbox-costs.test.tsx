@@ -45,8 +45,20 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
 }));
 
 // The cost view's answer, whose rows' rates set the credits poll.
-const costs = vi.hoisted<{ current: UserSandboxCost | undefined }>(() => ({
+const costs = vi.hoisted<{
+  current: UserSandboxCost | undefined;
+  /** The cost query is in error (its read failed). */
+  failed: boolean;
+}>(() => ({
   current: undefined,
+  failed: false,
+}));
+// Why the control plane cannot be reached at all, or `null`.
+const unavailable = vi.hoisted(() => ({
+  reason: null as string | null,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
+  useSandboxControlUnavailableReason: () => unavailable.reason,
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-costs-query",
@@ -54,7 +66,7 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-costs-query")
     >()),
-    useSandboxCosts: () => ({ data: costs.current }),
+    useSandboxCosts: () => ({ data: costs.current, isError: costs.failed }),
   }),
 );
 
@@ -133,6 +145,8 @@ describe("useRefreshSandboxCosts", () => {
     turns.handlers.clear();
     list.current = undefined;
     costs.current = undefined;
+    costs.failed = false;
+    unavailable.reason = null;
     AUTH.fetchAuthenticatedUser.mockClear();
   });
   afterEach(() => {
@@ -298,6 +312,75 @@ describe("useRefreshSandboxCosts", () => {
 
       costs.current = undefined;
       idle.rerender();
+      expect(
+        creditsObservers(queryClient).every(
+          (o) => o.options.refetchInterval === false,
+        ),
+      ).toBe(true);
+    });
+
+    it("polls the credits every minute after a failed cost read, with the control plane available and nothing known to accrue", () => {
+      useAuthStore.setState({ status: "signed-in" });
+      costs.current = undefined;
+      costs.failed = true;
+      const { wrapper, queryClient } = setup();
+      renderHook(() => useRefreshSandboxCosts(), { wrapper });
+
+      const observers = creditsObservers(queryClient);
+      expect(observers.length).toBeGreaterThan(0);
+      expect(observers.some((o) => o.options.refetchInterval === 60_000)).toBe(
+        true,
+      );
+    });
+
+    it("polls on a failed read even when the last good costs showed nothing accruing", () => {
+      useAuthStore.setState({ status: "signed-in" });
+      costs.current = costsOf(0, costRow("suspended", 0));
+      costs.failed = true;
+      const { wrapper, queryClient } = setup();
+      renderHook(() => useRefreshSandboxCosts(), { wrapper });
+
+      expect(
+        creditsObservers(queryClient).some(
+          (o) => o.options.refetchInterval === 60_000,
+        ),
+      ).toBe(true);
+    });
+
+    it("refetches the user's credits a minute after a failed cost read", async () => {
+      vi.useFakeTimers();
+      try {
+        useAuthStore.setState({ status: "signed-in" });
+        costs.failed = true;
+        const { wrapper } = setup();
+        renderHook(() => useRefreshSandboxCosts(), { wrapper });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(AUTH.fetchAuthenticatedUser).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(59_999);
+        });
+        expect(AUTH.fetchAuthenticatedUser).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(AUTH.fetchAuthenticatedUser).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not poll on a failed read when the control plane cannot be reached at all", () => {
+      useAuthStore.setState({ status: "signed-in" });
+      unavailable.reason = "Sandboxes aren't available in staging builds.";
+      costs.failed = true;
+      const { wrapper, queryClient } = setup();
+      renderHook(() => useRefreshSandboxCosts(), { wrapper });
+
+      expect(creditsObservers(queryClient).length).toBeGreaterThan(0);
       expect(
         creditsObservers(queryClient).every(
           (o) => o.options.refetchInterval === false,

@@ -48,11 +48,10 @@ import { cn } from "@/lib/utils";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
 import { toast } from "sonner";
-import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 import {
-  hostEntryTakesCredentials,
-  SANDBOX_CREDENTIALS_REFUSED,
-} from "@/components/settings/host-scope/host-option-model";
+  CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+  credentialedUrlRefusal,
+} from "@/hooks/host/use-host-credential-refusal";
 
 /**
  * `touch-none`: the controller translates a finger drag into wheel frames
@@ -235,9 +234,10 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     disabled: readOnly || client === null,
     onNavigateUrl: (url) => {
       // A sandbox's browser is not sent a URL carrying a sign-in.
-      if (!hostEntryTakesCredentials(hostEntry) && urlCarriesCredentials(url)) {
-        toast.warning(SANDBOX_CREDENTIALS_REFUSED, {
-          description: "Remove the sign-in from this URL to open it here.",
+      const refusal = credentialedUrlRefusal(hostEntry, url);
+      if (refusal !== null) {
+        toast.warning(refusal, {
+          description: CREDENTIALED_URL_REFUSAL_DESCRIPTION,
         });
         return;
       }
