@@ -31,7 +31,12 @@ const HOST_ID = "host-sbx-1";
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   entry: null as RemoteHostDirectoryEntry | null,
-  list: null as { sandboxes: readonly SandboxSummary[] } | null,
+  // `undefined` is a list that has not answered; `null` the suite's older
+  // "no list" stand-in, which the frame reads the same way as no row.
+  list: null as { sandboxes: readonly SandboxSummary[] } | null | undefined,
+  listError: false,
+  listFetching: false,
+  listRefetch: vi.fn(),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -41,7 +46,12 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => mocks.entry,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
-  useSandboxList: () => ({ data: mocks.list }),
+  useSandboxList: () => ({
+    data: mocks.list,
+    isError: mocks.listError,
+    isFetching: mocks.listFetching,
+    refetch: mocks.listRefetch,
+  }),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -147,6 +157,9 @@ beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
   mocks.list = null;
+  mocks.listError = false;
+  mocks.listFetching = false;
+  mocks.listRefetch.mockClear();
 });
 afterEach(cleanup);
 
@@ -362,5 +375,71 @@ describe("<SandboxTileStateFrame />", () => {
     expect(screen.getByTestId("tile-body")).toBe(body);
     expect(bodyWrapper().hasAttribute("inert")).toBe(false);
     expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+  });
+
+  describe("when the sandbox list's first read failed", () => {
+    it("says it could not load the sandbox and offers a retry in place of Resume, which reads the list again", () => {
+      useSandboxEntry("suspended", false);
+      mocks.list = undefined;
+      mocks.listError = true;
+      renderFrame(false);
+
+      expect(screen.getByTestId("sandbox-tile-overlay").textContent).toContain(
+        "Couldn't load this sandbox.",
+      );
+      expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
+      const retry = screen.getByTestId("sandbox-tile-overlay-retry-list");
+      expect(retry.hasAttribute("disabled")).toBe(false);
+
+      fireEvent.click(retry);
+
+      expect(mocks.listRefetch).toHaveBeenCalled();
+    });
+
+    it("holds the retry while the list is being read again", () => {
+      useSandboxEntry("suspended", false);
+      mocks.list = undefined;
+      mocks.listError = true;
+      mocks.listFetching = true;
+      renderFrame(false);
+
+      expect(
+        screen
+          .getByTestId("sandbox-tile-overlay-retry-list")
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    it("offers Resume and no retry when the list lists the row", () => {
+      useSandboxEntry("suspended", false);
+      renderFrame(false);
+
+      expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
+      expect(
+        screen.queryByTestId("sandbox-tile-overlay-retry-list"),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("sandbox-tile-overlay").textContent,
+      ).not.toContain("Couldn't load this sandbox.");
+    });
+
+    it("offers no retry while the first read is still pending, or when a later refetch failed over a good list", () => {
+      useSandboxEntry("suspended", false);
+      mocks.list = undefined;
+      renderFrame(false);
+      expect(
+        screen.queryByTestId("sandbox-tile-overlay-retry-list"),
+      ).toBeNull();
+      cleanup();
+
+      // A later failure keeps the last good rows: Resume stays available.
+      useSandboxEntry("suspended", false);
+      mocks.listError = true;
+      renderFrame(false);
+      expect(
+        screen.queryByTestId("sandbox-tile-overlay-retry-list"),
+      ).toBeNull();
+      expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
+    });
   });
 });

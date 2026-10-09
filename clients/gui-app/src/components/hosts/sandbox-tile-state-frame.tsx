@@ -62,9 +62,12 @@ function SandboxTileOverlayLayer(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay;
 }): ReactNode {
+  const list = useSandboxList();
   const summary =
-    useSandboxList().data?.sandboxes.find((s) => s.hostId === props.hostId) ??
-    null;
+    list.data?.sandboxes.find((s) => s.hostId === props.hostId) ?? null;
+  // Resume needs the sandbox's row. A first list read that FAILED would
+  // otherwise leave the overlay with no button and nothing to try.
+  const listUnread = list.data === undefined && list.isError;
   // The tab-open wake (`useSandboxWakeForOpenedTile`) is already bringing it
   // up: say so, rather than offering a second Resume while the directory
   // still reads the state it had before the wake.
@@ -105,13 +108,37 @@ function SandboxTileOverlayLayer(props: {
         {overlay.kind === "asleep" ? (
           <>
             <p className="font-medium text-foreground">{overlay.message}</p>
-            {summary === null ? null : (
+            {summary !== null ? (
               <SandboxTileWakeButton
                 sandboxId={summary.id}
                 verb={overlay.verb}
                 label={overlay.label}
               />
-            )}
+            ) : null}
+            {summary === null && listUnread ? (
+              <>
+                <p className="text-muted-foreground">
+                  Couldn&apos;t load this sandbox.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={list.isFetching}
+                  data-testid="sandbox-tile-overlay-retry-list"
+                  onClick={() => void list.refetch()}
+                >
+                  {list.isFetching ? (
+                    <AgentSpinningDots
+                      className={undefined}
+                      testId={undefined}
+                      variant={undefined}
+                    />
+                  ) : null}
+                  Try again
+                </Button>
+              </>
+            ) : null}
           </>
         ) : null}
       </div>

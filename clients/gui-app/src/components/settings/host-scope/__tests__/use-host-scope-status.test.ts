@@ -7,10 +7,12 @@ import {
   deriveHostScopeStatus,
   hostListReadiness,
   isHostScopeUsable,
+  sandboxSummariesUnread,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
  * The status machine is the safety contract of the whole settings host scope:
@@ -178,5 +180,62 @@ describe("deriveHostScopeStatus", () => {
         .filter(isHostScopeUsable)
         .slice(),
     ).toEqual(["following", "ready"]);
+  });
+});
+
+describe("sandboxSummariesUnread", () => {
+  const FAILED_FIRST_READ = { hasData: false, isError: true };
+  const sandboxHost = (hasSummary: boolean): HostScopeOption =>
+    hostScopeOptionFixture({
+      hostId: "sbx-host",
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: hasSummary
+          ? sandboxSummaryFixture({ hostId: "sbx-host" })
+          : null,
+      },
+    });
+  const personalHost = hostScopeOptionFixture({ hostId: "laptop" });
+
+  it("is true when the first sandbox read failed and a sandbox has no summary row", () => {
+    expect(
+      sandboxSummariesUnread(
+        [personalHost, sandboxHost(false)],
+        FAILED_FIRST_READ,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false once the list has answered, even if the query is now in error: the last good rows are kept", () => {
+    expect(
+      sandboxSummariesUnread([sandboxHost(false)], {
+        hasData: true,
+        isError: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false while the first read is still loading", () => {
+    expect(
+      sandboxSummariesUnread([sandboxHost(false)], {
+        hasData: false,
+        isError: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when no host is a sandbox", () => {
+    expect(sandboxSummariesUnread([personalHost], FAILED_FIRST_READ)).toBe(
+      false,
+    );
+    expect(sandboxSummariesUnread([], FAILED_FIRST_READ)).toBe(false);
+  });
+
+  it("is false when every sandbox has its summary row", () => {
+    expect(sandboxSummariesUnread([sandboxHost(true)], FAILED_FIRST_READ)).toBe(
+      false,
+    );
   });
 });

@@ -34,7 +34,13 @@ import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { ExternalLink, LayersPlus, LogOut, Settings } from "lucide-react";
+import {
+  ExternalLink,
+  LayersPlus,
+  LogOut,
+  RotateCcw,
+  Settings,
+} from "lucide-react";
 import { useState, type ReactElement, type ReactNode } from "react";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -329,12 +335,21 @@ function UserMenuHostSection(props: {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   useRegisteredHostsPollLiveness();
-  const { hosts: allHosts, activeHostId } = useHostOptions();
+  const {
+    hosts: allHosts,
+    activeHostId,
+    isLoading,
+    listsFailed,
+    retryLists,
+  } = useHostOptions();
   // A picker: no burst sandbox, and no sandbox the control plane has not yet
   // confirmed is not one. The active host always keeps its row.
   const hosts = pickableHostOptions(allHosts, activeHostId);
   const { makeActive, activatingHostId } = useMakeActiveHost(hosts);
-  if (hosts.length === 0) return null;
+  // A failed list (a sandbox list included, which hides every sandbox here)
+  // is said, with the retry, rather than shown as the whole account.
+  const showsRetry = listsFailed && !isLoading;
+  if (hosts.length === 0 && !showsRetry) return null;
   return (
     <>
       <DropdownMenuLabel>Host</DropdownMenuLabel>
@@ -364,6 +379,20 @@ function UserMenuHostSection(props: {
           />
         ))}
       </DropdownMenuRadioGroup>
+      {showsRetry ? (
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            retryLists();
+          }}
+          data-testid="user-menu-host-retry-lists"
+        >
+          <RotateCcw className="size-4" aria-hidden />
+          {hosts.length === 0
+            ? "Try loading hosts again"
+            : "Some hosts may be missing"}
+        </DropdownMenuItem>
+      ) : null}
       <DropdownMenuSeparator />
     </>
   );

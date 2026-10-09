@@ -363,6 +363,73 @@ describe("<UserMenu /> host section", () => {
     expect(screen.queryByText("Host")).toBeNull();
   });
 
+  describe("failed host lists", () => {
+    const only = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+
+    it("says hosts may be missing, and retries the lists on click, when a list failed", async () => {
+      const retryLists = vi.fn();
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [only],
+        activeHostId: only.hostId,
+        listsFailed: true,
+        isLoading: false,
+        retryLists,
+      });
+
+      await openMenu();
+
+      const retry = screen.getByTestId("user-menu-host-retry-lists");
+      expect(retry.textContent).toBe("Some hosts may be missing");
+      fireEvent.click(retry);
+
+      expect(retryLists).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers the retry on its own, worded for an empty list, when the failure left no host to pick", async () => {
+      const retryLists = vi.fn();
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [],
+        activeHostId: null,
+        listsFailed: true,
+        isLoading: false,
+        retryLists,
+      });
+
+      await openMenu();
+
+      const retry = screen.getByTestId("user-menu-host-retry-lists");
+      expect(retry.textContent).toBe("Try loading hosts again");
+      fireEvent.click(retry);
+
+      expect(retryLists).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows no retry when the lists did not fail, or while they are still loading", async () => {
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [only],
+        activeHostId: only.hostId,
+        listsFailed: false,
+        isLoading: false,
+      });
+      await openMenu();
+      expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
+      cleanup();
+
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [only],
+        activeHostId: only.hostId,
+        listsFailed: true,
+        isLoading: true,
+      });
+      await openMenu();
+      expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
+    });
+  });
+
   it("holds every row and shows the spinner on the pending one while a switch is in flight (R1-A2)", async () => {
     const active = hostScopeOptionFixture({
       hostId: "host-active",

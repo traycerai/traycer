@@ -21,7 +21,10 @@ import {
   buildHostScopeOptions,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import { hostListReadiness } from "@/components/settings/host-scope/host-scope-status";
+import {
+  hostListReadiness,
+  sandboxSummariesUnread,
+} from "@/components/settings/host-scope/host-scope-status";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 
 /** The cadence relative-time labels in the host pickers refresh at. */
@@ -72,10 +75,12 @@ export interface HostOptions {
   /**
    * A host list came back as an ERROR, so an empty `hosts` means "we could not
    * find out", not "you own no machines". The difference is the whole message:
-   * one is recoverable by retrying, the other by installing a host.
+   * one is recoverable by retrying, the other by installing a host. Includes a
+   * sandbox list whose failed first read is hiding sandboxes from the pickers
+   * (`sandboxSummariesUnread`).
    */
   readonly listsFailed: boolean;
-  /** Re-request both host lists after a failure. */
+  /** Re-request the host lists and the sandbox list after a failure. */
   readonly retryLists: () => void;
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
@@ -247,8 +252,8 @@ export function useHostOptions(): HostOptions {
   // `null` until the control plane answers, and kept at the last good answer
   // through a failed refetch: a picker must never learn "not burst" from a
   // list that did not come back.
-  const sandboxList = useSandboxList().data;
-  const sandboxes = sandboxList?.sandboxes ?? null;
+  const sandboxListQuery = useSandboxList();
+  const sandboxes = sandboxListQuery.data?.sandboxes ?? null;
 
   const hosts = useMemo(
     () =>
@@ -288,6 +293,13 @@ export function useHostOptions(): HostOptions {
     { hasData: directory !== undefined, isError: directoryQuery.isError },
     { hasData: registry !== undefined, isError: registryQuery.isError },
   );
+  // A sandbox list that failed before its first answer hides every sandbox
+  // from the pickers, so it fails the lists too: the pickers then say hosts
+  // may be missing and offer the retry, instead of looking complete.
+  const sandboxesUnread = sandboxSummariesUnread(hosts, {
+    hasData: sandboxListQuery.data !== undefined,
+    isError: sandboxListQuery.isError,
+  });
 
   return {
     hosts,
@@ -296,10 +308,11 @@ export function useHostOptions(): HostOptions {
     directoryResolved: directory !== undefined || directoryQuery.isError,
     directoryFailed: directoryQuery.isError,
     listsResolved: lists.resolved,
-    listsFailed: lists.failed,
+    listsFailed: lists.failed || sandboxesUnread,
     retryLists: () => {
       void directoryQuery.refetch();
       void registryQuery.refetch();
+      void sandboxListQuery.refetch();
     },
     nowMs,
   };
