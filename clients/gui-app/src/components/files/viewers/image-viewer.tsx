@@ -3,13 +3,17 @@ import { ImageOff } from "lucide-react";
 import { assetMediaTypeSchemaV12 } from "@traycer/protocol/host/asset-stream-schemas";
 import { ImagePreview } from "@/components/epic-canvas/image-preview/image-preview";
 import { DEFAULT_ANIMATION_MS } from "@/components/epic-canvas/image-preview/image-preview-transform";
+import { MiddleTruncatedText } from "@/components/files/middle-truncated-text";
 import { BlobViewerShell } from "@/components/files/viewers/blob-viewer-shell";
 import { ViewerToolbar } from "@/components/files/viewers/viewer-toolbar";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useBlobObjectUrl } from "@/hooks/files/use-blob-object-url";
 import { epicFileName } from "@/hooks/files/use-epic-file-mutations";
+import { useEpicFileRecord } from "@/hooks/files/use-epic-file-record";
 import type { EpicFileAddress } from "@/hooks/files/use-epic-file-text-query";
 import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
 import { byteSourceCapBytes } from "@/lib/files/byte-source";
+import { epicFileTitle } from "@/lib/files/epic-files-model";
 import { isMobileApp } from "@/lib/mobile-app";
 
 export interface ImageViewerProps {
@@ -26,7 +30,9 @@ export interface ImageViewerProps {
  * decoded dimensions, zoom, copy, then the tile's actions.
  */
 export function ImageViewer(props: ImageViewerProps): ReactNode {
-  const name = epicFileName(props.address.path);
+  const record = useEpicFileRecord(props.address.path);
+  const title = record === null ? null : epicFileTitle(record);
+  const name = title ?? epicFileName(props.address.path);
   return (
     <BlobViewerShell
       hostId={props.hostId}
@@ -42,6 +48,8 @@ export function ImageViewer(props: ImageViewerProps): ReactNode {
           key={props.address.sha256}
           blob={blob}
           name={name}
+          titled={title !== null}
+          path={props.address.path}
           actions={props.actions}
         />
       )}
@@ -49,9 +57,15 @@ export function ImageViewer(props: ImageViewerProps): ReactNode {
   );
 }
 
+/** Image names differ at the end: this many trailing characters stay whole. */
+const NAME_TAIL_CHARS = 12;
+
 function ImageBlobView(props: {
   readonly blob: Blob;
   readonly name: string;
+  /** A title reads from its start; a bare file name differs at its end. */
+  readonly titled: boolean;
+  readonly path: string;
   readonly actions: ReactNode;
 }): ReactNode {
   const url = useBlobObjectUrl(props.blob);
@@ -95,6 +109,29 @@ function ImageBlobView(props: {
       doubleClickOverride={null}
       onDecodeError={() => setDecodeFailed(true)}
       toolbarActions={props.actions}
+      toolbarLabel={
+        <TooltipWrapper
+          label={props.path}
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span
+            data-testid="epic-file-image-name"
+            className="flex min-w-0 text-foreground/85"
+          >
+            {props.titled ? (
+              <span className="min-w-0 truncate">{props.name}</span>
+            ) : (
+              <MiddleTruncatedText
+                text={props.name}
+                tailLength={NAME_TAIL_CHARS}
+                className={undefined}
+              />
+            )}
+          </span>
+        </TooltipWrapper>
+      }
     />
   );
 }

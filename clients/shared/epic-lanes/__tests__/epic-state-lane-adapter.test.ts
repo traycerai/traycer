@@ -1149,6 +1149,7 @@ function fileWire(
       status: "ready",
       createdAt: 1000,
       derivedFrom: null,
+      title: null,
       deletedAt: null,
     },
     localState,

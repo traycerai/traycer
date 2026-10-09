@@ -149,6 +149,7 @@ describe("react-zoom-pan-pinch 4.0.4 timing contract", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -207,6 +208,7 @@ describe("react-zoom-pan-pinch 4.0.4 timing contract", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 

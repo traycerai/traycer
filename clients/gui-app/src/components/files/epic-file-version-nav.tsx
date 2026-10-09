@@ -8,7 +8,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useOpenEpicFileTile } from "@/hooks/files/use-open-epic-file-tile";
 import { useMaybeEpicFiles } from "@/hooks/files/use-epic-file-record";
-import { epicFileVersionChain } from "@/lib/files/epic-files-model";
+import {
+  epicFileLabel,
+  epicFileVersionChain,
+} from "@/lib/files/epic-files-model";
 import { formatCompactRelativeTime, useSampledNow } from "@/lib/relative-time";
 
 export interface EpicFileVersionNavProps {
@@ -54,7 +57,11 @@ export function EpicFileVersionNav(props: EpicFileVersionNavProps): ReactNode {
             <DropdownMenuItem
               key={record.path}
               onSelect={() =>
-                openTile({ path: record.path, sha256: record.entry.sha256 })
+                openTile({
+                  path: record.path,
+                  sha256: record.entry.sha256,
+                  name: epicFileLabel(record),
+                })
               }
             >
               <span className="flex-1">

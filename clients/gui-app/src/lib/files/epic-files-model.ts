@@ -20,6 +20,7 @@ const FILES_ROOT_PREFIX = "files/";
 /** One file as a row shows it. */
 export interface EpicFileItem {
   readonly path: string;
+  /** What the row calls it: {@link epicFileLabel}. */
   readonly name: string;
   readonly record: EpicStateFileRecord;
   readonly viewer: EpicFileViewerEntry;
@@ -39,6 +40,21 @@ export interface EpicFilesGroup {
 
 export function epicFileDisplayName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/**
+ * The manifest's title for a file (a page's title, an app's `<server> ·
+ * <tool>`), or `null`: a host that predates titles, and a drop-zone file, have
+ * none, and a blank one counts as none.
+ */
+export function epicFileTitle(record: EpicStateFileRecord): string | null {
+  const title = record.entry.title?.trim() ?? "";
+  return title.length > 0 ? title : null;
+}
+
+/** What a reader calls a file: its title, else its file name. */
+export function epicFileLabel(record: EpicStateFileRecord): string {
+  return epicFileTitle(record) ?? epicFileDisplayName(record.path);
 }
 
 /** The directory between `files/` and the file name, or `""` at the root. */
@@ -115,7 +131,7 @@ function itemFor(
 ): EpicFileItem {
   return {
     path: record.path,
-    name: epicFileDisplayName(record.path),
+    name: epicFileLabel(record),
     record,
     viewer: epicFileViewer(record.path),
     earlier,

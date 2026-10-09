@@ -1,7 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EpicStateFileRecord } from "@traycer/protocol/host/epic/files";
-import { FilesPanelBody } from "@/components/epic-canvas/sidebar/files-panel";
+import {
+  FILES_VIRTUALIZE_AFTER_ROWS,
+  FilesPanelBody,
+} from "@/components/epic-canvas/sidebar/files-panel";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { FilesSlice } from "@/stores/epics/open-epic/types";
 import { TILE_KIND_EPIC_FILE } from "@/stores/epics/canvas/tile-kinds";
@@ -216,5 +219,93 @@ describe("<FilesPanelBody /> opening a file", () => {
 
     expect(row(PAGE_V1)).toHaveProperty("disabled", true);
     expect(mocks.openTile).not.toHaveBeenCalled();
+  });
+});
+
+describe("<FilesPanelBody /> names", () => {
+  it("names a file by its manifest title, and falls back to its file name", () => {
+    setFiles([
+      fileRecord({ path: PAGE_V1, title: "Revenue by region" }),
+      fileRecord({ path: "files/pages/blank.html", title: "  " }),
+      fileRecord({ path: "files/notes.txt" }),
+    ]);
+
+    renderPanel();
+
+    expect(row(PAGE_V1).textContent).toContain("Revenue by region");
+    expect(row(PAGE_V1).textContent).not.toContain("report.html");
+    expect(row("files/pages/blank.html").textContent).toContain("blank.html");
+    expect(row("files/notes.txt").textContent).toContain("notes.txt");
+  });
+
+  it("opens the tile under the file's title", () => {
+    setFiles([fileRecord({ path: PAGE_V1, title: "Revenue by region" })]);
+
+    renderPanel();
+    fireEvent.click(row(PAGE_V1));
+
+    expect(mocks.openTile.mock.calls[0][0].node).toMatchObject({
+      name: "Revenue by region",
+    });
+  });
+});
+
+describe("<FilesPanelBody /> many files", () => {
+  // jsdom lays nothing out: give the virtual scroller a sidebar's height
+  // (the virtualizer reads `offsetHeight`) so it has a window to fill.
+  let restoreOffsetHeight: (() => void) | null = null;
+  beforeEach(() => {
+    const previous = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetHeight",
+    );
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement): number {
+        return this.dataset.testid === "epic-files-virtual-tree" ? 600 : 0;
+      },
+    });
+    restoreOffsetHeight = () => {
+      if (previous === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, "offsetHeight");
+      } else {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", previous);
+      }
+    };
+  });
+  afterEach(() => {
+    restoreOffsetHeight?.();
+    restoreOffsetHeight = null;
+  });
+
+  const pages = (count: number): EpicStateFileRecord[] =>
+    Array.from({ length: count }, (_, index) =>
+      fileRecord({ path: `files/pages/p-${String(index)}.html` }),
+    );
+
+  it("groups the count the reader's way", () => {
+    setFiles(pages(1319));
+
+    renderPanel();
+
+    expect(screen.getByTestId("epic-files-group-pages").textContent).toContain(
+      new Intl.NumberFormat().format(1319),
+    );
+  });
+
+  it("mounts every row of a short list, and only a window of a long one", () => {
+    setFiles(pages(FILES_VIRTUALIZE_AFTER_ROWS - 1));
+    const short = render(<FilesPanelBody epicId="epic-1" tabId="tab-1" />);
+    expect(screen.getAllByTestId(/^epic-files-item-/)).toHaveLength(
+      FILES_VIRTUALIZE_AFTER_ROWS - 1,
+    );
+    short.unmount();
+
+    setFiles(pages(1319));
+    renderPanel();
+    expect(screen.getByTestId("epic-files-virtual-tree")).toBeTruthy();
+    const mounted = screen.queryAllByTestId(/^epic-files-item-/).length;
+    expect(mounted).toBeGreaterThan(0);
+    expect(mounted).toBeLessThan(FILES_VIRTUALIZE_AFTER_ROWS);
   });
 });

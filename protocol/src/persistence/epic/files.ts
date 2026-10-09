@@ -78,6 +78,11 @@ export function normalizeEpicFileStatus(
  *   `null`.
  * - `deletedAt` tombstones the entry: it is hidden from the Files panel and
  *   `files/.index.md`, but a transcript row still reads it by sha.
+ * - `title` is what a reader calls the file: a page's title, `<server> ·
+ *   <tool>` for an MCP App snapshot, `null` for a drop-zone file. Optional and
+ *   lenient: an older writer leaves it out, an older reader drops it, and a
+ *   reader with none falls back to the file name. Agent- and server-authored,
+ *   so it is display text only and never decides anything.
  *
  * Who created a file is deliberately absent. Nothing may decide a policy from
  * this map: any peer can write it.
@@ -93,6 +98,7 @@ export const epicFileEntrySchema = lazySchema(() =>
     createdAt: z.number(),
     derivedFrom: z.string().nullable().default(null),
     deletedAt: z.number().nullable().default(null),
+    title: z.string().nullable().default(null),
   }),
 );
 export type EpicFileEntry = z.infer<typeof epicFileEntrySchema>;

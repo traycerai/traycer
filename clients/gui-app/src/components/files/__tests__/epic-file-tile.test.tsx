@@ -340,6 +340,7 @@ describe("<EpicFileTile /> availability is the tile host's", () => {
       status: "queued",
       createdAt: 1000,
       derivedFrom: null,
+      title: null,
       deletedAt: null,
     },
     localState: { kind: "downloading", received: 50, total: 100 },

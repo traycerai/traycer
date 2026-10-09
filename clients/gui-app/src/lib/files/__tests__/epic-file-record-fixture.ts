@@ -20,6 +20,8 @@ interface FileRecordFixture {
   readonly deletedAt: number | null;
   /** The path of the file this one replaced, or `null`. */
   readonly replaces: string | null;
+  /** The manifest title, or `null` for a file that has none. */
+  readonly title: string | null;
 }
 
 const DEFAULTS: Omit<FileRecordFixture, "path"> = {
@@ -28,6 +30,7 @@ const DEFAULTS: Omit<FileRecordFixture, "path"> = {
   localState: { kind: "present" },
   deletedAt: null,
   replaces: null,
+  title: null,
 };
 
 export function fileRecord(
@@ -52,6 +55,7 @@ export function fileRecord(
               sha256: shaFor(fixture.replaces),
             }),
       deletedAt: fixture.deletedAt,
+      title: fixture.title,
     },
     localState: fixture.localState,
   };

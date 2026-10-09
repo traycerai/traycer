@@ -40,6 +40,7 @@ function renderPreview(
       doubleClickOverride={null}
       onDecodeError={null}
       toolbarActions={null}
+      toolbarLabel={null}
     />,
   );
 }

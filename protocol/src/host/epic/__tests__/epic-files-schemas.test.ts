@@ -416,10 +416,17 @@ describe("the manifest entry", () => {
     createdAt: 1,
   };
 
-  it("defaults the two nullable keys an older writer omitted", () => {
+  it("defaults the nullable keys an older writer omitted", () => {
     const parsed = epicFileEntrySchema.parse(entry);
     expect(parsed.derivedFrom).toBeNull();
     expect(parsed.deletedAt).toBeNull();
+    expect(parsed.title).toBeNull();
+  });
+
+  it("keeps the title a newer writer stamped", () => {
+    expect(
+      epicFileEntrySchema.parse({ ...entry, title: "Revenue by region" }).title,
+    ).toBe("Revenue by region");
   });
 
   it("keeps an entry a newer host wrote: higher v, unknown kind and status, extra keys", () => {

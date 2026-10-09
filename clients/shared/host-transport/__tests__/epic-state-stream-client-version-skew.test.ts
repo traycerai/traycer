@@ -38,6 +38,7 @@ const FILES = {
         status: "published",
         createdAt: 1,
         derivedFrom: null,
+        title: null,
         deletedAt: null,
       },
       localState: { kind: "present" },

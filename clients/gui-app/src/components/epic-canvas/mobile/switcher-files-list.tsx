@@ -6,7 +6,6 @@ import {
 } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
-import { epicFileName } from "@/hooks/files/use-epic-file-mutations";
 import { useEpicFiles } from "@/lib/epic-selectors";
 import {
   buildEpicFilesGroups,
@@ -16,6 +15,7 @@ import {
   type EpicFilesGroup,
 } from "@/lib/files/epic-files-model";
 import { formatByteSize } from "@/lib/format-byte-size";
+import { formatCount } from "@/lib/format-count";
 import { formatCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import { makeEpicFileTileRef } from "@/stores/epics/canvas/tile-schema/epic-file-tile";
@@ -111,7 +111,7 @@ export function SwitcherFilesList(props: SwitcherFilesListProps): ReactNode {
         >
           <h3 className="sticky top-0 z-10 flex items-center justify-between bg-popover px-3 pt-2 pb-1 text-overline text-muted-foreground">
             <span>{group.label}</span>
-            <span>{group.items.length}</span>
+            <span>{formatCount(group.items.length)}</span>
           </h3>
           {group.items.map((item) => (
             <SwitcherFileRow
@@ -144,7 +144,7 @@ function SwitcherFileRow(props: {
   return (
     <SwitcherListRow
       icon={<Icon className={cn("size-4", item.viewer.iconClassName)} />}
-      label={epicFileName(item.path)}
+      label={item.name}
       secondaryLabel={secondaryLabel(item, props.group)}
       badge={
         epicFileDownloadsOnOpen(item.record) ? (
@@ -161,7 +161,7 @@ function SwitcherFileRow(props: {
           makeEpicFileTileRef({
             path: item.path,
             sha256: item.record.entry.sha256,
-            name: epicFileName(item.path),
+            name: item.name,
             hostId,
             via: null,
           }),

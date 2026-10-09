@@ -413,6 +413,7 @@ function renderPreview(compact: boolean): void {
       doubleClickOverride={null}
       onDecodeError={null}
       toolbarActions={null}
+      toolbarLabel={null}
     />,
   );
 }
@@ -550,6 +551,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -656,6 +658,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -686,6 +689,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
     rerender(
@@ -709,6 +713,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -744,6 +749,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -769,6 +775,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
     rerender(
@@ -786,6 +793,7 @@ describe("image preview interactions", () => {
         doubleClickOverride={null}
         onDecodeError={null}
         toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 

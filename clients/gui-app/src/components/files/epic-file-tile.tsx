@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Globe, MoreHorizontal } from "lucide-react";
 import { EpicFileDownloadButton } from "@/components/files/epic-file-download-button";
 import { EpicFileVersionNav } from "@/components/files/epic-file-version-nav";
+import { MiddleTruncatedText } from "@/components/files/middle-truncated-text";
 import { HtmlViewer } from "@/components/files/viewers/html-viewer";
 import { ImageViewer } from "@/components/files/viewers/image-viewer";
 import { PdfViewer } from "@/components/files/viewers/pdf-viewer";
@@ -16,11 +17,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import {
   useEpicFileDownload,
   useEpicFileOpenInBrowser,
 } from "@/hooks/files/use-epic-file-mutations";
+import { useEpicFileRecord } from "@/hooks/files/use-epic-file-record";
 import type { EpicFileAddress } from "@/hooks/files/use-epic-file-text-query";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { epicFileViewer } from "@/lib/files/viewer-registry";
@@ -32,6 +35,8 @@ interface EpicFileTileProps {
 }
 
 const COPIED_RESET_MS = 2000;
+/** A path differs at its end: this many trailing characters never truncate. */
+const PATH_TAIL_CHARS = 24;
 
 /**
  * One epic file, expanded (D22), bound like every tile to its tab's host - the
@@ -59,6 +64,8 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
     via: node.via,
   };
   const viewer = epicFileViewer(node.path);
+  // The manifest's title names the file where it has one (a page, an app).
+  const title = useEpicFileRecord(node.path)?.entry.title?.trim() ?? "";
   const openInBrowser = useEpicFileOpenInBrowser(address);
   const download = useEpicFileDownload(hostId, address);
   const { copy } = useClipboardCopy({
@@ -104,23 +111,35 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
         return (
           <PathBar
             path={node.path}
+            title={title}
             openInBrowser={
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={offline || openInBrowser.isPending}
-                onClick={() => openInBrowser.mutate()}
+              // Icon-only once the bar is too narrow for its words.
+              <TooltipWrapper
+                label="Open in browser"
+                side="bottom"
+                sideOffset={undefined}
+                align={undefined}
               >
-                <Globe aria-hidden />
-                Open in browser
-                {openInBrowser.isPending ? (
-                  <AgentSpinningDots
-                    className={undefined}
-                    testId={undefined}
-                    variant={undefined}
-                  />
-                ) : null}
-              </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Open in browser"
+                  disabled={offline || openInBrowser.isPending}
+                  onClick={() => openInBrowser.mutate()}
+                >
+                  <Globe aria-hidden />
+                  <span className="hidden @[30rem]/path-bar:inline">
+                    Open in browser
+                  </span>
+                  {openInBrowser.isPending ? (
+                    <AgentSpinningDots
+                      className={undefined}
+                      testId={undefined}
+                      variant={undefined}
+                    />
+                  ) : null}
+                </Button>
+              </TooltipWrapper>
             }
             versionNav={versionNav}
             actions={fileActions}
@@ -130,7 +149,7 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
               key={node.sha256}
               hostId={hostId}
               address={address}
-              title={node.name}
+              title={title.length > 0 ? title : node.name}
               initialHeight={null}
               onOpenInBrowser={() => openInBrowser.mutate()}
               openInBrowserPending={openInBrowser.isPending}
@@ -169,6 +188,7 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
         return (
           <PathBar
             path={node.path}
+            title={title}
             versionNav={versionNav}
             openInBrowser={null}
             actions={fileActions}
@@ -201,20 +221,48 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
   );
 }
 
-/** The plain bar over a page or a file with no viewer (FileTile). */
+/**
+ * The plain bar over a page or a file with no viewer (FileTile): the file's
+ * title, or its path, truncated in the middle with the path in a tooltip. It
+ * keeps a few characters of room; past that the actions wrap below it.
+ */
 function PathBar(props: {
   readonly path: string;
+  /** The manifest's title, or `""` to show the path itself. */
+  readonly title: string;
   readonly versionNav: ReactNode;
   readonly openInBrowser: ReactNode;
   readonly actions: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
+  const hasTitle = props.title.length > 0;
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3">
-        <span className="min-w-0 flex-1 truncate font-mono text-ui-xs text-muted-foreground">
-          {props.path}
-        </span>
+      <div className="@container/path-bar flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-canvas-border/70 px-3 py-1">
+        <TooltipWrapper
+          label={props.path}
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span
+            data-testid="epic-file-path-bar-label"
+            className="flex min-w-16 grow basis-0 text-ui-xs"
+          >
+            {/* A path differs at its end; a title reads from its start. */}
+            {hasTitle ? (
+              <span className="min-w-0 truncate text-foreground/85">
+                {props.title}
+              </span>
+            ) : (
+              <MiddleTruncatedText
+                text={props.path}
+                tailLength={PATH_TAIL_CHARS}
+                className="font-mono text-muted-foreground"
+              />
+            )}
+          </span>
+        </TooltipWrapper>
         {props.versionNav}
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
         {props.openInBrowser}

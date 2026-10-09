@@ -721,6 +721,7 @@ function ImageDiffSide(props: {
       doubleClickOverride={props.doubleClickOverride}
       onDecodeError={handleDecodeError}
       toolbarActions={null}
+      toolbarLabel={null}
     />
   );
 }
