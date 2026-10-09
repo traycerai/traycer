@@ -155,11 +155,17 @@ export function clampCatalogProbeTimeoutSeconds(seconds: number): number {
 
 /**
  * The `catalog` block in `~/.traycer/cli/config.json`: how long the host waits
- * for a provider to list its models or commands, machine-wide. Additive and
+ * for a provider to list its models or commands - the value every provider
+ * shares unless it has its own in `catalogOverrides`. Additive and
  * `.default()`-ed like every other block, so older config files keep
  * validating without a `CLI_CONFIG_VERSION` bump. Any positive whole number
  * parses; the range is applied by `clampCatalogProbeTimeoutSeconds` on read
  * and enforced by the host on write.
+ *
+ * Frozen at the shape traycer#2450 shipped. A binary built at that schema
+ * knows this block, so it STRIPS any key added inside it on its next write;
+ * per-provider values therefore live in their own top-level block, which the
+ * file's top-level passthrough carries through that binary's writes.
  */
 export const catalogConfigSchema = lazySchema(() =>
   z
@@ -175,6 +181,73 @@ export const catalogConfigSchema = lazySchema(() =>
 export type CatalogConfig = z.infer<typeof catalogConfigSchema>;
 
 /**
+ * The `catalogOverrides` block: a provider's own catalog probe timeout, keyed
+ * by harness id, for each provider whose "Same for all providers" switch is
+ * off. A provider without an entry follows `catalog.probeTimeoutSeconds`.
+ *
+ * A TOP-LEVEL block, not a key inside `catalog`, so that a binary which knows
+ * `catalog` but not this block (traycer#2450) preserves it on a
+ * read-modify-write instead of stripping it. Keys are open strings, not the
+ * harness enum, for the same reason: a key a newer binary wrote must not fail
+ * an older one's read. Values are clamped on read like the shared value.
+ */
+export const catalogOverridesConfigSchema = lazySchema(() =>
+  z.record(z.string().min(1), z.number().int().positive()).default({}),
+);
+export type CatalogOverridesConfig = z.infer<
+  typeof catalogOverridesConfigSchema
+>;
+
+/**
+ * The catalog settings as the host and the `config.catalog.*` RPCs use them:
+ * the shared value from `catalog` and the per-provider values from
+ * `catalogOverrides`, read together.
+ */
+export interface CatalogSettings {
+  readonly probeTimeoutSeconds: number;
+  readonly overrides: Readonly<Record<string, number>>;
+}
+
+/**
+ * Builds the clamped settings from the two blocks, on read - the shared value
+ * and each provider's own alike.
+ */
+export function catalogSettingsFrom(
+  catalog: CatalogConfig,
+  catalogOverrides: CatalogOverridesConfig,
+): CatalogSettings {
+  // `Object.fromEntries` DEFINES own properties, so a hand-edited key such as
+  // `__proto__` stays an entry; an assignment into a `{}` literal would hit
+  // the prototype setter and drop it.
+  const overrides: Record<string, number> = Object.fromEntries(
+    Object.entries(catalogOverrides).map(([harnessId, seconds]) => [
+      harnessId,
+      clampCatalogProbeTimeoutSeconds(seconds),
+    ]),
+  );
+  return {
+    probeTimeoutSeconds: clampCatalogProbeTimeoutSeconds(
+      catalog.probeTimeoutSeconds,
+    ),
+    overrides,
+  };
+}
+
+/**
+ * The timeout one provider's catalog reads use: its own value when it has one,
+ * else the shared value. `Object.hasOwn`, not a bare index, so a key that names
+ * an `Object.prototype` member can never read through to it.
+ */
+export function catalogProbeTimeoutSecondsFor(
+  settings: CatalogSettings,
+  harnessId: string,
+): number {
+  return Object.hasOwn(settings.overrides, harnessId)
+    ? settings.overrides[harnessId]
+    : settings.probeTimeoutSeconds;
+}
+
+/**
  * The `catalog` block read on its own, ignoring every other key - for the
  * same reason as `worktreesOnlyConfigSchema`: an unrelated defect elsewhere in
  * the document must not hide the timeout the file plainly sets.
@@ -182,6 +255,16 @@ export type CatalogConfig = z.infer<typeof catalogConfigSchema>;
 export const catalogOnlyConfigSchema = lazySchema(() =>
   z.object({
     catalog: catalogConfigSchema,
+  }),
+);
+
+/**
+ * The `catalogOverrides` block read on its own, for the same reason - and
+ * separately from `catalog`, so a defect in one block never hides the other.
+ */
+export const catalogOverridesOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    catalogOverrides: catalogOverridesConfigSchema,
   }),
 );
 
@@ -265,6 +348,7 @@ export const cliConfigSchema = lazySchema(() =>
       browser: browserConfigSchema,
       worktrees: worktreesConfigSchema,
       catalog: catalogConfigSchema,
+      catalogOverrides: catalogOverridesConfigSchema,
     })
     // Top-level only: an unknown BLOCK survives a read-modify-write instead of
     // being stripped. Two binaries share this file - an older CLI or host that
@@ -336,4 +420,5 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   browser: { agentAccess: true },
   worktrees: { agentCreate: "allow" },
   catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
+  catalogOverrides: {},
 };

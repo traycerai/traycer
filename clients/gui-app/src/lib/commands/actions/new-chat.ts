@@ -85,6 +85,8 @@ export interface OpenNewChatInActiveTileArgs {
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string;
+  /** Parent chat for a CHILD agent, or `null` for a top-level one. */
+  readonly parentId: string | null;
   readonly worktreeIntent: WorktreeIntent | null;
   /** Stored title for the new chat - `""` for an ordinary empty chat (the
    *  "no title yet" convention; AI titling fills it on the first send). The
@@ -126,6 +128,7 @@ export function openNewChatInActiveTile(
       // is bound to for life - not whichever host happens to be active when
       // the mutation fires.
       hostId: args.hostId,
+      parentId: args.parentId,
       worktreeIntent: args.worktreeIntent,
       title: args.title,
       settings: args.settings,
@@ -271,16 +274,25 @@ const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
 function buildCreateChatRequest(args: {
   readonly epicId: string;
   readonly hostId: string;
+  readonly parentId: string | null;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly title: string;
   readonly settings: ChatRunSettings | null;
   readonly forkSource: CreateChatMutationInput["forkSource"] | null;
 }): CreateChatMutationInput {
-  const { epicId, hostId, worktreeIntent, title, settings, forkSource } = args;
+  const {
+    epicId,
+    hostId,
+    parentId,
+    worktreeIntent,
+    title,
+    settings,
+    forkSource,
+  } = args;
   return {
     epicId,
     hostId,
-    parentId: null,
+    parentId,
     // Ordinary chats are created with an empty stored title ("no title yet");
     // the "Untitled agent" fallback is applied at render via the display
     // helper, never baked into the stored title. The AI-generated title

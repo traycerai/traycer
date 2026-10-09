@@ -491,7 +491,11 @@ import {
   configWorktreesGetV10,
   configWorktreesSetV10,
   configCatalogGetV10,
+  configCatalogGetV11,
+  configCatalogGetUpgradeV10ToV11,
   configCatalogSetV10,
+  configCatalogSetV11,
+  configCatalogSetUpgradeV10ToV11,
 } from "@traycer/protocol/host/config/contracts";
 import {
   diagnosticsLogsListV10,
@@ -5857,14 +5861,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // 1.1: per-provider values (`overrides`) and the scoped set. The Providers
+  // CLI & Args rows render only when BOTH methods negotiate 1.1.
   "config.catalog.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configCatalogGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configCatalogGetV11,
+          upgradeFromPreviousVersion: configCatalogGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -5873,11 +5883,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.catalog.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configCatalogSetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configCatalogSetV11,
+          upgradeFromPreviousVersion: configCatalogSetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

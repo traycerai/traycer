@@ -2496,6 +2496,24 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(document.querySelector("header")?.contains(status)).toBe(true);
   });
 
+  it("carries no Model list timeout control on the heading row - it lives in each provider's CLI & Args tab", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const header = document.querySelector("header");
+    if (header === null) throw new Error("expected the heading row");
+    expect(screen.getByTestId("providers-global-status")).toBeTruthy();
+    expect(within(header).queryByText(/Model list timeout/)).toBeNull();
+    expect(within(header).queryByLabelText(/Model list timeout/)).toBeNull();
+    expect(
+      within(header).queryByTestId("providers-catalog-timeout-chip"),
+    ).toBeNull();
+    expect(screen.queryByTestId("providers-catalog-timeout-chip")).toBeNull();
+  });
+
   it("refreshes the SELECTED host, never the ambient one", async () => {
     // The wrong-host bug's actual signature. DOM absence cannot see it: the
     // failure was never a missing control, it was a present control resolving

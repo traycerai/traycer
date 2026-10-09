@@ -19,12 +19,6 @@ The list on the left shows every provider, with the enabled ones first.
 
 Select a provider to open its tabs.
 
-## Model List Timeout
-
-**Model list timeout**, beside **Refresh all providers**, sets how long Traycer waits for a provider to list its models: when you open the model picker, and when an agent creates another agent. The default is **60 s**. Choose **90 s**, **120 s**, or **180 s** on a slow or heavily loaded machine, where a provider can take longer than a minute to answer.
-
-The setting applies to every provider on the selected host, from the next model list it reads. A model list that arrives after the wait is still kept for the next request. The control is hidden on a host that is running a version without it.
-
 ## Turn A Provider On Or Off
 
 The switch in the provider's header reads **Enabled** or **Disabled**. Only enabled providers appear in the composer's model picker.
@@ -157,6 +151,14 @@ For CLIs that Traycer manages, open the version menu on the managed row to see t
 Traycer does not manage the Amp, Hermes Agent, or Command Code CLIs; install them yourself, then pick the detected copy or add its path.
 
 For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps its own permissions, so Traycer leaves those flags out.
+
+### Model List Timeout
+
+The **Model list** group on the **CLI & Args** tab sets how long Traycer waits for the provider to list its models: when you open the model picker, and when an agent creates another agent. **Timeout** offers **60 s** (the default), **90 s**, **120 s**, and **180 s**. Pick a longer one on a slow or heavily loaded machine, where a provider can take more than a minute to answer.
+
+With **Same for all providers** on, the timeout is shared: changing it changes every provider whose switch is also on. Turn the switch off to give this provider its own timeout, which starts at the shared value; turn it back on to follow the shared value again.
+
+A change applies from the next model list the host reads, and a model list that arrives after the wait is still kept for the next request. The group is hidden on a host running a version without per-provider timeouts.
 
 ## Environment Variables
 

@@ -185,8 +185,14 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
       envOverrides: {},
       catalog: { probeTimeoutSeconds: 90, bogus: 42 },
     });
-    expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: 90 });
-    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 90 });
+    expect(await readCatalogConfig()).toEqual({
+      probeTimeoutSeconds: 90,
+      overrides: {},
+    });
+    expect(readCatalogConfigSync()).toEqual({
+      probeTimeoutSeconds: 90,
+      overrides: {},
+    });
   });
 
   it("never crashes the sync catalog reader on hostile block shapes", async () => {
@@ -206,7 +212,10 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
         envOverrides: {},
         catalog,
       });
-      expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
+      expect(readCatalogConfigSync()).toEqual({
+        probeTimeoutSeconds: 60,
+        overrides: {},
+      });
     }
   });
 

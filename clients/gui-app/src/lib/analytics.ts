@@ -316,6 +316,7 @@ export type AnalyticsSetting =
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "catalogProbeTimeout"
+  | "catalogProbeTimeoutSameForAll"
   | "chatAutoArchive"
   | "codeFontFamily"
   | "codeFontSize"
@@ -1391,6 +1392,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     artifactIconColorMode: true,
     artifactIconColors: true,
     catalogProbeTimeout: true,
+    catalogProbeTimeoutSameForAll: true,
     chatAutoArchive: true,
     codeFontFamily: true,
     codeFontSize: true,
