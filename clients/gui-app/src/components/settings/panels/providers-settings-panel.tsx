@@ -17,7 +17,7 @@ import {
   SettingsMasterSelect,
 } from "@/components/settings/settings-master-detail";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
-import { ProvidersCatalogTimeoutChip } from "@/components/settings/panels/providers-catalog-timeout-chip";
+import { ProviderCatalogTimeoutGroup } from "@/components/settings/panels/provider-catalog-timeout-group";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -455,16 +455,10 @@ function ProvidersSettingsPanelInner({
       // host's. Gating on `ready` alone would hide the control in the ordinary
       // no-explicit-pick case.
       //
-      // The Model list timeout chip sits beside it for the same reason: it is
-      // a host-wide setting covering every provider, not the selected one's.
-      // It carries its own scope gate as well (see the chip).
+      // Status only: settings live in the body, as rows in the tab they
+      // belong to (the Model list timeout is in each provider's CLI & Args).
       headerAction={
-        isHostScopeUsable(scope.status) ? (
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <ProvidersCatalogTimeoutChip scope={scope} />
-            <ProvidersGlobalStatus />
-          </div>
-        ) : undefined
+        isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : undefined
       }
     >
       <HostScopeGate
@@ -1437,6 +1431,10 @@ function ProviderTabBody({
           <TerminalAgentArgsSection
             key={state.terminalAgentArgs}
             state={state}
+          />
+          <ProviderCatalogTimeoutGroup
+            providerId={state.providerId}
+            hostId={hostId}
           />
         </div>
       );

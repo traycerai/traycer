@@ -155,11 +155,19 @@ export function clampCatalogProbeTimeoutSeconds(seconds: number): number {
 
 /**
  * The `catalog` block in `~/.traycer/cli/config.json`: how long the host waits
- * for a provider to list its models or commands, machine-wide. Additive and
- * `.default()`-ed like every other block, so older config files keep
- * validating without a `CLI_CONFIG_VERSION` bump. Any positive whole number
- * parses; the range is applied by `clampCatalogProbeTimeoutSeconds` on read
- * and enforced by the host on write.
+ * for a provider to list its models or commands. Additive and `.default()`-ed
+ * like every other block, so older config files keep validating without a
+ * `CLI_CONFIG_VERSION` bump. Any positive whole number parses; the range is
+ * applied by `clampCatalogProbeTimeoutSeconds` on read and enforced by the
+ * host on write.
+ *
+ * `probeTimeoutSeconds` is the value shared by every provider; `overrides`
+ * holds a provider's own value, keyed by harness id, for the providers whose
+ * "Same for all providers" switch is off. A provider without an entry follows
+ * the shared value. Keys are open strings, not the harness enum: the file is
+ * shared by binaries of different ages, and a key a newer one wrote must not
+ * fail an older one's read of the whole block. `overrides` defaults to `{}`, so
+ * a block written before it existed (traycer#2450) still validates.
  */
 export const catalogConfigSchema = lazySchema(() =>
   z
@@ -169,10 +177,47 @@ export const catalogConfigSchema = lazySchema(() =>
         .int()
         .positive()
         .default(CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS),
+      overrides: z
+        .record(z.string().min(1), z.number().int().positive())
+        .default({}),
     })
-    .default({ probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS }),
+    .default({
+      probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
+      overrides: {},
+    }),
 );
 export type CatalogConfig = z.infer<typeof catalogConfigSchema>;
+
+/**
+ * Clamps every stored value of a catalog block into the supported range, on
+ * read - the shared value and each provider's own alike.
+ */
+export function clampCatalogConfig(catalog: CatalogConfig): CatalogConfig {
+  const overrides: Record<string, number> = {};
+  for (const [harnessId, seconds] of Object.entries(catalog.overrides)) {
+    overrides[harnessId] = clampCatalogProbeTimeoutSeconds(seconds);
+  }
+  return {
+    probeTimeoutSeconds: clampCatalogProbeTimeoutSeconds(
+      catalog.probeTimeoutSeconds,
+    ),
+    overrides,
+  };
+}
+
+/**
+ * The timeout one provider's catalog reads use: its own value when it has one,
+ * else the shared value. `Object.hasOwn`, not a bare index, so a key that names
+ * an `Object.prototype` member can never read through to it.
+ */
+export function catalogProbeTimeoutSecondsFor(
+  catalog: CatalogConfig,
+  harnessId: string,
+): number {
+  return Object.hasOwn(catalog.overrides, harnessId)
+    ? catalog.overrides[harnessId]
+    : catalog.probeTimeoutSeconds;
+}
 
 /**
  * The `catalog` block read on its own, ignoring every other key - for the
@@ -335,5 +380,8 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
   worktrees: { agentCreate: "allow" },
-  catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
+  catalog: {
+    probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
+    overrides: {},
+  },
 };
