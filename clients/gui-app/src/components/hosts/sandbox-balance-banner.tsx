@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
-import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
+import {
+  useSandboxBalancePoll,
+  useSandboxCostsObserver,
+} from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import {
@@ -14,14 +17,19 @@ import { cn } from "@/lib/utils";
  * the host list. Renders nothing while the balance covers more than two
  * hours or nothing is awake, and reads no cost at all for a user with no
  * sandboxes.
+ *
+ * It watches the row set whatever its size (`useSandboxCostsObserver`), so
+ * the last sandbox disappearing still refreshes the cost view and the
+ * balance after the card that showed it has unmounted.
  */
 export function SandboxBalanceBanner(): ReactNode {
+  useSandboxCostsObserver();
   const count = useSandboxList().data?.sandboxes.length ?? 0;
   return count === 0 ? null : <LiveSandboxBalanceBanner />;
 }
 
 function LiveSandboxBalanceBanner(): ReactNode {
-  useRefreshSandboxCosts();
+  useSandboxBalancePoll();
   const warning = useSandboxRunwayWarning();
   return <SandboxRunwayWarningLine warning={warning} />;
 }

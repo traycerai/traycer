@@ -14,7 +14,7 @@
  * against it sit on an error card until their own retry backoff fires. So the
  * subscription has to outlive the binding.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
@@ -1241,6 +1241,88 @@ describe("a SANDBOX_FROZEN verdict ends when the list shows the sandbox thawed o
     expect(rig.dials()).toBe(1);
 
     rig.binding.dispose();
+  });
+
+  describe("past the 30 s TTL", () => {
+    const PAST_TTL_MS = 30_001;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("(1) a CONFIRMED frozen verdict still fails fast with the frozen fatal, and nothing is dialed", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(true));
+      await rig.request();
+      rig.endSessionOn(frozenFatal());
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      vi.advanceTimersByTime(PAST_TTL_MS);
+
+      expectFrozenVerdict(await rejection(rig.request()));
+      // A long wait later, still: the host's billing state does not change
+      // with time, so no grant is minted for a session that will end the same
+      // way.
+      vi.advanceTimersByTime(10 * PAST_TTL_MS);
+      rig.binding.hostListChanged();
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      rig.binding.dispose();
+    });
+
+    it("(2) control: once the list shows it thawed after that wait, the next request dials", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(true));
+      await rig.request();
+      rig.endSessionOn(frozenFatal());
+      vi.advanceTimersByTime(PAST_TTL_MS);
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      rig.setEntry(sandboxRow(false));
+      rig.binding.hostListChanged();
+      await rig.request();
+
+      expect(rig.dials()).toBe(2);
+
+      rig.binding.dispose();
+    });
+
+    it("(3) control: an UNconfirmed frozen verdict (the list never showed frozen) expires at the TTL and dials", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(false));
+      await rig.request();
+      rig.endSessionOn(frozenFatal());
+      // Within the TTL it holds.
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      vi.advanceTimersByTime(PAST_TTL_MS);
+      await rig.request();
+
+      expect(rig.dials()).toBe(2);
+
+      rig.binding.dispose();
+    });
+
+    it("(4) control: a non-frozen fatal expires at the TTL and dials, even on an entry that shows frozen", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(true));
+      await rig.request();
+      rig.endSessionOn(incompatibleFatal());
+      expect(await rejection(rig.request())).toBeInstanceOf(
+        HostTransportFailureError,
+      );
+      expect(rig.dials()).toBe(1);
+
+      vi.advanceTimersByTime(PAST_TTL_MS);
+      await rig.request();
+
+      expect(rig.dials()).toBe(2);
+
+      rig.binding.dispose();
+    });
   });
 
   it("a fresh frozen verdict still fails fast while the list agrees, and hostListChanged() with no verdict is harmless", async () => {

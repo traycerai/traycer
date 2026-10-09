@@ -326,6 +326,14 @@ class RuntimeHostMessenger<
    * folds in version/publicKey/relay URL, so e.g. the host update that
    * resolves an INCOMPATIBLE fatal changes the key and proves the verdict
    * describes a session that can no longer even be built.
+   *
+   * One exception to the TTL: a `SANDBOX_FROZEN` verdict the host list has
+   * confirmed (`frozenConfirmed`) describes the HOST's billing state, which
+   * no amount of waiting changes, so it holds until the list shows the
+   * sandbox thawed or gone (`dropVerdictIfThawed`), the key moves, or a
+   * session reaches ready. Expiring it would let every stream owner's
+   * rebuild mint a grant authn refuses with 402, once per backoff, for as
+   * long as a frozen tile stays mounted.
    */
   private readonly terminalVerdictByHost = new Map<
     string,
@@ -766,7 +774,9 @@ class RuntimeHostMessenger<
    * (non-retryable, so the retrying wrapper and the Providers panel's error
    * classification both read it as "waiting will not help") instead of
    * minting a grant and dialing a session that will end the same way. An
-   * expired verdict is dropped here, letting the next request dial fresh.
+   * expired verdict is dropped here, letting the next request dial fresh; a
+   * confirmed `SANDBOX_FROZEN` verdict does not expire (see
+   * {@link terminalVerdictByHost}).
    */
   private rejectIfTerminalVerdict(
     hostId: string,
@@ -778,7 +788,12 @@ class RuntimeHostMessenger<
     if (verdict === undefined) {
       return null;
     }
-    if (verdict.key !== currentKey || Date.now() >= verdict.expiresAt) {
+    const outlivesTtl =
+      verdict.fatal.code === "SANDBOX_FROZEN" && verdict.frozenConfirmed;
+    if (
+      verdict.key !== currentKey ||
+      (!outlivesTtl && Date.now() >= verdict.expiresAt)
+    ) {
       // Key mismatch: the host's transport identity moved (version bump, key
       // rotation, relay move) since the fatal - the very session the verdict
       // condemned can no longer be built, so waiting out the TTL would

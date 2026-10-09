@@ -79,6 +79,8 @@ const AUTH = vi.hoisted(() => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => AUTH,
+  // The observer half reads auth through the nullable binding.
+  useHostBinding: () => ({ auth: AUTH }),
 }));
 
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
