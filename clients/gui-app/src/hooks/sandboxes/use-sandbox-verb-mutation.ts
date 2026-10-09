@@ -18,6 +18,10 @@ import {
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import {
+  settledForStartingAccount,
+  signedInUserId,
+} from "@/hooks/sandboxes/sandbox-mutation-account";
 
 /**
  * How a verb ended: `settled` (`200`, at rest), `moving` (`202`, still
@@ -29,6 +33,8 @@ export type SandboxVerbOutcome = "settled" | "moving" | "gone";
 
 interface SandboxVerbContext {
   readonly directory: HostDirectoryService | null;
+  /** The account signed in when the verb started. */
+  readonly userId: string | null;
 }
 
 const VERB_FAILURE_TITLE: Record<SandboxLifecycleVerb, string> = {
@@ -65,6 +71,7 @@ export function useSandboxVerb(
     mutationKey: sandboxMutationKeys.verb(sandboxId),
     onMutate: (): SandboxVerbContext => ({
       directory: binding === null ? null : binding.directory,
+      userId: signedInUserId(),
     }),
     mutationFn: async (
       verb: SandboxLifecycleVerb,
@@ -90,7 +97,8 @@ export function useSandboxVerb(
       // Settled, not success: a `sandbox_busy` refusal puts the row back to
       // `awake` and a conflict means it moved, so the lists are stale either
       // way.
-      void context?.directory?.refresh();
+      if (!settledForStartingAccount(context)) return;
+      void context.directory?.refresh();
       requestFleetRefresh(runnerHost);
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
@@ -99,7 +107,9 @@ export function useSandboxVerb(
         queryKey: sandboxQueryKeys.costsAll(),
       });
     },
-    onError: (error, verb) =>
-      toastFromAuthError(error, VERB_FAILURE_TITLE[verb]),
+    onError: (error, verb, context) => {
+      if (!settledForStartingAccount(context)) return;
+      toastFromAuthError(error, VERB_FAILURE_TITLE[verb]);
+    },
   });
 }

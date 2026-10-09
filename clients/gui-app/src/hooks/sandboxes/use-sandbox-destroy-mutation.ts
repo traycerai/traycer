@@ -10,9 +10,15 @@ import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import {
+  settledForStartingAccount,
+  signedInUserId,
+} from "@/hooks/sandboxes/sandbox-mutation-account";
 
 interface SandboxDestroyContext {
   readonly directory: HostDirectoryService | null;
+  /** The account signed in when the destroy started. */
+  readonly userId: string | null;
 }
 
 /**
@@ -39,6 +45,7 @@ export function useSandboxDestroy(
     mutationKey: sandboxMutationKeys.destroy(sandboxId),
     onMutate: (): SandboxDestroyContext => ({
       directory: binding === null ? null : binding.directory,
+      userId: signedInUserId(),
     }),
     mutationFn: async (): Promise<boolean> => {
       if (binding === null) {
@@ -58,13 +65,16 @@ export function useSandboxDestroy(
       throw new Error(sandboxFailureMessage(result));
     },
     onSuccess: (_data, _variables, context) => {
+      if (!settledForStartingAccount(context)) return;
       void context.directory?.refresh();
       requestFleetRefresh(runnerHost);
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
     },
-    onError: (error) =>
-      toastFromAuthError(error, "Couldn't destroy the sandbox."),
+    onError: (error, _variables, context) => {
+      if (!settledForStartingAccount(context)) return;
+      toastFromAuthError(error, "Couldn't destroy the sandbox.");
+    },
   });
 }

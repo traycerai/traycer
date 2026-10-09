@@ -12,10 +12,16 @@ import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import {
+  settledForStartingAccount,
+  signedInUserId,
+} from "@/hooks/sandboxes/sandbox-mutation-account";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface SandboxCreateContext {
   readonly directory: HostDirectoryService | null;
+  /** The account signed in when the create started. */
+  readonly userId: string | null;
 }
 
 /**
@@ -40,6 +46,7 @@ export function useSandboxCreate(): UseMutationResult<
     mutationKey: sandboxMutationKeys.create(userId),
     onMutate: (): SandboxCreateContext => ({
       directory: binding === null ? null : binding.directory,
+      userId: signedInUserId(),
     }),
     mutationFn: async (request): Promise<SandboxCreateAccepted> => {
       if (binding === null) {
@@ -54,18 +61,22 @@ export function useSandboxCreate(): UseMutationResult<
     // At hook level, not the form's `mutate` call: the form unmounts when the
     // dialog closes, and a create can take minutes, so only the mutation
     // itself is still there to say it finished.
-    onSuccess: (_data, request) => {
+    onSuccess: (_data, request, context) => {
+      if (!settledForStartingAccount(context)) return;
       toast.success(`Created ${request.displayName}`);
     },
     // Settled, not only success: a `502 provider_failed` leaves a `failed`
     // row behind, which the lists must show so it can be destroyed.
     onSettled: (_data, _error, _variables, context) => {
-      void context?.directory?.refresh();
+      if (!settledForStartingAccount(context)) return;
+      void context.directory?.refresh();
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
     },
-    onError: (error) =>
-      toastFromAuthError(error, "Couldn't create the sandbox."),
+    onError: (error, _variables, context) => {
+      if (!settledForStartingAccount(context)) return;
+      toastFromAuthError(error, "Couldn't create the sandbox.");
+    },
   });
 }
