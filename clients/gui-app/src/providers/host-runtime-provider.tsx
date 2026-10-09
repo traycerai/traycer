@@ -48,6 +48,7 @@ import { buildRuntimeChangeScopeHandler } from "@/lib/host/runtime-change-scope"
 import { appLogger } from "@/lib/logger";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { authQueryKeys } from "@/lib/query-keys";
+import { refreshHostListOnSandboxFrozen } from "@/lib/sandboxes/sandbox-frozen-terminal";
 import {
   runnerHostQueryScopeId,
   runnerQueryKeys,
@@ -326,6 +327,19 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
                   return;
                 }
                 runtime.hostClient.invalidateHostScopeUnannounced(hostId);
+              },
+              // A frozen sandbox's refused attach grant ends its session on
+              // `SANDBOX_FROZEN`. The frozen tile frame and picker row read
+              // the host list, so re-read it (the directory and the picker's
+              // registry query) instead of leaving the host looking awake.
+              onRemoteSessionTerminal: (_hostId, fatal) => {
+                refreshHostListOnSandboxFrozen(fatal, {
+                  refreshDirectory: () => directory.refresh(),
+                  invalidateRegisteredHosts: () =>
+                    queryClient.invalidateQueries({
+                      queryKey: authQueryKeys.registeredHostsAll(),
+                    }),
+                });
               },
             })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from

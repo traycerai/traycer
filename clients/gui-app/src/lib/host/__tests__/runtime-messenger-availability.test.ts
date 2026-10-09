@@ -231,6 +231,7 @@ function harness(): {
   session: ControllableSession;
   sessions: readonly ControllableSession[];
   recovered: string[];
+  terminals: { readonly hostId: string; readonly fatal: FatalErrorDetails }[];
   requestRemote: () => void;
   requestRemoteRaw: () => Promise<unknown>;
   requestRemoteWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
@@ -261,6 +262,10 @@ function harness(): {
     };
   });
   const recovered: string[] = [];
+  const terminals: {
+    readonly hostId: string;
+    readonly fatal: FatalErrorDetails;
+  }[] = [];
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
@@ -271,11 +276,15 @@ function harness(): {
     onRemoteAvailabilityRecovered: (hostId) => {
       recovered.push(hostId);
     },
+    onRemoteSessionTerminal: (hostId, fatal) => {
+      terminals.push({ hostId, fatal });
+    },
   });
   return {
     session: firstSession,
     sessions,
     recovered,
+    terminals,
     requestRemote: () => {
       void binding.messenger
         .request(
@@ -744,6 +753,44 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
+  it("tells the terminal-session callback ONCE, with the host and the SANDBOX_FROZEN fatal it ended on", () => {
+    const h = harness();
+    h.requestRemote();
+    expect(h.terminals).toEqual([]);
+
+    const fatal = frozenFatal();
+    h.session.fatal = fatal;
+    h.session.emitClosed();
+
+    expect(h.terminals).toEqual([{ hostId: REMOTE_HOST_ID, fatal }]);
+
+    h.dispose();
+  });
+
+  it("passes any terminal fatal to the callback, not only the frozen one (the consumer filters)", () => {
+    const h = harness();
+    h.requestRemote();
+
+    const fatal = incompatibleFatal();
+    h.session.fatal = fatal;
+    h.session.emitClosed();
+
+    expect(h.terminals).toEqual([{ hostId: REMOTE_HOST_ID, fatal }]);
+
+    h.dispose();
+  });
+
+  it("never calls the terminal-session callback for a routine close", () => {
+    const h = harness();
+    h.requestRemote();
+
+    h.session.emitClosed();
+
+    expect(h.terminals).toEqual([]);
+
+    h.dispose();
+  });
+
   it("auth reset clears a terminal verdict before the next credential context requests", async () => {
     const h = harness();
     h.requestRemote();
@@ -820,6 +867,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       authnBaseUrl: "https://authn.invalid",
       requestId: () => "req-1",
       onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
     });
     const requestRemote = (): Promise<unknown> =>
       binding.messenger.request(
@@ -880,6 +928,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       authnBaseUrl: "https://authn.invalid",
       requestId: () => "req-1",
       onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
     });
     const requestRemote = (): Promise<unknown> =>
       binding.messenger
@@ -947,6 +996,15 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 });
+
+function frozenFatal(): FatalErrorDetails {
+  return {
+    code: "SANDBOX_FROZEN",
+    reason: "This sandbox is paused because your credits ran out.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
 
 function incompatibleFatal(): FatalErrorDetails {
   return {

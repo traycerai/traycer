@@ -1,9 +1,16 @@
 import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
+import {
+  SANDBOX_REFUSAL_CODE_FROZEN,
+  sandboxRefusalBodySchema,
+} from "@traycer/protocol/host/sandbox-control";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   AttachGrant,
   AttachGrantFailure,
   AttachGrantProvider,
+  AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
+import { SANDBOX_FROZEN_MESSAGE } from "../../host-client/sandbox-control";
 
 export type {
   AttachGrant,
@@ -41,6 +48,10 @@ const GRANT_FETCH_TIMEOUT_MS = 10_000;
  *  - `ok`              — the grant to present to the relay.
  *  - `unauthorized`    — the bearer was rejected OR the host is revoked / not
  *                        owned (401/403); the caller decides whether to revalidate.
+ *  - `sandbox-frozen`  — authn refused the mint because the target is a
+ *                        sandbox frozen for lack of credits (`402` with code
+ *                        `sandbox_frozen`): a verdict, not a transient, so
+ *                        the session ends on it instead of retrying.
  *  - `network-error`   — transient transport/timeout/5xx or a malformed body.
  *
  * Every non-`ok` result carries a human-readable `detail`. Not decoration: this mint is the first step of a silently
@@ -60,6 +71,7 @@ export type AttachGrantResult =
       readonly sessionGrant: string | null;
     }
   | ({ readonly kind: "unauthorized" } & AttachGrantFailure)
+  | ({ readonly kind: "sandbox-frozen" } & AttachGrantFailure)
   | ({ readonly kind: "network-error" } & AttachGrantFailure);
 
 /**
@@ -266,6 +278,21 @@ export async function mintAttachGrantViaHttp(
       context: authnSaid(bodyText),
     };
   }
+  if (response.status === 402) {
+    const bodyText = await readBodyText(response);
+    if (isSandboxFrozenRefusal(bodyText)) {
+      return {
+        kind: "sandbox-frozen",
+        detail: `authn refused the mint: the sandbox is frozen (HTTP 402 ${SANDBOX_REFUSAL_CODE_FROZEN})`,
+        context: authnSaid(bodyText),
+      };
+    }
+    return {
+      kind: "network-error",
+      detail: `authn answered HTTP ${response.status}`,
+      context: authnSaid(bodyText),
+    };
+  }
   if (response.status < 200 || response.status >= 300) {
     const bodyText = await readBodyText(response);
     return {
@@ -305,11 +332,56 @@ export async function mintAttachGrantViaHttp(
   };
 }
 
+/** Whether a `402` body is authn's typed frozen-sandbox refusal. */
+function isSandboxFrozenRefusal(bodyText: string): boolean {
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return false;
+  }
+  const parsed = sandboxRefusalBodySchema.safeParse(body);
+  return parsed.success && parsed.data.code === SANDBOX_REFUSAL_CODE_FROZEN;
+}
+
+/**
+ * The fatal a frozen sandbox's refused mint ends the session on: the same
+ * typed `SANDBOX_FROZEN` refusal, and copy, the host itself answers a frozen
+ * sandbox's calls with, so every surface renders it the same way.
+ */
+const SANDBOX_FROZEN_FATAL: FatalErrorDetails = {
+  code: "SANDBOX_FROZEN",
+  reason: SANDBOX_FROZEN_MESSAGE,
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+/** A failed mint as the session's provision: terminal only for a frozen sandbox. */
+function provisionOfFailedMint(
+  result: Exclude<AttachGrantResult, { readonly kind: "ok" }>,
+): AttachGrantProvision {
+  if (result.kind === "sandbox-frozen") {
+    return {
+      kind: "refused",
+      fatal: SANDBOX_FROZEN_FATAL,
+      detail: result.detail,
+      context: result.context,
+    };
+  }
+  return {
+    kind: "unavailable",
+    detail: result.detail,
+    context: result.context,
+  };
+}
+
 /**
  * Builds an `AttachGrantProvider` bound to a host + bearer source. Every
- * non-`ok` mint collapses to `unavailable` (reconnect backoff — a transient CS
- * blip must not hard-fail the session; the re-auth bound still fail-closes a
- * genuinely revoked host at its next relay deadline).
+ * non-`ok` mint but one collapses to `unavailable` (reconnect backoff — a
+ * transient CS blip must not hard-fail the session; the re-auth bound still
+ * fail-closes a genuinely revoked host at its next relay deadline). The one is
+ * a frozen sandbox, which is `refused`: no retry can mint for it until its
+ * credits are topped up.
  */
 export function createAttachGrantProvider(deps: {
   readonly authnBaseUrl: string;
@@ -335,11 +407,7 @@ export function createAttachGrantProvider(deps: {
     if (result.kind === "ok") {
       return { kind: "ok", grant: result.grant };
     }
-    return {
-      kind: "unavailable",
-      detail: result.detail,
-      context: result.context,
-    };
+    return provisionOfFailedMint(result);
   };
 }
 
@@ -394,11 +462,7 @@ export function createSandboxAttachGrantProvider(deps: {
       bearerToken,
     );
     if (result.kind !== "ok") {
-      return {
-        kind: "unavailable",
-        detail: result.detail,
-        context: result.context,
-      };
+      return provisionOfFailedMint(result);
     }
     if (result.sessionGrant === null) {
       return {

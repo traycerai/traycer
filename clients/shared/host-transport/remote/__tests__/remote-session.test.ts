@@ -10843,3 +10843,162 @@ describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () =
     TEST_BUDGET_MS,
   );
 });
+
+/**
+ * A grant provider that answers `refused` carries a typed, terminal verdict
+ * from authn (a sandbox whose credits ran out): the session must end on it at
+ * once, like a host fatal, and never retry, because no retry can change it.
+ */
+describe("RemoteSession refused attach grant", () => {
+  const FROZEN_FATAL: FatalErrorDetails = {
+    code: "SANDBOX_FROZEN",
+    reason: "This sandbox is paused because your credits ran out.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  /** A session whose provider is counted and whose relay dials are counted. */
+  function buildCountedSession(
+    relay: FakeRelayHost,
+    provider: RemoteSessionOptions<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >["grantProvider"],
+  ) {
+    const counts = { provider: 0, dials: 0 };
+    const lease = new MutableBearerLease("user-bearer", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: () => {
+        counts.provider += 1;
+        return provider();
+      },
+      webSocketFactory: {
+        create: (url, priority) => {
+          counts.dials += 1;
+          return relay.factory.create(url, priority);
+        },
+      },
+    });
+    return { session, counts };
+  }
+
+  const refusedProvider = () =>
+    Promise.resolve({
+      kind: "refused" as const,
+      fatal: FROZEN_FATAL,
+      detail:
+        "authn refused the mint: the sandbox is frozen (HTTP 402 sandbox_frozen)",
+      context: "",
+    });
+
+  it(
+    "goes terminal at once on a refused grant, with the SANDBOX_FROZEN fatal, and reports the close once",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session } = buildCountedSession(relay, refusedProvider);
+      let closedEvents = 0;
+      session.onClosed(() => {
+        closedEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(session.terminalFatal()).toEqual(FROZEN_FATAL);
+        expect(closedEvents).toBe(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "calls the provider exactly once and opens no relay socket, even well past the first reconnect backoff",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session, counts } = buildCountedSession(relay, refusedProvider);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(counts.provider).toBe(1), WAIT);
+        // Past the first reconnect rung (jittered floor 500 ms, 1 s nominal),
+        // and past the second, so a scheduled redial would have called again.
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+        expect(counts.provider).toBe(1);
+        expect(counts.dials).toBe(0);
+        expect(relay.openBearers).toEqual([]);
+        expect(session.isClosed()).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "rejects a call parked on the session with the SANDBOX_FROZEN fatal, not as a retryable transport loss",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session } = buildCountedSession(relay, refusedProvider);
+      try {
+        session.start();
+        const error: unknown = await session
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).not.toBeNull();
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
+        const fatal =
+          error instanceof HostTransportFailureError ||
+          error instanceof HostRpcError
+            ? error.fatalDetails
+            : null;
+        expect(fatal?.code).toBe("SANDBOX_FROZEN");
+        expect(relay.unaryRequests).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "control: a provider answering unavailable keeps the session reconnecting, calling it again and again",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session, counts } = buildCountedSession(relay, () =>
+        Promise.resolve({
+          kind: "unavailable" as const,
+          detail: "authn answered HTTP 503",
+          context: "",
+        }),
+      );
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(counts.provider).toBeGreaterThanOrEqual(2),
+          WAIT,
+        );
+
+        expect(session.isClosed()).toBe(false);
+        expect(session.terminalFatal()).toBeNull();
+        expect(counts.dials).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});

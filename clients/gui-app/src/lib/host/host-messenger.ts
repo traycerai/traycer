@@ -224,6 +224,16 @@ export interface BuildRuntimeHostMessengerParams<
    * `HostClient.notifyHostAvailabilityRecovered`.
    */
   readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
+  /**
+   * Called once when a host's remote session ends terminally, with the fatal
+   * it ended on. The one consumer acts on `SANDBOX_FROZEN` (an attach-grant
+   * mint refused for a frozen sandbox): the frozen tile frame and picker row
+   * read the host list, so it is refreshed to say so.
+   */
+  readonly onRemoteSessionTerminal: (
+    hostId: string,
+    fatal: FatalErrorDetails,
+  ) => void;
 }
 
 export function buildRuntimeHostMessenger<
@@ -248,6 +258,10 @@ class RuntimeHostMessenger<
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
   private readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
+  private readonly onRemoteSessionTerminal: (
+    hostId: string,
+    fatal: FatalErrorDetails,
+  ) => void;
   private readonly localMessenger: IHostMessenger<Registry>;
   private remoteBinding: RemoteBinding<Registry> | null = null;
   // The bearer of the request currently being dispatched. The cached remote
@@ -304,6 +318,7 @@ class RuntimeHostMessenger<
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
     this.onRemoteAvailabilityRecovered = params.onRemoteAvailabilityRecovered;
+    this.onRemoteSessionTerminal = params.onRemoteSessionTerminal;
     this.localMessenger = new WsRpcClient<Registry>({
       registry: params.registry,
       requestId: params.requestId,
@@ -624,6 +639,7 @@ class RuntimeHostMessenger<
           key: transportKey,
         });
         this.onRemoteAvailabilityRecovered(hostId);
+        this.onRemoteSessionTerminal(hostId, fatal);
       }
       detach();
     });
