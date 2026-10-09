@@ -35,9 +35,9 @@ export interface SwitcherNewChat {
  * no workspace are stamped: the chat tile's own composer picks the model and
  * resolves the workspace on the first send, as it does for an A2A-created chat.
  *
- * The sheet stays open until the host answers: `mutate`'s per-call callbacks
- * are dropped once the calling component unmounts, and this hook lives inside
- * the sheet. `onOpened` closes it as the new chat takes the screen.
+ * The sheet stays open until the host answers, and `onOpened` closes it as the
+ * new chat takes the screen. If the user drag-dismisses it first the create
+ * still completes and the chat still opens (see `mutateAsync` below).
  */
 export function useSwitcherNewChat(
   epicId: string,
@@ -75,9 +75,20 @@ export function useSwitcherNewChat(
         forkSource: null,
         source: "direct_ui",
         createChat: (request, callbacks) => {
-          createChat.mutate(request, callbacks);
+          // `mutateAsync`, not `mutate`: a drag-dismissed sheet unmounts this
+          // hook mid-create, TanStack drops `mutate`'s per-call callbacks
+          // then, and the new chat would be made but never opened. The promise
+          // outlives the component. A refusal RESOLVES (its `chatId` names a
+          // chat the host did not make) and the mutation's own `onSuccess`
+          // already reported it, so it is never opened.
+          createChat.mutateAsync(request).then(
+            (response) => {
+              if (response.refusal === undefined) callbacks.onSuccess(response);
+            },
+            // The mutation's own `onError` already toasts.
+            () => undefined,
+          );
         },
-        // The mutation's own `onError` already toasts.
         onCreateError: () => undefined,
         openWhenProjected: (intent) => {
           const cancel = openCreatedChatWhenProjectedWithNavigation({

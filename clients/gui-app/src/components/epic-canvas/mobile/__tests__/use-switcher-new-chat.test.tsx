@@ -5,10 +5,8 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { HostRpcRegistry } from "@/lib/host";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
-import type {
-  CreateChatCommandCallbacks,
-  CreatedChatOpenIntent,
-} from "@/lib/commands/actions";
+import type { CreatedChatOpenIntent } from "@/lib/commands/actions";
+import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useSwitcherNewChat } from "@/components/epic-canvas/mobile/use-switcher-new-chat";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
@@ -17,13 +15,11 @@ const TAB_ID = "tab-1";
 const HOST_ID = "host-A";
 
 const spies = vi.hoisted(() => ({
-  mutate:
-    vi.fn<
-      (
-        request: CreateChatMutationInput,
-        callbacks: CreateChatCommandCallbacks,
-      ) => void
-    >(),
+  mutate: vi.fn<(request: CreateChatMutationInput) => void>(),
+  /** Resolves the in-flight `mutateAsync` of the last send. */
+  answer: {
+    current: (_response: CreateChatResponseV12): void => undefined,
+  },
   setSelection: vi.fn(),
   openWhenProjected:
     vi.fn<(args: { readonly intent: CreatedChatOpenIntent }) => () => void>(),
@@ -41,7 +37,11 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
-    mutate: spies.mutate,
+    mutateAsync: (request: CreateChatMutationInput) =>
+      new Promise<CreateChatResponseV12>((resolve) => {
+        spies.mutate(request);
+        spies.answer.current = resolve;
+      }),
     isPending: spies.isPending,
   }),
 }));
@@ -96,13 +96,18 @@ function submitTarget(hostId: string | null): LandingPlacementTarget {
   };
 }
 
-function lastCreate(): {
-  readonly request: CreateChatMutationInput;
-  readonly callbacks: CreateChatCommandCallbacks;
-} {
+function lastCreate(): { readonly request: CreateChatMutationInput } {
   const call = spies.mutate.mock.calls.at(-1);
   if (call === undefined) throw new Error("epic.createChat was not sent");
-  return { request: call[0], callbacks: call[1] };
+  return { request: call[0] };
+}
+
+/** The host answers; the hook's `.then` runs on the microtask queue. */
+async function answer(response: CreateChatResponseV12): Promise<void> {
+  await act(async () => {
+    spies.answer.current(response);
+    await Promise.resolve();
+  });
 }
 
 beforeEach(() => {
@@ -119,7 +124,7 @@ afterEach(() => {
 });
 
 describe("useSwitcherNewChat", () => {
-  it("sends one empty epic.createChat on the resolved host and opens it when answered", () => {
+  it("sends one empty epic.createChat on the resolved host and opens it when answered", async () => {
     const onOpened = vi.fn();
     const { result } = renderHook(() =>
       useSwitcherNewChat(EPIC_ID, TAB_ID, onOpened),
@@ -127,7 +132,7 @@ describe("useSwitcherNewChat", () => {
     act(() => result.current.start(null));
 
     expect(spies.mutate).toHaveBeenCalledTimes(1);
-    const { request, callbacks } = lastCreate();
+    const { request } = lastCreate();
     expect(request).toMatchObject({
       epicId: EPIC_ID,
       hostId: HOST_ID,
@@ -141,7 +146,7 @@ describe("useSwitcherNewChat", () => {
     expect(spies.setSelection).toHaveBeenCalledWith(HOST_ID);
     expect(onOpened).not.toHaveBeenCalled();
 
-    act(() => callbacks.onSuccess({ chatId: "chat-new" }));
+    await answer({ chatId: "chat-new" });
     expect(spies.openWhenProjected).toHaveBeenCalledTimes(1);
     expect(spies.openWhenProjected.mock.calls[0][0].intent).toMatchObject({
       epicId: EPIC_ID,
@@ -150,6 +155,34 @@ describe("useSwitcherNewChat", () => {
       hostId: HOST_ID,
     });
     expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens nothing when the host refuses the create", async () => {
+    const onOpened = vi.fn();
+    const { result } = renderHook(() =>
+      useSwitcherNewChat(EPIC_ID, TAB_ID, onOpened),
+    );
+    act(() => result.current.start(null));
+    await answer({
+      chatId: "never-made",
+      refusal: {
+        kind: "local-store-unavailable",
+        message: "unavailable",
+        remedy: "retry",
+      },
+    });
+    expect(spies.openWhenProjected).not.toHaveBeenCalled();
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("still opens the chat when the sheet unmounts before the host answers", async () => {
+    const { result, unmount } = renderHook(() =>
+      useSwitcherNewChat(EPIC_ID, TAB_ID, vi.fn()),
+    );
+    act(() => result.current.start(null));
+    unmount();
+    await answer({ chatId: "chat-late" });
+    expect(spies.openWhenProjected).toHaveBeenCalledTimes(1);
   });
 
   it("creates a child when given a parent id", () => {
