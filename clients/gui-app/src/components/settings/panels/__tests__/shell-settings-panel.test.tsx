@@ -1306,3 +1306,115 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     expect(set).toHaveBeenCalledWith({ key: "REPO_URL", value: SIGN_IN_URL });
   });
 });
+
+describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const NAME_LINE = `${REFUSAL}: a variable whose name looks like a credential is not stored here.`;
+
+  function envCli(): MockTraycerCli {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    return cli;
+  }
+
+  function envHandlers(cli: MockTraycerCli) {
+    const set = vi.fn(
+      async (request: { key: string; value: string | null }) => {
+        await cli.envOverrideSet(request);
+        return { key: request.key, value: request.value };
+      },
+    );
+    const remove = vi.fn(async (request: { key: string }) => {
+      await cli.envOverrideDelete(request);
+      return { key: request.key, deleted: true as const };
+    });
+    return { set, remove };
+  }
+
+  async function addVariable(name: string, value: string): Promise<void> {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add environment variable" }),
+    );
+    fireEvent.change(screen.getByLabelText("New environment variable name"), {
+      target: { value: name },
+    });
+    fireEvent.change(screen.getByLabelText("New environment variable value"), {
+      target: { value },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply environment variable" }),
+    );
+  }
+
+  it("never sends config.env.set for OPENAI_API_KEY=sk-x on a sandbox scope, and shows the line", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const { set, remove } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set, "config.env.delete": remove },
+    });
+
+    await addVariable("OPENAI_API_KEY", "sk-x");
+
+    expect(await screen.findByText(NAME_LINE)).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(cli.envOverrides).toEqual([]);
+  });
+
+  it("never sends set or delete when a row is renamed to a credential-shaped name", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "EDITOR", value: "vim" }];
+    const { set, remove } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set, "config.env.delete": remove },
+    });
+
+    const name = await screen.findByLabelText("Name for EDITOR");
+    fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
+    fireEvent.blur(name);
+
+    expect(await screen.findByText(NAME_LINE)).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(cli.envOverrides.map((row) => row.key)).toEqual(["EDITOR"]);
+  });
+
+  it("still saves EDITOR=vim on a sandbox scope", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const { set } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("EDITOR", "vim");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ key: "EDITOR", value: "vim" });
+    expect(screen.queryByText(NAME_LINE)).toBeNull();
+  });
+
+  it("control: on a personal host OPENAI_API_KEY=sk-x saves", async () => {
+    credentialRefusal.current = null;
+    const cli = envCli();
+    const { set } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("OPENAI_API_KEY", "sk-x");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ key: "OPENAI_API_KEY", value: "sk-x" });
+  });
+});

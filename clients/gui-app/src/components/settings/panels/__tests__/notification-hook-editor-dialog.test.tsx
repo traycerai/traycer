@@ -83,14 +83,13 @@ describe("<NotificationHookEditorDialog /> credentials", () => {
     fireEvent.click(save);
 
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: {
-          type: "http",
-          url: "https://hooks.example.com/traycer",
-          headers: { authorization: "Bearer secret" },
-        },
-      }),
-    );
+    const saved = onSave.mock.lastCall?.[0];
+    expect(saved).toMatchObject({
+      action: {
+        type: "http",
+        url: "https://hooks.example.com/traycer",
+        headers: { authorization: "Bearer secret" },
+      },
+    });
   });
 });

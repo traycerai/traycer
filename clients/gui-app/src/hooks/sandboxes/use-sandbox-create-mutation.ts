@@ -12,6 +12,7 @@ import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface SandboxCreateContext {
   readonly directory: HostDirectoryService | null;
@@ -33,8 +34,10 @@ export function useSandboxCreate(): UseMutationResult<
 > {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
+  // The account the sandbox list and costs are keyed by.
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   return useMutation({
-    mutationKey: sandboxMutationKeys.create(),
+    mutationKey: sandboxMutationKeys.create(userId),
     onMutate: (): SandboxCreateContext => ({
       directory: binding === null ? null : binding.directory,
     }),

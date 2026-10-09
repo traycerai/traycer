@@ -51,7 +51,10 @@ import { Button } from "@/components/ui/button";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
+import {
+  isCredentialShapedEnvName,
+  urlCarriesCredentials,
+} from "@/components/providers/credential-bearing-values";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
@@ -313,8 +316,9 @@ function ShellSettingsPanelBody(props: {
   const shellPending = controller.shellPending;
   const envPending = controller.envPending;
   // A sandbox takes no credentials. Its host variables are runtime settings
-  // and stay editable, but a value that is a URL with a sign-in is refused
-  // here and never sent (provider keys live in Providers, which refuses them).
+  // and stay editable, but a variable whose name looks like a credential's
+  // (the host's own rule) or whose value is a URL with a sign-in is refused
+  // here and never sent. Provider keys live in Providers, which refuses them.
   const credentialRefusal = useHostCredentialRefusal(null);
   const [shellSaveTarget, setShellSaveTarget] =
     useState<ShellSaveTarget | null>(null);
@@ -438,8 +442,8 @@ function ShellSettingsPanelBody(props: {
     if (envPending) return;
     if (
       credentialRefusal !== null &&
-      value !== null &&
-      urlCarriesCredentials(value)
+      (isCredentialShapedEnvName(newKey) ||
+        (value !== null && urlCarriesCredentials(value)))
     ) {
       return;
     }

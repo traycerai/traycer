@@ -9,7 +9,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
+import {
+  isCredentialShapedEnvName,
+  urlCarriesCredentials,
+} from "@/components/providers/credential-bearing-values";
 import { cn } from "@/lib/utils";
 
 /**
@@ -128,18 +131,24 @@ function draftError(key: string, otherKeys: readonly string[]): string | null {
 }
 
 /**
- * Why a SET value cannot be sent: with `credentialRefusal` (the host takes no
- * credentials), a URL carrying a sign-in in its userinfo. The value is kept in
- * the field so the person can remove the sign-in.
+ * Why a variable cannot be sent to a host that takes no credentials
+ * (`credentialRefusal` set): a name that looks like a credential's (the
+ * host's own rule, mirrored), or a SET value that is a URL carrying a
+ * sign-in. The typed name and value stay in the fields.
  */
-function valueError(
+function credentialError(
+  key: string,
   value: string | null,
   credentialRefusal: string | null,
 ): string | null {
-  if (credentialRefusal === null || value === null) return null;
-  return urlCarriesCredentials(value)
-    ? `${credentialRefusal}: remove the sign-in from this URL.`
-    : null;
+  if (credentialRefusal === null) return null;
+  if (isCredentialShapedEnvName(key)) {
+    return `${credentialRefusal}: a variable whose name looks like a credential is not stored here.`;
+  }
+  if (value !== null && urlCarriesCredentials(value)) {
+    return `${credentialRefusal}: remove the sign-in from this URL.`;
+  }
+  return null;
 }
 
 export function EnvOverrideEditor(props: {
@@ -288,7 +297,7 @@ function EnvOverrideRow(props: {
       setDraft((current) => ({ ...current, key: entry.key, error }));
       return;
     }
-    const refused = valueError(nextValue, credentialRefusal);
+    const refused = credentialError(nextKey, nextValue, credentialRefusal);
     if (refused !== null) {
       setDraft((current) => ({ ...current, error: refused }));
       return;
@@ -316,7 +325,12 @@ function EnvOverrideRow(props: {
       const nextValue = current.mode === "unset" ? null : current.value;
       const error = draftError(nextKey, otherKeysRef.current);
       if (error !== null) return;
-      if (valueError(nextValue, credentialRefusalRef.current) !== null) return;
+      if (
+        credentialError(nextKey, nextValue, credentialRefusalRef.current) !==
+        null
+      ) {
+        return;
+      }
       if (nextKey !== currentEntry.key || nextValue !== currentEntry.value) {
         onCommitRef.current(currentEntry.key, nextKey, nextValue);
       }
@@ -402,7 +416,7 @@ function EnvOverrideAddRow(props: {
     const nextValue = draft.mode === "unset" ? null : draft.value;
     const error =
       draftError(nextKey, existingKeys) ??
-      valueError(nextValue, credentialRefusal);
+      credentialError(nextKey, nextValue, credentialRefusal);
     if (error !== null) {
       setDraft((current) => ({ ...current, error }));
       return;

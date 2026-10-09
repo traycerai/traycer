@@ -28,34 +28,66 @@ export function urlCarriesCredentials(value: string): boolean {
 }
 
 /**
- * Whether an MCP server definition carries a secret: an auth header's value,
- * a stdio env value, or credentials in one of its URLs - the remote URL, the
- * OAuth resource, or a URL passed as a stdio argument
- * (`mcp-remote https://alice:token@host/mcp`). An OAuth server's client id and
- * an env-auth server's variable NAME are not secrets.
+ * Mirrors the host's sandbox env-name rule
+ * (`traycer-host/src/domain/sandbox/sandbox-credential-refusal.ts`): a host
+ * that takes no credentials stores no variable whose NAME looks like one, so
+ * the client refuses it before the send rather than after the host's refusal.
+ * Keep the two patterns identical.
  */
-export function mcpTransportCarriesSecret(
+const CREDENTIAL_SHAPED_ENV_NAME =
+  /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE|CERT)/i;
+
+/** Whether an environment variable's name looks like a credential's. */
+export function isCredentialShapedEnvName(name: string): boolean {
+  return CREDENTIAL_SHAPED_ENV_NAME.test(name);
+}
+
+/**
+ * Why an MCP server definition cannot be sent to a host that takes no
+ * credentials, or `null`. Mirrors the host's own refusal for `nativeMutate`
+ * MCP `add` / `update` on a sandbox, plus the client's userinfo rule:
+ *  - `credential-env-name` - a stdio `env` NAME that looks like a
+ *    credential's ({@link isCredentialShapedEnvName}, the host's rule);
+ *  - `secret-auth`         - header or env auth on an http/sse server, which
+ *    the host refuses whatever the values;
+ *  - `url-sign-in`         - a URL carrying a sign-in: the remote URL, the
+ *    OAuth resource, the stdio command or an argument
+ *    (`mcp-remote https://alice:token@host/mcp`), or a stdio env value.
+ * An OAuth server's client id and a plain stdio env variable are not
+ * credentials.
+ */
+export type McpCredentialReason =
+  | "credential-env-name"
+  | "secret-auth"
+  | "url-sign-in";
+
+export function mcpTransportCredentialReason(
   transport: ProviderMcpServerTransportWrite,
-): boolean {
+): McpCredentialReason | null {
   if (transport.type === "stdio") {
-    return (
-      transport.env !== null ||
-      urlCarriesCredentials(transport.command) ||
-      transport.args.some(urlCarriesCredentials)
-    );
-  }
-  if (urlCarriesCredentials(transport.url)) return true;
-  if (transport.auth === null) return false;
-  switch (transport.auth.type) {
-    case "header":
-      return true;
-    case "oauth": {
-      const resource = transport.auth.oauthResource;
-      return typeof resource === "string" && urlCarriesCredentials(resource);
+    const env = transport.env ?? [];
+    if (env.some((entry) => isCredentialShapedEnvName(entry.name))) {
+      return "credential-env-name";
     }
-    case "env":
-      // The variable NAME the host reads its token from; a value here would be
-      // the token itself.
-      return transport.auth.value.length > 0;
+    const signIn =
+      urlCarriesCredentials(transport.command) ||
+      transport.args.some(urlCarriesCredentials) ||
+      env.some((entry) => urlCarriesCredentials(entry.value));
+    return signIn ? "url-sign-in" : null;
   }
+  if (transport.auth !== null) {
+    switch (transport.auth.type) {
+      case "header":
+      case "env":
+        return "secret-auth";
+      case "oauth": {
+        const resource = transport.auth.oauthResource;
+        if (typeof resource === "string" && urlCarriesCredentials(resource)) {
+          return "url-sign-in";
+        }
+        break;
+      }
+    }
+  }
+  return urlCarriesCredentials(transport.url) ? "url-sign-in" : null;
 }

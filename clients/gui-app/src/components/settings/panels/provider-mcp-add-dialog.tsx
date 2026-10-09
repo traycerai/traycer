@@ -41,7 +41,10 @@ import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutat
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { cn } from "@/lib/utils";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import { mcpTransportCarriesSecret } from "@/components/providers/credential-bearing-values";
+import {
+  mcpTransportCredentialReason,
+  type McpCredentialReason,
+} from "@/components/providers/credential-bearing-values";
 
 type TransportKind = "remote" | "local";
 type RemoteTransportType = "http" | "sse";
@@ -457,12 +460,13 @@ export function ProviderMcpAddDialog(props: {
   function submitValues(values: McpFormValues): void {
     const submission = submissionFromValues(values);
     if (submission.error !== undefined) return;
-    if (
-      credentialRefusal !== null &&
-      mcpTransportCarriesSecret(submission.transport)
-    ) {
+    const credentialReason =
+      credentialRefusal === null
+        ? null
+        : mcpTransportCredentialReason(submission.transport);
+    if (credentialRefusal !== null && credentialReason !== null) {
       setFormError(
-        `${credentialRefusal}: remove the header values, environment values and any sign-in in its URLs to add this server here.`,
+        mcpCredentialRefusalLine(credentialRefusal, credentialReason),
       );
       return;
     }
@@ -1075,6 +1079,21 @@ function isHttpUrl(value: string): boolean {
     return parsed.protocol === "http:" || parsed.protocol === "https:";
   } catch {
     return false;
+  }
+}
+
+/** The form error for a server a host that takes no credentials refuses. */
+function mcpCredentialRefusalLine(
+  refusal: string,
+  reason: McpCredentialReason,
+): string {
+  switch (reason) {
+    case "credential-env-name":
+      return `${refusal}: a variable whose name looks like a credential is not stored here.`;
+    case "secret-auth":
+      return `${refusal}: header and environment-variable authentication is not stored here.`;
+    case "url-sign-in":
+      return `${refusal}: remove the sign-in from its URLs to add this server here.`;
   }
 }
 

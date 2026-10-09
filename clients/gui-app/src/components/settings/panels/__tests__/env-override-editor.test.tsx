@@ -348,3 +348,127 @@ describe("EnvOverrideEditor", () => {
     });
   });
 });
+
+describe("EnvOverrideEditor credential-shaped names", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const NAME_LINE = `${REFUSAL}: a variable whose name looks like a credential is not stored here.`;
+
+  function renderWith(input: {
+    readonly refusal: string | null;
+    readonly overrides: readonly {
+      readonly key: string;
+      readonly value: string | null;
+    }[];
+    readonly onCommit: EnvCommit;
+  }) {
+    return render(
+      <EnvOverrideEditor
+        overrides={input.overrides}
+        disabled={false}
+        credentialRefusal={input.refusal}
+        namePlaceholder="NODE_ENV"
+        emptyLabel="No environment variables."
+        onCommit={input.onCommit}
+        onDelete={vi.fn<EnvDelete>()}
+      />,
+    );
+  }
+
+  function addRow(name: string, value: string): void {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add environment variable" }),
+    );
+    fireEvent.change(screen.getByLabelText("New environment variable name"), {
+      target: { value: name },
+    });
+    fireEvent.change(screen.getByLabelText("New environment variable value"), {
+      target: { value },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply environment variable" }),
+    );
+  }
+
+  it("refuses an added variable whose name looks like a credential: no commit, the line shown, the typed name kept", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderWith({ refusal: REFUSAL, overrides: [], onCommit });
+
+    addRow("OPENAI_API_KEY", "sk-x");
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByText(NAME_LINE)).toBeDefined();
+    const nameField = screen.getByLabelText("New environment variable name");
+    expect((nameField as HTMLInputElement).value).toBe("OPENAI_API_KEY");
+  });
+
+  it("refuses a credential-shaped name whatever the value, an empty one included", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderWith({ refusal: REFUSAL, overrides: [], onCommit });
+
+    addRow("GITHUB_TOKEN", "");
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByText(NAME_LINE)).toBeDefined();
+  });
+
+  it("refuses renaming an existing row to a credential-shaped name on blur, with the same line", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderWith({
+      refusal: REFUSAL,
+      overrides: [{ key: "EDITOR", value: "vim" }],
+      onCommit,
+    });
+
+    const name = screen.getByLabelText("Name for EDITOR");
+    fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
+    fireEvent.blur(name);
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByText(NAME_LINE)).toBeDefined();
+  });
+
+  it("sends nothing when a row unmounts with a credential-shaped name still in its field", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const view = renderWith({
+      refusal: REFUSAL,
+      overrides: [{ key: "EDITOR", value: "vim" }],
+      onCommit,
+    });
+
+    fireEvent.change(screen.getByLabelText("Name for EDITOR"), {
+      target: { value: "GITHUB_TOKEN" },
+    });
+    view.unmount();
+
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("still commits an ordinary name and value on a host that takes no credentials", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderWith({ refusal: REFUSAL, overrides: [], onCommit });
+
+    addRow("EDITOR", "vim");
+
+    expect(onCommit).toHaveBeenCalledWith("", "EDITOR", "vim");
+    expect(screen.queryByText(NAME_LINE)).toBeNull();
+  });
+
+  it("control: with no refusal the same credential-shaped names commit, added and renamed", () => {
+    const added = vi.fn<EnvCommit>();
+    const first = renderWith({ refusal: null, overrides: [], onCommit: added });
+    addRow("OPENAI_API_KEY", "sk-x");
+    expect(added).toHaveBeenCalledWith("", "OPENAI_API_KEY", "sk-x");
+    first.unmount();
+
+    const renamed = vi.fn<EnvCommit>();
+    renderWith({
+      refusal: null,
+      overrides: [{ key: "EDITOR", value: "vim" }],
+      onCommit: renamed,
+    });
+    const name = screen.getByLabelText("Name for EDITOR");
+    fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
+    fireEvent.blur(name);
+    expect(renamed).toHaveBeenCalledWith("EDITOR", "GITHUB_TOKEN", "vim");
+  });
+});

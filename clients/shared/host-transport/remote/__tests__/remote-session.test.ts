@@ -10759,3 +10759,87 @@ describe("RemoteSession sandbox session grant", () => {
     TEST_BUDGET_MS,
   );
 });
+
+/**
+ * The no-progress bound counts an UNAUTHORIZED rejection whose revalidation
+ * answered "rotated" as no progress when the credential the next attach will
+ * present is the one just rejected. A session grant is not like a bearer: the
+ * grant reader keeps returning the grant the host just refused, because the
+ * fresh grant is minted only by the NEXT attach. So "unchanged" proves nothing
+ * for a grant, and a sandbox session must keep reconnecting through it.
+ */
+describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () => {
+  const ROTATED: StreamAuthRevalidator = {
+    revalidateForReconnect: () => Promise.resolve("rotated" as const),
+  };
+
+  /**
+   * One open past the bound (three), or a terminal close. Four, not more: the
+   * reconnect backoff starts at 1 s and doubles, so a fourth open lands near
+   * 7 s and a fifth would not fit the wait.
+   */
+  async function untilPastTheBoundOrClosed(
+    relay: FakeRelayHost,
+    session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+  ): Promise<void> {
+    await vi.waitFor(
+      () =>
+        expect(session.isClosed() || relay.openBearers.length >= 4).toBe(true),
+      WAIT,
+    );
+  }
+
+  it(
+    "keeps reconnecting a session-grant session whose grant reader returns the rejected grant, after rotated revalidations past the bearer bound",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const lease = new MutableBearerLease("user-bearer-secret", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, ROTATED),
+        // The same grant every time: the next attach has not minted a new one.
+        sessionGrant: () => "session-grant-jws",
+      });
+      try {
+        session.start();
+        await untilPastTheBoundOrClosed(relay, session);
+
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers.length).toBeGreaterThanOrEqual(4);
+        // Every one of those opens carried the grant, never the user bearer.
+        expect(relay.openBearers.every((bearer) => bearer === "")).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "control: a bearer session whose bearer is unchanged still goes terminal after three rejected opens",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const lease = new MutableBearerLease("unchanged-bearer", "user-1");
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, ROTATED),
+      );
+      try {
+        session.start();
+        await untilPastTheBoundOrClosed(relay, session);
+
+        expect(session.isClosed()).toBe(true);
+        expect(relay.openBearers).toHaveLength(3);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});

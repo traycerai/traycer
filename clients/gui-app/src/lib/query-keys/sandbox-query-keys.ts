@@ -44,7 +44,10 @@ export const sandboxQueryKeys = {
 };
 
 export const sandboxMutationKeys = {
-  create: () => ["auth", "sandbox", "create"] as const,
+  // Per account: a create can run for minutes, and one started by another
+  // account (before a sign-out) must not hold this account's create form.
+  create: (userId: string | null) =>
+    ["auth", "sandbox", "create", userId] as const,
   // Per sandbox, so two destroys never share a pending state.
   destroy: (sandboxId: string) =>
     ["auth", "sandbox", "destroy", sandboxId] as const,

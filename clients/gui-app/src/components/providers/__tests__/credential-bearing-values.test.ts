@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderMcpServerTransportWrite } from "@traycer/protocol/host/provider-native-schemas";
 import {
-  mcpTransportCarriesSecret,
+  isCredentialShapedEnvName,
+  mcpTransportCredentialReason,
   urlCarriesCredentials,
 } from "../credential-bearing-values";
 
@@ -42,149 +43,211 @@ describe("urlCarriesCredentials", () => {
 
 const NO_ARGS: string[] = [];
 
-describe("mcpTransportCarriesSecret", () => {
-  it.each(["http", "sse"] as const)(
-    "is true for a %s server whose URL has a sign-in and whose auth is null",
-    (type) => {
+function stdio(
+  overrides: Partial<
+    Extract<ProviderMcpServerTransportWrite, { type: "stdio" }>
+  >,
+): ProviderMcpServerTransportWrite {
+  return {
+    type: "stdio",
+    command: "npx",
+    args: NO_ARGS,
+    env: null,
+    ...overrides,
+  };
+}
+
+describe("mcpTransportCredentialReason", () => {
+  describe("stdio", () => {
+    it("is credential-env-name for an env entry whose NAME looks like a credential", () => {
       expect(
-        mcpTransportCarriesSecret({
+        mcpTransportCredentialReason(
+          stdio({ env: [{ name: "OPENAI_API_KEY", value: "sk-x" }] }),
+        ),
+      ).toBe("credential-env-name");
+    });
+
+    it("is credential-env-name whatever the value, an empty one included", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ env: [{ name: "GITHUB_TOKEN", value: "" }] }),
+        ),
+      ).toBe("credential-env-name");
+    });
+
+    it("is null for a plain env such as NODE_ENV=production", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ env: [{ name: "NODE_ENV", value: "production" }] }),
+        ),
+      ).toBeNull();
+    });
+
+    it("is url-sign-in for an env VALUE that is a URL with a sign-in under an ordinary name", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ env: [{ name: "DB_URL", value: "postgres://u:p@db/app" }] }),
+        ),
+      ).toBe("url-sign-in");
+    });
+
+    it("is url-sign-in for an argument that is a URL with a sign-in", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ args: ["mcp-remote", "https://alice:token@host/mcp"] }),
+        ),
+      ).toBe("url-sign-in");
+    });
+
+    it("is url-sign-in for a command that is a URL with a sign-in", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ command: "https://alice:token@host/run" }),
+        ),
+      ).toBe("url-sign-in");
+    });
+
+    it("names the env NAME first when both a credential-shaped name and a sign-in URL are present", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({
+            args: ["https://alice:token@host/mcp"],
+            env: [{ name: "GITHUB_TOKEN", value: "x" }],
+          }),
+        ),
+      ).toBe("credential-env-name");
+    });
+
+    it("is null for a plain stdio server, including URL arguments without a sign-in", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ args: ["mcp-remote", "https://host/mcp", "--flag"] }),
+        ),
+      ).toBeNull();
+    });
+
+    it("is null for an ssh URL argument that names only an account", () => {
+      expect(
+        mcpTransportCredentialReason(
+          stdio({ args: ["clone", "ssh://git@host/repo"] }),
+        ),
+      ).toBeNull();
+    });
+  });
+
+  describe.each(["http", "sse"] as const)("%s", (type) => {
+    it("is secret-auth for header auth, whatever the values", () => {
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://host/mcp",
+          auth: { type: "header", name: "Authorization", value: "Bearer x" },
+        }),
+      ).toBe("secret-auth");
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://host/mcp",
+          auth: { type: "header", name: "x-trace", value: "" },
+        }),
+      ).toBe("secret-auth");
+    });
+
+    it("is secret-auth for env auth with an empty value (just the variable name)", () => {
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://host/mcp",
+          auth: { type: "env", name: "GITHUB_TOKEN", value: "" },
+        }),
+      ).toBe("secret-auth");
+    });
+
+    it("is secret-auth for env auth that carries a value", () => {
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://host/mcp",
+          auth: { type: "env", name: "GITHUB_TOKEN", value: "ghp_secret" },
+        }),
+      ).toBe("secret-auth");
+    });
+
+    it("is null for oauth with a plain resource, a null one, or none", () => {
+      for (const oauthResource of ["https://host/resource", null, undefined]) {
+        expect(
+          mcpTransportCredentialReason({
+            type,
+            url: "https://host/mcp",
+            auth: { type: "oauth", oauthClientId: "client-1", oauthResource },
+          }),
+        ).toBeNull();
+      }
+    });
+
+    it("is url-sign-in for oauth whose resource is a URL with a sign-in", () => {
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://host/mcp",
+          auth: {
+            type: "oauth",
+            oauthClientId: null,
+            oauthResource: "https://alice:token@host/resource",
+          },
+        }),
+      ).toBe("url-sign-in");
+    });
+
+    it("is null for a plain URL with no auth", () => {
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://host/mcp",
+          auth: null,
+        }),
+      ).toBeNull();
+    });
+
+    it("is url-sign-in for a URL with a sign-in and no auth", () => {
+      expect(
+        mcpTransportCredentialReason({
           type,
           url: "https://alice:token@host/mcp",
           auth: null,
         }),
-      ).toBe(true);
+      ).toBe("url-sign-in");
+    });
+
+    it("names the auth first when the URL carries a sign-in too", () => {
+      expect(
+        mcpTransportCredentialReason({
+          type,
+          url: "https://alice:token@host/mcp",
+          auth: { type: "header", name: "Authorization", value: "Bearer x" },
+        }),
+      ).toBe("secret-auth");
+    });
+  });
+});
+
+describe("isCredentialShapedEnvName", () => {
+  it.each([
+    "OPENAI_API_KEY",
+    "DATABASE_PASSWORD",
+    "GITHUB_TOKEN",
+    "AUTH_URL",
+    "my_secret",
+    "SSL_CERT_FILE",
+    "SESSION_ID",
+  ])("is true for %s", (name) => {
+    expect(isCredentialShapedEnvName(name)).toBe(true);
+  });
+
+  it.each(["EDITOR", "PATH", "NODE_OPTIONS", "NODE_ENV", "HOME"])(
+    "is false for %s",
+    (name) => {
+      expect(isCredentialShapedEnvName(name)).toBe(false);
     },
   );
-
-  it("is true for a remote server with header auth on a plain URL", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "http",
-        url: "https://host/mcp",
-        auth: { type: "header", name: "Authorization", value: "Bearer x" },
-      }),
-    ).toBe(true);
-  });
-
-  it("is false for an oauth server on a plain URL", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "http",
-        url: "https://host/mcp",
-        auth: { type: "oauth", oauthClientId: "client-1" },
-      }),
-    ).toBe(false);
-  });
-
-  it("is true for an oauth server whose resource is a URL with a sign-in", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "http",
-        url: "https://host/mcp",
-        auth: {
-          type: "oauth",
-          oauthClientId: null,
-          oauthResource: "https://alice:token@host/resource",
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it.each([
-    ["a plain URL", "https://host/resource"],
-    ["null", null],
-    ["undefined", undefined],
-  ])("is false for an oauth server whose resource is %s", (_name, resource) => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "http",
-        url: "https://host/mcp",
-        auth: { type: "oauth", oauthClientId: null, oauthResource: resource },
-      }),
-    ).toBe(false);
-  });
-
-  it("is false for an env-auth server whose value is empty (the name is not a secret)", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "http",
-        url: "https://host/mcp",
-        auth: { type: "env", name: "GITHUB_TOKEN", value: "" },
-      }),
-    ).toBe(false);
-  });
-
-  it("is true for an env-auth server that carries a value (the token itself)", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "http",
-        url: "https://host/mcp",
-        auth: { type: "env", name: "GITHUB_TOKEN", value: "ghp_secret" },
-      }),
-    ).toBe(true);
-  });
-
-  it("is false for a stdio server that passes an ssh URL naming only an account", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "stdio",
-        command: "npx",
-        args: ["clone", "ssh://git@host/repo"],
-        env: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("is false for a remote server with no auth on a plain URL", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "sse",
-        url: "https://host/mcp",
-        auth: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("is true for a stdio server with env values", () => {
-    const transport: ProviderMcpServerTransportWrite = {
-      type: "stdio",
-      command: "npx",
-      args: NO_ARGS,
-      env: [{ name: "GITHUB_TOKEN", value: "ghp_secret" }],
-    };
-    expect(mcpTransportCarriesSecret(transport)).toBe(true);
-  });
-
-  it("is true for a stdio server with a sign-in URL as an argument", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "stdio",
-        command: "npx",
-        args: ["mcp-remote", "https://alice:token@host/mcp"],
-        env: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("is true for a stdio server whose command is a sign-in URL", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "stdio",
-        command: "https://alice:token@host/run",
-        args: NO_ARGS,
-        env: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("is false for a plain stdio server, including URL arguments without a sign-in", () => {
-    expect(
-      mcpTransportCarriesSecret({
-        type: "stdio",
-        command: "npx",
-        args: ["mcp-remote", "https://host/mcp", "--flag"],
-        env: null,
-      }),
-    ).toBe(false);
-  });
 });

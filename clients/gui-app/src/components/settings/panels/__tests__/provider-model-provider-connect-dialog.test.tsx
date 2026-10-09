@@ -385,6 +385,60 @@ describe("connect with an API key", () => {
     expect(mocks.authCalls).toHaveLength(0);
   });
 
+  it("sends no startOauth on a host that takes no credentials: Continue is disabled and pressing it does nothing", () => {
+    mocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+
+    const cont = screen.getByRole("button", { name: "Continue" });
+    expect(cont.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(cont);
+    fireEvent.submit(cont);
+
+    expect(mocks.authCalls).toHaveLength(0);
+  });
+
+  it("sends no submitCode once the host stops taking credentials mid-attempt: the code is not submitted by the button or by Enter", () => {
+    const element = (): ReactNode => (
+      <ProviderModelProviderConnectDialog
+        open
+        onOpenChange={() => {}}
+        providerId="opencode"
+        providerLabel="OpenCode"
+        entry={OAUTH_ONLY}
+        capabilities={FULL_CAPS}
+        hostId="host-1"
+        resumedAttempt={null}
+        onDone={vi.fn()}
+      />
+    );
+    const { rerender } = render(element());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    settle(mocks.authCalls[0], {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/device",
+      method: "code",
+      instructions: null,
+    });
+    const field = screen.getByLabelText("Paste the code");
+    fireEvent.change(field, { target: { value: "pasted-code" } });
+    expect(mocks.authCalls).toHaveLength(1);
+
+    // The scoped host becomes a sandbox with the attempt still on screen.
+    mocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    rerender(element());
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.keyDown(screen.getByLabelText("Paste the code"), {
+      key: "Enter",
+    });
+
+    expect(mocks.authCalls).toHaveLength(1);
+  });
+
   it("shows no refusal and connects when the host takes credentials", () => {
     renderDialog({
       entry: entry({}),

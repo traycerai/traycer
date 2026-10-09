@@ -259,7 +259,12 @@ function createSessionGrantRemoteSessionAuth(
       };
     },
     readCredentialUpdateBearer: () => null,
-    currentFingerprint: readSessionGrant,
+    // Unknown until the next attach mints one: the reader still holds the
+    // grant that was just refused, because only the next attach replaces it.
+    // A grant refusal is therefore never evidence of no progress. The loop
+    // stays bounded the way a rotating bearer's is (the reconnect backoff),
+    // and the `local-plane-retained` bound is untouched.
+    currentFingerprint: () => null,
     // A refused session grant is recovered the way a refused bearer is: the
     // user bearer that mints the next pair is revalidated, then the session
     // redials and the provider mints a fresh attach and session grant.

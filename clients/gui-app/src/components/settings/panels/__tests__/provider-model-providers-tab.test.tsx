@@ -1767,6 +1767,28 @@ describe("ProviderModelProvidersTab on a host that takes no credentials", () => 
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("sends no createCustom: pressing Add custom provider opens no form and sends nothing", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add custom provider" }),
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(hostMocks.authMutate).not.toHaveBeenCalled();
+  });
+
+  it("sends no updateCustom: pressing Edit on a declared provider opens no form and sends nothing", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(hostMocks.authMutate).not.toHaveBeenCalled();
+  });
+
   it("lets Disconnect through: removing a credential sends none", () => {
     hostMocks.credentialRefusal = REFUSAL;
     renderMixedList();
