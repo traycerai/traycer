@@ -131,7 +131,12 @@ describe("windows OS-native uninstall macro", () => {
     for (const line of readUninstallMacro().split("\n")) {
       const command = line.trim();
       if (!command.startsWith("nsExec::")) continue;
-      const argument = command.slice(command.indexOf(" ") + 1).trim();
+      let argument = command.slice(command.indexOf(" ") + 1).trim();
+      // `nsExec::ExecToLog` accepts an optional `/TIMEOUT=<ms>` flag before
+      // the delimited command string; skip it to reach the actual argument.
+      const timeoutFlag = argument.match(/^\/TIMEOUT=\d+\s+/);
+      if (timeoutFlag !== null)
+        argument = argument.slice(timeoutFlag[0].length);
       const delimiter = argument[0];
       expect(["'", '"', "`"]).toContain(delimiter);
       expect(argument.endsWith(delimiter)).toBe(true);
@@ -161,7 +166,9 @@ describe("windows OS-native uninstall macro", () => {
     const optionIndex = macro.indexOf('"--updated"');
     const guardIndex = macro.indexOf("${ifNot} ${Errors}");
     const elseIndex = macro.indexOf("${else}", guardIndex);
-    const endIfIndex = macro.indexOf("${endIf}", elseIndex);
+    // The macro's OUTERMOST `${endIf}` closes the update guard; the ownership
+    // branches nested inside the removal arm close with their own.
+    const endIfIndex = macro.lastIndexOf("${endIf}");
     expect(optionIndex).toBeGreaterThan(-1);
     expect(guardIndex).toBeGreaterThan(optionIndex);
     expect(elseIndex).toBeGreaterThan(guardIndex);
@@ -177,6 +184,136 @@ describe("windows OS-native uninstall macro", () => {
     ]) {
       expect(removalArm).toContain(command);
       expect(updateArm).not.toContain(command);
+    }
+  });
+});
+
+// The macro's own ownership gate. The task name is machine-global, and an
+// uninstaller elevated as an admin may end and delete ANOTHER user's task by
+// the default task DACL, so every write on the task waits on a probe of whose
+// task it is (the CLI's `windows-task-gate.ts` is the same rule). Pinned
+// structurally, like the update guard above, because makensis is not available
+// where this suite runs.
+describe("windows OS-native uninstall macro: the task is ended and deleted only when it is this account's", () => {
+  // Offsets of every executed `nsExec::` command containing `text` (a comment
+  // that names a verb is not a command).
+  function commandOffsets(macro: string, text: string): number[] {
+    const offsets: number[] = [];
+    let offset = 0;
+    for (const line of macro.split("\n")) {
+      if (line.trim().startsWith("nsExec::") && line.includes(text)) {
+        offsets.push(offset + line.indexOf(text));
+      }
+      offset += line.length + 1;
+    }
+    return offsets;
+  }
+
+  // The probe is the one nsExec whose script reads the task's principal.
+  function probeIndex(macro: string): number {
+    return macro.indexOf("Definition.Principal.UserId");
+  }
+
+  // The `${if} $R1 == "0"` ... `${elseIf}` arm: end and delete.
+  function ownedArm(macro: string): { start: number; end: number } {
+    const start = macro.indexOf('${if} $R1 == "0"\n');
+    const end = macro.indexOf("${elseIf}", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return { start, end };
+  }
+
+  it("asks whose task it is before any of the three writes", () => {
+    const macro = readUninstallMacro();
+    const probe = probeIndex(macro);
+    expect(probe).toBeGreaterThan(-1);
+    for (const write of [
+      "schtasks /End",
+      "schtasks /Delete",
+      "DeleteFolder(",
+    ]) {
+      const offsets = commandOffsets(macro, write);
+      expect(offsets, `${write} is executed`).toHaveLength(1);
+      expect(offsets[0], `${write} comes after the probe`).toBeGreaterThan(
+        probe,
+      );
+    }
+  });
+
+  it('/End and /Delete are each spelled once, and only under ${if} $R1 == "0"', () => {
+    const macro = readUninstallMacro();
+    const arm = ownedArm(macro);
+    for (const write of ["schtasks /End", "schtasks /Delete"]) {
+      const offsets = commandOffsets(macro, write);
+      expect(offsets, `${write} is executed once`).toHaveLength(1);
+      const first = offsets[0] ?? -1;
+      expect(first).toBeGreaterThan(arm.start);
+      expect(first).toBeLessThan(arm.end);
+    }
+  });
+
+  it('the folder DeleteFolder is only under $R1 == "0" ${orIf} $R1 == "2" (the task is gone or was this account\'s)', () => {
+    const macro = readUninstallMacro();
+    const guard = macro.indexOf('${if} $R1 == "0"\n    ${orIf} $R1 == "2"');
+    expect(guard).toBeGreaterThan(-1);
+    const offsets = commandOffsets(macro, "DeleteFolder(");
+    expect(offsets).toHaveLength(1);
+    const deleteFolder = offsets[0] ?? -1;
+    expect(deleteFolder).toBeGreaterThan(guard);
+    // Nothing closes the guard between it and the delete.
+    expect(macro.slice(guard, deleteFolder)).not.toContain("${endIf}");
+  });
+
+  it("the launcher Delete is unconditional within the removal arm: this account's own file goes whoever owns the task", () => {
+    const macro = readUninstallMacro();
+    const removalArmStart = macro.indexOf(
+      "${else}",
+      macro.indexOf("${ifNot} ${Errors}"),
+    );
+    const launcher = macro.indexOf('Delete "$PROFILE');
+    expect(launcher).toBeGreaterThan(removalArmStart);
+    // Every ${if} opened after the removal arm began has closed by the time
+    // the launcher is deleted: it is not nested in an ownership branch.
+    const before = macro.slice(removalArmStart, launcher);
+    const opened = (before.match(/\$\{if\}/g) ?? []).length;
+    const closed = (before.match(/\$\{endIf\}/g) ?? []).length;
+    expect(opened).toBe(closed);
+  });
+
+  it("the probe tells 'no such task' (0x80070002 = -2147024894, or the folder's own 0x80070003 = -2147024893) from every other failure, and only those are absent", () => {
+    const macro = readUninstallMacro();
+    // The task can be missing two ways: `GetTask` fails with "file not
+    // found" when the `\Traycer` folder exists but the task inside it
+    // doesn't, or with "path not found" when the folder itself is gone.
+    // Both mean "no such task", so both are folded into the same exit 2.
+    expect(macro).toContain(
+      "($$e.HResult -eq -2147024894) -or ($$e.HResult -eq -2147024893)){exit 2}",
+    );
+    // Any other failure to read the task fails closed (4), never as absent.
+    expect(macro).toMatch(
+      /-2147024894\) -or \(\$\$e\.HResult -eq -2147024893\)\)\{exit 2\};exit 4\}/,
+    );
+    // Another user's task is 3, this account's is 0.
+    expect(macro).toContain("if($$u -ieq $$me){exit 0};exit 3");
+  });
+
+  it("names no account: nothing prints the principal or the caller's SID", () => {
+    const macro = readUninstallMacro();
+    const probe = probeIndex(macro);
+    const probeLine = macro.slice(
+      macro.lastIndexOf("nsExec::", probe),
+      macro.indexOf("\n", probe),
+    );
+    // The probe emits nothing: it answers through its exit status alone.
+    expect(probeLine).not.toMatch(
+      /Write-(Host|Output|Verbose|Information)|\becho\b|\bOut-/i,
+    );
+    // No user-visible line interpolates the answer or either account.
+    for (const line of macro.split("\n")) {
+      if (!line.trim().startsWith("DetailPrint")) continue;
+      expect(line).not.toContain("$R1");
+      expect(line).not.toContain("$$");
+      expect(line).not.toMatch(/S-1-\d/);
     }
   });
 });

@@ -30,6 +30,7 @@ import {
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
   draftsSubscribeV10,
+  draftsSubscribeV11,
   draftsUpsertRequestSchema,
   draftsUpsertV10,
   draftSubscribeFrameApplies,
@@ -198,22 +199,30 @@ describe("drafts unary contracts", () => {
     // `drafts.putBlob` and `drafts.readBlob` are canonical at `@1.1` now (the
     // wire-cap minor); `versions[0]` above still pins the `@1.0` contract
     // instance, so this is only the manifest's ADVERTISED minor moving.
-    const CANONICAL_MINOR: Record<(typeof UNARY_METHODS)[number], number> = {
-      "drafts.upsert": 0,
-      "drafts.delete": 0,
-      "drafts.list": 0,
-      "drafts.retract": 0,
-      "drafts.putBlob": 1,
-      "drafts.readBlob": 1,
+    //
+    // `drafts.upsert` and `drafts.list` carry a harness id in their host->client
+    // response, so `commandcode` opened major 2 on those two (1.0 frozen, with
+    // parse-or-refuse / row-dropping bridges); the rest stay on major 1.
+    const CANONICAL_LINE: Record<
+      (typeof UNARY_METHODS)[number],
+      { major: number; minor: number }
+    > = {
+      "drafts.upsert": { major: 2, minor: 0 },
+      "drafts.delete": { major: 1, minor: 0 },
+      "drafts.list": { major: 2, minor: 0 },
+      "drafts.retract": { major: 1, minor: 0 },
+      "drafts.putBlob": { major: 1, minor: 1 },
+      "drafts.readBlob": { major: 1, minor: 1 },
     };
     for (const method of UNARY_METHODS) {
       expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
       expect(split.manifest[method]).toBeUndefined();
+      const line = CANONICAL_LINE[method];
       expect(split.optionalManifest[method]).toEqual({
-        major: 1,
-        minor: CANONICAL_MINOR[method],
-        supportedMajors: [1],
+        major: line.major,
+        minor: line.minor,
+        supportedMajors: line.major === 2 ? [1, 2] : [1],
       });
     }
   });
@@ -389,10 +398,18 @@ describe("drafts.subscribe@1.0 contract", () => {
         STREAM_METHOD
       ],
     ).toEqual({
+      // 1.1 is canonical: it binds the live server frame (Command Code ids)
+      // above the frozen 1.0 that the released hosts shipped.
       major: 1,
-      minor: 0,
+      minor: 1,
       supportedMajors: [1],
     });
+    expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[0].contract).toBe(
+      draftsSubscribeV10,
+    );
+    expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[1].contract).toBe(
+      draftsSubscribeV11,
+    );
   });
 
   it("stays out of the unary released floor", () => {

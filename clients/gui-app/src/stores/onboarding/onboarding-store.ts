@@ -59,7 +59,7 @@ interface OnboardingState {
   } | null;
   readonly startSetup: (id: SetupGuideId) => void;
   readonly advanceSetup: () => void;
-  readonly retreatSetup: () => void;
+  readonly retreatSetup: (stepCount: number) => void;
   readonly completeSetup: (id: SetupGuideId) => void;
   /**
    * The product reporting something a guide may be waiting for. Whichever
@@ -218,10 +218,20 @@ export const useOnboardingStore = create<OnboardingState>()(
               : { id: active.id, step },
         });
       },
-      retreatSetup: () => {
+      // Clamped from the same place the card reads (`setupGuideStepsFor`'s
+      // length, the same shape the tour's own `retreat` takes): a step
+      // resumed past a shell-filtered guide's shown end must land Back on
+      // the predecessor of the step it can actually SEE, not one below its
+      // own stale, unfiltered value.
+      retreatSetup: (stepCount) => {
         const active = get().activeSetup;
-        if (active !== null && active.step > 0)
-          set({ activeSetup: { ...active, step: active.step - 1 } });
+        if (active === null) return;
+        set({
+          activeSetup: {
+            ...active,
+            step: Math.max(0, clampOnboardingStep(active.step, stepCount) - 1),
+          },
+        });
       },
       completeSetup: (id) =>
         set({

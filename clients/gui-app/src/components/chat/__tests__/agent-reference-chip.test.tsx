@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
+import {
+  EpicSessionContext,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 const navigation = vi.hoisted(() => ({
   openTile: vi.fn<(intent: TileOpenIntent) => void>(),
@@ -39,9 +44,29 @@ afterEach(() => {
   navigation.openTile.mockClear();
 });
 
+/**
+ * `EpicSessionGate` only checks for a non-null handle - the mocked
+ * `@/lib/epic-selectors` above is what actually reads from it - so an empty
+ * stand-in with a host on the liveness map is enough to route through
+ * `ResolvedAgentReferenceChip` instead of the id-as-written fallback.
+ */
+function handle(): OpenEpicStoreHandle {
+  const value = {} as OpenEpicStoreHandle;
+  handleHostIds.set(value, "host-1");
+  return value;
+}
+
+function renderChip(props: { agentId: string; display: "text" | "code" }) {
+  return render(
+    <EpicSessionContext value={handle()}>
+      <AgentReferenceChip agentId={props.agentId} display={props.display} />
+    </EpicSessionContext>,
+  );
+}
+
 describe("agent reference chip", () => {
   it("opens the agent with an explicit gesture", () => {
-    render(<AgentReferenceChip agentId="agent-1" display="text" />);
+    renderChip({ agentId: "agent-1", display: "text" });
 
     fireEvent.click(screen.getByRole("button"));
 
@@ -58,7 +83,7 @@ describe("agent reference chip", () => {
   });
 
   it("opens a middle-click in the background, which only auxclick carries", () => {
-    render(<AgentReferenceChip agentId="agent-1" display="text" />);
+    renderChip({ agentId: "agent-1", display: "text" });
 
     // The browser dispatches `auxclick` for the middle button and no `click`,
     // so an onClick-only chip would never see `modifiers.middle`.
@@ -75,7 +100,7 @@ describe("agent reference chip", () => {
   });
 
   it("leaves a right-click to the context menu", () => {
-    render(<AgentReferenceChip agentId="agent-1" display="text" />);
+    renderChip({ agentId: "agent-1", display: "text" });
 
     fireEvent(
       screen.getByRole("button"),

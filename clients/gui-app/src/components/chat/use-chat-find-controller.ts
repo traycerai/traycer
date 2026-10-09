@@ -1,16 +1,20 @@
 import {
   buildChatFindRows,
+  buildSubagentChatFindRows,
   createChatFindAdapter,
   queryMountedChatFindUnit,
   queryMountedChatMessageRoot,
+  subagentChatFindRowId,
   type ChatFindAdapter,
   type ChatFindLandingOutcome,
   type ChatFindReconcileTarget,
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find";
+import { subagentCardPath } from "@/components/chat/segments/subagent-display";
 import {
   CHAT_FIND_INDEX_ABSENT,
   ChatFindIndexDemandSource,
+  FULLY_LOADED_TRANSCRIPT,
   type ChatFindIndexAnswer,
   type ChatFindIndexRead,
   type ChatFindTranscriptPlacement,
@@ -26,6 +30,8 @@ import {
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { useTranscriptQueuePauseReasonSupport } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { useRegionShown } from "@/lib/layout-overrides";
+import { isThinkingShown } from "@/stores/layout/layout-store";
 import {
   useChatFindActiveTargetClearEpoch,
   useReconcileChatFindActiveTarget,
@@ -102,6 +108,14 @@ interface ChatFindControllerArgs {
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
+  /**
+   * The card an open-as-chat view shows, or `null` while the transcript does.
+   * While a card is open find searches ONLY its conversation, resolves anchors
+   * under `getSubagentViewRoot()`, and never scrolls the covered timeline; a
+   * change re-runs the open query over the new scope.
+   */
+  readonly openSubagentId: string | null;
+  readonly getSubagentViewRoot: () => HTMLElement | null;
 }
 
 interface ChatFindController {
@@ -148,7 +162,13 @@ export function useChatFindController(
     cancelManualNavigation,
     getNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
+    openSubagentId,
+    getSubagentViewRoot,
   } = args;
+
+  // Read lazily by the adapter's suppliers, like `messagesRef`, so opening a
+  // card does not re-register the adapter; the scope effect below keeps it.
+  const openSubagentIdRef = useRef(openSubagentId);
 
   // One per transcript, outliving every adapter registration: the index query
   // subscribes to it before any adapter exists.
@@ -159,6 +179,7 @@ export function useChatFindController(
   const requestIndexJumpRef = useRef(requestIndexJump);
   const requestIndexReadRef = useRef(requestIndexRead);
   const getNavigationGenerationRef = useRef(getNavigationGeneration);
+  const getSubagentViewRootRef = useRef(getSubagentViewRoot);
   // How much of that generation find's own scrolls account for: the rest is
   // the reader moving, which a read in flight has to yield to.
   const findNavigationBumpsRef = useRef(0);
@@ -170,9 +191,11 @@ export function useChatFindController(
     requestIndexJumpRef.current = requestIndexJump;
     requestIndexReadRef.current = requestIndexRead;
     getNavigationGenerationRef.current = getNavigationGeneration;
+    getSubagentViewRootRef.current = getSubagentViewRoot;
   }, [
     getFindPlacement,
     getNavigationGeneration,
+    getSubagentViewRoot,
     requestIndexJump,
     requestIndexRead,
   ]);
@@ -253,6 +276,9 @@ export function useChatFindController(
 
   const scrollToMessageForFind = useCallback(
     (messageId: string): void => {
+      // The open conversation's one row is always mounted, and the timeline
+      // under it is not what the reader is looking at: leave it where it is.
+      if (openSubagentIdRef.current !== null) return;
       const generationBefore = getNavigationGenerationRef.current();
       cancelManualNavigation();
       // Find's own scroll is not the reader moving.
@@ -280,6 +306,12 @@ export function useChatFindController(
 
   const getMountedMessageRoot = useCallback(
     (messageId: string): HTMLElement | null => {
+      const openId = openSubagentIdRef.current;
+      if (openId !== null) {
+        return messageId === subagentChatFindRowId(openId)
+          ? getSubagentViewRootRef.current()
+          : null;
+      }
       const scroller = getScroller();
       if (scroller === null) return null;
       return queryMountedChatMessageRoot(scroller, messageId);
@@ -499,24 +531,64 @@ export function useChatFindController(
     [applyFindOpenedTarget],
   );
 
+  // Thinking's Shown regroups runs as surely as promotion does.
+  const thinkingShown = useRegionShown("thinking");
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
-  }, [backgroundToolBlockIds, messages, queuePauseReasonSupport]);
+  }, [
+    backgroundToolBlockIds,
+    messages,
+    queuePauseReasonSupport,
+    thinkingShown,
+  ]);
+
+  useLayoutEffect(() => {
+    if (openSubagentIdRef.current === openSubagentId) return;
+    openSubagentIdRef.current = openSubagentId;
+    // A new scope is a new search space: an open query re-runs over it from
+    // its first match, exactly as typing it afresh would - a passive rescan
+    // would try to keep a match that no longer exists in this scope.
+    const adapter = chatFindAdapterRef.current;
+    if (adapter === null) return;
+    const { requestId, query, matchCase } = adapter.getSnapshot();
+    if (query.length === 0) return;
+    void adapter.search({ requestId, query, matchCase });
+  }, [openSubagentId]);
 
   useLayoutEffect(() => {
     if (tileFindContext === null) return undefined;
 
     const adapter = createChatFindAdapter({
       tileInstanceId: instanceId,
-      getRows: () =>
-        buildChatFindRows(
+      getRows: () => {
+        const openId = openSubagentIdRef.current;
+        if (openId !== null) {
+          return buildSubagentChatFindRows(
+            subagentCardPath(messagesRef.current, openId)?.at(-1) ?? null,
+            instanceId,
+          );
+        }
+        return buildChatFindRows(
           messagesRef.current,
           instanceId,
           backgroundToolBlockIdsRef.current,
-          queuePauseReasonSupportRef.current,
-        ),
-      getCoverageMessage: getFindCoverageMessage,
-      getPlacement: () => getFindPlacementRef.current(),
+          {
+            hideReasoning: !isThinkingShown(),
+            queuePauseReasonProtocolSupported:
+              queuePauseReasonSupportRef.current,
+          },
+        );
+      },
+      // A card's conversation lives inside one loaded turn: the windowed
+      // line's caveat and the transcript placement describe transcript rows,
+      // which an open card never searches. A `null` caveat is also what keeps
+      // the index's older hits out of the card's stops.
+      getCoverageMessage: () =>
+        openSubagentIdRef.current === null ? getFindCoverageMessage() : null,
+      getPlacement: () =>
+        openSubagentIdRef.current === null
+          ? getFindPlacementRef.current()
+          : FULLY_LOADED_TRANSCRIPT,
       getQueuePauseReasonSupport: () => queuePauseReasonSupportRef.current,
       getReaderNavigationGeneration: () =>
         getNavigationGenerationRef.current() - findNavigationBumpsRef.current,

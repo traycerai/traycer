@@ -108,6 +108,7 @@ const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {
   progress: null,
   lastProgress: null,
   provisioningError: null,
+  ensureFailure: null,
   provisioning: false,
   removed: false,
   hostBusy: false,
@@ -342,6 +343,75 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+  });
+
+  // `HostControllerStatus.lastEnsureFailure`'s settled read, surfaced
+  // on `DefaultHostReadinessPresentation` as `ensureFailure`. Same post-latch
+  // ∅/local-lifecycle settled body as the test above, so the only variable is
+  // `ensureFailure` itself.
+  it("the settled ∅ narrator shows the ensure failure's own message verbatim", async () => {
+    const SENTENCE =
+      "the Traycer Host task is disabled in Task Scheduler; enable it or run `traycer host service install`";
+    hostStatus.data = BOOTSTRAP_MARKERS;
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        ensureFailure: { message: SENTENCE, code: null },
+      },
+      false,
+      new MockTraycerCli(),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    const messageEl = screen.queryByTestId("host-ensure-failure-message");
+    expect(messageEl).not.toBeNull();
+    expect(messageEl?.textContent).toBe(SENTENCE);
+    expect(messageEl?.className ?? "").toContain("line-clamp-4");
+    expect(messageEl?.className ?? "").toContain("select-text");
+  });
+
+  it("control: ensureFailure: null renders no message, and the attempt body is unchanged", async () => {
+    hostStatus.data = BOOTSTRAP_MARKERS;
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        ensureFailure: null,
+      },
+      false,
+      new MockTraycerCli(),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("host-ensure-failure-message")).toBeNull();
+    // Today's attempt body, unchanged by the new field's absence.
+    expect(
+      screen.getByTestId("local-host-bootstrap-log-path").textContent,
+    ).toBe("/Users/me/.traycer/bootstrap.log");
+    expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
   });
 
   it("a REMOTE-only fleet: no local bootstrap body, no bootstrap log path", async () => {
@@ -720,28 +790,6 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("window-host-modal")).toBeNull();
   });
 
-  it("a plan-restricted fleet: no retry button", async () => {
-    applySnapshot({
-      attached: true,
-      effectiveHostId: null,
-      targetHostId: null,
-      leases: [
-        deadLease("host-a", { reason: "plan-restricted" }),
-        deadLease("host-b", { reason: "plan-restricted" }),
-      ],
-    });
-
-    renderHost(EMPTY_PRESENTATION, false, undefined);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
-    });
-    expect(
-      screen.getByTestId("window-host-modal").getAttribute("data-variant"),
-    ).toBe("plan-restricted");
-    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
-  });
-
   it("closes by re-derivation: a later snapshot naming a ready effective host makes the modal disappear with no user interaction", async () => {
     applySnapshot({
       attached: true,
@@ -910,8 +958,8 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
   });
 
-  it("arm 3: a non-target incompatible host is named, and no local action is offered for it", async () => {
-    // `deriveNoHostVariant` arm 3 - "some OTHER lease is dead because it is
+  it("arm 2: a non-target incompatible host is named, and no local action is offered for it", async () => {
+    // `deriveNoHostVariant` arm 2 - "some OTHER lease is dead because it is
     // incompatible", reached when the target is dead for an unrelated reason.
     // Arm 1 (target IS the incompatible host) is what the two tests around this
     // one cover, and on that arm the named host and the acted-on host are the
@@ -961,7 +1009,7 @@ describe("<WindowHostModalHost />", () => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
 
-    // Premise, positively: the narration really is arm 3 - `update-host`, and
+    // Premise, positively: the narration really is arm 2 - `update-host`, and
     // quoting the REMOTE lease's version rather than the target's. Without
     // this the assertion below could pass on an arm-1 render.
     expect(

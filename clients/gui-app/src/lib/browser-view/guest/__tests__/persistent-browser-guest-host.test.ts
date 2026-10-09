@@ -13,6 +13,7 @@ import type {
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import {
   browserGuestCssAnchorName,
+  browserGuestCssSheetAnchorName,
   clearBrowserGuestTilePlacement,
   confirmBrowserGuestViewport,
   readBrowserGuestViewport,
@@ -160,6 +161,7 @@ function queryWrapper(registrationId: string): HTMLElement | null {
 
 function guestNodes(registrationId: string): {
   readonly host: HTMLElement;
+  readonly sheetClipper: HTMLElement;
   readonly clipper: HTMLElement;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
@@ -174,11 +176,17 @@ function guestNodes(registrationId: string): {
   if (clipper === null) {
     throw new Error(`expected guest clipper ${registrationId}`);
   }
+  // The outer sheet clipper rounds the guest to its owning epic tab's content
+  // sheet; the inner `clipper` keeps clipping to the tile's own stage rect.
+  const sheetClipper = clipper.parentElement;
+  if (sheetClipper === null) {
+    throw new Error(`expected guest sheet clipper ${registrationId}`);
+  }
   const webview = wrapper.querySelector("webview");
   if (!(webview instanceof HTMLElement)) {
     throw new Error(`expected webview for ${registrationId}`);
   }
-  return { host, clipper, wrapper, webview };
+  return { host, sheetClipper, clipper, wrapper, webview };
 }
 
 function dispatchPointerDown(target: HTMLElement): void {
@@ -227,6 +235,97 @@ describe("browserGuestCssAnchorName", () => {
     expect(
       browserGuestCssAnchorName("550e8400-e29b-41d4-a716-446655440000"),
     ).toBe("--traycer-bv-550e8400-e29b-41d4-a716-446655440000");
+  });
+});
+
+describe("browserGuestCssSheetAnchorName", () => {
+  it("prefixes the view tab id as a dashed-ident, distinct from the registration anchor", () => {
+    expect(browserGuestCssSheetAnchorName("view-1")).toBe(
+      "--traycer-sheet-view-1",
+    );
+    expect(browserGuestCssSheetAnchorName(REGISTRATION_A)).not.toBe(
+      browserGuestCssAnchorName(REGISTRATION_A),
+    );
+  });
+});
+
+// D2 browser-tile risk (sheet-shell ticket 02): a guest's outer `sheetClipper`
+// rounds it to the content sheet of the epic TAB it is presented on, so two
+// guests on two different tabs must never share - or cross-clip to - the
+// wrong sheet, and a guest dragged to a different tab must follow.
+describe("the outer sheet clipper anchors to the owning view tab", () => {
+  it("gives each of two presented guests its own view tab's sheet anchor", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));
+    const ownerA = Symbol("tile-a");
+    const ownerB = Symbol("tile-b");
+    setOwnedPlacement(ownerA, {
+      registrationId: REGISTRATION_A,
+      instanceId: INSTANCE_A,
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+    setOwnedPlacement(ownerB, {
+      registrationId: REGISTRATION_B,
+      instanceId: "tile-2",
+      viewTabId: "view-2",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+
+    const sheetA = guestNodes(REGISTRATION_A).sheetClipper;
+    const sheetB = guestNodes(REGISTRATION_B).sheetClipper;
+    expect(sheetA).not.toBe(sheetB);
+    expect(sheetA.style.getPropertyValue("position-anchor")).toBe(
+      browserGuestCssSheetAnchorName("view-1"),
+    );
+    expect(sheetB.style.getPropertyValue("position-anchor")).toBe(
+      browserGuestCssSheetAnchorName("view-2"),
+    );
+    expect(sheetA.dataset.browserGuestSheet).toBe("view-1");
+    expect(sheetB.dataset.browserGuestSheet).toBe("view-2");
+  });
+
+  it("re-anchors the same sheet clipper when a guest's placement moves to a different view tab", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    const owner = Symbol("tile");
+    setOwnedPlacement(owner, {
+      registrationId: REGISTRATION_A,
+      instanceId: INSTANCE_A,
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+    const before = guestNodes(REGISTRATION_A).sheetClipper;
+    expect(before.dataset.browserGuestSheet).toBe("view-1");
+
+    // Same registration - its tile dragged into a different epic tab's split
+    // slot, exactly like `paneId` already does in the sibling test above.
+    setOwnedPlacement(owner, {
+      registrationId: REGISTRATION_A,
+      instanceId: INSTANCE_A,
+      viewTabId: "view-2",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+    const after = guestNodes(REGISTRATION_A).sheetClipper;
+    expect(after).toBe(before); // re-anchored in place, never remounted
+    expect(after.dataset.browserGuestSheet).toBe("view-2");
+    expect(after.style.getPropertyValue("position-anchor")).toBe(
+      browserGuestCssSheetAnchorName("view-2"),
+    );
+    expect(before.style.getPropertyValue("position-anchor")).not.toBe(
+      browserGuestCssSheetAnchorName("view-1"),
+    );
   });
 });
 
@@ -570,7 +669,8 @@ describe("persistent browser guest host", () => {
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
 
       const created = guestNodes(REGISTRATION_A);
-      expect(created.clipper.parentNode).toBe(created.host);
+      expect(created.sheetClipper.parentNode).toBe(created.host);
+      expect(created.clipper.parentNode).toBe(created.sheetClipper);
       expect(created.wrapper.parentNode).toBe(created.clipper);
       expect(created.webview.parentNode).toBe(created.wrapper);
       expect(created.webview.tagName).toBe("WEBVIEW");
@@ -594,7 +694,9 @@ describe("persistent browser guest host", () => {
       });
       const presented = guestNodes(REGISTRATION_A);
       expect(presented.clipper).toBe(created.clipper);
-      expect(presented.clipper.parentNode).toBe(created.host);
+      expect(presented.sheetClipper).toBe(created.sheetClipper);
+      expect(presented.sheetClipper.parentNode).toBe(created.host);
+      expect(presented.clipper.parentNode).toBe(presented.sheetClipper);
       expect(presented.wrapper).toBe(created.wrapper);
       expect(presented.webview).toBe(created.webview);
       expect(presented.wrapper.parentNode).toBe(presented.clipper);
@@ -602,6 +704,10 @@ describe("persistent browser guest host", () => {
       expect(presented.wrapper.style.getPropertyValue("position-anchor")).toBe(
         ANCHOR_A,
       );
+      expect(
+        presented.sheetClipper.style.getPropertyValue("position-anchor"),
+      ).toBe(browserGuestCssSheetAnchorName("view-1"));
+      expect(presented.sheetClipper.dataset.browserGuestSheet).toBe("view-1");
 
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
@@ -613,7 +719,9 @@ describe("persistent browser guest host", () => {
       });
       const moved = guestNodes(REGISTRATION_A);
       expect(moved.clipper).toBe(created.clipper);
-      expect(moved.clipper.parentNode).toBe(created.host);
+      expect(moved.sheetClipper).toBe(created.sheetClipper);
+      expect(moved.sheetClipper.parentNode).toBe(created.host);
+      expect(moved.clipper.parentNode).toBe(moved.sheetClipper);
       expect(moved.wrapper).toBe(created.wrapper);
       expect(moved.webview).toBe(created.webview);
       expect(moved.wrapper.parentNode).toBe(moved.clipper);
@@ -642,10 +750,16 @@ describe("persistent browser guest host", () => {
       });
       const retained = guestNodes(REGISTRATION_A);
       expect(retained.clipper).toBe(created.clipper);
-      expect(retained.clipper.parentNode).toBe(created.host);
+      expect(retained.sheetClipper).toBe(created.sheetClipper);
+      expect(retained.sheetClipper.parentNode).toBe(created.host);
+      expect(retained.clipper.parentNode).toBe(retained.sheetClipper);
       expect(retained.wrapper).toBe(created.wrapper);
       expect(retained.webview).toBe(created.webview);
       expect(retained.wrapper.parentNode).toBe(retained.clipper);
+      // A guest leaving the presented state (still owned, just not on stage)
+      // relinquishes its sheet anchor - nothing should be clipping to a sheet
+      // it no longer belongs to.
+      expect(retained.sheetClipper.dataset.browserGuestSheet).toBeUndefined();
     });
 
     it("applies a placement that arrived before the matching mount without recreating later", () => {
@@ -800,6 +914,26 @@ describe("persistent browser guest host", () => {
   });
 
   describe("presentation states", () => {
+    /**
+     * The parked posture: laid out at the window's origin at full size, shrunk
+     * to a speck by a transform and made invisible by a filter. The plain
+     * `opacity` stays unset because opacity:0 stops the compositor drawing the
+     * guest, and a guest nobody draws cannot be captured.
+     */
+    function expectParkedPosture(wrapper: HTMLElement): void {
+      expect(wrapper.style.position).toBe("fixed");
+      expect(wrapper.style.insetInlineStart).toBe("0px");
+      expect(wrapper.style.insetBlockStart).toBe("0px");
+      expect(wrapper.style.width).toBe("1280px");
+      expect(wrapper.style.height).toBe("800px");
+      expect(wrapper.style.transform).toBe("scale(0.02)");
+      expect(wrapper.style.transformOrigin).toBe("top left");
+      expect(wrapper.style.filter).toBe("opacity(0)");
+      expect(wrapper.style.opacity).toBe("");
+      expect(wrapper.style.pointerEvents).toBe("none");
+      expect(wrapper.style.display).toBe("block");
+    }
+
     it("maps presented, retained, and unbound onto visibility and interactivity", () => {
       const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
@@ -807,13 +941,7 @@ describe("persistent browser guest host", () => {
       const { wrapper } = guestNodes(REGISTRATION_A);
 
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("unbound");
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("-10000px");
-      expect(wrapper.style.width).toBe("1280px");
-      expect(wrapper.style.height).toBe("800px");
-      expect(wrapper.style.opacity).toBe("0");
-      expect(wrapper.style.pointerEvents).toBe("none");
-      expect(wrapper.style.display).toBe("block");
+      expectParkedPosture(wrapper);
       expect(wrapper.inert).toBe(true);
       expect(wrapper.getAttribute("aria-hidden")).toBe("true");
       expect(wrapper.hasAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
@@ -835,6 +963,8 @@ describe("persistent browser guest host", () => {
       expect(wrapper.style.position).toBe("fixed");
       expect(wrapper.style.getPropertyValue("position-anchor")).toBe(ANCHOR_A);
       expect(wrapper.style.opacity).toBe("1");
+      expect(wrapper.style.transform).toBe("");
+      expect(wrapper.style.filter).toBe("");
       expect(wrapper.style.pointerEvents).toBe("auto");
       expect(wrapper.style.display).toBe("block");
       expect(wrapper.inert).toBe(false);
@@ -858,13 +988,10 @@ describe("persistent browser guest host", () => {
         viewport: null,
       });
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
-      // Retained keeps the unbound offscreen posture: a `display: none` guest
-      // stops compositing, and CDP/PiP frames go blank with it.
-      expect(wrapper.style.display).toBe("block");
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("-10000px");
-      expect(wrapper.style.pointerEvents).toBe("none");
-      expect(wrapper.style.opacity).toBe("0");
+      // Retained keeps the unbound parked posture. A guest is captured only
+      // while the compositor draws it, and `display: none`, `opacity: 0` and
+      // an off-viewport box each stop that.
+      expectParkedPosture(wrapper);
       expect(wrapper.style.getPropertyValue("position-anchor")).toBe("");
       expect(wrapper.inert).toBe(true);
       expect(wrapper.getAttribute("aria-hidden")).toBe("true");
@@ -877,10 +1004,7 @@ describe("persistent browser guest host", () => {
 
       clearBrowserGuestTilePlacement(owner, REGISTRATION_A);
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("unbound");
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("-10000px");
-      expect(wrapper.style.width).toBe("1280px");
-      expect(wrapper.style.height).toBe("800px");
+      expectParkedPosture(wrapper);
       expect(wrapper.inert).toBe(true);
       expect(wrapper.getAttribute("aria-hidden")).toBe("true");
     });

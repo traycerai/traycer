@@ -10,6 +10,7 @@ import {
   providerIdSchemaV60,
   providerIdSchemaV70,
   providerIdSchemaV80,
+  providerIdSchemaV91,
 } from "@traycer/protocol/host/provider-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -1013,6 +1014,48 @@ export const providerRateLimitsSchemaV80 = lazySchema(() =>
 );
 export type ProviderRateLimitsV80 = z.infer<typeof providerRateLimitsSchemaV80>;
 
+// Frozen pre-Command-Code unavailable arm: `provider` pinned to
+// `providerIdSchemaV91` (the id set the 1.5.0 tags shipped, through
+// `antigravity`), so a released `agent.getProviderProfileRateLimits@6.0` /
+// `providers.refreshProfileStatus@2.0` caller's strict decode never sees a
+// later provider id in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV91 = lazySchema(() =>
+  unavailableProviderRateLimitsSchemaV2.extend({
+    provider: providerIdSchemaV91,
+    credentialGeneration: z.string().min(1).optional(),
+  }),
+);
+
+/**
+ * Frozen provider union as the 1.5.0 tags shipped it: the live union with the
+ * `available: false` arm's `provider` pinned to `providerIdSchemaV91`.
+ *
+ * Bound by `agent.getProviderProfileRateLimits@6.0` and
+ * `providers.refreshProfileStatus@2.0`. Both ranged over the live union until
+ * the first provider id after 1.5.0 was added, which is what opened 7.0 and
+ * 3.0. `host.getRateLimitUsage@5.0` is not here: its response is an echo of the
+ * provider the caller named, which the compat gate excepts.
+ *
+ * Every available arm is shared with the live union by reference: they carry
+ * no provider-id enum, so there is nothing for them to drift on. The first
+ * available ARM added after 1.5.0 must not be added here.
+ */
+export const providerRateLimitsSchemaV91 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    antigravityRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV91,
+  ]),
+);
+export type ProviderRateLimitsV91 = z.infer<typeof providerRateLimitsSchemaV91>;
+
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see
 // `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
@@ -1148,6 +1191,21 @@ export const providersRefreshProfileStatusResponseSchemaV10 = lazySchema(() =>
 );
 export type ProvidersRefreshProfileStatusResponseV10 = z.infer<
   typeof providersRefreshProfileStatusResponseSchemaV10
+>;
+
+/**
+ * Frozen `providers.refreshProfileStatus@2.0` response: the 1.5.0 tags
+ * shipped this line, so it stops tracking the live union and ranges over
+ * `providerRateLimitsSchemaV91`. v3.0 carries the live union with fail-closed
+ * bridges to both older lines.
+ */
+export const providersRefreshProfileStatusResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    providerRateLimits: providerRateLimitsSchemaV91,
+  }),
+);
+export type ProvidersRefreshProfileStatusResponseV20 = z.infer<
+  typeof providersRefreshProfileStatusResponseSchemaV20
 >;
 
 /**

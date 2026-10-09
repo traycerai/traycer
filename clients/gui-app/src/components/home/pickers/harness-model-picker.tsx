@@ -5,6 +5,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
   findUpgradeServiceTierForModel,
   findReasoningOptionsForModel,
@@ -87,10 +89,8 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
-import {
-  useLayoutStore,
-  type ComposerReasoningIndicator,
-} from "@/stores/settings/layout-store";
+import { useRegionValue } from "@/lib/layout-overrides";
+import type { ModelStyle } from "@/lib/layout/layout-values";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -104,8 +104,8 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID,
-  loginCapabilityByHarnessIdFromProviderStates,
+  EMPTY_PROVIDER_STATE_BY_HARNESS_ID,
+  providerStateByHarnessIdFromProviderStates,
   resolveCreateProfileGate,
   useCreateProfileHostIsLocal,
 } from "@/components/home/pickers/harness-model-picker-create-profile-gate";
@@ -211,6 +211,7 @@ export interface HarnessModelPickerEmbedding {
 }
 
 interface HarnessModelPickerProps {
+  readonly presentation?: boolean;
   /** Per-composer toolbar store; the picker subscribes to the selection /
    *  reasoning / service-tier slices and dispatches through its actions. */
   store: ComposerToolbarStore;
@@ -333,6 +334,13 @@ function buildReasoningFooter(input: {
     disabled: hasNoReasoningLevels(input.selectedModel, input.options),
     onChange: input.onChange,
   };
+}
+
+function isModelHotspotInteractive(
+  registerActivation: boolean,
+  activityEnabled: boolean,
+): boolean {
+  return registerActivation && activityEnabled;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -506,11 +514,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     createProfileClient,
     { enabled: activityEnabled, subscribed: activityEnabled },
   );
-  const loginCapabilityByHarnessId = useMemo(
+  const createProfileStateByHarnessId = useMemo(
     () =>
       createProfileProvidersQuery.data === undefined
-        ? EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID
-        : loginCapabilityByHarnessIdFromProviderStates(
+        ? EMPTY_PROVIDER_STATE_BY_HARNESS_ID
+        : providerStateByHarnessIdFromProviderStates(
             createProfileProvidersQuery.data.providers,
           ),
     [createProfileProvidersQuery.data],
@@ -737,12 +745,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
   // Mirrors Settings' `providerCanStartProfileOauth` gate: OAuth sign-in
-  // needs a local host that advertises login args for the browsed provider.
+  // needs a local host that advertises login args for the browsed provider,
+  // has it turned on and has a CLI to run for it.
   // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
   // resolved from `createProfileHostId`), never the renderer-default host.
   const createProfileGate = resolveCreateProfileGate(
     createProfileHostIsLocal,
-    loginCapabilityByHarnessId.get(resolvedActiveProviderId),
+    createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );
   const activeProvider = useBrowsedProviderCatalogEntry({
     runTargetClient,
@@ -1104,13 +1113,23 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activationController,
   );
 
+  // Same test the shortcut registration above uses to keep fork / add-node
+  // dialog pickers and the Auto-judge picker out - a genuine toolbar mount,
+  // not every place this component is used as a plain picker.
+  const modelHotspotInteractive = isModelHotspotInteractive(
+    registerActivation,
+    activityEnabled,
+  );
+  const tileId = useComposerTileId();
+  const { ref: modelHotspotRef } = useLayoutRegion({
+    regionId: "model",
+    instanceId: tileId,
+  });
   const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
   // Layout ▸ Composer ▸ Reasoning level. Read here rather than in the trigger
   // so the chip stays a pure function of its props, and both surfaces that
   // mount this picker (the chat composer, the terminal launcher) follow it.
-  const reasoningIndicator = useLayoutStore(
-    (state) => state.composer.reasoningIndicator,
-  );
+  const reasoningIndicator = useRegionValue("model", "style");
   const tooltipLabel = (
     <HarnessModelPickerTooltip
       harnessLabel={selectedHarnessLabel}
@@ -1142,6 +1161,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     >
       <HarnessModelTrigger
         {...paneActivationDeferProps}
+        ref={modelHotspotInteractive ? modelHotspotRef : undefined}
         selection={selection}
         label={presentation.label}
         reasoningLabel={presentation.reasoningLabel}
@@ -1374,7 +1394,42 @@ function hasNoReasoningLevels(
   return selectedModel !== null && options.length === 0;
 }
 
-export const HarnessModelPicker = memo(HarnessModelPickerImpl);
+function HarnessModelPickerSurface(props: HarnessModelPickerProps) {
+  return props.presentation ? (
+    <PresentationHarnessModelPicker {...props} />
+  ) : (
+    <HarnessModelPickerImpl {...props} />
+  );
+}
+export const HarnessModelPicker = memo(HarnessModelPickerSurface);
+
+/** The same trigger, with no catalog queries, activation registration or writes. */
+function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
+  const selection = useStore(props.store, (state) => state.selection);
+  const tileId = useComposerTileId();
+  const { ref } = useLayoutRegion({
+    regionId: "model",
+    instanceId: tileId,
+  });
+  const reasoningIndicator = useRegionValue("model", "style");
+  return (
+    <HarnessModelTrigger
+      ref={ref}
+      selection={selection}
+      label="Sample model"
+      reasoningLabel="Medium"
+      reasoningStep={{ index: 1, count: 3 }}
+      reasoningIndicator={reasoningIndicator}
+      serviceTierLabel={null}
+      serviceTierActive={false}
+      profileLabel={null}
+      profileAccentDot={null}
+      isLoading={false}
+      disabled={false}
+      labelDisplay={props.labelDisplay}
+    />
+  );
+}
 
 function HarnessModelPickerTooltip({
   harnessLabel,
@@ -1437,7 +1492,7 @@ function TooltipSummaryRow({
  * only draws. The `text` mode keeps the bare name - the chip already says it.
  */
 function reasoningTooltipLabel(
-  reasoningIndicator: ComposerReasoningIndicator,
+  reasoningIndicator: ModelStyle,
   reasoningLabel: string | null,
   reasoningStep: ReasoningStep | null,
 ): string | null {
@@ -1787,9 +1842,6 @@ function modelPickerHostUnavailableLabel(
   if (hostId === null) return "No device available";
   if (reachability.status === "checking") return "Checking device";
   if (reachability.status === "unreachable") {
-    if (reachability.unavailability === "plan-restricted") {
-      return `${reachability.hostLabel} isn't available on your plan`;
-    }
     return `${reachability.hostLabel} is offline`;
   }
   return `${reachability.hostLabel} is starting`;

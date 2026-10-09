@@ -1,0 +1,983 @@
+/*
+ * Canvas decoration for the layout editor (L-12, L-13).
+ *
+ * Everything here styles the app's OWN elements through data attributes that
+ * `use-layout-region.ts` writes onto them, plus the two overlay elements the
+ * canvas controllers create. There is no scrim, no proxy layer and no
+ * duplicate of the app: what the user points at is the real thing (P3, P4).
+ *
+ * The motion values are frozen in the plan's section 6 and only `transform`,
+ * `opacity` and `filter` animate (L-29). Both reduced-motion gates are
+ * honoured: the OS media query, and the app's own Panel animations switch,
+ * which `theme-applier.ts` mirrors onto `<html data-reduce-panel-motion>`.
+ */
+
+:root {
+  --layout-editor-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --layout-editor-dim-duration: 200ms;
+  --layout-editor-ring-duration: 160ms;
+  /* Where the inspector comes from and goes back to. Declared on the root
+     rather than on the panel because the view transition's pseudo-elements
+     inherit from here and a side dock is the only thing that changes it. */
+  --layout-inspector-away: 100%;
+  /* Above the app column, below a toast, which still has to reach the user. */
+  --layout-editor-ring-z: 40;
+  --layout-editor-chip-z: 41;
+  /* The editing frame (L-130), above every layer INSIDE the app column: the
+     canvas subtree carries positioned chrome up to `z-40` and the two editor
+     overlays above stop at 41. Below the modal layer, which is not part of the
+     screen the frame is drawn around.
+
+     `layout-editor-contrast.test.ts` measures that ceiling rather than taking
+     it on trust: it scans the column's own subtrees for `z-<n>`, skipping the
+     files that portal their overlay out of the column, and asserts this number
+     clears the highest one left.
+
+     ONE deliberate exception, excluded there by name:
+     `epic-canvas/epic-shell.tsx`'s repoint-failure overlay is `absolute inset-0
+     z-50` INSIDE the column, so it paints over this frame's border. It is a
+     70%-opaque card shown only in an error state that cannot arise in the
+     sample workspace, so the frame stays where it is and the exception is
+     recorded rather than designed around. */
+  --layout-editor-frame-z: 43;
+  /* Above all three, because a floating panel the user placed there is the one
+     thing that is allowed to cover the canvas it decorates, frame included
+     (L-38). */
+  --layout-editor-float-z: 44;
+  /* A member in hand is off the surface, which is the whole of what the lift
+     says; the prototype's `--shadow-lift`, which this app has no token for. */
+  --layout-editor-lift-shadow: 0 10px 24px rgb(0 0 0 / 18%);
+  /* The editing frame's geometry (L-137). Two numbers rather than a platform
+     branch, because Electron does not expose the OS window radius and the
+     renderer has no honest way to ask for it.
+
+     An inset rounded rect with radius `r` at inset `i` stays strictly inside a
+     window whose corner radius is `R` whenever `r + i >= R`. macOS draws its
+     window corners at ~10pt (measured off the owner's third-pass screenshot:
+     the arc leaves the straight edges ~18 device px in, at 2x), so 4 + 12
+     clears it with a margin big enough to absorb a future OS bump. On a
+     square-cornered window - Windows, Linux, and a maximised or fullscreen
+     macOS window - the same frame simply reads as a rounded frame inset from
+     the edge, which is the app's own card language. No dock mode and no
+     platform changes either number: all four corners are rounded, so the frame
+     is one shape rather than a mix of square and round corners that would read
+     as an accident wherever the two met. */
+  --layout-editor-frame-inset: 4px;
+  --layout-editor-frame-radius: 12px;
+}
+
+/* Both spellings the app's own dark variant is defined over (`index.css`): a
+   preset theme carries `theme-base-dark` rather than `dark`. */
+:root.dark,
+:root.theme-base-dark {
+  --layout-editor-lift-shadow: 0 12px 28px rgb(0 0 0 / 65%);
+}
+
+/* ---------------------------------------------------------------
+   The app column while a session is live
+   --------------------------------------------------------------- */
+
+[data-layout-editing="1"] {
+  user-select: none;
+}
+
+/* ---------------------------------------------------------------
+   The inspector's dock (L-38, 5.4, 5.5)
+
+   `right` and `left` are flex children of the shell row, so the app column
+   reflows beside them in a single frame - deliberately with no width
+   transition, because an app whose text reflows over 220ms is the thing P2
+   forbids. What animates is the panel arriving over its own slot.
+
+   380px is the plan's one frozen inspector width: this is an instrument
+   panel like DevTools, and a fluid width would change the measured width of
+   the specimen stage, which is the thing the user is judging. 380 is what
+   one line needs: the longest label ("Background tasks") beside the widest
+   member control (Full row | Chip | Hidden) with the grip, icon and chevron
+   columns, measured in the fixture; at 320 those labels kept 46px of 111.
+   --------------------------------------------------------------- */
+
+[data-layout-inspector] {
+  display: flex;
+  width: 380px;
+  max-width: 100%;
+  min-height: 0;
+  flex: none;
+  flex-direction: column;
+  background: var(--background);
+  animation: layout-inspector-in 220ms var(--layout-editor-ease) both;
+}
+
+/* A panel that arrived inside a view transition has already been seen to
+   arrive: its snapshot played the slide, and `editor-motion.ts` stamps this
+   before that snapshot is taken. Keyed on the panel rather than on the running
+   transition because the attribute is what OUTLIVES it - gating on
+   `:root[data-layout-transition]` made the live element's animation-name change
+   from `none` back to `layout-inspector-in` the moment the transition finished,
+   which started a second 220ms slide over the arrival just watched (G2-01). */
+[data-layout-inspector][data-entered] {
+  animation: none;
+}
+
+[data-layout-inspector][data-dock-mode="right"] {
+  border-left: 1px solid var(--border);
+}
+
+[data-layout-inspector][data-dock-mode="left"] {
+  --layout-inspector-away: -100%;
+
+  order: -1;
+  border-right: 1px solid var(--border);
+}
+
+/* The exit, faster than the entry (section 6). It plays while the session is
+   still open: the inspector renders session state, so `editor-session.ts`
+   holds the teardown until this animation reports finished, and an exit under
+   either reduced-motion gate has no animation to report and lands at once. */
+[data-layout-inspector][data-exiting="1"] {
+  animation: layout-inspector-out 140ms var(--layout-editor-ease) both;
+}
+
+/* The one mode allowed to overlap the canvas, because the user chose it and
+   can move it again (scoped exception to P3). Positioned by `transform` so a
+   drag and a snap animate the only property L-29 allows. */
+[data-layout-inspector][data-dock-mode="float"] {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--layout-editor-float-z);
+  height: min(560px, calc(100vh - 92px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  /* The artifact's `--shadow-float`, both bands. The translucent material is
+     invisible on a black palette - 72% of black over black is black - so the
+     cast shadow and the specular edge below are what say the panel is ABOVE
+     the canvas rather than docked into it (LV2-17). */
+  box-shadow:
+    0 26px 64px rgb(0 0 0 / 42%),
+    0 4px 14px rgb(0 0 0 / 26%);
+  backdrop-filter: blur(20px) saturate(160%);
+  transition: transform 180ms var(--layout-editor-ease);
+}
+
+/* The light catching the panel's top edge, the artifact's one glass cue. It is
+   a highlight rather than a colour, so it is white on every palette and simply
+   has nothing to catch on a light one. */
+[data-layout-inspector][data-dock-mode="float"]::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 12px;
+  left: 12px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 55%),
+    transparent
+  );
+  pointer-events: none;
+}
+
+[data-layout-inspector][data-dock-mode="float"] [data-layout-inspector-shell] {
+  background: transparent;
+}
+
+/* The header is the handle; the pointer says so before the drag starts. */
+[data-layout-inspector][data-dock-mode="float"] [data-layout-inspector-header] {
+  cursor: grab;
+}
+
+[data-layout-inspector][data-dragging="1"] {
+  transition: none;
+}
+
+[data-layout-inspector][data-dragging="1"] [data-layout-inspector-header] {
+  cursor: grabbing;
+}
+
+@keyframes layout-inspector-in {
+  from {
+    transform: translateX(var(--layout-inspector-away));
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes layout-inspector-out {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(var(--layout-inspector-away));
+  }
+}
+
+/* A floating panel carries its position in the same `transform` the slide
+   would animate, so it arrives and leaves by fading rather than by moving.
+
+   `:not([data-entered])` for the same reason the plain panel's `animation:
+   none` above exists, and because that rule could not reach this one: both
+   selectors carry two attributes, so they TIE on specificity and this one wins
+   by coming later in the file. The result was that switching an already-entered
+   panel to Float re-declared `animation-name` on it and replayed a 220ms fade
+   over a panel that had been on screen for minutes (I-16). The exiting variant
+   below is deliberately left unscoped - an exiting panel carries `data-entered`
+   too, and its reverse fade is the thing the user asked for. */
+[data-layout-inspector][data-dock-mode="float"]:not([data-entered]) {
+  animation-name: layout-inspector-appear;
+}
+
+[data-layout-inspector][data-dock-mode="float"][data-exiting="1"] {
+  animation-name: layout-inspector-appear;
+  animation-direction: reverse;
+}
+
+@keyframes layout-inspector-appear {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Entry and exit: the View Transition (L-30, 5.2, section 6)
+
+   Two named groups and no more: the app column, which glides narrower or
+   wider, and the inspector, which slides in over 220ms and back out over
+   140ms. Everything else - the transcript included - travels inside the
+   document's own `root` snapshot, so a streaming turn is captured ONCE, as
+   the static old bitmap, and cannot ghost against a live copy of itself.
+
+   The names are applied only while `editor-motion.ts` holds
+   `:root[data-layout-transition]`, and that attribute carries the phase and the
+   dock side as two tokens, because a custom property set on `:root` is what
+   reaches the view-transition pseudo tree and the two directions are not the
+   same picture (L-66). Naming a group permanently would enrol the app column in
+   every later transition, including the ones L-30 guards off.
+
+   The reduced-motion gate is here as well as in JS (C-14): a preference that
+   turns on between the guard and the capture still has no groups to animate,
+   and the transition degrades to the plain cross-fade the browser does for
+   the page as a whole.
+   --------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-layout-transition]:not([data-reduce-panel-motion])
+    [data-layout-column] {
+    view-transition-name: layout-shell;
+  }
+
+  :root[data-layout-transition]:not([data-reduce-panel-motion])
+    [data-layout-inspector] {
+    view-transition-name: layout-inspector;
+  }
+}
+
+/* The attribute carries two tokens, the phase and the side, so every rule that
+   reads a value matches by TOKEN - an `=` here would silently stop matching. */
+:root[data-layout-transition~="left"] {
+  --layout-inspector-away: -100%;
+}
+
+::view-transition-group(layout-shell) {
+  animation-duration: 220ms;
+  animation-timing-function: var(--layout-editor-ease);
+}
+
+/* The prototype fills the group with `height: 100%` alone, which squashes a
+   full-width bitmap into a 380px-narrower box and visibly compresses the app's
+   own text - the one thing P2 forbids. `cover` with equal heights scales by
+   1 and crops instead, so every glyph keeps its size and the right edge slides
+   under the arriving inspector (C-14). */
+::view-transition-old(layout-shell),
+::view-transition-new(layout-shell) {
+  height: 100%;
+  object-fit: cover;
+  object-position: left top;
+  animation-timing-function: var(--layout-editor-ease);
+}
+
+/* The exit's own half of that, separated because the two directions are not
+   the same picture: on the way out the group box GROWS, so `cover` enlarges
+   the narrower old snapshot rather than cropping it. It stays `cover` until
+   the owner's live pass says it reads as a zoom, and `object-fit: none` is
+   then this one line (L-66). */
+:root[data-layout-transition~="exit"]::view-transition-old(layout-shell),
+:root[data-layout-transition~="exit"]::view-transition-new(layout-shell) {
+  object-fit: cover;
+}
+
+/* One side of the pair exists at a time - there is no inspector before the
+   session and none after it - so these two never animate against each other. */
+::view-transition-new(layout-inspector) {
+  animation: layout-inspector-in 220ms var(--layout-editor-ease) both;
+}
+
+::view-transition-old(layout-inspector) {
+  animation: layout-inspector-out 140ms var(--layout-editor-ease) both;
+}
+
+/* ---------------------------------------------------------------
+   The passive dim (4.2)
+
+   The marker sits on individual LEAVES, never on an ancestor of a region:
+   `filter` on an ancestor would dim the region it contains, and the whole
+   point is that editable chrome reads as lit against calm content.
+   --------------------------------------------------------------- */
+
+/* Scoped under a live session, both of them. Unscoped, the transition rule
+   gave every marked leaf a permanent 200ms opacity/filter transition for the
+   whole life of the app - which outside a session was the only runtime effect
+   this whole marker set had, and it changed how the send and stop buttons
+   fade in ordinary use (G1-19). */
+/* `data-layout-lit` is the guide's lit MOMENT (L-50): the same dim with no
+   session behind it, so the last step of the "Appearance and layout" guide can
+   show what customizing looks like without entering. It joins the dim rules and
+   nothing else - no hover outline, no ring, no firewall. */
+/* `data-layout-passive-members` is the one marker that dims its CHILDREN
+   instead of itself, and the tab strip's scroller is the one box that needs it:
+   it holds both the task tabs and the tab that says which one is being
+   customized, and `opacity` on an ancestor cannot be undone below it - so the
+   one mark that says "you are customizing" was drawn at 45% opacity and 45%
+   saturation (L-132, redesigned as a filled tab by L-138). The member that
+   CONTAINS the session marker stays lit; every other member dims exactly as a
+   leaf marker would. */
+[data-layout-editing="1"] [data-layout-passive],
+[data-layout-lit="1"] [data-layout-passive],
+[data-layout-editing="1"]
+  [data-layout-passive-members]
+  > :not(:has([data-layout-session-tab])),
+[data-layout-lit="1"]
+  [data-layout-passive-members]
+  > :not(:has([data-layout-session-tab])) {
+  opacity: 0.45;
+  filter: saturate(0.45);
+  transition:
+    opacity var(--layout-editor-dim-duration) var(--layout-editor-ease),
+    filter var(--layout-editor-dim-duration) var(--layout-editor-ease);
+}
+
+/* The session tab's own mark (L-87, L-132, L-138, L-163), the other half of
+   the rule above: the member that CONTAINS it stays lit, and this is what it
+   contains. ONE element with one job, and the paint follows the state the tab
+   is in - which is the whole of what the two rules below say.
+
+   The two states carry the colour differently because they are given
+   different geometry to carry it in, not because they disagree about it. An
+   ACTIVE tab has a silhouette, so the colour is its area and its edge is the
+   ordinary border. A RESTING tab has no fill at all - the inactive chrome
+   paints no background - so the only thing it can say "this one" with is a
+   mark along an edge, and that mark has to read beside a dotted frame and
+   outside the dim that calms every other tab. Area beats line, so the active
+   tab is still the louder of the two. */
+
+[data-layout-session-tab="rest"] {
+  height: 3px;
+  background: var(--layout-session-tab-color);
+}
+
+/* The same resting cap on a vertical tab row (L-163): the row is a line in a
+   column, so the cap runs down its inline-start edge instead of along its
+   bottom, and the row's own absolute inset gives it its height. */
+[data-layout-session-tab="rest"][data-orientation="vertical"] {
+  height: auto;
+  width: 3px;
+}
+
+/* Active, `TabChrome` is the mark and this element draws nothing. It stays in
+   the tree because `:has()` matches a `display: none` element, so the dim
+   exemption above keeps working in both states off one marker. */
+[data-layout-session-tab="filled"] {
+  display: none;
+}
+
+/* The transcript dims with `opacity` alone. It is a virtualised, full-viewport
+   list that keeps STREAMING under the editor (L-17), and a `filter` on it is a
+   continuously repainting filtered layer the size of the window; the small
+   leaves around it keep the desaturation that carries the signal. */
+[data-layout-editing="1"] [data-layout-passive="opacity-only"],
+[data-layout-lit="1"] [data-layout-passive="opacity-only"] {
+  filter: none;
+}
+
+/* ---------------------------------------------------------------
+   Hover and selection
+
+   Both attributes land on EVERY instance of a region, so a setting that
+   exists in two chat tiles lights up in both (L-23). Hover has no
+   transition: pointing at a thing is not an animation.
+   --------------------------------------------------------------- */
+
+[data-layout-editing="1"] [data-layout-region][data-hover="1"],
+[data-layout-editing="1"] [data-layout-setting][data-hover="1"] {
+  outline: 1px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+/* There is no rule here for the OTHER instances of a selected region, and
+   there is nothing left for one to match. L-23's "every instance highlights
+   together" needed a region to have two, and L-87 took the second away: the
+   editor's canvas is always the sample workspace, `SurfacePresentationBoundary`
+   publishes `PaneVisibilityContext = false` for every other top-level surface,
+   and `useLayoutRegion` registers nothing from a surface that is not visible.
+   The sample tab is `splitEligibility: "ineligible"`, so no second surface is
+   ever presented beside it, and the app-wide chrome around it draws each of
+   its regions once (the status bar is not even mounted while the usage cluster
+   is hosted in the header - `useStatusBarVisible`).
+
+   So the selected region is always the anchor instance, and the travelling
+   ring is the whole of the selection signal. The 2px `--foreground` outline
+   that stood in for it elsewhere, and the `outline: none` that cancelled it on
+   the anchor, went with the case they were written for. */
+
+/* ---------------------------------------------------------------
+   Reordering (L-24, L-29, 4.7)
+
+   The element itself is picked up, so the affordance is on the element: a
+   grab cursor on anything the canvas can reorder, and a lift while one is in
+   hand. Every pixel of the movement is a `transform` written per frame by
+   `drag-engine.ts`; nothing here transitions, because a transition and a
+   spring fighting over the same property is the stutter L-29 exists to
+   prevent.
+   --------------------------------------------------------------- */
+
+/* Keyed on the DRAGGABLE marker alone, not on the region name beside it: the
+   rail's dividers are members of `arrangement.rail` without being regions
+   (L-115, L-155), so `left-panel-rail-divider.tsx` stamps the marker and no
+   name, and the region-scoped spelling could not match the one element on the
+   canvas whose whole job is to be grabbed. The marker is written only while a
+   session is live - by `use-layout-region.ts` for a region and by the divider
+   for itself - so the editing scope is what it has always been. */
+[data-layout-editing="1"] [data-layout-draggable="1"] {
+  cursor: grab;
+}
+
+[data-layout-dragging="1"] {
+  z-index: 40;
+  border-radius: 7px;
+  box-shadow: var(--layout-editor-lift-shadow);
+  cursor: grabbing;
+}
+
+/* The sortable list's rows are outside the canvas and outside the firewall,
+   so they carry the same two states on their own. */
+[data-sortable-id] {
+  cursor: grab;
+}
+
+/* A row in hand, written HERE and nowhere else. The rows are flat now (L-114,
+   the redesign's T1): their only edge is the hairline to the next row, so the
+   old `border-color: var(--ring)` tinted that one hairline blue and said
+   nothing, while out-ranking the lift the row's own classes were asking for.
+   One rule, and the same `--layout-editor-lift-shadow` a region in hand takes
+   on the canvas, so the list and the canvas lift alike. */
+[data-sortable-id][data-grabbed="1"] {
+  z-index: 10;
+  border-bottom-color: transparent;
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--layout-editor-lift-shadow);
+}
+
+/* A focused row, written HERE for the same reason the lift above is: this file
+   owns the row's states, and the alternative was one arbitrary variant chained
+   five times on a single `className` - `has-[[data-row-grab]:focus-visible]:` in
+   front of every declaration, a shape that appears nowhere else in this app
+   (R3-18). The indicator belongs to the ROW rather than to the grab inside it,
+   because the row is what the keyboard operates.
+
+   INSET, because the settings card clips its content
+   (`settings-group.tsx`'s `overflow-clip`) and an outset ring on the first or
+   last row was sliced off along the card's edge. At the dock's 380px an inset
+   3px band still reads. */
+[data-sortable-id]:has([data-row-grab]:focus-visible) {
+  z-index: 10;
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+}
+
+/* ---------------------------------------------------------------
+   Materialised hidden regions (L-14)
+
+   No ghosts at rest: a hidden region is absent until its index row is
+   hovered or selected, and then its REAL control appears in place, low
+   enough to read as a preview rather than as a setting that came back on.
+   The `filter` and `transform` here are on the region itself, never on an
+   ancestor of one.
+
+   Above the passive dim, deliberately. A ghost appears among leaves the
+   session has already calmed, and at 0.4 it was the FAINTEST thing on the
+   canvas - a preview of a hidden region drawn quieter than the chrome the
+   user was told to ignore. It still reads as a preview, because everything
+   live around it is opaque (`layout-editor-contrast.test.ts`).
+   --------------------------------------------------------------- */
+
+[data-layout-editing="1"] [data-layout-region][data-ghost="1"] {
+  opacity: 0.55;
+  animation: layout-region-materialise 180ms var(--layout-editor-ease) both;
+}
+
+/* A setting's part shown in the value that hides it: Side tab view's live
+   agents while the row is pointed at in Tabs only. It arrives as a hidden
+   region does, and on a switch between the two values it eases between the
+   preview and the real thing rather than popping, so the toggle reads as
+   "these rows are what changed". The same 180ms as the ring's travel and the
+   materialise, from the editor's own curve. */
+[data-layout-editing="1"] [data-layout-setting] {
+  transition: opacity 180ms var(--layout-editor-ease);
+}
+
+[data-layout-editing="1"] [data-layout-setting][data-ghost="1"] {
+  opacity: 0.55;
+  animation: layout-region-materialise 180ms var(--layout-editor-ease) both;
+}
+
+@keyframes layout-region-materialise {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 0.55;
+    filter: blur(0);
+    transform: scale(1);
+  }
+}
+
+/* ---------------------------------------------------------------
+   Anchors (4.3)
+
+   Two names rather than one, because the chip follows the pointer while the
+   pinned card stays on the open section, and one shared name would make the
+   card jump to whatever is hovered. Each name is on exactly one element:
+   elements sharing an `anchor-name` resolve to the last in tree order, which
+   would anchor an overlay to a background tile (C-12).
+   --------------------------------------------------------------- */
+
+[data-layout-editing="1"] [data-layout-region][data-layout-anchor~="selected"] {
+  anchor-name: --layout-region;
+}
+
+[data-layout-editing="1"] [data-layout-region][data-layout-anchor~="hover"],
+[data-layout-editing="1"] [data-layout-cue][data-layout-anchor~="hover"],
+[data-layout-editing="1"] [data-layout-setting][data-layout-anchor~="hover"],
+[data-layout-editing="1"] [data-layout-surface][data-layout-anchor~="hover"] {
+  anchor-name: --layout-hover-region;
+}
+
+[data-layout-editing="1"]
+  [data-layout-region][data-layout-anchor~="hover"][data-layout-anchor~="selected"] {
+  anchor-name: --layout-region, --layout-hover-region;
+}
+
+/* The sample composer's Model chip also anchors the sample picker
+   (`sample-model-picker.tsx`), in every state the editor's own names can be
+   in. `anchor-name` is one list, so each state spells all of its names. */
+[data-layout-editing="1"]
+  [data-sample-model-anchor]
+  [data-layout-region="model"] {
+  anchor-name: --sample-model-chip;
+}
+
+[data-layout-editing="1"]
+  [data-sample-model-anchor]
+  [data-layout-region="model"][data-layout-anchor~="selected"] {
+  anchor-name: --sample-model-chip, --layout-region;
+}
+
+[data-layout-editing="1"]
+  [data-sample-model-anchor]
+  [data-layout-region="model"][data-layout-anchor~="hover"] {
+  anchor-name: --sample-model-chip, --layout-hover-region;
+}
+
+[data-layout-editing="1"]
+  [data-sample-model-anchor]
+  [data-layout-region="model"][data-layout-anchor~="hover"][data-layout-anchor~="selected"] {
+  anchor-name: --sample-model-chip, --layout-region, --layout-hover-region;
+}
+
+/* ---------------------------------------------------------------
+   The hover chip
+
+   Portalled to <body> so no `filter`, `transform` or `contain` in the app
+   tree can become its containing block - measured: a filtered ancestor of
+   the chip drops it to the bottom-left of that ancestor's box.
+   --------------------------------------------------------------- */
+
+[data-layout-hover-chip] {
+  position: fixed;
+  z-index: var(--layout-editor-chip-z);
+  pointer-events: none;
+  border-radius: 5px;
+  padding: 2px 7px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+[data-layout-hover-chip][hidden] {
+  display: none;
+}
+
+[data-layout-hover-chip][data-anchored="1"] {
+  position-anchor: --layout-hover-region;
+  position-area: block-start center;
+  position-try-fallbacks: flip-block, flip-inline;
+  margin: 6px;
+  inset: auto;
+}
+
+[data-layout-hover-chip][data-anchored="1"][data-placement="below"] {
+  position-area: block-end center;
+  position-try-fallbacks: flip-inline;
+}
+
+/* ---------------------------------------------------------------
+   The travelling selection ring
+
+   Sized and moved by `selection-ring.ts`; everything static is here. The
+   fade-in is the one property it does not drive per frame.
+   --------------------------------------------------------------- */
+
+[data-layout-selection-ring] {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--layout-editor-ring-z);
+  pointer-events: none;
+  border-radius: 7px;
+  /* Three bands, innermost first. The hairline is what makes the ring VISIBLE
+     rather than merely coloured: `--ring` is a soft grey in this app's light
+     palettes and bottoms out at 2.02:1 against them, so an accent-only ring
+     would be the primary indicator of this whole feature sitting under the
+     3:1 a non-text indicator owes. The foreground hairline clears it on every
+     palette and the accent band keeps the ring's identity. */
+  box-shadow:
+    0 0 0 1px var(--foreground),
+    0 0 0 3px var(--ring),
+    0 0 0 6px color-mix(in srgb, var(--ring) 22%, transparent);
+  opacity: 0;
+  transition: opacity var(--layout-editor-ring-duration)
+    var(--layout-editor-ease);
+}
+
+[data-layout-selection-ring][data-on="1"] {
+  opacity: 1;
+}
+
+[data-layout-selection-ring][hidden] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------
+   Surface placement (D14)
+
+   The placement bar sits over the canvas beside the selected surface, above
+   the ring and the chip it would otherwise fight; the drop zones light the
+   edges a surface in hand can take, the one under the pointer brightest.
+   --------------------------------------------------------------- */
+
+[data-layout-placement-bar] {
+  z-index: var(--layout-editor-frame-z);
+}
+
+[data-layout-editing="1"] [data-layout-surface] {
+  cursor: grab;
+}
+
+[data-layout-editing="1"] [data-layout-surface-dragging="1"] {
+  cursor: grabbing;
+  opacity: 0.6;
+}
+
+[data-layout-drop-zone] {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--layout-editor-chip-z);
+  pointer-events: none;
+  border: 1px dashed color-mix(in srgb, var(--ring) 70%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ring) 8%, transparent);
+  transition: background-color var(--layout-editor-ring-duration)
+    var(--layout-editor-ease);
+}
+
+/* The foreground hairline carries the 3:1 the ring's accent alone misses on
+   the light palettes (see the ring below); the fill keeps the ring's identity. */
+[data-layout-drop-zone][data-over="1"] {
+  border-style: solid;
+  border-color: var(--foreground);
+  background: color-mix(in srgb, var(--ring) 24%, transparent);
+}
+
+/* ---------------------------------------------------------------
+   Reduced motion
+
+   The dim still happens - it is the state, not an effect - but it crossfades
+   linearly and drops the `filter`, which is the expensive half and the part
+   that reads as an effect.
+   --------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  /* Every spelling that names an animation above, because specificity is per
+     selector and each of those carries more of it than the plain panel: the
+     exit, and the floating panel's fade in both directions. Listing only the
+     first two left the float pair reinstating `layout-inspector-appear` under
+     the preference - at `0s`, so the visible cost was one extra frame before
+     the session ended, but the rule said the opposite of what it meant. With
+     no animation to wait for, the session ends in the same frame.
+
+     The float's arrival now carries `:not([data-entered])` (I-16), which is a
+     third attribute and so MORE specific than the plain float spelling: without
+     the matching entry here it would out-rank this block and put
+     `layout-inspector-appear` back under the preference, which is exactly the
+     bug the paragraph above describes. */
+  [data-layout-inspector],
+  [data-layout-inspector][data-exiting="1"],
+  [data-layout-inspector][data-dock-mode="float"],
+  [data-layout-inspector][data-dock-mode="float"]:not([data-entered]),
+  [data-layout-inspector][data-dock-mode="float"][data-exiting="1"] {
+    animation: none;
+  }
+
+  [data-layout-inspector][data-dock-mode="float"] {
+    transition: none;
+  }
+
+  [data-layout-editing="1"] [data-layout-passive],
+  [data-layout-lit="1"] [data-layout-passive],
+  [data-layout-editing="1"]
+    [data-layout-passive-members]
+    > :not(:has([data-layout-session-tab])),
+  [data-layout-lit="1"]
+    [data-layout-passive-members]
+    > :not(:has([data-layout-session-tab])) {
+    filter: none;
+    transition: opacity var(--layout-editor-dim-duration) linear;
+  }
+
+  [data-layout-selection-ring] {
+    transition: none;
+  }
+
+  /* The materialised control still appears - that is the answer to "what is
+     hidden here" - it just arrives rather than being blurred into place. */
+  [data-layout-editing="1"] [data-layout-region][data-ghost="1"],
+  [data-layout-editing="1"] [data-layout-setting][data-ghost="1"] {
+    animation: none;
+  }
+
+  [data-layout-editing="1"] [data-layout-setting] {
+    transition: none;
+  }
+}
+
+:root[data-reduce-panel-motion] [data-layout-inspector],
+:root[data-reduce-panel-motion] [data-layout-inspector][data-exiting="1"] {
+  animation: none;
+}
+
+:root[data-reduce-panel-motion]
+  [data-layout-inspector][data-dock-mode="float"] {
+  transition: none;
+}
+
+:root[data-reduce-panel-motion] [data-layout-editing="1"] [data-layout-passive],
+:root[data-reduce-panel-motion][data-layout-lit="1"] [data-layout-passive],
+:root[data-reduce-panel-motion]
+  [data-layout-editing="1"]
+  [data-layout-passive-members]
+  > :not(:has([data-layout-session-tab])),
+:root[data-reduce-panel-motion][data-layout-lit="1"]
+  [data-layout-passive-members]
+  > :not(:has([data-layout-session-tab])) {
+  filter: none;
+  transition: opacity var(--layout-editor-dim-duration) linear;
+}
+
+:root[data-reduce-panel-motion] [data-layout-selection-ring] {
+  transition: none;
+}
+
+:root[data-reduce-panel-motion]
+  [data-layout-editing="1"]
+  [data-layout-region][data-ghost="1"],
+:root[data-reduce-panel-motion]
+  [data-layout-editing="1"]
+  [data-layout-setting][data-ghost="1"] {
+  animation: none;
+}
+
+:root[data-reduce-panel-motion]
+  [data-layout-editing="1"]
+  [data-layout-setting] {
+  transition: none;
+}
+
+/* ---------------------------------------------------------------
+   Reduced transparency
+
+   The ring's outer halo is the only translucent thing on the canvas; without
+   it the ring is still a ring.
+   --------------------------------------------------------------- */
+
+@media (prefers-reduced-transparency: reduce) {
+  /* The halo goes; the two solid bands stay, which is where the ring's whole
+     signal already lives. */
+  [data-layout-selection-ring] {
+    box-shadow:
+      0 0 0 1px var(--foreground),
+      0 0 0 3px var(--ring);
+  }
+
+  /* The floating panel's translucent material is the one place the editor
+     puts the canvas behind a surface; asked for opacity, it becomes an
+     ordinary card and nothing else changes. */
+  [data-layout-inspector][data-dock-mode="float"] {
+    background: var(--card);
+    backdrop-filter: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   The editing frame (L-87, L-130)
+
+   One rule, on the element that already carries the session marker: the app
+   column (`app-shell.tsx` writes `data-layout-column`, `layout-canvas.ts`
+   writes `data-layout-editing`). The column holds the header, the WHOLE tab
+   strip and the screen, and it is deliberately NOT an ancestor of the
+   inspector (C-06) - so framing it draws one box around the app the editor
+   is decorating and leaves the instrument panel outside it. The box is around
+   every open tab, not around the sample one: which tab is being customized is
+   said by that tab's own treatment (filled while it is active, a cap along its
+   bottom edge at rest - L-138), and this frame says that the app under it is
+   in edit mode.
+
+   An OVERLAY, not the column's own `outline`. The column paints with
+   `z-index: auto`, so its outline went under every positioned descendant that
+   paints an opaque background: measured live, the header covered the whole top
+   edge and the tab pane covered both sides, leaving 5% of the frame lit and
+   the rest invisible (LV2-04). A pseudo-element with a stacking layer above
+   them is drawn over the app instead of under it, and needs no JS to follow
+   the column's reflow in any of the three dock modes - the column is already
+   `position: relative`, so it is the containing block.
+
+   Inside the column's box, because an outset frame on a `h-safe-dvh` column is
+   clipped by the window edge on three sides and reads as a stray hairline -
+   the same trap the full-bleed rows above document. `pointer-events: none`,
+   because the canvas under it is what the user points at (P3, L-131).
+
+   INSET AND ROUNDED (L-137), which is the whole of the third live pass's other
+   finding. At `inset: 0` with square corners the frame ran into the window's
+   own rounded corners and was sliced off at the top-left and bottom-left - the
+   two corners of the column that ARE window corners while the inspector is
+   docked right. The numbers are on `:root` with the reasoning; what matters
+   here is that they are uniform, so the frame follows the column's box in all
+   three dock modes with no JS and no per-mode rule: docked right the LEFT
+   corners are the window's, docked left the RIGHT ones are, floating all four
+   are, and a corner that is not a window corner is simply a rounded corner
+   against the inspector's divider.
+
+   `dotted` on a curve is Chromium's own dot distribution along the border
+   path. At a 2px stroke and a 12px radius each corner arc carries roughly four
+   dots, which reads as a curve rather than as a bunched joint; this is the one
+   thing here that a still image cannot settle, so it is named in the report as
+   an owner check.
+
+   Static: the frame is a statement about the mode, not an event, so there
+   is nothing to animate and no reduced-motion gate to honour. The sample tab
+   (`stores/tabs/kinds/sample-workspace.tsx`) is the other half of the same
+   signal and uses the same token - solid where this is hollow.
+
+   A region's own hover outline is `outline-offset: 3px` on a DIFFERENT
+   element, so the two never compose into one thicker line.
+   --------------------------------------------------------------- */
+
+[data-layout-column][data-layout-editing="1"]::after {
+  content: "";
+  position: absolute;
+  z-index: var(--layout-editor-frame-z);
+  inset: var(--layout-editor-frame-inset);
+  border: 2px dotted var(--warning-foreground);
+  border-radius: var(--layout-editor-frame-radius);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------
+   Forced colors
+
+   `opacity` and `filter` survive a forced-colors palette, so the dim would
+   quietly make half the app unreadable rather than merely calm. Everything
+   that carried meaning through colour is restated with a system colour.
+   --------------------------------------------------------------- */
+
+@media (forced-colors: active) {
+  [data-layout-editing="1"] [data-layout-passive],
+  [data-layout-lit="1"] [data-layout-passive],
+  [data-layout-editing="1"]
+    [data-layout-passive-members]
+    > :not(:has([data-layout-session-tab])),
+  [data-layout-lit="1"]
+    [data-layout-passive-members]
+    > :not(:has([data-layout-session-tab])),
+  [data-layout-editing="1"] [data-layout-region][data-ghost="1"],
+  [data-layout-editing="1"] [data-layout-setting][data-ghost="1"] {
+    opacity: 1;
+    filter: none;
+  }
+
+  [data-layout-editing="1"] [data-layout-region][data-hover="1"],
+  [data-layout-editing="1"] [data-layout-setting][data-hover="1"],
+  [data-layout-editing="1"] [data-layout-region][data-selected="1"] {
+    outline: 2px solid Highlight;
+  }
+
+  [data-layout-hover-chip] {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  [data-layout-selection-ring] {
+    box-shadow: none;
+    outline: 2px solid Highlight;
+    outline-offset: 0;
+  }
+
+  /* The editing frame (L-87). A forced-colors palette drops
+     `--warning-foreground` like every other theme colour, and this frame is
+     the whole of what says the screen is in an editing mode. */
+  [data-layout-column][data-layout-editing="1"]::after {
+    border-color: Highlight;
+  }
+
+  /* The signal's other half, on the same terms. The active tab's amber fill is
+     force-adjusted away with every other background, so at rest AND in use the
+     tab says "this one" with the system's own highlight - restated here
+     because the colour it was saying it with no longer exists. */
+  [data-layout-session-tab="rest"] {
+    background: Highlight;
+  }
+
+  [data-layout-session-tab="filled"] {
+    display: block;
+    height: 3px;
+    background: Highlight;
+  }
+}

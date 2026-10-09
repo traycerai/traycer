@@ -6,10 +6,6 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswerability } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import type {
-  Message,
-  UserMessageSender,
-} from "@traycer/protocol/persistence/epic/schemas";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatMessageEditing } from "@/components/chat/chat-message";
@@ -32,6 +28,9 @@ import type {
   PendingInterviewView,
   UnanswerableInterviewView,
 } from "./chat-tile-types";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 
 /**
  * Fallback harness id used when the inline-edit settings do not carry a
@@ -798,7 +797,7 @@ export function selectContextUsage(
 }
 
 function findLastAssistantUsage(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
 ): TokenUsage | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];

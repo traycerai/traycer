@@ -4,10 +4,11 @@
  *  - its `ACTION_META` registration (label, category, default chord) and
  *    that the chord doesn't collide with any other action's default chord -
  *    a silent collision would mean one of the two chords never fires;
- *  - `dispatchAction` gates on the `homeTabEnabled` settings flag exactly as
- *    documented in `dispatch.ts` - returning `false` and touching nothing
- *    while the flag is off, so the provider leaves the chord unhandled
- *    instead of swallowing a keypress for a surface this build hasn't got;
+ *  - `dispatchAction` gates on the layout store's `homeTab.shown` value
+ *    exactly as documented in `dispatch.ts` - returning `false` and touching
+ *    nothing while the flag is off, so the provider leaves the chord
+ *    unhandled instead of swallowing a keypress for a surface this build
+ *    hasn't got;
  *  - `closeActiveEpic` (the handler behind `epic.close`) falls back to
  *    `router.navigateHome()` when closing the only open Epic tab leaves no
  *    next tab to focus - the one place `app.home.open`'s target is reached
@@ -33,7 +34,10 @@ import {
   resetTabsStoreForTest,
   seedActiveEpicTabInTabsStore,
 } from "@/stores/tabs/test-support/tabs-store-fixtures";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 const SEED_EPIC_ID = "epic-home-action";
 
@@ -85,13 +89,15 @@ function plainRouter(homeCalls: { count: number }): KeybindingRouter {
 beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   resetTabsStoreForTest();
-  useSettingsStore.setState({ homeTabEnabled: false });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
 });
 
 afterEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   resetTabsStoreForTest();
-  useSettingsStore.setState({ homeTabEnabled: false });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
 });
 
 describe("ACTION_META['app.home.open']", () => {
@@ -131,16 +137,16 @@ describe("ACTION_META['app.home.open']", () => {
 });
 
 describe("dispatchAction('app.home.open', router)", () => {
-  it("calls navigateHome and returns true when homeTabEnabled is on", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+  it("calls navigateHome and returns true when the Home tab is on", () => {
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const homeCalls = { count: 0 };
     const result = dispatchAction("app.home.open", plainRouter(homeCalls));
     expect(result).toBe(true);
     expect(homeCalls.count).toBe(1);
   });
 
-  it("returns false and calls nothing when homeTabEnabled is off", () => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+  it("returns false and calls nothing when the Home tab is off", () => {
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
     const homeCalls = { count: 0 };
     const result = dispatchAction("app.home.open", plainRouter(homeCalls));
     expect(result).toBe(false);

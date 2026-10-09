@@ -1,14 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   hostScopeFixture,
@@ -20,52 +12,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { setMobileApp } from "@/lib/mobile-app";
-import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 /** Concealed-or-absent: the gate's claim for children in a non-usable state. */
 function expectHiddenFromView(node: Element | null): void {
   expect(node === null || isConcealed(node)).toBe(true);
-}
-
-/** The plan-gated gate, wired with the runner host its remedy needs. */
-function renderPlanRestrictedGate(): MockRunnerHost {
-  const runnerHost = new MockRunnerHost({
-    signInUrl: "https://auth.example/sign-in",
-    authnBaseUrl: "https://auth.example",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostScopeGate
-          scope={hostScopeFixture({
-            host: hostScopeOptionFixture({
-              hostId: "host-b",
-              name: "Office Linux",
-              isLocalMachine: false,
-              connectable: false,
-              planRestricted: true,
-            }),
-            status: "unreachable",
-          })}
-          skeleton={<div data-testid="skeleton" />}
-        >
-          <div data-testid="body" />
-        </HostScopeGate>
-      </RunnerHostProvider>
-    </QueryClientProvider>,
-  );
-  return runnerHost;
 }
 
 /**
@@ -78,12 +28,7 @@ function renderPlanRestrictedGate(): MockRunnerHost {
  * Collapsing them told people with hosts to go install a host.
  */
 describe("<HostScopeGate /> empty and failed states", () => {
-  afterEach(() => {
-    cleanup();
-    setMobileApp(false);
-    useAuthStore.setState({ shareableTeams: [] });
-    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-  });
+  afterEach(cleanup);
 
   it("renders the panel body once the scope is ready", () => {
     render(
@@ -99,65 +44,32 @@ describe("<HostScopeGate /> empty and failed states", () => {
     expect(screen.queryByTestId("skeleton")).toBeNull();
   });
 
-  it("names the plan gate and offers Upgrade instead of claiming unreachable", async () => {
-    // A plan-gated route is a billing fact: the host works on its own
-    // machine and the server refuses the attach. Rendering it through the
-    // generic unreachable notice sent people debugging connectivity over a
-    // limit only an upgrade lifts.
-    const runnerHost = renderPlanRestrictedGate();
-
-    expect(screen.getByTestId("host-scope-plan-restricted")).not.toBeNull();
-    expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
-    expectHiddenFromView(screen.queryByTestId("body"));
-
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
-    // The Billing page, never the bare origin: that is the marketing homepage.
-    await waitFor(() => {
-      expect(runnerHost.openedExternalLinks).toEqual([
-        "https://auth.example/billing",
-      ]);
-    });
-  });
-
-  it("offers the selected team's Billing page as the upgrade", async () => {
-    useAuthStore.setState({
-      shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
-    });
-    useAccountContextStore.setState({
-      accountContext: { type: "TEAM", teamId: "team-1" },
-    });
-    const runnerHost = renderPlanRestrictedGate();
-
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
-    await waitFor(() => {
-      expect(runnerHost.openedExternalLinks).toEqual([
-        "https://auth.example/team/acme/billing",
-      ]);
-    });
-  });
-
-  // App Store review guideline 3.1.1: the installed app may not present or
-  // link to a subscription that cannot be bought through Apple. The state is
-  // still reported - withholding the notice too would leave a blank panel -
-  // but with no plan named, no upgrade offered, and nothing that opens the
-  // web billing page.
-  it("names the host, withholds the upgrade, and offers no link in the installed mobile app", () => {
-    setMobileApp(true);
-    renderPlanRestrictedGate();
-
-    const notice = screen.getByTestId("host-scope-plan-restricted");
-    expect(notice).not.toBeNull();
-    expect(notice.textContent).toContain(
-      "Office Linux is not available to the mobile app on the current plan",
+  it("renders the ordinary unreachable notice for a remote host with no route, and nothing about a plan", () => {
+    // Remote hosts are available on every plan, so a remote host this app has
+    // no route to is only ever unreachable: the notice names the host, says
+    // there is no live connection, and offers no purchase.
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-b",
+            name: "Office Linux",
+            isLocalMachine: false,
+            connectable: false,
+          }),
+          status: "unreachable",
+        })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
     );
-    expect(notice.textContent).toContain(
-      "Manage this from the Traycer desktop app.",
-    );
-    expect(notice.textContent).not.toContain("paid plan");
-    expect(screen.queryByTestId("host-scope-plan-upgrade")).toBeNull();
+
+    const notice = screen.getByTestId("host-scope-unreachable");
+    expect(notice.textContent).toContain("Can't reach Office Linux from here");
+    expect(notice.textContent).not.toContain("plan");
     expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
-    // Nothing else in the notice opens a link either.
-    expect(notice.querySelector("a")).toBeNull();
+    expectHiddenFromView(screen.queryByTestId("body"));
   });
 
   it("renders the skeleton, not the body, while the scope is connecting", () => {

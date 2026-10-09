@@ -3,30 +3,44 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
 import { HostAutoUpdateRow } from "@/components/settings/host-scope/host-registry-updates";
 import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import {
+  HostOverviewDesktopAppRow,
+  type HostOverviewDesktopAppRowProps,
+} from "@/components/settings/panels/host-overview-desktop-app-row";
 import { HostOverviewTabSections } from "@/components/settings/panels/host-overview-tabs";
-import { HostOverviewVersionCard } from "@/components/settings/panels/host-overview-updates";
+import { HostOverviewAnswerCard } from "@/components/settings/panels/host-overview-updates";
 import {
   VersionPicker,
   type VersionPickerProps,
 } from "@/components/settings/panels/host-overview-version-picker";
 
 /**
- * Overview ▸ Updates, top to bottom: the version card (the running version and
- * the update answer - is there an update, install it), the auto-update policy,
- * and installing one specific version.
+ * Overview ▸ Updates, top to bottom: the answer card (only when the update
+ * answer has news or an action - an update to install, a fix, a failure),
+ * where the desktop app stands on its own update (this machine's host, in
+ * the desktop app, only), the auto-update policy, and installing one specific
+ * version, whose heading carries Check now.
  *
  * The update IN FLIGHT is not here: its card sits in the notices strip above
- * the tab bar, on every tab, and the version card goes quiet while it shows.
- * The whole update story is still ONE hook instance up in the panel, so the
- * card, the answer and this list cannot disagree about what the last check
- * returned or which write is in flight.
+ * the tab bar, on every tab, and the answer card and Check now go quiet while
+ * it shows. The whole update story is still ONE hook instance up in the
+ * panel, so the card, the answer and this list cannot disagree about what the
+ * last check returned or which write is in flight.
  */
 export interface HostOverviewUpdatesTabProps {
   /**
-   * The version card, or `null` while the scope is still connecting with no
-   * update retained - the version list's loading shape stands in then.
+   * The answer card's inputs, or `null` while the host can't be reached or
+   * is still connecting: the answer needs the host. The card itself decides
+   * whether the answer is worth drawing.
    */
-  readonly versionCard: ComponentProps<typeof HostOverviewVersionCard> | null;
+  readonly answerCard: ComponentProps<typeof HostOverviewAnswerCard> | null;
+  /**
+   * The desktop app's own update, or `null` when this window is not the
+   * desktop app or the page is another machine's host. The app's updater
+   * needs no route to the host, so the row stays while the host cannot be
+   * reached.
+   */
+  readonly desktopApp: HostOverviewDesktopAppRowProps | null;
   /**
    * The account's auto-update policy, or `null` for a host with no registry
    * row. An account write, so it needs no route to the host: it stays while
@@ -43,9 +57,14 @@ export interface HostOverviewUpdatesTabProps {
    */
   readonly versions: VersionPickerProps | null;
   /**
+   * An update is running, waiting or restarting: the picker's Check now is
+   * hidden, not disabled, for that span, as the answer card is.
+   */
+  readonly inFlight: boolean;
+  /**
    * Why the version list is withheld; the account switch remains available.
    * `null` when it is not withheld, and when updates are not manageable here:
-   * the version card states that reason itself, directly above.
+   * the answer card states that reason itself, directly above.
    */
   readonly versionFallback:
     | { readonly kind: "connecting"; readonly hostName: string }
@@ -58,8 +77,11 @@ export function HostOverviewUpdatesTab(
 ): ReactNode {
   return (
     <HostOverviewTabSections>
-      {props.versionCard === null ? null : (
-        <HostOverviewVersionCard {...props.versionCard} />
+      {props.answerCard === null ? null : (
+        <HostOverviewAnswerCard {...props.answerCard} />
+      )}
+      {props.desktopApp === null ? null : (
+        <HostOverviewDesktopAppRow {...props.desktopApp} />
       )}
       {props.autoUpdate === null ? null : (
         <div className="rounded-md border border-border/40 px-4 py-3">
@@ -70,7 +92,9 @@ export function HostOverviewUpdatesTab(
           />
         </div>
       )}
-      {props.versions === null ? null : <VersionPicker {...props.versions} />}
+      {props.versions === null ? null : (
+        <VersionPicker {...props.versions} checkNowShown={!props.inFlight} />
+      )}
       {props.versionFallback?.kind === "connecting" ? (
         <HostScopeConnecting hostName={props.versionFallback.hostName} />
       ) : null}

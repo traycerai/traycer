@@ -45,7 +45,6 @@ export function hostScopeOptionFixture(
     isLocalMachine: true,
     isActive: true,
     connectable: true,
-    planRestricted: false,
     settingUp: false,
     registered: true,
     platform: "darwin-arm64",
@@ -137,9 +136,9 @@ export function scopedHostBindingFixture(
  * the host LIST.
  *
  * It exists because unifying the pickers moved every surface from a narrow,
- * easily-stubbed directory query onto `useHostOptions`, which composes six
+ * easily-stubbed directory query onto `useHostOptions`, which composes five
  * hooks (the runner host, the local service snapshot, the installed record,
- * both list queries, the plan gate). A suite that used to stub one hook now
+ * both list queries). A suite that used to stub one hook now
  * has to stand up all of them — so it mocks at THIS boundary instead, exactly
  * as the panel suites mock `useHostScope` rather than its internals.
  *

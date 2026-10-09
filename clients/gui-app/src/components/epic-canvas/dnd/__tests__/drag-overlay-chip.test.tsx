@@ -1,8 +1,37 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useDraggable } from "@dnd-kit/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { EpicRootDragOverlayContent } from "@/components/epic-canvas/dnd/drag-overlay-chip";
+import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE } from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
+import {
+  HEADER_TAB_DND_TYPE,
+  getHeaderTabDragId,
+  type HeaderTabDragData,
+} from "@/components/layout/tabs/header-tab-dnd";
+import { HEADER_STRIP_SCROLL_TEST_ID } from "@/components/layout/tabs/header-strip-geometry";
+import {
+  publishTabDetachHandler,
+  resetTabDetachHandler,
+} from "@/components/layout/tabs/tab-detach-channel";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -313,8 +342,16 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(marker.contains(screen.getByText("Folder chip"))).toBe(true);
     });
 
-    it("wraps the left-panel rail chip", () => {
-      const panel = LEFT_PANEL_DEFINITIONS[0];
+    /**
+     * A rail icon drags as its own tile (`LEFT_PANEL_RAIL_TILE_CLASS`, so
+     * `size-9`), not the old titled chip: a chip three tiles wide covered the
+     * neighbours and the drop line the user was aiming at.
+     */
+    it("wraps the left-panel rail tile, drawn with no title text", () => {
+      const panel = LEFT_PANEL_DEFINITIONS.find(
+        (definition) => definition.id === "terminals",
+      );
+      if (panel === undefined) throw new Error("no terminals panel definition");
       const source: EpicCanvasLeftPanelRailDragData = {
         kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
         viewTabId: "view-tab-1",
@@ -325,7 +362,11 @@ describe("<EpicRootDragOverlayContent />", () => {
       render(<EpicRootDragOverlayContent />);
 
       const marker = overlayMarker();
-      expect(marker.contains(screen.getByText(panel.title))).toBe(true);
+      const overlay = screen.getByTestId("left-panel-rail-drag-overlay");
+      expect(marker.contains(overlay)).toBe(true);
+      expect(overlay.className).toContain("size-9");
+      expect(overlay.querySelector("svg")).not.toBeNull();
+      expect(screen.queryByText(panel.title)).toBeNull();
     });
   });
 
@@ -389,10 +430,12 @@ describe("<EpicRootDragOverlayContent />", () => {
 
     beforeEach(() => {
       queryClient = new QueryClient();
+      __resetTabNavigationControllerForTesting();
     });
 
     afterEach(() => {
       queryClient.clear();
+      resetTabDetachHandler();
       useTabsStore.setState(useTabsStore.getInitialState(), true);
       useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     });
@@ -407,7 +450,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-left",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         null,
       );
       renderOverlay();
@@ -418,7 +462,7 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(overlay.style.width).toBe("480px");
     });
 
-    it("shows the focus icon and underline for the side the store says is focused", () => {
+    it("shows the focus icon and box for the side the store says is focused", () => {
       seedSplitGroup("right", { kind: "tab" });
       useEpicDndStore.getState().headerTabDragStarted(
         {
@@ -428,7 +472,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-right",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         null,
       );
       renderOverlay();
@@ -438,14 +483,19 @@ describe("<EpicRootDragOverlayContent />", () => {
         "split-focus-indicator-split-1",
       );
       expect(indicator.dataset.focusedSide).toBe("right");
-      const underline = within(overlay).getByTestId(
-        "split-tab-group-underline-right-split-1",
+      // F4 round 2 dropped the group underline; the focused member's own box
+      // is now what says which side is focused.
+      const leftMember = overlay.querySelector<HTMLElement>(
+        '[data-split-member="left"]',
       );
-      expect(underline.className).not.toContain("bg-current");
-      const leftUnderline = within(overlay).getByTestId(
-        "split-tab-group-underline-left-split-1",
+      const rightMember = overlay.querySelector<HTMLElement>(
+        '[data-split-member="right"]',
       );
-      expect(leftUnderline.className).toContain("bg-current");
+      if (leftMember === null || rightMember === null) {
+        throw new Error("expected both split members");
+      }
+      expect(within(leftMember).queryByTestId("tab-chrome-box")).toBeNull();
+      expect(within(rightMember).getByTestId("tab-chrome-box")).toBeTruthy();
     });
 
     it("carries the captured manual appearance and notification snapshot into the split preview", () => {
@@ -458,7 +508,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-left",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         {
           appearance: { color: "#654321", icon: "🚀" },
           indicatorState: {
@@ -480,7 +531,7 @@ describe("<EpicRootDragOverlayContent />", () => {
       // `tab-strip-drag-overlay.test.tsx`.
       expect(
         within(overlay)
-          .getByTestId("tab-chrome-center")
+          .getByTestId("tab-chrome-box")
           .style.getPropertyValue("--swatch-border"),
       ).toBe("#654321");
       expect(
@@ -498,7 +549,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-left",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         null,
       );
       renderOverlay();
@@ -508,65 +560,253 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(within(overlay).getByText("Tab unavailable")).toBeTruthy();
     });
 
-    function rect(left: number, top: number, right: number, bottom: number) {
+    interface Rect {
+      readonly x: number;
+      readonly y: number;
+      readonly left: number;
+      readonly top: number;
+      readonly right: number;
+      readonly bottom: number;
+      readonly width: number;
+      readonly height: number;
+      readonly toJSON: () => Record<string, never>;
+    }
+
+    /** `(left, top, width, height)` - the shape `getBoundingClientRect` returns. */
+    function rect(
+      left: number,
+      top: number,
+      width: number,
+      height: number,
+    ): Rect {
       return {
         x: left,
         y: top,
         left,
         top,
-        right,
-        bottom,
-        width: right - left,
-        height: bottom - top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
         toJSON: () => ({}),
       };
     }
 
-    it("offsets the preview root by the grabbed right member's position within the group frame", () => {
-      seedSplitGroup("right", { kind: "tab" });
+    function withRouter(harness: () => ReactNode) {
+      const rootRoute = createRootRoute({ component: harness });
+      const home = createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/",
+        component: () => null,
+      });
+      return createRouter({
+        routeTree: rootRoute.addChildren([home]),
+        history: createMemoryHistory({ initialEntries: ["/"] }),
+      });
+    }
 
-      // Supply the source nodes without mounting the full interactive strip.
-      const frame = document.createElement("div");
-      frame.setAttribute("data-strip-item-id", "split-1");
-      const member = document.createElement("div");
-      member.setAttribute("data-tab-kind", "epic");
-      member.setAttribute("data-testid", "tab-epic-epic-right");
-      frame.appendChild(member);
-      document.body.appendChild(frame);
-      const frameRectSpy = vi
+    /**
+     * A minimal real strip: the FRAME carries `data-strip-item-id`, each
+     * member is its own `useDraggable` root carrying the `data-tab-kind`/
+     * `data-testid` pair `SplitTabDragOverlay`'s own width capture looks up -
+     * the same shape `header-strip-drag-overlay-origin.test.tsx` uses for the
+     * frame-vs-member origin fix, extended so the REAL overlay component (not
+     * a bare positioned wrapper) can resolve its dragged member too.
+     */
+    function SplitFrameStrip(): ReactNode {
+      const dataFor = (tabId: string): HeaderTabDragData => ({
+        kind: HEADER_TAB_DND_TYPE,
+        stripItemId: "split-1",
+        tabKind: "epic",
+        tabId,
+        index: 0,
+      });
+      const { setNodeRef: setLeftRef, listeners: leftListeners } = useDraggable(
+        {
+          id: getHeaderTabDragId("epic", "epic-left"),
+          data: dataFor("epic-left"),
+        },
+      );
+      const { setNodeRef: setRightRef, listeners: rightListeners } =
+        useDraggable({
+          id: getHeaderTabDragId("epic", "epic-right"),
+          data: dataFor("epic-right"),
+        });
+      return (
+        <div
+          data-testid={HEADER_STRIP_SCROLL_TEST_ID}
+          data-strip-axis="x"
+          data-strip-edge="top"
+        >
+          <div data-strip-item-id="split-1" data-strip-item-mergeable="false">
+            <button
+              ref={setLeftRef}
+              data-tab-kind="epic"
+              data-testid="tab-epic-epic-left"
+              {...leftListeners}
+            >
+              left
+            </button>
+            <button
+              ref={setRightRef}
+              data-tab-kind="epic"
+              data-testid="tab-epic-epic-right"
+              {...rightListeners}
+            >
+              right
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    interface SplitDragRects {
+      readonly stripRect: Rect;
+      readonly frameRect: Rect;
+      readonly leftMemberRect: Rect;
+      readonly rightMemberRect: Rect;
+    }
+
+    interface SplitDragMount {
+      readonly leftEl: HTMLElement;
+      readonly rightEl: HTMLElement;
+      readonly setFrameRect: (next: Rect) => void;
+      readonly setMemberRect: (side: "left" | "right", next: Rect) => void;
+    }
+
+    /** Mounts the REAL `RootDndProvider` + `EpicRootDragOverlayContent` over `SplitFrameStrip`. */
+    async function mountRealSplitDrag(
+      rects: SplitDragRects,
+    ): Promise<SplitDragMount> {
+      const router = withRouter(() => (
+        <QueryClientProvider client={queryClient}>
+          <RootDndProvider>
+            <SplitFrameStrip />
+          </RootDndProvider>
+        </QueryClientProvider>
+      ));
+      await act(async () => {
+        render(<RouterProvider router={router} />);
+        await router.load();
+      });
+      const strip = screen.getByTestId(HEADER_STRIP_SCROLL_TEST_ID);
+      vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(rects.stripRect);
+      const frame = strip.querySelector<HTMLElement>(
+        '[data-strip-item-id="split-1"]',
+      );
+      if (frame === null) throw new Error("expected split frame");
+      const frameSpy = vi
         .spyOn(frame, "getBoundingClientRect")
-        .mockReturnValue(rect(100, 0, 101, 40));
-      const memberRectSpy = vi
-        .spyOn(member, "getBoundingClientRect")
-        .mockReturnValue(rect(340, 0, 341, 40));
+        .mockReturnValue(rects.frameRect);
+      const leftEl = screen.getByTestId("tab-epic-epic-left");
+      const rightEl = screen.getByTestId("tab-epic-epic-right");
+      const leftSpy = vi
+        .spyOn(leftEl, "getBoundingClientRect")
+        .mockReturnValue(rects.leftMemberRect);
+      const rightSpy = vi
+        .spyOn(rightEl, "getBoundingClientRect")
+        .mockReturnValue(rects.rightMemberRect);
+      return {
+        leftEl,
+        rightEl,
+        setFrameRect: (next) => frameSpy.mockReturnValue(next),
+        setMemberRect: (side, next) =>
+          (side === "left" ? leftSpy : rightSpy).mockReturnValue(next),
+      };
+    }
 
-      try {
-        useEpicDndStore.getState().headerTabDragStarted(
-          {
-            kind: "header-tab",
-            stripItemId: "split-1",
-            tabKind: "epic",
-            tabId: "epic-right",
-            index: 0,
-          },
-          480,
-          null,
+    interface Drag {
+      readonly source: HTMLElement;
+      readonly pointerId: number;
+    }
+
+    /** Press at `(x, y)` on `source`, then cross the activation distance along x. */
+    function pressAndActivate(
+      source: HTMLElement,
+      x: number,
+      y: number,
+      pointerId: number,
+    ): Drag {
+      act(() => {
+        fireEvent.pointerDown(source, {
+          pointerId,
+          isPrimary: true,
+          button: 0,
+          clientX: x,
+          clientY: y,
+        });
+      });
+      act(() => {
+        fireEvent.pointerMove(source, {
+          pointerId,
+          clientX: x + EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE + 50,
+          clientY: y,
+        });
+      });
+      return { source, pointerId };
+    }
+
+    function moveTo(drag: Drag, x: number, y: number): void {
+      act(() => {
+        fireEvent.pointerMove(drag.source, {
+          pointerId: drag.pointerId,
+          clientX: x,
+          clientY: y,
+        });
+      });
+    }
+
+    function releaseAt(drag: Drag, x: number, y: number): void {
+      act(() => {
+        fireEvent.pointerUp(drag.source, {
+          pointerId: drag.pointerId,
+          clientX: x,
+          clientY: y,
+        });
+      });
+    }
+
+    /** The one fixed, translate3d-transformed element dnd-kit's `DragOverlay` positions. */
+    function outerOverlayElement(): HTMLElement {
+      const overlays = [...document.querySelectorAll<HTMLElement>("*")].filter(
+        (node) =>
+          node.style.position === "fixed" &&
+          node.style.transform.startsWith("translate3d("),
+      );
+      expect(overlays.length).toBe(1);
+      return overlays[0];
+    }
+
+    /**
+     * The overlay's EFFECTIVE rendered position: the outer dnd-kit wrapper's
+     * frozen `top`/`left` plus its `translate3d`, PLUS any leftover transform
+     * on `SplitTabDragOverlay`'s own root (`header-tab-drag-overlay`) - which
+     * must be empty now that the frame-vs-member correction lives solely on
+     * the outer wrapper (the deleted DOM `translateX` hack). Summing both
+     * catches a regression that reintroduces a correction on the inner
+     * element too, which would double it, rather than reading only the layer
+     * that happens to still be right.
+     */
+    function renderedOverlayPosition(): { top: number; left: number } {
+      const outer = outerOverlayElement();
+      const match = /^translate3d\(([-\d.]+)px, ([-\d.]+)px, 0\)/.exec(
+        outer.style.transform,
+      );
+      if (match === null) {
+        throw new Error(
+          `unexpected overlay transform: ${outer.style.transform}`,
         );
-        renderOverlay();
-
-        const overlay = screen.getByTestId("header-tab-drag-overlay");
-        // frame.left (100) - member.left (340): the preview paints back at the
-        // group's origin instead of the grabbed member's own, narrower slot.
-        expect(overlay.style.transform).toBe("translateX(-240px)");
-        expect(overlay.style.width).toBe("480px");
-        expect(within(overlay).getByText("Left Epic")).toBeTruthy();
-        expect(within(overlay).getByText("Right Epic")).toBeTruthy();
-      } finally {
-        frameRectSpy.mockRestore();
-        memberRectSpy.mockRestore();
-        frame.remove();
       }
-    });
+      const inner = within(outer).getByTestId("header-tab-drag-overlay");
+      const innerMatch = /translateX\(([-\d.]+)px\)/.exec(
+        inner.style.transform,
+      );
+      const innerOffset = innerMatch === null ? 0 : Number(innerMatch[1]);
+      return {
+        top: parseFloat(outer.style.top) + Number(match[2]),
+        left: parseFloat(outer.style.left) + Number(match[1]) + innerOffset,
+      };
+    }
 
     it("still renders the plain single-title overlay for an ordinary (non-split) tab drag", () => {
       useEpicCanvasStore
@@ -593,7 +833,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-solo",
           index: 0,
         },
-        220,
+        { width: 220, height: 36 },
+        "x",
         null,
       );
       renderOverlay();
@@ -651,7 +892,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-right",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         null,
       );
       renderOverlay();
@@ -662,15 +904,7 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(
         within(overlay).getByTestId("split-tab-divider-split-1"),
       ).toBeTruthy();
-      const leftUnderline = within(overlay).getByTestId(
-        "split-tab-group-underline-left-split-1",
-      );
-      const rightUnderline = within(overlay).getByTestId(
-        "split-tab-group-underline-right-split-1",
-      );
-      expect(leftUnderline.className).toContain("bg-current");
-      expect(rightUnderline.className).toContain("bg-current");
-      expect(within(overlay).queryByTestId("tab-chrome-center")).toBeNull();
+      expect(within(overlay).queryByTestId("tab-chrome-box")).toBeNull();
 
       act(() => {
         useTabsStore.setState({ activeItemId: "split-1" });
@@ -679,89 +913,84 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(
         within(overlay).queryByTestId("split-tab-divider-split-1"),
       ).toBeNull();
-      expect(leftUnderline.className).toContain("bg-current");
-      expect(rightUnderline.className).not.toContain("bg-current");
-      expect(within(overlay).getByTestId("tab-chrome-center")).toBeTruthy();
+      expect(within(overlay).getByTestId("tab-chrome-box")).toBeTruthy();
     });
 
-    (
-      [
-        { side: "left", origin: 100, groupOffset: 0 },
-        { side: "right", origin: 340, groupOffset: -240 },
-      ] as const
-    ).forEach(({ side, origin, groupOffset }) => {
-      it(`switches to just the grabbed ${side} member at its measured width on tear-off, and restores the full group on reentry`, () => {
+    [
+      { side: "left", origin: 100 } as const,
+      { side: "right", origin: 340 } as const,
+    ].forEach(({ side, origin }) => {
+      it(`switches to just the grabbed ${side} member at its measured width on tear-off, and restores the full group on reentry`, async () => {
         seedSplitGroup("right", { kind: "tab" });
-        const draggedId = side === "left" ? "epic-left" : "epic-right";
+        const requestOpen = vi.fn();
+        publishTabDetachHandler({ isAvailable: true, requestOpen });
         const draggedTitle = side === "left" ? "Left Epic" : "Right Epic";
         const otherTitle = side === "left" ? "Right Epic" : "Left Epic";
 
-        const frame = document.createElement("div");
-        frame.setAttribute("data-strip-item-id", "split-1");
-        const member = document.createElement("div");
-        member.setAttribute("data-tab-kind", "epic");
-        member.setAttribute("data-testid", `tab-epic-${draggedId}`);
-        frame.appendChild(member);
-        document.body.appendChild(frame);
-        const frameRectSpy = vi
-          .spyOn(frame, "getBoundingClientRect")
-          .mockReturnValue(rect(100, 0, 101, 40));
-        const memberRectSpy = vi
-          .spyOn(member, "getBoundingClientRect")
-          .mockReturnValue(rect(origin, 0, origin + 190, 40));
+        const mount = await mountRealSplitDrag({
+          stripRect: rect(0, 0, 1000, 40),
+          frameRect: rect(100, 0, 480, 40),
+          leftMemberRect: rect(100, 0, 190, 40),
+          rightMemberRect: rect(340, 0, 190, 40),
+        });
+        const draggedEl = side === "left" ? mount.leftEl : mount.rightEl;
 
-        try {
-          useEpicDndStore.getState().headerTabDragStarted(
-            {
-              kind: "header-tab",
-              stripItemId: "split-1",
-              tabKind: "epic",
-              tabId: draggedId,
-              index: 0,
-            },
-            480,
-            null,
-          );
-          renderOverlay();
-          const overlay = screen.getByTestId("header-tab-drag-overlay");
+        const drag = pressAndActivate(draggedEl, origin, 16, 32);
+        moveTo(drag, origin + 10, 16); // +10px right of press
 
-          expect(within(overlay).getByText("Left Epic")).toBeTruthy();
-          expect(within(overlay).getByText("Right Epic")).toBeTruthy();
-          expect(overlay.style.transform).toBe(`translateX(${groupOffset}px)`);
-          expect(overlay.style.width).toBe("480px");
+        // Only exists once the drag is active - `EpicRootDragOverlayContent`
+        // renders nothing for a null `activeHeaderTab`.
+        const overlay = screen.getByTestId("header-tab-drag-overlay");
+        expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+        expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+        expect(renderedOverlayPosition()).toEqual({ top: 0, left: 110 });
+        expect(overlay.style.width).toBe("480px");
 
-          act(() => {
-            useEpicDndStore.getState().headerTearOffPreviewChanged(true);
-          });
+        // Past the strip's band on the cross axis (y): the app's own
+        // `onDragMove` effect flips the store flag AFTER this event's
+        // modifier already ran, so the overlay only reflects tear-off on the
+        // NEXT dnd-kit-driven position update - a second move at the same
+        // point exercises exactly that (mirrors the vertical-strip sibling
+        // regression in `header-strip-drag-overlay-origin.test.tsx`).
+        moveTo(drag, origin + 10, 200);
+        expect(useEpicDndStore.getState().headerTearOffPreview).toBe(true);
+        moveTo(drag, origin + 10, 200);
 
-          expect(within(overlay).getByText(draggedTitle)).toBeTruthy();
-          expect(within(overlay).queryByText(otherTitle)).toBeNull();
-          expect(overlay.style.transform).toBe("translateX(0px)");
-          expect(overlay.style.width).toBe("190px");
+        expect(within(overlay).getByText(draggedTitle)).toBeTruthy();
+        expect(within(overlay).queryByText(otherTitle)).toBeNull();
+        expect(overlay.style.width).toBe("190px");
+        // Tear-off keeps the grabbed member under the pointer.
+        expect(renderedOverlayPosition()).toEqual({
+          top: 0,
+          left: origin + 10,
+        });
 
-          // Captured once: re-mocking the rects after the first measurement
-          // must not move either number in either direction below.
-          frameRectSpy.mockReturnValue(rect(999, 0, 1000, 40));
-          memberRectSpy.mockReturnValue(rect(2000, 0, 2500, 40));
+        // Captured once: re-mocking the rects after the first measurement
+        // must not move either number in either direction below.
+        mount.setFrameRect(rect(999, 0, 1, 40));
+        mount.setMemberRect(side, rect(2000, 0, 1, 40));
 
-          act(() => {
-            useEpicDndStore.getState().headerTearOffPreviewChanged(false);
-          });
-          expect(within(overlay).getByText("Left Epic")).toBeTruthy();
-          expect(within(overlay).getByText("Right Epic")).toBeTruthy();
-          expect(overlay.style.transform).toBe(`translateX(${groupOffset}px)`);
-          expect(overlay.style.width).toBe("480px");
+        moveTo(drag, origin + 10, 16);
+        expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
+        moveTo(drag, origin + 10, 16);
 
-          act(() => {
-            useEpicDndStore.getState().headerTearOffPreviewChanged(true);
-          });
-          expect(overlay.style.transform).toBe("translateX(0px)");
-          expect(overlay.style.width).toBe("190px");
-        } finally {
-          frameRectSpy.mockRestore();
-          memberRectSpy.mockRestore();
-          frame.remove();
-        }
+        expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+        expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+        expect(overlay.style.width).toBe("480px");
+        expect(renderedOverlayPosition()).toEqual({ top: 0, left: 110 });
+
+        // A second tear-off: still member-relative, still the ORIGINALLY
+        // captured width, immune to the remock above.
+        moveTo(drag, origin + 10, 200);
+        moveTo(drag, origin + 10, 200);
+        expect(overlay.style.width).toBe("190px");
+        expect(renderedOverlayPosition()).toEqual({
+          top: 0,
+          left: origin + 10,
+        });
+
+        releaseAt(drag, origin + 10, 200);
+        expect(requestOpen).toHaveBeenCalledTimes(1);
       });
     });
 
@@ -775,7 +1004,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-right",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         null,
       );
       useEpicDndStore.getState().headerTearOffPreviewChanged(true);
@@ -789,7 +1019,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: "epic-left",
           index: 0,
         },
-        480,
+        { width: 480, height: 36 },
+        "x",
         null,
       );
       expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
@@ -859,7 +1090,6 @@ describe("<EpicRootDragOverlayContent />", () => {
           epicId: EPIC_ID,
           hostId: "test-host",
           userId: null,
-          onRetryTransport: () => {},
           onWakeTransport: () => {},
           runtime: INERT_RUNTIME,
           accounting: createRecordingAccountingPort().port,
@@ -950,7 +1180,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: EPIC_ID,
           index: 0,
         },
-        400,
+        { width: 400, height: 36 },
+        "x",
         null,
       );
     }
@@ -1087,7 +1318,8 @@ describe("<EpicRootDragOverlayContent />", () => {
           tabId: EPIC_ID,
           index: 0,
         },
-        400,
+        { width: 400, height: 36 },
+        "x",
         null,
       );
       renderOverlay();

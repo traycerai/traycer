@@ -38,6 +38,7 @@ const USAGE_SERIES_SLOTS = Array.from(
  */
 const HARNESS_PREFERRED_SLOT: Readonly<Partial<Record<string, number>>> = {
   amp: 8,
+  commandcode: 6,
   copilot: 5,
   cursor: 15,
   devin: 3,

@@ -52,6 +52,18 @@ export function isUpdateBlockedByLocation(): boolean {
   );
 }
 
+let relocationRelaunchPending = false;
+
+/**
+ * True from the moment an accepted move to `/Applications` is attempted until
+ * it is known not to have happened. The quit Electron fires once the moved
+ * copy is relaunched is a relaunch-intended quit - like an update install's,
+ * it hands the host to the next instance instead of stopping or asking.
+ */
+export function isRelocationRelaunchPending(): boolean {
+  return relocationRelaunchPending;
+}
+
 /**
  * macOS only. When the app is launched from outside `/Applications` - most often
  * run straight from the mounted `.dmg` (a read-only volume) or a Gatekeeper
@@ -90,8 +102,16 @@ export async function maybePromptRelocateToApplications(): Promise<void> {
   // Boundary: `moveToApplicationsFolder` performs native filesystem work and can
   // throw (permission denied, locked target). Handle it here so a failed move
   // never disrupts the running app - it just keeps running from where it is.
+  //
+  // On success Electron relaunches from the new path and then quits this
+  // instance from INSIDE the call (`Browser::Quit`, which emits `before-quit`
+  // synchronously), so the flag must be up before the call: that quit is a
+  // relaunch, and the quit transaction reads it through
+  // `isRelocationRelaunchPending`. A move that did not happen puts it down.
+  relocationRelaunchPending = true;
+  let moved = false;
   try {
-    app.moveToApplicationsFolder({
+    moved = app.moveToApplicationsFolder({
       conflictHandler: (conflictType) => {
         // Another copy already lives in `/Applications`.
         if (conflictType === "existsAndRunning") {
@@ -121,4 +141,5 @@ export async function maybePromptRelocateToApplications(): Promise<void> {
   } catch (err) {
     log.warn("[relocate] move to Applications failed", err);
   }
+  if (!moved) relocationRelaunchPending = false;
 }

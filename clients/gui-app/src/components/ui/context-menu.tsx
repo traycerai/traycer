@@ -6,6 +6,7 @@ import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { MenuOpenMarker } from "@/components/ui/open-menus";
 
 function ContextMenu({
   ...props
@@ -26,6 +27,7 @@ function ContextMenuContent({
   className,
   collisionPadding,
   onCloseAutoFocus,
+  children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   // A modal context menu drives `hideOthers` + scroll-lock while open, so a
@@ -58,15 +60,41 @@ function ContextMenuContent({
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
-      />
+      >
+        {/* Mounted with the open menu: no hover card opens meanwhile. */}
+        <MenuOpenMarker />
+        {children}
+      </ContextMenuPrimitive.Content>
     </ContextMenuPrimitive.Portal>
   );
+}
+
+/**
+ * A closing menu must not take focus back from the control its item's action
+ * just focused. The content goes `pointer-events: none` for its exit animation
+ * (above), and Chrome answers that by dispatching `pointerleave` on the item
+ * still under the pointer - no mouse movement needed. Radix's handler for that
+ * leave focuses the menu CONTENT, which blurs the inline rename input the item
+ * just opened; `useInlineRename` blur-commits and unmounts it before a
+ * keystroke lands. Default-preventing the item's own `pointerleave` while its
+ * content is closed is the seam Radix leaves for this: its composed handler
+ * runs only when the event is not default-prevented. An OPEN menu keeps the
+ * behaviour, which is what un-highlights an item the pointer leaves.
+ */
+function preventClosedMenuItemLeaveRefocus(
+  event: React.PointerEvent<HTMLDivElement>,
+): void {
+  const content = event.currentTarget.closest(
+    '[data-slot="context-menu-content"], [data-slot="context-menu-sub-content"]',
+  );
+  if (content?.getAttribute("data-state") === "closed") event.preventDefault();
 }
 
 function ContextMenuItem({
   className,
   inset,
   variant = "default",
+  onPointerLeave,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
   inset?: boolean;
@@ -77,6 +105,10 @@ function ContextMenuItem({
       data-slot="context-menu-item"
       data-inset={inset}
       data-variant={variant}
+      onPointerLeave={(event) => {
+        onPointerLeave?.(event);
+        preventClosedMenuItemLeaveRefocus(event);
+      }}
       className={cn(
         "group/context-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
         className,
@@ -104,6 +136,7 @@ function ContextMenuCheckboxItem({
   children,
   checked,
   inset,
+  onPointerLeave,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.CheckboxItem> & {
   inset?: boolean;
@@ -112,6 +145,10 @@ function ContextMenuCheckboxItem({
     <ContextMenuPrimitive.CheckboxItem
       data-slot="context-menu-checkbox-item"
       data-inset={inset}
+      onPointerLeave={(event) => {
+        onPointerLeave?.(event);
+        preventClosedMenuItemLeaveRefocus(event);
+      }}
       className={cn(
         "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className,
@@ -129,6 +166,70 @@ function ContextMenuCheckboxItem({
       </span>
       {children}
     </ContextMenuPrimitive.CheckboxItem>
+  );
+}
+
+function ContextMenuRadioGroup({
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.RadioGroup>) {
+  return (
+    <ContextMenuPrimitive.RadioGroup
+      data-slot="context-menu-radio-group"
+      {...props}
+    />
+  );
+}
+
+function ContextMenuRadioItem({
+  className,
+  children,
+  inset,
+  onPointerLeave,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.RadioItem> & {
+  inset?: boolean;
+}) {
+  return (
+    <ContextMenuPrimitive.RadioItem
+      data-slot="context-menu-radio-item"
+      data-inset={inset}
+      onPointerLeave={(event) => {
+        onPointerLeave?.(event);
+        preventClosedMenuItemLeaveRefocus(event);
+      }}
+      className={cn(
+        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-[state=checked]:bg-foreground/5 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    >
+      <span
+        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        data-slot="context-menu-radio-item-indicator"
+      >
+        <ContextMenuPrimitive.ItemIndicator>
+          <CheckIcon />
+        </ContextMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </ContextMenuPrimitive.RadioItem>
+  );
+}
+
+/** A section heading inside a menu, drawn like `DropdownMenuLabel`. */
+function ContextMenuLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.Label>) {
+  return (
+    <ContextMenuPrimitive.Label
+      data-slot="context-menu-label"
+      className={cn(
+        "px-1.5 py-1 text-overline tracking-wide uppercase text-muted-foreground",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
@@ -206,6 +307,9 @@ export {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuCheckboxItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuLabel,
   ContextMenuSub,
   ContextMenuSubTrigger,
   ContextMenuSubContent,

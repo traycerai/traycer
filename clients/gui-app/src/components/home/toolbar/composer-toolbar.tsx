@@ -1,3 +1,4 @@
+import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 import { memo, useMemo } from "react";
 import { useStore } from "zustand";
 
@@ -18,6 +19,8 @@ import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-st
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
 interface ComposerToolbarProps {
+  /** Passive sample chrome: no host hooks, activation slots or send action. */
+  readonly presentation?: boolean;
   /** Per-composer toolbar store; this component subscribes to the slices the
    *  left group renders, leaves stay presentational. */
   store: ComposerToolbarStore;
@@ -59,7 +62,59 @@ interface ComposerToolbarProps {
   readonly chatLineCarriesAutoMode: boolean | null;
 }
 
+function ComposerToolbarLive(props: ComposerToolbarProps) {
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    props.runTargetHostId,
+    "agent.gui.listHarnesses",
+  );
+  const hostKnowsAutoMode =
+    props.runTargetHostId === null
+      ? null
+      : autoModeOfferableHere(listHarnessesLine, props.chatLineCarriesAutoMode);
+  const runHarnessId = useStore(
+    props.store,
+    (state) => state.selection.harnessId,
+  );
+  const runModelSlug = useStore(
+    props.store,
+    (state) => state.selection.modelSlug,
+  );
+  const judgeBilling = useAutoJudgeBilling(
+    props.runTargetHostId,
+    runHarnessId,
+    runModelSlug,
+  );
+  const openPermissionSettings = useOpenPermissionSettings(
+    props.runTargetHostId,
+  );
+  return (
+    <ComposerToolbarView
+      {...props}
+      hostKnowsAutoMode={hostKnowsAutoMode}
+      judgeBilling={judgeBilling}
+      onOpenPermissionSettings={openPermissionSettings}
+    />
+  );
+}
 function ComposerToolbarImpl(props: ComposerToolbarProps) {
+  return props.presentation ? (
+    <ComposerToolbarView
+      {...props}
+      hostKnowsAutoMode={null}
+      judgeBilling={null}
+      onOpenPermissionSettings={null}
+    />
+  ) : (
+    <ComposerToolbarLive {...props} />
+  );
+}
+function ComposerToolbarView(
+  props: ComposerToolbarProps & {
+    readonly hostKnowsAutoMode: boolean | null;
+    readonly judgeBilling: AutoJudgeBilling | null;
+    readonly onOpenPermissionSettings: (() => void) | null;
+  },
+) {
   const {
     store,
     onAttachImages,
@@ -76,7 +131,8 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
-    chatLineCarriesAutoMode,
+    hostKnowsAutoMode,
+    judgeBilling,
   } = props;
 
   // Left-group slices. The store is the single source for harness-level
@@ -86,6 +142,10 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     store,
     (s) => s.supportedPermissionModes,
   );
+  // The permission picker's only use for it: naming the provider that does
+  // not support a mode. The sample scene's own store answers it like any
+  // other, so there is no presentation override - the label the toolbar used
+  // to DRAW beside the access chip left the composer with L-136.
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
   // The union across the WHOLE catalog, so the picker can tell "this host
@@ -98,52 +158,51 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
   );
-  // The HOST capability the union cannot express: a catalog of unconstrained
-  // rows names no modes at all, and even a fully constrained one cannot tell
-  // "this machine predates `auto`" from "every provider here declines it".
-  // The negotiated catalog line answers the first question directly, and the
-  // picker's unsupported copy uses it to decide who to blame.
-  // `null` when no host is named: that is "no host in scope", not "the host
-  // cannot spell `auto`", and the two are different claims. A named host whose
-  // line is unreadable still answers `false` - the composer is about to send on
-  // it - which is what `catalogLineKnowsAutoMode(null)` gives.
-  //
-  // ANDed with this chat's own `chat.subscribe` line, because the catalog line
-  // is evidence about what the host can OFFER and the frame that CARRIES the
-  // value is a different method - see `autoModeOfferableHere`. On the landing
-  // composer that second half is `null` (no chat yet) and the catalog line
-  // decides alone, which is all this surface can know.
-  const listHarnessesLine = useHostMethodSchemaVersion(
-    runTargetHostId,
-    "agent.gui.listHarnesses",
-  );
-  const hostKnowsAutoMode =
-    runTargetHostId === null
-      ? null
-      : autoModeOfferableHere(listHarnessesLine, chatLineCarriesAutoMode);
-  // The harness this composer will RUN, which decides the disclosure alongside
-  // the host's stored judge: a provider set to its own classifier bypasses
-  // Traycer's judge entirely. Read off the same store slice the picker shows,
-  // so the row and the trigger can never name different providers.
-  const runHarnessId = useStore(store, (s) => s.selection.harnessId);
-  // And the model it will run: under Automatic's fallback the judge is this
-  // conversation's own harness, on its judge model or else on this one.
-  const runModelSlug = useStore(store, (s) => s.selection.modelSlug);
-  const judgeBilling = useAutoJudgeBilling(
-    runTargetHostId,
-    runHarnessId,
-    runModelSlug,
-  );
-  const openPermissionSettings = useOpenPermissionSettings(runTargetHostId);
-
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
   const recordingDictation =
+    !props.presentation &&
     dictation !== null &&
     (dictation.state === "recording" || dictation.state === "transcribing")
       ? dictation
       : null;
 
+  // Both clusters render through the same `renderToolbarItem` map now that an
+  // item may move between them, so both need the full prop set - what used to
+  // be split into "left's props" and "right's props" is one shared object.
+  const itemProps = {
+    presentation: props.presentation === true,
+    onAttachImages,
+    permission,
+    onPermissionChange: setPermission,
+    supportedPermissionModes,
+    harnessLabel,
+    catalogSupportedModes,
+    hostKnowsAutoMode,
+    // A turn the user can still switch a mode underneath - which the host
+    // honours IMMEDIATELY for the running turn, not from the next message;
+    // the picker's own mid-turn notice is what says so. `settingsLocked`
+    // surfaces cannot flip at all.
+    turnActive: activeTurnStatus !== null && !settingsLocked,
+    judgeBilling,
+    onOpenPermissionSettings: props.onOpenPermissionSettings,
+    settingsLocked,
+    store,
+    createProfileHostId,
+    runTargetHostId,
+    terminalLoginSurface,
+    dictation,
+    dictationPreparing,
+  };
+
+  // No `inert` on the presentation copy (L-131). The only surface that renders
+  // one is the layout editor's sample workspace, where the toolbar IS the thing
+  // being pointed at: `inert` removes the subtree from hit testing, so Attach
+  // image, Access, Model and Microphone could not be hovered, selected or
+  // dragged. The edit firewall on the app column is what keeps a sample
+  // gesture from acting, and every leaf here is already passive on its own -
+  // the model picker draws a trigger with no menu, Send is disabled, and the
+  // handlers the sample passes are no-ops.
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1">
       {recordingDictation !== null ? (
@@ -157,38 +216,16 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
         </div>
       ) : (
         <>
-          <ComposerToolbarLeft
-            onAttachImages={onAttachImages}
-            permission={permission}
-            onPermissionChange={setPermission}
-            supportedPermissionModes={supportedPermissionModes}
-            harnessLabel={harnessLabel}
-            catalogSupportedModes={catalogSupportedModes}
-            hostKnowsAutoMode={hostKnowsAutoMode}
-            // A turn the user can still switch a mode underneath - which the
-            // host honours IMMEDIATELY for the running turn, not from the next
-            // message; the picker's own mid-turn notice is what says so.
-            // `settingsLocked` surfaces cannot flip at all.
-            turnActive={activeTurnStatus !== null && !settingsLocked}
-            judgeBilling={judgeBilling}
-            onOpenPermissionSettings={openPermissionSettings}
-            settingsLocked={settingsLocked}
-          />
+          <ComposerToolbarLeft {...itemProps} />
           <ComposerToolbarRight
-            store={store}
-            canSubmit={canSubmit}
+            {...itemProps}
+            canSubmit={props.presentation ? false : canSubmit}
             attachmentPending={attachmentPending}
             onSubmit={onSubmit}
-            activeTurnStatus={activeTurnStatus}
+            activeTurnStatus={props.presentation ? null : activeTurnStatus}
             stopDisabled={stopDisabled}
-            onStopTurn={onStopTurn}
+            onStopTurn={props.presentation ? null : onStopTurn}
             composerDisabledHint={composerDisabledHint}
-            settingsLocked={settingsLocked}
-            dictation={dictation}
-            dictationPreparing={dictationPreparing}
-            createProfileHostId={createProfileHostId}
-            runTargetHostId={runTargetHostId}
-            terminalLoginSurface={terminalLoginSurface}
           />
         </>
       )}

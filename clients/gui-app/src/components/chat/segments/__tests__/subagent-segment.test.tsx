@@ -4,18 +4,22 @@ import {
   render as rtlRender,
   screen,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveSubagentCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindSubagentHeaderUnitId } from "@/components/chat/chat-find";
 import { SubagentSegment } from "@/components/chat/segments/subagent-segment";
+import { OpenSubagentAsChatContext } from "@/components/chat/segments/subagent-open-as-chat";
 import {
   useChatFindForcedOpen,
   useSetChatFindForcedOpen,
   useChatCollapsibleTileInstanceId,
 } from "@/stores/chats/chat-find-force-store-context";
-import type { SubagentSegment as SubagentSegmentModel } from "@/stores/composer/chat-store";
+import type {
+  SubagentChildSegment,
+  SubagentSegment as SubagentSegmentModel,
+} from "@/stores/composer/chat-store";
 
 function clickTriggerFor(text: string): void {
   const button = screen.getByText(text).closest("button");
@@ -67,6 +71,7 @@ function SubagentPersistenceHarness(props: SubagentPersistenceHarnessProps) {
   return (
     <SubagentSegment
       id={props.segmentId}
+      cardId={props.segmentId}
       name="reviewer"
       task="Review the implementation"
       progressUpdates={["Step one"]}
@@ -120,6 +125,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-1"
+        cardId="test-segment-1"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["one", "two", "three", "four", "five", "six"]}
@@ -156,6 +162,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-2"
+        cardId="test-segment-2"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={[]}
@@ -179,6 +186,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="subagent-header-skip"
+        cardId="subagent-header-skip"
         name="Scanner"
         task="Scan the repo"
         progressUpdates={["Scanning"]}
@@ -216,6 +224,7 @@ describe("<SubagentSegment /> promoted feed", () => {
       render(
         <SubagentSegment
           id="subagent-header-skip-elapsed"
+          cardId="subagent-header-skip-elapsed"
           name="Probe"
           task="Scan the repo"
           progressUpdates={[]}
@@ -250,6 +259,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="subagent-header-skip-badge"
+        cardId="subagent-header-skip-badge"
         name="Probe"
         task="Scan the repo"
         progressUpdates={["Scanning"]}
@@ -281,6 +291,7 @@ describe("<SubagentSegment /> promoted feed", () => {
       render(
         <SubagentSegment
           id="subagent-card-header-skip"
+          cardId="subagent-card-header-skip"
           name="Probe"
           task="Scan the repo"
           progressUpdates={["Scanning"]}
@@ -318,6 +329,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="subagent-card-header-skip-badge"
+        cardId="subagent-card-header-skip-badge"
         name="Probe"
         task="Scan the repo"
         progressUpdates={[]}
@@ -346,6 +358,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-measured-change"
+        cardId="test-segment-measured-change"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["one", "two"]}
@@ -374,6 +387,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-card-measured-change"
+        cardId="test-segment-card-measured-change"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["one", "two"]}
@@ -402,6 +416,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-task-notification"
+        cardId="test-segment-task-notification"
         name="codex-cli"
         task={[
           "<task-notification>",
@@ -437,6 +452,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-task-notification-attrs"
+        cardId="test-segment-task-notification-attrs"
         name="codex-cli"
         task={[
           '<task-notification kind="monitor">',
@@ -469,6 +485,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-3"
+        cardId="test-segment-3"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["Scanning", "Scanning", "Reading", "Scanning"]}
@@ -497,6 +514,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-4"
+        cardId="test-segment-4"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["Step one", "Step two"]}
@@ -561,6 +579,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         <FindForceStatus renderId={segmentId} />
         <SubagentSegment
           id={segmentId}
+          cardId={segmentId}
           name="reviewer"
           task="Find-forced task"
           progressUpdates={["Step one"]}
@@ -603,6 +622,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           />
           <SubagentSegment
             id={segmentId}
+            cardId={segmentId}
             name="reviewer"
             task="Tile A task"
             progressUpdates={[]}
@@ -621,6 +641,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         <ChatExpansionTestProviders tileInstanceId="tile-b">
           <SubagentSegment
             id={segmentId}
+            cardId={segmentId}
             name="reviewer"
             task="Tile B task"
             progressUpdates={[]}
@@ -651,6 +672,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-agent-type"
+        cardId="test-agent-type"
         name="Godel"
         agentType="explorer"
         task="Investigate the auth flow"
@@ -676,6 +698,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-header-anchor"
+        cardId="test-header-anchor"
         name="Godel"
         agentType="explorer"
         task="Investigate the auth flow"
@@ -711,6 +734,7 @@ describe("<SubagentSegment /> promoted feed", () => {
       render(
         <SubagentSegment
           id="test-elapsed-live"
+          cardId="test-elapsed-live"
           name="reviewer"
           agentType={null}
           task="Review the implementation"
@@ -737,6 +761,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-total"
+        cardId="test-elapsed-total"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -760,6 +785,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-floor"
+        cardId="test-elapsed-floor"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -785,6 +811,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-subsecond"
+        cardId="test-elapsed-subsecond"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -809,6 +836,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-interrupted"
+        cardId="test-elapsed-interrupted"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -838,6 +866,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-subagent-stopped"
+        cardId="test-subagent-stopped"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -857,10 +886,11 @@ describe("<SubagentSegment /> promoted feed", () => {
     expect(screen.getByText("stopped")).toBeTruthy();
   });
 
-  it("renders a nested agent as a row in the Sub-agents section once expanded", () => {
+  it("renders a nested agent as a row entry once expanded", () => {
     render(
       <SubagentSegment
         id="test-parent"
+        cardId="test-parent"
         name="planner"
         agentType={null}
         task="Plan the refactor."
@@ -879,19 +909,18 @@ describe("<SubagentSegment /> promoted feed", () => {
       />,
     );
 
-    expect(screen.queryByText("Sub-agents")).toBeNull();
     expect(screen.queryByText("callsite-sweeper")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
 
-    expect(screen.getByText("Sub-agents")).toBeTruthy();
     expect(screen.getByText("callsite-sweeper")).toBeTruthy();
   });
 
-  it("does not render a Sub-agents section when there are no nested agent children", () => {
-    render(
+  it("draws no conversation when there are no children", () => {
+    const { container } = render(
       <SubagentSegment
         id="test-no-children"
+        cardId="test-no-children"
         name="planner"
         agentType={null}
         task="Plan the refactor."
@@ -910,13 +939,14 @@ describe("<SubagentSegment /> promoted feed", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
 
-    expect(screen.queryByText("Sub-agents")).toBeNull();
+    expect(container.querySelector("[data-subagent-conversation]")).toBeNull();
   });
 
   it("renders a nested provider notice as a compact row once the card is expanded", () => {
     render(
       <SubagentSegment
         id="test-parent-notice"
+        cardId="test-parent-notice"
         name="planner"
         agentType={null}
         task="Plan the refactor."
@@ -957,6 +987,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-root"
+        cardId="test-root"
         name="root-agent"
         agentType={null}
         task="Root task."
@@ -990,9 +1021,6 @@ describe("<SubagentSegment /> promoted feed", () => {
 
     clickTriggerFor("mid-agent");
 
-    // One "Sub-agents" label per expanded level: the root's (holding
-    // mid-agent) and mid-agent's own (holding leaf-agent).
-    expect(screen.getAllByText("Sub-agents")).toHaveLength(2);
     expect(screen.getByText("leaf-agent")).toBeTruthy();
   });
 
@@ -1000,6 +1028,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-workflow"
+        cardId="test-workflow"
         name="max-effort-review"
         agentType={null}
         task={null}
@@ -1046,6 +1075,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-workflow-no-intent"
+        cardId="test-workflow-no-intent"
         name="mystery-workflow"
         agentType={null}
         task={null}
@@ -1078,6 +1108,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-workflow-totals"
+        cardId="test-workflow-totals"
         name="settled-workflow"
         agentType={null}
         task={null}
@@ -1110,4 +1141,404 @@ describe("<SubagentSegment /> promoted feed", () => {
       screen.getByText("5 agents run · 10,000 tokens · 1m 5s"),
     ).toBeTruthy();
   });
+});
+
+function textChild(id: string, markdown: string): SubagentChildSegment {
+  return { id, kind: "text", markdown, isStreaming: false, parentId: "conv" };
+}
+
+function noticeChild(id: string): SubagentChildSegment {
+  return {
+    id,
+    kind: "provider_notice",
+    status: "completed",
+    noticeKind: "model_rerouted",
+    tone: "info",
+    title: "Model changed",
+    message: null,
+    details: [],
+    receipt: null,
+    parentId: "conv",
+  };
+}
+
+interface ConversationCardProps {
+  readonly nested: ReadonlyArray<SubagentChildSegment>;
+  readonly result: string | null;
+  readonly progressUpdates: ReadonlyArray<string>;
+  readonly variant: "card" | "promoted";
+}
+
+// The open store outlives a test, so every render takes a fresh card id.
+let conversationCardCounter = 0;
+
+function ConversationCard(props: ConversationCardProps) {
+  const [id] = useState(() => {
+    conversationCardCounter += 1;
+    return `conv-${conversationCardCounter}`;
+  });
+  return (
+    <SubagentSegment
+      id={id}
+      cardId={id}
+      name="reviewer"
+      agentType={null}
+      task="Review it"
+      progressUpdates={props.progressUpdates}
+      result={props.result}
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      workflowMeta={null}
+      nested={props.nested}
+      variant={props.variant}
+    />
+  );
+}
+
+function openCard(variant: "card" | "promoted"): void {
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: variant === "promoted" ? /Subagent/ : /reviewer/,
+    }),
+  );
+}
+
+describe("<SubagentSegment /> conversation", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("mounts no children while the card is closed", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result={null}
+        progressUpdates={[]}
+        variant="card"
+      />,
+    );
+    expect(screen.queryByText("child words")).toBeNull();
+    openCard("card");
+    expect(screen.getByText("child words")).toBeTruthy();
+  });
+
+  it("renders a prose child inside the card", () => {
+    const { container } = render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result={null}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    const conversation = container.querySelector(
+      "[data-subagent-conversation]",
+    );
+    expect(conversation).not.toBeNull();
+    expect(conversation?.textContent ?? "").toContain("child words");
+  });
+
+  it("hides the Result panel when a child text exists", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result="a different result"
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.getByText("child words")).toBeTruthy();
+    expect(screen.queryByText("Result")).toBeNull();
+    expect(screen.queryByText("a different result")).toBeNull();
+  });
+
+  it("shows the Result panel when the children are not text", () => {
+    render(
+      <ConversationCard
+        nested={[noticeChild("n1")]}
+        result="a different result"
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.getByText("a different result")).toBeTruthy();
+  });
+
+  it("renders a parented reasoning child as a collapsed Thinking row", () => {
+    render(
+      <ConversationCard
+        nested={[
+          {
+            id: "r1",
+            kind: "reasoning",
+            markdown: "private chain of thought",
+            isStreaming: false,
+            durationMs: 3_000,
+            parentId: "conv",
+          },
+        ]}
+        result={null}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.queryByText("private chain of thought")).toBeNull();
+    clickTriggerFor("Thought for 3s");
+    expect(screen.getByText("private chain of thought")).toBeTruthy();
+  });
+
+  it("shows a hand-back result verbatim when there is no child text", () => {
+    const handBack = "[Subagent hand-back] the final answer";
+    render(
+      <ConversationCard
+        nested={[noticeChild("n1")]}
+        result={handBack}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.getByText(handBack)).toBeTruthy();
+  });
+
+  it("shows the hand-back header text nowhere once a child text exists", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "the final answer")]}
+        result="[Subagent hand-back] the final answer"
+        progressUpdates={[]}
+        variant="card"
+      />,
+    );
+    // The compact header mirrors the result, so it must be absent even closed.
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+    openCard("card");
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+    expect(screen.getByText("the final answer")).toBeTruthy();
+  });
+
+  it("keeps the workflow card's collapsed header off the result once a child text exists", () => {
+    render(
+      <SubagentSegment
+        id="conv-workflow"
+        cardId="conv-workflow"
+        name="review-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result="[Subagent hand-back] the final answer"
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={{
+          name: "review-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: 0,
+          agentsFinished: 0,
+          totalTokens: null,
+        }}
+        nested={[textChild("t1", "the final answer")]}
+        variant="promoted"
+      />,
+    );
+    // Collapsed: the header is the only thing on screen, and it must not
+    // carry the result the body will not draw.
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+  });
+
+  it("lists a progress line equal to a child text once, and keeps a summary line matching none", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "Found the bug.")]}
+        result={null}
+        progressUpdates={["Found the bug.", "Summary: one bug"]}
+        variant="card"
+      />,
+    );
+    openCard("card");
+    expect(screen.getAllByText("Found the bug.")).toHaveLength(1);
+    expect(screen.getByText("Progress")).toBeTruthy();
+    // Header mirror + the Progress list entry.
+    expect(screen.getAllByText("Summary: one bug")).toHaveLength(2);
+  });
+
+  it("offers Open as chat only with the context, and calls the opener with the card id", () => {
+    const open = vi.fn();
+    const { unmount } = render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result={null}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Open as chat" })).toBeNull();
+    unmount();
+
+    render(
+      <OpenSubagentAsChatContext value={open}>
+        <ConversationCard
+          nested={[textChild("t1", "child words")]}
+          result={null}
+          progressUpdates={[]}
+          variant="promoted"
+        />
+      </OpenSubagentAsChatContext>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open as chat" }));
+    expect(open).toHaveBeenCalledWith(expect.stringMatching(/^conv-\d+$/));
+  });
+
+  it("marks the Open as chat button with the card id for focus return", () => {
+    render(
+      <OpenSubagentAsChatContext value={vi.fn()}>
+        <ConversationCard
+          nested={[textChild("t1", "child words")]}
+          result={null}
+          progressUpdates={[]}
+          variant="promoted"
+        />
+      </OpenSubagentAsChatContext>,
+    );
+    const button = screen.getByRole("button", { name: "Open as chat" });
+    const cardId = button.getAttribute("data-subagent-open-as-chat");
+    expect(cardId).toMatch(/^conv-\d+$/);
+    expect(button.getAttribute("data-testid")).toBe(
+      `subagent-open-as-chat-${cardId}`,
+    );
+  });
+});
+
+const WORKFLOW_META: NonNullable<SubagentSegmentModel["workflowMeta"]> = {
+  name: "review-workflow",
+  intent: null,
+  activity: [],
+  agentsStarted: 0,
+  agentsFinished: 0,
+  totalTokens: null,
+};
+
+type OpenAsChatVariant = "card" | "row" | "promoted";
+
+function OpenAsChatCard(props: {
+  readonly id: string;
+  readonly variant: OpenAsChatVariant;
+  readonly workflow: boolean;
+  readonly nested: ReadonlyArray<SubagentChildSegment>;
+}) {
+  return (
+    <SubagentSegment
+      id={props.id}
+      cardId={props.id}
+      name="reviewer"
+      agentType={null}
+      task="Review it"
+      progressUpdates={[]}
+      result="Looks fine."
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      workflowMeta={props.workflow ? WORKFLOW_META : null}
+      nested={props.nested}
+      variant={props.variant}
+    />
+  );
+}
+
+describe("<SubagentSegment /> open as chat on a card with no nested activity", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const variants: ReadonlyArray<OpenAsChatVariant> = [
+    "promoted",
+    "card",
+    "row",
+  ];
+
+  it.each(variants)(
+    "draws the control on a finished %s subagent card and opens it by the card id",
+    (variant) => {
+      const open = vi.fn();
+      const id = `reply-only-${variant}`;
+      render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={id}
+            variant={variant}
+            workflow={false}
+            nested={[]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      fireEvent.click(screen.getByTestId(`subagent-open-as-chat-${id}`));
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith(id);
+    },
+  );
+
+  it.each(variants)(
+    "draws nothing on a %s subagent card without the context",
+    (variant) => {
+      const id = `no-context-${variant}`;
+      render(
+        <OpenAsChatCard
+          id={id}
+          variant={variant}
+          workflow={false}
+          nested={[]}
+        />,
+      );
+      expect(screen.queryByTestId(`subagent-open-as-chat-${id}`)).toBeNull();
+    },
+  );
+
+  it.each(["card", "row"] as const)(
+    "draws no control on a %s workflow card with no nested activity, and one with nested activity",
+    (variant) => {
+      const open = vi.fn();
+      const { unmount } = render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={`wf-empty-${variant}`}
+            variant={variant}
+            workflow
+            nested={[]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      expect(
+        screen.queryByTestId(`subagent-open-as-chat-wf-empty-${variant}`),
+      ).toBeNull();
+      unmount();
+
+      render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={`wf-busy-${variant}`}
+            variant={variant}
+            workflow
+            nested={[textChild("t1", "child words")]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      fireEvent.click(
+        screen.getByTestId(`subagent-open-as-chat-wf-busy-${variant}`),
+      );
+      expect(open).toHaveBeenCalledWith(`wf-busy-${variant}`);
+    },
+  );
 });

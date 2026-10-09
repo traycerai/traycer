@@ -149,6 +149,7 @@ function renderBody(
                 manualRungAnchorId={null}
                 elapsedStartedAt={0}
                 turnHasOnlyAutonomousResumeSegments={false}
+                autonomousResumeOwed={false}
                 showCompletionFooter={false}
                 pausedDurationMs={0}
                 pausedSinceMs={null}
@@ -178,12 +179,11 @@ function findUnitsFor(
     runState: null,
     segments,
   };
-  return buildChatFindRows(
-    [model],
-    TILE_INSTANCE_ID,
-    new Set(),
-    handle.store.getState().queuePauseReasonProtocolSupported,
-  ).flatMap((row) => row.units);
+  return buildChatFindRows([model], TILE_INSTANCE_ID, new Set(), {
+    hideReasoning: false,
+    queuePauseReasonProtocolSupported:
+      handle.store.getState().queuePauseReasonProtocolSupported,
+  }).flatMap((row) => row.units);
 }
 
 describe.each([

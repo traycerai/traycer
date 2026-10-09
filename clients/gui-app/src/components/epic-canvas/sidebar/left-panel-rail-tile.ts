@@ -1,9 +1,8 @@
 /**
  * What a rail slot LOOKS like, in one place because two surfaces draw it: the
  * epic rail itself, and the strip on Layout ▸ Sidebar that previews it. The
- * strip has to read as the rail - same tile size, same tab underline, same
- * highlight for the tile a drop would nest into - and a hand-copied class list
- * drifts the first time either one is tuned.
+ * strip has to read as the rail - same tile size, same tab underline - and a
+ * hand-copied class list drifts the first time either one is tuned.
  *
  * Classes rather than a shared component: the two tiles differ in everything
  * BUT their look. The rail's is a real button that activates a panel, carries a
@@ -16,13 +15,23 @@ export const LEFT_PANEL_RAIL_TILE_CLASS =
   "relative size-9 rounded-md text-muted-foreground hover:text-foreground";
 
 /**
- * The underline a horizontal rail draws under the group it is showing. The
- * settings strip draws the same line under a whole tabbed group, which is what
- * makes one read as a single panel with tabs rather than as adjacent icons.
+ * The icon a drop will stack the dragged panel INTO. The ring is drawn
+ * outside the tile, because the dragged tile is centred on the pointer and
+ * covers the target it is aimed at; a fill alone was painted underneath it.
+ * Two pixels, flush: the horizontal rail is `h-10` around a `size-9` tile and
+ * clips anything further out.
  */
+export const LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS =
+  "bg-primary/10 text-foreground ring-2 ring-primary";
+
+/** The underline a horizontal rail draws under the panel it is showing. */
 export const LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS =
   "absolute inset-x-2 bottom-0 rounded-b-none rounded-t";
 
-/** A tile the pointer sits on in its middle band, where a drop would nest. */
-export const LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS =
-  "bg-primary/10 text-foreground ring-1 ring-primary/60";
+/**
+ * A stack's name (G3, L-181): every member's title, in order, the way the
+ * stack icon's tooltip and accessible name read it.
+ */
+export function railGroupLabel(titles: ReadonlyArray<string>): string {
+  return titles.join(" · ");
+}

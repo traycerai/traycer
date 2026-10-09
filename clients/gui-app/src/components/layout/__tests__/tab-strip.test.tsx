@@ -1,17 +1,29 @@
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
+import {
+  SheetJoinBridge,
+  SheetJoinScope,
+} from "@/components/layout/tabs/sheet-join";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import {
   SplitMemberChrome,
   SplitTabLayout,
 } from "@/components/layout/tabs/split-tab-chrome";
-import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
+import {
+  TabChrome,
+  HeaderTabPreview,
+} from "@/components/layout/tabs/header-tab-visual";
+import { TabStripHomeItemView } from "@/components/layout/tabs/tab-strip-home-item";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import {
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
@@ -26,7 +38,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { tabItemId } from "@/stores/tabs/layout";
+import { tabItemId, type SplitSide } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -310,6 +322,60 @@ function seedSplitHeaderTabs(): void {
   });
 }
 
+/** One split pair, active with its first side focused, alone in the strip. */
+function seedActiveSplit(left: SplitSide, right: SplitSide): void {
+  openEpicFixture(EPIC_A);
+  openEpicFixture(EPIC_B);
+  const refs = [left, right].flatMap((side) =>
+    side.kind === "tab" ? [side.ref] : [],
+  );
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      {
+        kind: "split",
+        id: "split-a",
+        left,
+        right,
+        focusedSide: "left",
+        routeBackingSide: "left",
+        leftRatio: 0.5,
+      },
+    ],
+    activeItemId: "split-a",
+    stripOrder: refs,
+    systemTabs: {
+      history: refs.some((ref) => ref.kind === "history")
+        ? { id: "history", kind: "history", name: "History", lastPath: null }
+        : null,
+      settings: null,
+    },
+  });
+}
+
+/**
+ * Publishes what the start page `draftId`'s terminal panel renders, as the
+ * panel does: `null` is a page that shows no panel (closed, or its target
+ * cannot serve one).
+ */
+function publishDraftPanel(
+  draftId: string,
+  coverage: LandingPanelCoverage | null,
+): void {
+  act(() => {
+    useLandingPaneAnchorStore.getState().setPanelCoverage(draftId, coverage);
+  });
+}
+
+/** The pane the top bridge paints onto the sheet, or null when it names none. */
+function topBridgePane(): string | null {
+  return (
+    document
+      .querySelector('[data-sheet-join-bridge="top"]')
+      ?.getAttribute("data-join-pane") ?? null
+  );
+}
+
 function canvasTabIds(tabId: string): ReadonlyArray<string> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId] ?? null;
   if (canvas === null) return [];
@@ -483,7 +549,6 @@ function buildHeaderEpicHandle(
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
-    retryTransport: () => undefined,
     wakeTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
@@ -534,6 +599,10 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingPaneAnchorStore.setState(
+    useLandingPaneAnchorStore.getInitialState(),
+    true,
+  );
   useEpicDndStore.getState().dragEnded();
   useTabsStore.setState({
     stripOrder: [],
@@ -597,7 +666,12 @@ function buildRouter(initialPath: string) {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <TabStrip />
+          {/* The app's own join scope and top bridge (`AppColumnFrame`), so a
+              joined tab's published outline reaches the real bridge. */}
+          <SheetJoinScope>
+            <TabStrip />
+            <SheetJoinBridge edge="top" />
+          </SheetJoinScope>
         </TooltipProvider>
       </QueryClientProvider>
     ),
@@ -665,6 +739,204 @@ async function flushNav(): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, 0));
 }
 
+interface RevealBox {
+  readonly left: number;
+  readonly right: number;
+}
+
+interface RevealGeometryShim {
+  readonly scrolled: () => number;
+  readonly restore: () => void;
+}
+
+/**
+ * The strip's active-tab reveal, under a jsdom with no layout: the scroller's
+ * viewport box, the box of the MEMBER the strip painted selected, and storage
+ * for `scrollLeft` (jsdom's is a layout read that never keeps what is written
+ * to it) are all shimmed.
+ *
+ * What is NOT shimmed is the decision. The component reads those boxes and
+ * writes `scrollLeft` itself, and the amount it writes is the assertion.
+ *
+ * Two boxes, not one, and the pair is what makes the production walk
+ * measurable (R4B-05). `tab-strip.tsx` deliberately climbs from the selected
+ * NODE to the scroller's own child, because inside a split group the selected
+ * node is one HALF of the member - so the shim gives the scroller's child the
+ * member box and gives anything nested below it the member's leading half.
+ * Handing every ancestor the same rect made the walk unobservable: replacing
+ * it with `const member = selected` produced the same numbers in all four
+ * cases, and the split group L-146 was written against would have scrolled by
+ * the half's overflow and left the other half cut.
+ *
+ * `memberBox` is read per measurement so one test can move the selection from
+ * a member that fits to one that does not.
+ */
+function installRevealGeometry(memberBox: () => RevealBox): RevealGeometryShim {
+  const realRect = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "getBoundingClientRect",
+  );
+  const box = (left: number, right: number): DOMRect =>
+    ({ left, right, width: right - left }) as DOMRect;
+  const isScroller = (node: Element | null): boolean =>
+    node !== null && node.hasAttribute("data-layout-passive-members");
+  HTMLElement.prototype.getBoundingClientRect = function boxFor(
+    this: HTMLElement,
+  ): DOMRect {
+    // The scroller shows 0..200.
+    if (isScroller(this)) return box(0, 200);
+    const holdsSelection =
+      this.getAttribute("aria-selected") === "true" ||
+      this.querySelector('[aria-selected="true"]') !== null;
+    if (!holdsSelection) return box(0, 0);
+    const member = memberBox();
+    // The scroller's own child IS the member; anything below it is a half of
+    // one, and a half is strictly narrower and flush with the member's start.
+    if (isScroller(this.parentElement)) return box(member.left, member.right);
+    return box(member.left, (member.left + member.right) / 2);
+  };
+  let scrolled = 0;
+  const realScrollLeft = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollLeft",
+  );
+  Object.defineProperty(Element.prototype, "scrollLeft", {
+    configurable: true,
+    get: () => scrolled,
+    set: (value: number) => {
+      scrolled = value;
+    },
+  });
+  return {
+    scrolled: () => scrolled,
+    restore: () => {
+      if (realRect === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, "getBoundingClientRect");
+      } else {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "getBoundingClientRect",
+          realRect,
+        );
+      }
+      if (realScrollLeft === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollLeft");
+      } else {
+        Object.defineProperty(Element.prototype, "scrollLeft", realScrollLeft);
+      }
+    },
+  };
+}
+
+function seedTwoEpicTabs(): { readonly alpha: TabRef; readonly beta: TabRef } {
+  openEpicFixture(EPIC_A);
+  openEpicFixture(EPIC_B);
+  const alpha: TabRef = { kind: "epic", id: EPIC_A.id };
+  const beta: TabRef = { kind: "epic", id: EPIC_B.id };
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      { kind: "tab", id: tabItemId(alpha), ref: alpha },
+      { kind: "tab", id: tabItemId(beta), ref: beta },
+    ],
+    activeItemId: tabItemId(alpha),
+    stripOrder: [alpha, beta],
+    systemTabs: { history: null, settings: null },
+  });
+  return { alpha, beta };
+}
+
+// The pane an active tab joins is the ground its own surface paints along
+// the top edge (`surfaceJoinPane`): a task, a draft and Settings paint
+// `--background`, so their tab takes it; History paints nothing and shows
+// the sheet's canvas. The bridge under the tab paints that same fill onto
+// the sheet, so it must name the box's pane - a canvas bridge under a
+// background tab (or the reverse) would be the two-colour seam this fixes.
+interface ActiveTabCase {
+  readonly kind: string;
+  readonly pane: "surface" | "canvas";
+  /** Opens the tab the way the app does and says where to land and what to click. */
+  readonly open: () => { readonly path: string; readonly testId: string };
+}
+const ACTIVE_TAB_CASES: ReadonlyArray<ActiveTabCase> = [
+  {
+    kind: "epic",
+    pane: "surface",
+    open: () => {
+      seedTwoEpicTabs();
+      return { path: "/epics/e-a/e-a", testId: "tab-epic-e-a" };
+    },
+  },
+  {
+    kind: "draft",
+    pane: "surface",
+    open: () => {
+      seedTwoEpicTabs();
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      return { path: "/epics/e-a/e-a", testId: `tab-draft-${draftId}` };
+    },
+  },
+  {
+    kind: "settings",
+    pane: "surface",
+    open: () => {
+      ensureSettingsTab({ subSection: null, resetToGeneral: true });
+      return { path: "/settings/general", testId: "tab-settings-settings" };
+    },
+  },
+  {
+    kind: "history",
+    pane: "canvas",
+    open: () => {
+      ensureHistoryTab();
+      return { path: "/epics", testId: "tab-history-history" };
+    },
+  },
+];
+
+// A split pair joins as one box, in the pane its members paint
+// (`splitPairJoinPane`): `--background` when a member that holds a tab paints
+// it, the canvas otherwise. An empty slot paints neither, so History beside
+// one is the pair that keeps History's canvas.
+interface ActiveSplitCase {
+  readonly pair: string;
+  readonly pane: "surface" | "canvas";
+  readonly left: SplitSide;
+  readonly right: SplitSide;
+  /** The route the focused (left) side backs. */
+  readonly path: string;
+}
+const ACTIVE_SPLIT_CASES: ReadonlyArray<ActiveSplitCase> = [
+  {
+    pair: "two tasks",
+    pane: "surface",
+    left: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    right: { kind: "tab", ref: { kind: "epic", id: EPIC_B.id } },
+    path: "/epics/e-a/e-a",
+  },
+  {
+    pair: "a task and an empty slot",
+    pane: "surface",
+    left: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    right: { kind: "empty" },
+    path: "/epics/e-a/e-a",
+  },
+  {
+    pair: "History and a task",
+    pane: "surface",
+    left: { kind: "tab", ref: { kind: "history", id: "history" } },
+    right: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    path: "/epics",
+  },
+  {
+    pair: "History and an empty slot",
+    pane: "canvas",
+    left: { kind: "tab", ref: { kind: "history", id: "history" } },
+    right: { kind: "empty" },
+    path: "/epics",
+  },
+];
+
 // Reconciliation install is owned by `WindowsBridgeProvider` in
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -725,24 +997,32 @@ describe("<TabStrip />", () => {
   });
 
   it("uses the project color for the active outline while keeping the neutral fill", () => {
-    render(<TabChrome isActive color="#12ab34" />);
+    render(
+      <TabChrome
+        isActive
+        joined={null}
+        concealed={false}
+        color="#12ab34"
+        session={false}
+      />,
+    );
 
-    const center = screen.getByTestId("tab-chrome-center");
-    expect(center.style.getPropertyValue("--swatch")).toBe(
+    const box = screen.getByTestId("tab-chrome-box");
+    expect(box.style.getPropertyValue("--swatch")).toBe(
       "var(--color-background)",
     );
-    expect(center.style.getPropertyValue("--swatch-border")).toBe("#12ab34");
-    expect(
-      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke"),
-    ).toBe("#12ab34");
-    expect(
-      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke"),
-    ).toBe("#12ab34");
+    expect(box.style.getPropertyValue("--swatch-border")).toBe("#12ab34");
   });
 
   it("keeps the project color on an inactive tab", () => {
     const { container } = render(
-      <TabChrome isActive={false} color="#12ab34" />,
+      <TabChrome
+        isActive={false}
+        joined={null}
+        concealed={false}
+        color="#12ab34"
+        session={false}
+      />,
     );
 
     expect(
@@ -750,92 +1030,642 @@ describe("<TabStrip />", () => {
     ).toContain("--swatch: #12ab34;");
   });
 
-  it("uses the manual color for a focused split member and retains the primary fallback", () => {
-    const { rerender, container } = render(
-      <SplitMemberChrome focused color="#12ab34" />,
+  it("draws an inactive coloured tab's color as an edge line, and none on the active one", () => {
+    const { rerender } = render(
+      <TabChrome
+        isActive={false}
+        joined={null}
+        concealed={false}
+        color="#12ab34"
+        session={false}
+      />,
     );
     expect(
       screen
-        .getByTestId("tab-chrome-center")
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("#12ab34");
+
+    rerender(
+      <TabChrome
+        isActive
+        joined={null}
+        concealed={false}
+        color="#12ab34"
+        session={false}
+      />,
+    );
+    // The box's own border carries the color once the tab is active; nothing
+    // left for the edge line to draw.
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
+    expect(
+      screen
+        .getByTestId("tab-chrome-box")
         .style.getPropertyValue("--swatch-border"),
     ).toBe("#12ab34");
+  });
+
+  /**
+   * The editing signal on the tab (L-87, L-138, L-163, F4): ACTIVE, the
+   * editor's own tab IS the colour and wears none of it on its edge. The
+   * fill is the colour the tab is handed, at full strength, and the border is
+   * the ordinary canvas border every other active tab gets - so the frame
+   * around the screen owns the only amber line while a session is live.
+   */
+  it("fills the editor's own tab instead of outlining it like every other", () => {
+    render(
+      <TabChrome
+        isActive
+        joined={null}
+        concealed={false}
+        color="var(--warning-foreground)"
+        session
+      />,
+    );
+
+    const box = screen.getByTestId("tab-chrome-box");
+    expect(box.style.getPropertyValue("--swatch")).toBe(
+      "var(--warning-foreground)",
+    );
+    expect(box.style.getPropertyValue("--swatch-border")).toBe(
+      "var(--canvas-border)",
+    );
+  });
+
+  /**
+   * At rest the cap is `SessionTabMark`'s, so `TabChrome` must not draw a
+   * second bar of the same colour underneath it: two strokes on one edge is
+   * the kind of stacked decoration this redesign exists to remove (L-138).
+   */
+  it("leaves the resting editor tab's bottom edge to the session mark", () => {
+    render(
+      <TabChrome
+        isActive={false}
+        joined={null}
+        concealed={false}
+        color="var(--warning-foreground)"
+        session
+      />,
+    );
+
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
+  });
+
+  /**
+   * `joined` names the pane the active tab runs into, and `TabChrome` writes
+   * it beside the join marker so the CSS can pick that pane's fill
+   * (`[data-join-pane]` in `index.css`). Unjoined, it writes neither.
+   */
+  it.each(["surface", "canvas"] as const)(
+    "writes the %s pane it is handed beside the join marker, and neither when unjoined",
+    (pane) => {
+      const { rerender } = render(
+        <TabChrome
+          isActive
+          joined={pane}
+          concealed={false}
+          color={null}
+          session={false}
+        />,
+      );
+      const box = screen.getByTestId("tab-chrome-box");
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.getAttribute("data-join-pane")).toBe(pane);
+
+      rerender(
+        <TabChrome
+          isActive
+          joined={null}
+          concealed={false}
+          color={null}
+          session={false}
+        />,
+      );
+      expect(box.hasAttribute("data-sheet-joined")).toBe(false);
+      expect(box.hasAttribute("data-join-pane")).toBe(false);
+    },
+  );
+
+  /**
+   * The editor's own tab is a mode, not a place: whatever pane `TabChrome` is
+   * handed, a session tab keeps its coloured box and never joins the sheet, so
+   * neither the join marker nor a pane reaches it.
+   */
+  it("never joins the editor's own tab, whichever pane it is handed", () => {
+    render(
+      <TabChrome
+        isActive
+        joined="surface"
+        concealed={false}
+        color="var(--warning-foreground)"
+        session
+      />,
+    );
+
+    const box = screen.getByTestId("tab-chrome-box");
+    expect(box.hasAttribute("data-sheet-joined")).toBe(false);
+    expect(box.hasAttribute("data-join-pane")).toBe(false);
+  });
+
+  /**
+   * The strip may not cut the layout editor's own tab in half (L-87, L-138).
+   *
+   * The scroller is `overflow-x-auto` and nothing reveals a newly opened tab,
+   * so with enough tabs open the editor's tab was appended past the right edge
+   * and clipped there - which is the single cause of all three things the
+   * owner's third live pass reported as a broken tab: a label cut to "Sample",
+   * an amber outline covering only the left and the top (the right cap of the
+   * silhouette was past the edge), and a mark ending on a razor edge.
+   *
+   * jsdom has no layout, so the two boxes and the scroll position are shimmed.
+   * What is NOT shimmed is the decision: the component reads those boxes and
+   * writes `scrollLeft` itself, and the amount it writes is the assertion.
+   */
+  it("reveals the editor's own tab when the strip has scrolled it out", async () => {
+    const sampleRef: TabRef = {
+      kind: "sample-workspace",
+      id: "sample-workspace",
+    };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(sampleRef), ref: sampleRef }],
+      activeItemId: tabItemId(sampleRef),
+      stripOrder: [sampleRef],
+      systemTabs: { history: null, settings: null },
+    });
+    // The scroller shows 0..200; the tab's member box runs 120..320, so 120px
+    // of it - the trailing cap and the end of the label - is past the edge.
+    const geometry = installRevealGeometry(() => ({ left: 120, right: 320 }));
+    try {
+      const router = buildRouter("/sample-workspace");
+      render(<RouterProvider router={router} />);
+      await screen.findByTestId("header-tab-strip-scroll");
+
+      expect(geometry.scrolled()).toBe(120);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  /**
+   * The other half of the solid fill (L-163): with the tab painted in
+   * `--warning-foreground`, the strip's own `text-foreground` is the one
+   * colour its label cannot be in, so the session tab hands its content
+   * wrapper the fill's counterpart instead. `layout-editor-contrast.test.ts`
+   * measures that pair per palette; what is asserted here is that the class
+   * reaches the element the label and the icon are inside, and reaches only
+   * that tab.
+   */
+  it("gives the active editor tab's label the fill's counterpart colour", async () => {
+    const sampleRef: TabRef = {
+      kind: "sample-workspace",
+      id: "sample-workspace",
+    };
+    openEpicFixture(EPIC_A);
+    const epicRef: TabRef = { kind: "epic", id: EPIC_A.id };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(epicRef), ref: epicRef },
+        { kind: "tab", id: tabItemId(sampleRef), ref: sampleRef },
+      ],
+      activeItemId: tabItemId(sampleRef),
+      stripOrder: [epicRef, sampleRef],
+      systemTabs: { history: null, settings: null },
+    });
+    const router = buildRouter("/sample-workspace");
+    render(<RouterProvider router={router} />);
+
+    const sampleTab = await screen.findByTestId(
+      "tab-sample-workspace-sample-workspace",
+    );
+    const title = within(sampleTab).getByTestId(
+      "tab-title-sample-workspace-sample-workspace",
+    );
+    expect(title.closest(".text-background")).not.toBeNull();
+    // The ordinary tab beside it keeps the strip's own colours, so the class
+    // is the session tab's and not the strip's.
+    const epicTab = screen.getByTestId(`tab-epic-${EPIC_A.id}`);
+    expect(epicTab.querySelector(".text-background")).toBeNull();
+  });
+
+  /**
+   * The reveal is the SELECTION's, not the editing indicator's (L-146).
+   *
+   * The L-138 version above keyed on the session tab's own marker, so an
+   * ORDINARY tab activated behind the strip's right edge stayed there - worst
+   * for the keyboard paths, where there is no pointer to say where the tab
+   * went and the only evidence of the switch is the tab that should have
+   * appeared.
+   */
+  it("reveals an ordinary tab when it becomes the active one", async () => {
+    const { beta } = seedTwoEpicTabs();
+    // Alpha's member sits wholly inside the scroller's 0..200, so mounting on
+    // it must move nothing; Beta's runs 260..460, entirely past the edge.
+    let selected: RevealBox = { left: 0, right: 180 };
+    const geometry = installRevealGeometry(() => selected);
+    try {
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+      await screen.findByTestId("tab-epic-e-b");
+      expect(geometry.scrolled()).toBe(0);
+
+      selected = { left: 260, right: 460 };
+      act(() => {
+        useTabsStore.setState({ activeItemId: tabItemId(beta) });
+      });
+
+      expect(geometry.scrolled()).toBe(260);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  /**
+   * Reordering is dnd-kit's gesture and the strip's scroll offset is its
+   * working surface: members carry displacement transforms and the drag model
+   * reads this scroller's `scrollLeft` as its content origin. A reveal fired
+   * mid-drag would measure a transient box and move the ground under the
+   * pointer, so a live drag is not a moment to reveal anything.
+   */
+  it("does not reveal while a header tab is being dragged", async () => {
+    const { alpha, beta } = seedTwoEpicTabs();
+    let selected: RevealBox = { left: 0, right: 180 };
+    const geometry = installRevealGeometry(() => selected);
+    try {
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+      await screen.findByTestId("tab-epic-e-b");
+
+      act(() => {
+        useEpicDndStore.getState().headerTabDragStarted(
+          {
+            kind: "header-tab",
+            stripItemId: tabItemId(alpha),
+            tabKind: "epic",
+            tabId: EPIC_A.id,
+            index: 0,
+          },
+          { width: 120, height: 36 },
+          "x",
+          null,
+        );
+      });
+      selected = { left: 260, right: 460 };
+      act(() => {
+        useTabsStore.setState({ activeItemId: tabItemId(beta) });
+      });
+
+      expect(geometry.scrolled()).toBe(0);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  it("uses the manual color for a focused split member and retains the primary fallback", () => {
+    const { rerender } = render(<SplitMemberChrome focused color="#12ab34" />);
     expect(
-      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke"),
-    ).toBe("#12ab34");
-    expect(
-      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke"),
+      screen
+        .getByTestId("tab-chrome-box")
+        .style.getPropertyValue("--swatch-border"),
     ).toBe("#12ab34");
 
     rerender(<SplitMemberChrome focused color={null} />);
     expect(
       screen
-        .getByTestId("tab-chrome-center")
+        .getByTestId("tab-chrome-box")
         .style.getPropertyValue("--swatch-border"),
-    ).toBe("var(--color-primary)");
-    expect(
-      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke"),
-    ).toBe("var(--color-primary)");
-    expect(
-      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke"),
     ).toBe("var(--color-primary)");
 
     rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
-    expect(screen.queryByTestId("tab-chrome-center")).toBeNull();
-    expect(screen.queryByTestId("tab-baseline-cover")).toBeNull();
-    expect(screen.queryByTestId("tab-cap-left")).toBeNull();
-    expect(screen.queryByTestId("tab-cap-right")).toBeNull();
-    expect(container.querySelector("span")?.className).toContain(
-      "group-hover/tab:bg-accent/20",
+    expect(screen.queryByTestId("tab-chrome-box")).toBeNull();
+    expect(screen.getByTestId("tab-hover-box").className).toContain(
+      "group-hover/tab:bg-foreground/5",
     );
+    // An unfocused colored member has no box to wear its color in, so it
+    // gets the same edge line an inactive lone tab does. The focused member
+    // above never draws one - its box border carries the color.
+    expect(
+      screen
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("#12ab34");
+
+    rerender(<SplitMemberChrome focused={false} color={null} />);
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
   });
 
-  it.each([
-    {
-      side: "left",
-      leftColor: "#f97316",
-      rightColor: null,
-      expectedLeft: "#f97316",
-      expectedRight: "var(--color-primary)",
-    },
-    {
-      side: "right",
-      leftColor: null,
-      rightColor: "#f97316",
-      expectedLeft: "var(--color-primary)",
-      expectedRight: "#f97316",
-    },
-  ])(
-    "keeps the $side split member underline color independent",
-    ({ leftColor, rightColor, expectedLeft, expectedRight }) => {
-      render(
-        <SplitTabLayout
-          leftColor={leftColor}
-          rightColor={rightColor}
-          splitId="split-colors"
-          selectedSide={null}
-          control={<span data-testid="split-control" />}
-          left={<span data-testid="split-left" />}
-          right={<span data-testid="split-right" />}
-        />,
-      );
+  it("draws a grouped tab in its group's colour, and in its own again once it leaves the group", async () => {
+    const { beta } = seedTwoEpicTabs();
+    useTabsStore.getState().setTabCustomization(beta, { color: "#ff0000" });
+    // A commit drops a group with no members, so the group comes after.
+    useTabsStore.setState({
+      groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+    });
+    useTabsStore.getState().setTabGroup(beta, "g");
+    render(<RouterProvider router={buildRouter("/epics/e-a/e-a")} />);
+    const tab = await screen.findByTestId("tab-epic-e-b");
+    const edge = (): string =>
+      within(tab)
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch");
 
-      // The group underline takes `text-primary` as a class now, so only the
-      // two members carry a per-side value.
+    expect(edge()).toBe("#8ab4f8");
+
+    act(() => {
+      useTabsStore.getState().setTabGroup(beta, null);
+    });
+
+    expect(edge()).toBe("#ff0000");
+  });
+
+  describe("the task tray join (top strip)", () => {
+    it("joins the active tab's chrome box to the tray, and draws no chrome box at all on the inactive one", async () => {
+      seedTwoEpicTabs();
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      const activeTab = await screen.findByTestId("tab-epic-e-a");
       expect(
-        screen.getByTestId("split-tab-group-underline-split-colors").className,
-      ).toContain("text-primary");
+        within(activeTab)
+          .getByTestId("tab-chrome-box")
+          .getAttribute("data-sheet-joined"),
+      ).toBe("top");
+
+      const inactiveTab = screen.getByTestId("tab-epic-e-b");
+      expect(within(inactiveTab).queryByTestId("tab-chrome-box")).toBeNull();
+    });
+
+    it.each(ACTIVE_TAB_CASES)(
+      "joins the active $kind tab and the bridge under it to the $pane pane",
+      async ({ pane, open }) => {
+        const { path, testId } = open();
+        const router = buildRouter(path);
+        render(<RouterProvider router={router} />);
+
+        fireEvent.click(await screen.findByTestId(testId));
+        await flushNav();
+
+        const box = await within(screen.getByTestId(testId)).findByTestId(
+          "tab-chrome-box",
+        );
+        expect(box.getAttribute("data-sheet-joined")).toBe("top");
+        expect(box.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector('[data-sheet-join-bridge="top"]')
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
+
+    it.each(ACTIVE_SPLIT_CASES)(
+      "joins the active pair of $pair as one box in the $pane pane, and the bridge under it with it",
+      async ({ left, right, pane, path }) => {
+        seedActiveSplit(left, right);
+        const router = buildRouter(path);
+        render(<RouterProvider router={router} />);
+
+        const box = await screen.findByTestId("split-tab-joined-split-a");
+        expect(box.getAttribute("data-sheet-joined")).toBe("top");
+        expect(box.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector('[data-sheet-join-bridge="top"]')
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
+
+    // A draft paints `--background` along its top edge, under its terminal
+    // panel. The top row of a docked panel is still that ground; full, the
+    // panel (canvas) covers the whole page, so the tab joins the canvas. The
+    // pane follows what the panel publishes live, so a change under an
+    // already-joined tab moves the box and the bridge with it.
+    it("joins the active draft tab and the bridge to the surface pane, and to the canvas pane while its terminal panel renders full", async () => {
+      seedTwoEpicTabs();
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      const testId = `tab-draft-${draftId}`;
+      fireEvent.click(await screen.findByTestId(testId));
+      await flushNav();
+      const draftBox = () =>
+        within(screen.getByTestId(testId)).getByTestId("tab-chrome-box");
+      await within(screen.getByTestId(testId)).findByTestId("tab-chrome-box");
+
+      expect(draftBox().getAttribute("data-sheet-joined")).toBe("top");
+      expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+
+      publishDraftPanel(draftId, "docked");
+      expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+
+      publishDraftPanel(draftId, "full");
+      expect(draftBox().getAttribute("data-sheet-joined")).toBe("top");
+      expect(draftBox().getAttribute("data-join-pane")).toBe("canvas");
+      expect(topBridgePane()).toBe("canvas");
+
+      publishDraftPanel(draftId, null);
+      expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+    });
+
+    // The pair reads the same panel through `useHeaderSplitJoinPane`: a draft
+    // whose full panel covers its page leaves History's canvas the only ground
+    // the pair meets.
+    it("joins the active pair of a draft and History to the canvas pane while the draft's terminal panel renders full", async () => {
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      seedActiveSplit(
+        { kind: "tab", ref: { kind: "draft", id: draftId } },
+        { kind: "tab", ref: { kind: "history", id: "history" } },
+      );
+      const router = buildRouter(`/draft/${draftId}`);
+      render(<RouterProvider router={router} />);
+
+      const pairBox = () => screen.getByTestId("split-tab-joined-split-a");
+      await screen.findByTestId("split-tab-joined-split-a");
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+
+      publishDraftPanel(draftId, "docked");
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+
+      publishDraftPanel(draftId, "full");
+      expect(pairBox().getAttribute("data-join-pane")).toBe("canvas");
+      expect(topBridgePane()).toBe("canvas");
+
+      publishDraftPanel(draftId, null);
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+    });
+
+    it("keeps the active tab joined while another tab is dragged", async () => {
+      const { beta } = seedTwoEpicTabs();
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      const activeTab = await screen.findByTestId("tab-epic-e-a");
       expect(
-        screen
-          .getByTestId("split-tab-group-underline-left-split-colors")
-          .style.getPropertyValue("--swatch"),
-      ).toBe(expectedLeft);
+        within(activeTab)
+          .getByTestId("tab-chrome-box")
+          .hasAttribute("data-sheet-joined"),
+      ).toBe(true);
+
+      act(() => {
+        useEpicDndStore.getState().headerTabDragStarted(
+          {
+            kind: "header-tab",
+            stripItemId: tabItemId(beta),
+            tabKind: "epic",
+            tabId: EPIC_B.id,
+            index: 1,
+          },
+          { width: 120, height: 36 },
+          "x",
+          null,
+        );
+      });
+
       expect(
-        screen
-          .getByTestId("split-tab-group-underline-right-split-colors")
-          .style.getPropertyValue("--swatch"),
-      ).toBe(expectedRight);
-    },
-  );
+        within(activeTab)
+          .getByTestId("tab-chrome-box")
+          .hasAttribute("data-sheet-joined"),
+      ).toBe(true);
+    });
+
+    it("never joins the layout editor's own (session) tab", async () => {
+      const sampleRef: TabRef = {
+        kind: "sample-workspace",
+        id: "sample-workspace",
+      };
+      useTabsStore.setState({
+        version: 2,
+        items: [{ kind: "tab", id: tabItemId(sampleRef), ref: sampleRef }],
+        activeItemId: tabItemId(sampleRef),
+        stripOrder: [sampleRef],
+        systemTabs: { history: null, settings: null },
+      });
+      const router = buildRouter("/sample-workspace");
+      render(<RouterProvider router={router} />);
+
+      const sessionTab = await screen.findByTestId(
+        "tab-sample-workspace-sample-workspace",
+      );
+      expect(
+        within(sessionTab)
+          .getByTestId("tab-chrome-box")
+          .hasAttribute("data-sheet-joined"),
+      ).toBe(false);
+    });
+
+    it("joins an active tab that has its own color, and draws the join outline in that color", async () => {
+      const { alpha } = seedTwoEpicTabs();
+      const router = buildRouter("/epics/e-a/e-a");
+      const { container } = render(<RouterProvider router={router} />);
+
+      const activeTab = await screen.findByTestId("tab-epic-e-a");
+      // Uncoloured control: the same tab in the same setup joins.
+      expect(
+        within(activeTab)
+          .getByTestId("tab-chrome-box")
+          .getAttribute("data-sheet-joined"),
+      ).toBe("top");
+
+      act(() => {
+        useTabsStore
+          .getState()
+          .setTabCustomization(alpha, { color: "#12ab34" });
+      });
+
+      const box = within(activeTab).getByTestId("tab-chrome-box");
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.style.getPropertyValue("--join-outline")).toBe("#12ab34");
+      expect(box.style.getPropertyValue("--swatch-border")).toBe("#12ab34");
+
+      const bridge = container.querySelector<HTMLElement>(
+        '[data-sheet-join-bridge="top"]',
+      );
+      if (bridge === null) throw new Error("expected the top join bridge");
+      expect(bridge.hasAttribute("data-join-active")).toBe(true);
+      expect(bridge.style.getPropertyValue("--join-outline")).toBe("#12ab34");
+    });
+
+    it("joins the active Home tab, on the canvas pane: Home paints no ground of its own", () => {
+      render(
+        <TooltipProvider>
+          <TabStripHomeItemView isActive onActivate={() => undefined} />
+        </TooltipProvider>,
+      );
+      const box = screen.getByTestId("tab-chrome-box");
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.getAttribute("data-join-pane")).toBe("canvas");
+    });
+
+    // The active overlay DOES join during a real drag - `HeaderTabDragOverlay`
+    // threads `joined={isActive}` into this same component (see
+    // `header-strip-active-join.test.tsx`). This is the leaf's own prop
+    // contract: given `joined={false}` explicitly, it draws no marker.
+    it("honors an explicit joined={false} on the preview, drawing no sheet marker", () => {
+      seedTwoEpicTabs();
+      const tab = getHeaderTabs().find(
+        (candidate) =>
+          candidate.kind === "epic" && candidate.epicId === EPIC_A.id,
+      );
+      if (tab === undefined) throw new Error("expected alpha's header tab");
+
+      render(
+        <TooltipProvider>
+          <HeaderTabPreview
+            tab={tab}
+            ghost={null}
+            chrome="own"
+            isActive
+            joined={false}
+          />
+        </TooltipProvider>,
+      );
+      expect(
+        screen.getByTestId("tab-chrome-box").hasAttribute("data-sheet-joined"),
+      ).toBe(false);
+    });
+
+    // `joined` names the pane the pair runs into (`splitPairJoinPane`), so the
+    // layout writes whichever one it is handed: a pair that holds History and
+    // an empty slot is handed the canvas, not a hardcoded surface.
+    it.each(["surface", "canvas"] as const)(
+      "joins an active split pair as one container on the %s pane it is handed, and draws no marker when inactive",
+      (pane) => {
+        const { rerender } = render(
+          <SplitTabLayout
+            splitId="split-a"
+            selectedSide="left"
+            joined={pane}
+            control={null}
+            left={<span>left</span>}
+            right={<span>right</span>}
+          />,
+        );
+        const box = screen.getByTestId("split-tab-joined-split-a");
+        expect(box.getAttribute("data-sheet-joined")).toBe("top");
+        expect(box.getAttribute("data-join-pane")).toBe(pane);
+
+        rerender(
+          <SplitTabLayout
+            splitId="split-a"
+            selectedSide="left"
+            joined={null}
+            control={null}
+            left={<span>left</span>}
+            right={<span>right</span>}
+          />,
+        );
+        expect(screen.queryByTestId("split-tab-joined-split-a")).toBeNull();
+      },
+    );
+  });
 
   it("shows the pair highlight on the approach half during a merge", async () => {
     openEpicFixture(EPIC_A);
@@ -854,15 +1684,16 @@ describe("<TabStrip />", () => {
           tabId: "e-a",
           index: 0,
         },
-        120,
+        { width: 120, height: 36 },
+        "x",
         null,
       );
-      // Dragging rightward onto B: the dragged tab's centre is on B's
-      // approach (left) half, so the merge is live immediately with the
-      // dragged tab taking the pair's left side.
+      // Dragging rightward onto B's middle: the split shows with the dragged
+      // tab taking the pair's left side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 0,
+        groupId: null,
         targetItemId: "tab:epic:e-b",
         targetSide: "left",
       });
@@ -898,12 +1729,15 @@ describe("<TabStrip />", () => {
           tabId: "e-a",
           index: 0,
         },
-        120,
+        { width: 120, height: 36 },
+        "x",
         null,
       );
       dndStore.headerStripDragStateChanged({
         kind: "reorder",
         targetIndex: 0,
+        groupId: null,
+        joinsGroup: false,
       });
       dndStore.headerStripDropIndexChanged(1);
     });
@@ -932,15 +1766,16 @@ describe("<TabStrip />", () => {
           tabId: "e-a",
           index: 0,
         },
-        120,
+        { width: 120, height: 36 },
+        "x",
         null,
       );
-      // Dragging leftward back onto B: the dragged tab's centre is on B's
-      // approach (right) half, so the dragged tab would take the pair's
-      // right side.
+      // Dragging leftward back onto B's middle: the dragged tab would take the
+      // pair's right side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 1,
+        groupId: null,
         targetItemId: "tab:epic:e-b",
         targetSide: "right",
       });
@@ -1052,7 +1887,6 @@ describe("<TabStrip />", () => {
 
     expect(closeSlot.className).toContain("header-tab-trailing-slot");
     expect(closeSlot.className).not.toContain("group-hover/tab:w-5");
-    expect(hoverChrome?.className).toContain("rounded-md");
     expect(hoverChrome?.className).toContain("group-hover/tab:opacity-100");
     // :focus-visible (keyboard-only), NOT :focus-within - a mouse-drag reorder
     // focuses the tab div without activating it, and :focus-within would leave
@@ -1118,12 +1952,6 @@ describe("<TabStrip />", () => {
     // Distinct from the unconditional divider between the halves - a fix that
     // reused that divider would leave the group-to-tab boundary still blank.
     expect(screen.getByTestId("split-tab-divider-split-a")).toBeDefined();
-    expect(
-      screen.getByTestId("split-tab-group-underline-left-split-a").className,
-    ).toContain("bg-current");
-    expect(
-      screen.getByTestId("split-tab-group-underline-right-split-a").className,
-    ).toContain("bg-current");
 
     const plainC = screen.getByTestId(`tab-epic-${EPIC_C.id}`);
     const plainD = screen.getByTestId(`tab-epic-${tabD.id}`);
@@ -1203,37 +2031,26 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    // Purely cosmetic geometry (frame width, underline thickness, member
-    // padding) is not asserted via Tailwind class strings - those break on
-    // any restyle without proving behavior. The focus semantics that matter
-    // are the data-focused-side/data-focused attributes and bg-primary state
-    // asserted below.
+    // Purely cosmetic geometry (frame width, member padding) is not asserted
+    // via Tailwind class strings - those break on any restyle without proving
+    // behavior. The focus semantics that matter are the
+    // data-focused-side/data-focused attributes and the box below (F4 round
+    // 2 dropped the group underline; the focused member's own box is now
+    // what says which side is focused).
     await screen.findByTestId("split-tab-group-split-a");
     const trigger = screen.getByTestId("split-quick-actions-split-a");
     const indicator = screen.getByTestId("split-focus-indicator-split-a");
-    const controlUnderline = screen.getByTestId(
-      "split-tab-group-underline-control-split-a",
-    );
-    const leftUnderline = screen.getByTestId(
-      "split-tab-group-underline-left-split-a",
-    );
-    const rightUnderline = screen.getByTestId(
-      "split-tab-group-underline-right-split-a",
-    );
     const leftTab = screen.getByTestId("tab-epic-e-a");
     const rightTab = screen.getByTestId("tab-epic-e-b");
     const leftPane = indicator.querySelector('[data-split-pane="left"]');
     const rightPane = indicator.querySelector('[data-split-pane="right"]');
-    expect(controlUnderline.className).toContain("bg-current");
     expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
-    expect(leftUnderline.className).not.toContain("bg-current");
-    expect(rightUnderline.className).toContain("bg-current");
     expect(
       within(leftTab)
-        .getByTestId("tab-chrome-center")
+        .getByTestId("tab-chrome-box")
         .style.getPropertyValue("--swatch-border"),
     ).toBe("var(--color-primary)");
-    expect(within(rightTab).queryByTestId("tab-chrome-center")).toBeNull();
+    expect(within(rightTab).queryByTestId("tab-chrome-box")).toBeNull();
     expect(screen.queryByTestId("split-member-focus-accent")).toBeNull();
     expect(trigger.className).toContain("text-info-foreground");
     expect(
@@ -1262,18 +2079,16 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("width")).toBe("8");
     expect(leftPane?.getAttribute("fill")).toBe("none");
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
-    expect(leftUnderline.className).toContain("bg-current");
-    expect(rightUnderline.className).not.toContain("bg-current");
     expect(leftTab.className).toContain(
       "px-[var(--header-tab-padding,1.25rem)]",
     );
     expect(rightTab.className).toContain(
       "px-[var(--header-tab-padding,1.25rem)]",
     );
-    expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
+    expect(within(leftTab).queryByTestId("tab-chrome-box")).toBeNull();
     expect(
       within(rightTab)
-        .getByTestId("tab-chrome-center")
+        .getByTestId("tab-chrome-box")
         .style.getPropertyValue("--swatch-border"),
     ).toBe("var(--color-primary)");
 
@@ -1296,7 +2111,8 @@ describe("<TabStrip />", () => {
 
     const tabRow = screen.getByTestId("header-tab-strip-scroll");
     const newTabButton = screen.getByTestId("tab-new");
-    const tabCluster = newTabButton.parentElement;
+    // The button sits in the strip's own placement box inside the cluster.
+    const tabCluster = newTabButton.parentElement?.parentElement ?? null;
     if (tabCluster === null) throw new Error("Expected tab cluster");
     Object.defineProperties(tabRow, {
       clientWidth: { configurable: true, value: 100 },
@@ -1333,25 +2149,31 @@ describe("<TabStrip />", () => {
     expect(newTaskButton).toBeDefined();
   });
 
+  /**
+   * Route activation, against the STRIP's reveal (L-146).
+   *
+   * The item's own `scrollIntoView` callback ref is gone: it had no drag gate,
+   * it revealed one half of a split group rather than the strip member, and it
+   * scrolled every scrollable ancestor. This is the case it covered that the
+   * cases above do not - a real router navigation rather than a store write -
+   * kept, and now asserted on the amount the strip scrolls its own scroller.
+   */
   it("scrolls the active header tab into view after any route activation", async () => {
-    const scrollTargets: Element[] = [];
-    const scrollSpy = vi
-      .spyOn(Element.prototype, "scrollIntoView")
-      .mockImplementation(function (this: Element) {
-        scrollTargets.push(this);
-      });
+    openEpicFixture(EPIC_A);
+    openEpicFixture(EPIC_B);
+    openEpicFixture(EPIC_C);
+    useTabsStore.setState({ activeItemId: "tab:epic:e-a" });
+    // Alpha's member fits inside the scroller's 0..200; Gamma's runs 300..500,
+    // entirely past the right edge.
+    let selected: RevealBox = { left: 0, right: 180 };
+    const geometry = installRevealGeometry(() => selected);
     try {
-      openEpicFixture(EPIC_A);
-      openEpicFixture(EPIC_B);
-      openEpicFixture(EPIC_C);
-      useTabsStore.setState({ activeItemId: "tab:epic:e-a" });
       const router = buildRouter("/epics/e-a/e-a");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("tab-epic-e-a");
+      expect(geometry.scrolled()).toBe(0);
 
-      scrollTargets.length = 0;
-      scrollSpy.mockClear();
-
+      selected = { left: 300, right: 500 };
       await router.navigate({
         to: "/epics/$epicId/$tabId",
         params: { epicId: "e-c", tabId: "e-c" },
@@ -1364,21 +2186,19 @@ describe("<TabStrip />", () => {
           focusTileInstanceId: undefined,
         },
       });
-      useTabsStore.setState({ activeItemId: "tab:epic:e-c" });
+      act(() => {
+        useTabsStore.setState({ activeItemId: "tab:epic:e-c" });
+      });
       await flushNav();
 
-      const activeTab = screen.getByTestId("tab-epic-e-c");
-      expect(scrollTargets).toContain(activeTab);
-      expect(scrollSpy).toHaveBeenCalledWith({
-        block: "nearest",
-        inline: "nearest",
-      });
+      expect(screen.getByTestId("tab-epic-e-c")).toBeDefined();
+      expect(geometry.scrolled()).toBe(300);
     } finally {
-      scrollSpy.mockRestore();
+      geometry.restore();
     }
   });
 
-  it("scopes the epic title tooltip trigger to the title text", async () => {
+  it("scopes the epic title hover card trigger to the title text", async () => {
     openEpicFixture(EPIC_A);
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
@@ -1387,10 +2207,14 @@ describe("<TabStrip />", () => {
     const title = screen.getByTestId("tab-title-epic-e-a");
     const closeButton = screen.getByTestId("tab-close-epic-e-a");
 
-    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
-    if (trigger === null) throw new Error("Expected a tooltip trigger");
+    // The hover card's `HoverCard.trigger` clones its interaction props onto
+    // the title's own wrapping span (`Slot.Root`, no extra DOM node), so the
+    // title's parent IS the trigger - the same scoping the plain tooltip it
+    // replaced had, checked structurally rather than through a `data-slot`
+    // Radix no longer sets on this primitive.
+    const trigger = title.parentElement;
+    if (trigger === null) throw new Error("Expected a hover card trigger");
 
-    expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
     expect(trigger).not.toBe(tab);
     expect(trigger.contains(title)).toBe(true);
     expect(trigger.contains(closeButton)).toBe(false);
@@ -1444,9 +2268,11 @@ describe("<TabStrip />", () => {
     const indicator = await screen.findByTestId(
       `header-tab-failure-${EPIC_A.id}`,
     );
-    expect(indicator.getAttribute("class")).toContain(
-      "lucide-message-square-x",
-    );
+    expect(
+      indicator
+        .closest("[data-status-glyph]")
+        ?.getAttribute("data-status-glyph"),
+    ).toBe("failure");
     expect(screen.queryByTestId(`header-tab-done-${EPIC_A.id}`)).toBeNull();
   });
 
@@ -1492,9 +2318,11 @@ describe("<TabStrip />", () => {
     const backgroundIcon = await screen.findByTestId(
       `header-tab-background-activity-${EPIC_A.id}`,
     );
-    expect(backgroundIcon.getAttribute("class")).toContain(
-      "lucide-message-square-clock",
-    );
+    expect(
+      backgroundIcon
+        .closest("[data-status-glyph]")
+        ?.getAttribute("data-status-glyph"),
+    ).toBe("background");
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
     expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
@@ -1548,10 +2376,13 @@ describe("<TabStrip />", () => {
 
     expect(await screen.findByTestId(`tab-epic-${EPIC_A.id}`)).toBeDefined();
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
-    expect(screen.queryByTestId(`header-tab-prompt-${EPIC_A.id}`)).toBeNull();
+    expect(
+      screen.queryByTestId(`header-tab-interview-${EPIC_A.id}`),
+    ).toBeNull();
+    expect(screen.queryByTestId(`header-tab-approval-${EPIC_A.id}`)).toBeNull();
   });
 
-  it("does not derive a prompt indicator from a chat session's pending interview", () => {
+  it("shows the interview glyph for a live chat's pending interview with no notification lit", async () => {
     openEpicFixture(EPIC_A);
     registerLiveEpicHeader(EPIC_A, "owner", ["chat-waiting"]);
     registerChatSession(EPIC_A.id, "chat-waiting");
@@ -1567,10 +2398,13 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    expect(screen.queryByTestId(`header-tab-prompt-${EPIC_A.id}`)).toBeNull();
+    expect(
+      await screen.findByTestId(`header-tab-interview-${EPIC_A.id}`),
+    ).toBeDefined();
+    expect(screen.queryByTestId(`header-tab-approval-${EPIC_A.id}`)).toBeNull();
   });
 
-  it("does not derive a prompt indicator from a chat session's pending approval", () => {
+  it("shows the approval glyph for a live chat's pending approval with no notification lit", async () => {
     openEpicFixture(EPIC_A);
     registerLiveEpicHeader(EPIC_A, "owner", ["chat-permission"]);
     registerChatSession(EPIC_A.id, "chat-permission");
@@ -1599,7 +2433,12 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    expect(screen.queryByTestId(`header-tab-prompt-${EPIC_A.id}`)).toBeNull();
+    expect(
+      await screen.findByTestId(`header-tab-approval-${EPIC_A.id}`),
+    ).toBeDefined();
+    expect(
+      screen.queryByTestId(`header-tab-interview-${EPIC_A.id}`),
+    ).toBeNull();
   });
 
   it("hides the header epic edit-title menu item for viewer role", async () => {

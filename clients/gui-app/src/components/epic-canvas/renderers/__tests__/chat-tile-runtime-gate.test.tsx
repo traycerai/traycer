@@ -262,7 +262,7 @@ describe("<ChatTilePreContent />: the calm waits", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
-  // The wake pulse, the plan-restricted reprobe and the host-version move all
+  // The wake pulse and the host-version move both
   // call the store's automatic `retry()`, which clears `snapshotLoaded` on a
   // tile whose transcript is on screen. The tile's anchor is its first render,
   // so a tile open for an hour would otherwise show the "hasn't loaded yet"

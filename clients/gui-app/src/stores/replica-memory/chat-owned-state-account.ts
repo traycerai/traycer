@@ -2,7 +2,6 @@ import type {
   ChatSessionState,
   LiveAssistantMessage,
 } from "@/stores/chats/chat-session-store";
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
 import {
   estimatedStringBytesFromWidth,
   retainedValueSize,
@@ -10,7 +9,9 @@ import {
   v8StringWidth,
 } from "./retained-value-size";
 
-type TextBlock = Extract<ContentBlock, { readonly type: "text" }>;
+import type { OpenContentBlock } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
+type TextBlock = Extract<OpenContentBlock, { readonly type: "text" }>;
 
 export const CHAT_PRIVATE_STRING_SET_NAMES = [
   "watchedMessageDeliveryIds",
@@ -73,8 +74,8 @@ const appendedTextBlocks = new WeakMap<
  * next live block; checking a long prefix here would repeat the hot-path scan.
  */
 export function noteLiveTextAppend(
-  previousBlocks: readonly ContentBlock[],
-  nextBlocks: readonly ContentBlock[],
+  previousBlocks: readonly OpenContentBlock[],
+  nextBlocks: readonly OpenContentBlock[],
   blockId: string,
   delta: string,
 ): void {
@@ -184,12 +185,16 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   openedSubagentCardBlockIds: true,
   pendingCancelRestorations: true,
   failedSendRestoration: true,
+  queueEditRecords: true,
+  unconfirmedSendActionIds: true,
   hashOnlyRecoveries: true,
   currentComposerSettings: true,
   liveAssistantMessage: true,
   liveTurnUsage: true,
   worktreeBinding: true,
   missingWorktreePaths: true,
+  suggestedPrompt: true,
+  thinkingTokens: true,
 } as const satisfies Readonly<Record<ChatSessionDataKey, true | string>>;
 
 const OWNED_STATE_KEYS = (
@@ -243,7 +248,7 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
     estimatedHeapBytes: 0,
   };
 
-  const measureBlock = (block: ContentBlock): MeasuredBlock => {
+  const measureBlock = (block: OpenContentBlock): MeasuredBlock => {
     const cached = blockSizes.get(block);
     if (cached !== undefined) {
       appendedTextBlocks.delete(block);

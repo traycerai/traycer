@@ -25,7 +25,7 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   navigateNestedFocus,
   navigateNestedFocusToPrimaryEditor,

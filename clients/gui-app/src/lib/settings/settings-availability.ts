@@ -21,17 +21,13 @@
  * on them are not indexed and their enclosing page is. The existing bridge resolvers stay the source of truth for each
  * bridge; a predicate only names which bridge its row needs.
  *
- * `mobileFooter` is the one member that is a PREFERENCE rather than a fact
- * about the shell, and it is here because it decides the same thing a bridge
- * decides: whether a surface exists. The installed mobile app draws the footer
- * strip only when that switch is on, so the rows that configure the strip are
- * present exactly when it is — and withholding them from search while the
- * strip is on screen would be the same dead end the rule above exists to
- * prevent. It is admissible because it satisfies the property the rule is
- * really about: it is device-local, a stable answer for the whole shell, and
- * the context re-evaluates when it flips (`useSettingsAvailabilityContext`
- * subscribes to it). Do not read a preference here that fails any of those —
- * a per-host or per-surface value has no shell-wide answer.
+ * Every member here is a fact about the shell, never a stored preference: a
+ * preference has no shell-wide answer the moment it is per host or per
+ * surface, and a predicate that reads one withholds a row from search while
+ * its control is on screen. The one layout value that decides whether a
+ * surface exists, `arrangement.mobileFooter`, is read by the layout form's
+ * own rules (`components/layout-editor/regions/row-availability.ts`) rather
+ * than by a predicate here.
  */
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
@@ -53,11 +49,14 @@ export interface SettingsAvailabilityContext {
    */
   readonly mobileApp: boolean;
   /**
-   * `layout-store`'s `statusBar.mobileFooter`, read reactively by the caller.
-   * Only ever consulted together with `mobileApp`: on a build that draws the
-   * footer unconditionally it decides nothing.
+   * Whether the shell draws its PHONE layout right now: `useIsMobileViewport()`,
+   * the same predicate every renderer that swaps layouts reads. Always true in
+   * the installed app; in a browser tab it follows the window below 768px; the
+   * desktop app's 960px window floor keeps it false there. The one viewport
+   * fact here, because a layout row's availability keys on it (the form and
+   * the surface it describes must agree), and search has to agree with both.
    */
-  readonly mobileFooter: boolean;
+  readonly phoneLayout: boolean;
 }
 
 /** Rendered in every shell. */
@@ -88,53 +87,66 @@ export function isPreventSleepRowAvailable(
 }
 
 /**
- * Layout › Status bar's footer controls — the installed mobile app draws the
- * footer only when `Footer status bar` is switched on, so with it off the
- * group collapses to that switch, a note and the one header row. Every other
- * build draws the footer whenever placement says so and keeps the full group.
+ * Layout › Usage and resources ▸ "Status bar on small screens" (L-51): the
+ * switch the phone layout's footer mounts from (`useStatusBarVisible`), so it
+ * exists wherever that layout is drawn - the installed app, and a browser tab
+ * below 768px - and nowhere else.
  */
-export function isStatusBarControlsAvailable(
+export function isMobileFooterRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp || context.mobileFooter;
+  return context.phoneLayout;
 }
 
 /**
- * Layout › Status bar ▸ Placement — which of two surfaces hosts the usage
- * gauge and the resource monitor, a question the installed mobile app does not
- * have: its header keeps both controls whatever the strip does, so the switch
- * above is that build's whole answer and the segment would pick between two
- * identical outcomes.
- *
- * Narrower than `isStatusBarControlsAvailable` on purpose, and it is the one
- * gate that does NOT widen with the mobile footer: turning the strip on gives
- * the phone every other footer control, and still no second surface to move
- * the gauge to.
+ * Layout rows the installed app can never draw, whatever its window: it
+ * always draws its own header and no tab strip or sidebar, so the tab
+ * strip's placement, view and overflow, the sidebar's side, the readings on
+ * agent rows (the phone's switcher lists draw none), the reading width (a
+ * phone is narrower than even the Comfortable column) and the minimap's edge
+ * rail (its minimap is the tile bar's drawer, which ignores the region) have
+ * no effect there. A narrow BROWSER tab keeps them: widening the window is
+ * the way back, which the form says (`wideLayoutRow`).
  */
-export function isStatusBarPlacementAvailable(
+export function isDesktopLayoutRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp;
 }
 
 /**
- * Layout › Status bar ▸ Footer status bar — the switch itself, which exists
- * only where the footer is withheld by default. It is available in BOTH of
- * that build's states, on and off: it is the control that flips the gate above,
- * so a predicate that went away with the rows it governs would leave no way
- * back.
+ * Layout › Customize layout - the canvas editor, and every door that offers it
+ * by name. It needs a window wider than the phone layout ever draws
+ * (`LAYOUT_EDITOR_MIN_WIDTH`), and the installed app is a phone-layout product
+ * on every device, so there it can never open. A narrow DESKTOP window keeps
+ * it: widening the window is the way in, and the page says so.
  */
-export function isMobileFooterRowAvailable(
+export function isLayoutEditorAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return context.mobileApp;
+  return !context.mobileApp;
 }
 
-/** General › Experimental — the desktop feature-settings bridge. */
-export function isExperimentalGroupAvailable(
+/** General › Agent roles — the desktop feature-settings bridge. */
+export function isAgentRolesRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return context.featureSettings !== null;
+}
+
+/**
+ * General › When you quit Traycer — the desktop's host lifecycle bridge.
+ * Present in every desktop launch, including one with no local host (where
+ * it is the only way back), and absent on the phone and in the browser.
+ */
+export function isHostLifecycleRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    !context.mobileApp &&
+    context.runnerHost !== null &&
+    context.runnerHost.hostLifecycle !== null
+  );
 }
 
 /** Appearance › Zoom — the desktop zoom bridge. */
@@ -147,8 +159,8 @@ export function isZoomRowAvailable(
   );
 }
 
-/** Notifications › System — the OS notification-settings pointer. */
-export function isSystemNotificationsGroupAvailable(
+/** Sounds › OS notifications — the OS notification-settings pointer. */
+export function isSystemNotificationsRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (
@@ -157,8 +169,8 @@ export function isSystemNotificationsGroupAvailable(
   );
 }
 
-/** Notifications › This phone — the OS push permission of a phone shell. */
-export function isPushPermissionGroupAvailable(
+/** Sounds › Push notifications — the OS push permission of a phone shell. */
+export function isPushPermissionRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (

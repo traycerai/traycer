@@ -69,6 +69,7 @@ describe("chat activity grouping - failed browser call", () => {
       {
         turnState: "complete",
         promotedToolBlockIds: EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+        hideReasoning: false,
       },
     );
 

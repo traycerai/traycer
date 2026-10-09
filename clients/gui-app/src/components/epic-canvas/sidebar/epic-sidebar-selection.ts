@@ -3,7 +3,6 @@ import {
   createElement,
   use,
   useCallback,
-  useEffect,
   useMemo,
   useReducer,
   type ReactNode,
@@ -35,7 +34,6 @@ export type SidebarTreeFilterFn = (type: string | null | undefined) => boolean;
 
 interface SidebarBulkSelectionProviderProps {
   readonly panelId: SidebarBulkSelectionPanelId;
-  readonly collapsed: boolean;
   readonly children: ReactNode;
 }
 
@@ -122,10 +120,6 @@ export function SidebarBulkSelectionProvider(
     sidebarBulkSelectionReducer,
     INITIAL_SELECTION_STATE,
   );
-
-  useEffect(() => {
-    if (props.collapsed) dispatch({ type: "reset" });
-  }, [props.collapsed]);
 
   const selectedVisibleIds = useMemo(
     () =>

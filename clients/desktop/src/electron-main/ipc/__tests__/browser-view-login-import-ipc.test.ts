@@ -46,7 +46,6 @@ vi.mock("electron", () => {
     },
     BrowserWindow,
     dialog: {
-      showSaveDialogSync: () => undefined,
       showMessageBox: () => Promise.resolve({ response: 1 }),
       showMessageBoxSync: (): number => {
         throw new Error("must not use the synchronous dialog");
@@ -99,6 +98,8 @@ vi.mock("../../browser-view/browser-session", () => {
     BROWSER_VIEW_EPHEMERAL_PARTITION: "traycer-browser-ephemeral",
     createBrowserViewWebPreferences: vi.fn(() => ({})),
     cancelBrowserViewDownload: vi.fn(),
+    setBrowserViewOnScreenProbe: vi.fn(),
+    discardHeldBrowserViewDownloads: vi.fn(),
     clearBrowserViewPendingCertificateError: vi.fn(),
     ensureBrowserViewSession: vi.fn(() => fakeSession),
     ensureBrowserViewSessionForPartition: vi.fn(() => fakeSession),

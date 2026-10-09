@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
+  buildSubagentChatFindRows,
+  chatFindSubagentChatResultUnitId,
+  chatFindSubagentChatTaskUnitId,
+  subagentChatFindRowId,
   chatFindActivityGroupChildHeaderUnitId,
   chatFindActivityGroupSummaryUnitId,
   chatFindMessageContentUnitId,
   chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
+  chatFindSubagentResultUnitId,
   markdownToChatSearchText,
   type ChatFindRow,
 } from "@/components/chat/chat-find";
@@ -14,15 +19,21 @@ import {
   deriveActivityGroupRenderId,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
+  deriveSubagentCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ApprovalSegment,
   ChatMessage as ChatMessageModel,
   InterviewSegment,
   MessageSegment,
+  SubagentSegment,
+  TextSegment,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { makeMessage } from "./chat-message-fixtures";
@@ -39,12 +50,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const completedQuestion = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -112,7 +121,7 @@ describe("chat find projection", () => {
       ],
       TILE_INSTANCE_ID,
       new Set(),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )[0];
 
     expect(
@@ -215,12 +224,10 @@ describe("chat find projection", () => {
       ...makeMessage(4, "assistant"),
       segments: [segment],
     };
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const model = deriveInterviewReviewModel({
       blockId: segment.id,
       status: segment.status,
@@ -378,7 +385,7 @@ describe("chat find projection", () => {
       [user, assistant],
       TILE_INSTANCE_ID,
       new Set(),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     );
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
 
@@ -416,7 +423,10 @@ describe("chat find projection", () => {
       },
     };
 
-    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), null)
+    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -470,12 +480,10 @@ describe("chat find projection", () => {
       segments,
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Read 1 file, edited 1 file");
     expect(rowSearchText(row)).toContain("src/components/search-bar.tsx");
@@ -497,12 +505,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Thought for 2s");
     expect(rowSearchText(row)).not.toContain("private chain of thought");
@@ -522,12 +528,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Thinking");
     expect(rowSearchText(row)).not.toContain(
@@ -556,7 +560,10 @@ describe("chat find projection", () => {
     };
 
     const text = rowSearchText(
-      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), null)[0],
+      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0],
     );
 
     expect(text).toContain("Thought");
@@ -607,12 +614,10 @@ describe("chat find projection", () => {
     };
 
     const promoted = new Set(["tool-live-promoted"]);
-    const unitIds = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      promoted,
-      null,
-    )[0].units.map((unit) => unit.unitId);
+    const unitIds = buildChatFindRows([assistant], TILE_INSTANCE_ID, promoted, {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0].units.map((unit) => unit.unitId);
 
     // The run starts at the reasoning block, because the tool stands alone.
     // Probed through the group SUMMARY unit: the group's sole reasoning block
@@ -649,12 +654,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     // Exactly once - in the group summary ("Thought for 2s"). The label is
     // still findable; it is just not counted twice.
@@ -707,7 +710,7 @@ describe("chat find projection", () => {
       [assistant],
       TILE_INSTANCE_ID,
       new Set(["command-backgrounded"]),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )[0];
 
     expect(row.units.map((unit) => unit.unitId)).not.toContain(
@@ -753,12 +756,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toContain(
       chatFindActivityGroupChildHeaderUnitId(
@@ -795,7 +796,7 @@ describe("chat find projection", () => {
       [assistant],
       TILE_INSTANCE_ID,
       new Set(),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )
       .flatMap((row) => row.units)
       .map((unit) => unit.unitId);
@@ -835,12 +836,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const headerUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentHeaderUnitId(renderId),
@@ -860,10 +859,15 @@ describe("chat find projection", () => {
     expect(bodyUnit?.text.match(/Scanning/g)).toHaveLength(2);
     expect(bodyUnit?.text).toContain("Reading");
     expect(bodyUnit?.text).toContain("Investigate the flake");
-    expect(bodyUnit?.text).toContain("All clear.");
+    // The result is its own unit now: the body unit no longer holds it.
+    expect(bodyUnit?.text).not.toContain("All clear.");
+    const resultUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+    );
+    expect(resultUnit?.text).toBe("All clear.");
   });
 
-  it("indexes a workflow card's Intent/Activity/Result in the same order the card renders them", () => {
+  it("indexes a workflow card's Intent/Activity in card order and its Result as its own unit", () => {
     const subagentId = "workflow-projection";
     const assistant: ChatMessageModel = {
       ...makeMessage(6, "assistant"),
@@ -898,12 +902,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -913,10 +915,14 @@ describe("chat find projection", () => {
     const text = bodyUnit?.text ?? "";
     const intentIndex = text.indexOf("Review the diff");
     const activityIndex = text.indexOf("Find");
-    const resultIndex = text.indexOf("3 findings");
     expect(intentIndex).toBeGreaterThanOrEqual(0);
     expect(activityIndex).toBeGreaterThan(intentIndex);
-    expect(resultIndex).toBeGreaterThan(activityIndex);
+    expect(text).not.toContain("3 findings");
+    expect(
+      row.units.find(
+        (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+      )?.text,
+    ).toBe("3 findings");
   });
 
   it("falls back to the rendered Subagent placeholder when the name is null", () => {
@@ -945,12 +951,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const headerUnit = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -995,12 +999,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("1 of 3 Done");
     // Completed item renders its plain text, never its active form.
@@ -1052,12 +1054,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Refactor the search index");
     // The status badge LABEL is indexed, not the raw enum value.
@@ -1100,12 +1100,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const joined = buildChatFindRows(
-      [grouped],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )
+    const joined = buildChatFindRows([grouped], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -1141,12 +1139,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const noticeUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("notice-top"),
     );
@@ -1188,12 +1184,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const textOf = (id: string): string | undefined =>
       row.units.find((unit) => unit.unitId === chatFindSegmentUnitId(id))?.text;
 
@@ -1230,12 +1224,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const retryUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("retry-notice"),
     );
@@ -1286,12 +1278,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -1308,6 +1298,127 @@ describe("chat find projection", () => {
     // body - expanding the card reveals the notice alongside it.
     expect(noticeUnit?.owningChain).toEqual(bodyUnit?.owningChain);
     expect(noticeUnit?.owningChain).toHaveLength(1);
+  });
+
+  describe("a promoted card's conversation", () => {
+    const CARD_ID = "card-conversation";
+    const renderId = derivePromotedSubagentRenderId(CARD_ID);
+
+    function card(patch: Partial<SubagentSegment>): SubagentSegment {
+      return {
+        id: CARD_ID,
+        kind: "subagent",
+        name: "Researcher",
+        agentType: null,
+        task: "Investigate",
+        progressUpdates: [],
+        result: null,
+        isStreaming: false,
+        endState: null,
+        stopped: false,
+        startedAt: 1,
+        durationMs: 10,
+        spawnToolCallId: null,
+        parentId: null,
+        workflowMeta: null,
+        children: [],
+        ...patch,
+      };
+    }
+
+    function rowFor(segment: SubagentSegment): ChatFindRow {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(40, "assistant"),
+        segments: [segment],
+      };
+      return buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0];
+    }
+
+    function childText(id: string, markdown: string): TextSegment {
+      return {
+        id,
+        kind: "text",
+        markdown,
+        isStreaming: false,
+        parentId: CARD_ID,
+      };
+    }
+
+    it("indexes a child text as its own segment unit chained through the card's collapsible key", () => {
+      const row = rowFor(
+        card({ children: [childText("child-text", "The parser is fine.")] }),
+      );
+      const unit = row.units.find(
+        (candidate) => candidate.unitId === chatFindSegmentUnitId("child-text"),
+      );
+      expect(unit?.text).toContain("The parser is fine.");
+      expect(unit?.owningChain).toEqual([
+        deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, renderId),
+      ]);
+    });
+
+    it("emits the result unit only when the card has no child text", () => {
+      const withText = rowFor(
+        card({
+          result: "Final answer",
+          children: [childText("child-text", "The parser is fine.")],
+        }),
+      );
+      expect(
+        withText.units.some(
+          (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+        ),
+      ).toBe(false);
+      expect(rowSearchText(withText)).not.toContain("Final answer");
+
+      const noProse = rowFor(
+        card({
+          result: "Final answer",
+          children: [
+            {
+              id: "notice-only",
+              kind: "provider_notice",
+              status: "completed",
+              noticeKind: "model_rerouted",
+              tone: "info",
+              title: "Model changed",
+              message: "Switched models.",
+              details: [],
+              receipt: null,
+              parentId: CARD_ID,
+            },
+          ],
+        }),
+      );
+      const resultUnit = noProse.units.find(
+        (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+      );
+      expect(resultUnit?.text).toBe("Final answer");
+      expect(resultUnit?.owningChain).toEqual([
+        deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, renderId),
+      ]);
+    });
+
+    it("drops a progress line equal to a child text and keeps a line matching none", () => {
+      const row = rowFor(
+        card({
+          progressUpdates: ["The parser is fine.", "Summary: nothing found"],
+          children: [childText("child-text", "The parser is fine.")],
+        }),
+      );
+      const body = row.units.find(
+        (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
+      );
+      expect(body?.text).toContain("Summary: nothing found");
+      expect(body?.text).not.toContain("The parser is fine.");
+      // The prose is indexed once, in its own unit.
+      expect(countOccurrences(rowSearchText(row), "The parser is fine.")).toBe(
+        1,
+      );
+    });
   });
 
   // A regular user message renders its whole body as ONE anchor
@@ -1329,7 +1440,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), null)[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -1361,7 +1475,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), null)[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -1384,12 +1501,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("assistant-text-0"),
@@ -1416,12 +1531,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("forked-1"),
@@ -1448,12 +1561,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("imported-1"),
@@ -1485,12 +1596,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units).toEqual([]);
   });
@@ -1562,7 +1671,7 @@ describe("chat find projection", () => {
         ],
         TILE_INSTANCE_ID,
         new Set(),
-        null,
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
       )[0];
 
       const noticeUnit = row.units.find(
@@ -1592,7 +1701,7 @@ describe("chat find projection", () => {
         ],
         TILE_INSTANCE_ID,
         new Set(),
-        null,
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
       )[0];
 
       expect(rowSearchText(row)).toContain("zqtext");
@@ -1614,7 +1723,7 @@ describe("chat find projection", () => {
           ],
           TILE_INSTANCE_ID,
           new Set(),
-          null,
+          { hideReasoning: false, queuePauseReasonProtocolSupported: null },
         )[0];
         const text = rowSearchText(row);
 
@@ -1650,12 +1759,10 @@ describe("chat find projection", () => {
         ...makeMessage(70, "assistant"),
         segments: [errorSegment("queue-pause", QUEUE_PAUSED_AFTER_ERROR_CODE)],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(
         row.units.some(
@@ -1670,12 +1777,10 @@ describe("chat find projection", () => {
         ...makeMessage(71, "assistant"),
         segments: [errorSegment("not-queue-pause", "RUNTIME")],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(rowSearchText(row)).toContain("queued message was held");
     });
@@ -1689,12 +1794,10 @@ describe("chat find projection", () => {
           errorSegment("queue-pause-n1", QUEUE_PAUSED_AFTER_ERROR_CODE),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        false,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: false,
+      })[0];
 
       expect(
         row.units.some(
@@ -1712,12 +1815,10 @@ describe("chat find projection", () => {
           errorSegment("queue-pause-n3", QUEUE_PAUSED_AFTER_ERROR_CODE),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        null,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0];
 
       expect(
         row.units.some(
@@ -1775,7 +1876,10 @@ describe("chat find projection", () => {
           [assistant],
           TILE_INSTANCE_ID,
           new Set(),
-          protocolSupported,
+          {
+            hideReasoning: false,
+            queuePauseReasonProtocolSupported: protocolSupported,
+          },
         )[0];
 
         expect(
@@ -1799,12 +1903,10 @@ describe("chat find projection", () => {
           }),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(
         row.units.some(
@@ -1827,12 +1929,10 @@ describe("chat find projection", () => {
           }),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(
         row.units.some(
@@ -1843,6 +1943,34 @@ describe("chat find projection", () => {
       ).toBe(true);
       expect(rowSearchText(row)).toContain(CANCEL_TITLE);
     });
+  });
+});
+
+// Layout > Chat > Thinking is Hidden: the renderer draws no reasoning, so
+// Find must not emit units for it either - a match nobody could paint or
+// navigate to.
+describe("buildChatFindRows - hideReasoning", () => {
+  it("emits no reasoning units for a reasoning-only run", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(6, "assistant"),
+      segments: [
+        {
+          id: "reasoning-hidden",
+          kind: "reasoning",
+          markdown: "private chain of thought",
+          isStreaming: false,
+          durationMs: 2000,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: true,
+      queuePauseReasonProtocolSupported: true,
+    })[0];
+
+    expect(row.units).toEqual([]);
+    expect(rowSearchText(row)).not.toContain("Thought");
   });
 });
 
@@ -1893,3 +2021,125 @@ function rowSearchText(row: ChatFindRow): string {
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+describe("buildSubagentChatFindRows", () => {
+  const OPEN_ID = "open-card";
+
+  function openCard(patch: Partial<SubagentSegment>): SubagentSegment {
+    return {
+      id: OPEN_ID,
+      kind: "subagent",
+      name: "Opener",
+      agentType: null,
+      task: "Open task words",
+      progressUpdates: [],
+      result: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      startedAt: 1,
+      durationMs: 10,
+      spawnToolCallId: null,
+      parentId: null,
+      workflowMeta: null,
+      children: [],
+      ...patch,
+    };
+  }
+
+  function nestedCard(): SubagentSegment {
+    return {
+      ...openCard({ id: "nested-card", name: "Nested", task: "Nested task" }),
+      parentId: OPEN_ID,
+      children: [
+        {
+          id: "nested-text",
+          kind: "text",
+          markdown: "nested words",
+          isStreaming: false,
+          parentId: "nested-card",
+        },
+      ],
+    };
+  }
+
+  function toolChild(): ToolSegment {
+    const input = { command: "ls" };
+    return {
+      id: "tool-1",
+      kind: "tool",
+      toolName: "Bash",
+      inputSummary: deriveToolInputSummary("Bash", input),
+      inputDetail: deriveToolInputDetail("Bash", input),
+      taskTodoItems: null,
+      error: null,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      imageResults: [],
+      startedAt: 0,
+      durationMs: null,
+      parentId: OPEN_ID,
+    };
+  }
+
+  const childText: TextSegment = {
+    id: "open-child-text",
+    kind: "text",
+    markdown: "Child prose.",
+    isStreaming: false,
+    parentId: OPEN_ID,
+  };
+
+  it("gives no rows for a card that left the transcript", () => {
+    expect(buildSubagentChatFindRows(null, TILE_INSTANCE_ID)).toEqual([]);
+  });
+
+  it("orders task, child text and nested header, rooted at the view", () => {
+    const rows = buildSubagentChatFindRows(
+      openCard({
+        result: "Ignored result",
+        children: [childText, nestedCard()],
+      }),
+      TILE_INSTANCE_ID,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].messageId).toBe(subagentChatFindRowId(OPEN_ID));
+    const ids = rows[0].units.map((unit) => unit.unitId);
+    expect(ids.slice(0, 3)).toEqual([
+      chatFindSubagentChatTaskUnitId(OPEN_ID),
+      chatFindSegmentUnitId("open-child-text"),
+      chatFindSubagentHeaderUnitId("nested-card"),
+    ]);
+    expect(rows[0].units[0].owningChain).toEqual([]);
+    expect(rows[0].units[1].owningChain).toEqual([]);
+    expect(rows[0].units[2].owningChain).toEqual([]);
+    expect(ids).not.toContain(chatFindSubagentChatResultUnitId(OPEN_ID));
+    expect(ids).not.toContain(chatFindSubagentHeaderUnitId(OPEN_ID));
+    expect(ids).not.toContain(chatFindSubagentBodyUnitId(OPEN_ID));
+    expect(ids).not.toContain(
+      chatFindSubagentHeaderUnitId(derivePromotedSubagentRenderId(OPEN_ID)),
+    );
+  });
+
+  it("emits the result unit last when the children hold no text", () => {
+    const rows = buildSubagentChatFindRows(
+      openCard({
+        result: "Final answer",
+        children: [toolChild()],
+      }),
+      TILE_INSTANCE_ID,
+    );
+    const units = rows[0].units;
+    const last = units[units.length - 1];
+    expect(last.unitId).toBe(chatFindSubagentChatResultUnitId(OPEN_ID));
+    expect(last.text).toBe("Final answer");
+    expect(last.owningChain).toEqual([]);
+  });
+});

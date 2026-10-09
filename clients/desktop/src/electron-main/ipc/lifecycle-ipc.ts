@@ -62,21 +62,12 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
         return;
       }
       const parsed = parseQuitDecisionResponse(response);
-      const waiterIndex = parsed.legacy
-        ? bridge.quitDecisionWaiters.findIndex(
-            (entry) => entry.windowId === windowId,
-          )
-        : bridge.quitDecisionWaiters.findIndex(
-            (entry) =>
-              entry.windowId === windowId &&
-              entry.requestId === parsed.requestId,
-          );
-      const waiter =
-        waiterIndex === -1
-          ? undefined
-          : bridge.quitDecisionWaiters.splice(waiterIndex, 1)[0];
-      if (waiter !== undefined) {
-        clearTimeout(waiter.serviceTimer);
+      const waiter = bridge.quitDecisions.take(
+        windowId,
+        parsed.requestId,
+        parsed.legacy,
+      );
+      if (waiter !== null) {
         waiter.resolve(parsed.decision);
       } else {
         log.warn("[runner-ipc] respondToQuitRequest received with no waiter", {
@@ -104,12 +95,7 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
         });
         return;
       }
-      const waiter = bridge.quitDecisionWaiters.find(
-        (entry) =>
-          entry.windowId === windowId && entry.requestId === parsedRequestId,
-      );
-      if (waiter !== undefined) {
-        clearTimeout(waiter.serviceTimer);
+      if (bridge.quitDecisions.acknowledge(windowId, parsedRequestId)) {
         return;
       }
       log.warn("[runner-ipc] acknowledgeQuitRequest received with no waiter", {

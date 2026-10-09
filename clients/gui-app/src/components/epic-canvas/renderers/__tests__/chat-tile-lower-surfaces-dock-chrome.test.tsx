@@ -16,6 +16,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
 
 /**
  * `useChatDockChrome` (`chat-tile-lower-surfaces.tsx`) is the piece deciding
@@ -109,10 +110,10 @@ vi.mock("@dnd-kit/sortable", () => ({
   }),
 }));
 
-// The one deliberate departure from `chat-lower-background-spacing.test.tsx`'s
-// stub: that suite discards `workspaceControls`, which is exactly where
-// `<ChatDockCompactStrip />` lives. This renders it, the way `chat-tile.tsx`
-// composes the real composer.
+// Renders `workspaceControls` rather than discarding it, so the row's own
+// contents stay observable. The compact chips are NOT in it any more (A12,
+// L-97) - `ChatLowerDock` draws the strip above the composer, which is outside
+// this stub and is what the chip assertions below reach.
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: { readonly workspaceControls: ReactNode }) => (
     <div data-testid="composer-stub">{props.workspaceControls}</div>
@@ -141,10 +142,10 @@ import type {
   AgentStopControls,
 } from "@/hooks/agent/use-agent-stop-controls";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
-import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
+} from "@/stores/layout/layout-store";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import {
   ChatLowerInteractionSurfaces,
@@ -283,6 +284,20 @@ function runningManagedCommand(args: {
   };
 }
 
+/** A live port forward, seeded through `managedCommandSession.setPortForwards`. */
+function portForward(id: string): ChatPortForward {
+  return {
+    forwardId: id,
+    description: "dev server",
+    target: { hostId: HOST_ID, port: 3000 },
+    listen: { hostId: HOST_ID, requestedPort: 8080, boundPort: 8080 },
+    state: "active",
+    stateReason: null,
+    createdAtMs: 1,
+    recentEvents: [],
+  };
+}
+
 function content(text: string): JsonContent {
   return {
     type: "doc",
@@ -414,8 +429,11 @@ function surfacesProps(patch: {
       onSettingsChange: null,
       // The one required departure from the background-spacing harness: this
       // must actually contain the strip, not `null`.
-      workspaceControls: <ChatDockCompactStrip />,
+      // The chips are no longer in the workspace row (A12, L-97):
+      // `ChatLowerDock` renders the strip itself, above the composer.
+      workspaceControls: <div data-testid="workspace-controls-stub" />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      suggestedPrompt: undefined,
     },
     todo: null,
     restoreContext: patch.restoreContext,
@@ -427,6 +445,7 @@ function surfacesProps(patch: {
     backgroundStopAllPending: false,
     backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
+    subagentView: null,
   };
 }
 
@@ -483,7 +502,9 @@ beforeEach(() => {
     openTabOrder: [TAB_ID],
     activeTabId: TAB_ID,
   });
-  useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutEditorStore.getState().endSession();
+  useLayoutEditorStore.setState({ instances: new Map() });
   setAgentStopControls({ self: null, descendants: [] });
 });
 
@@ -492,15 +513,14 @@ afterEach(() => {
   disposeManagedCommandChatSessions();
   epicHandle.dispose();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  useLayoutEditorStore.getState().endSession();
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   setAgentStopControls({ self: null, descendants: [] });
 });
 
 describe("useChatDockChrome via ChatDockCompactStrip", () => {
   it("prints the files-changed chip from the accumulated line counts and names the file count in its label", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("changedFiles", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -530,9 +550,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // chip drops the side it has nothing to say about rather than printing a
   // zero, and falls back to the count alone when it has neither.
   it("omits a zero side of the files-changed chip, and its label with it", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("changedFiles", { size: "chip" });
     const addedOnly = surfacesProps({
       restoreContext: {
         ...EMPTY_RESTORE,
@@ -583,9 +601,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
   // One line each way: the sentence has to say "line", not "1 lines".
   it("names a single added or removed line in the singular", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("changedFiles", { size: "chip" });
     const oneEachWay = surfacesProps({
       restoreContext: {
         ...EMPTY_RESTORE,
@@ -618,9 +634,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   });
 
   it("prints the active-agents chip from the same arithmetic ActiveAgentsPanel uses for its own running count", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
-    });
+    useLayoutStore
+      .getState()
+      .setRegionValues("runningAgents", { size: "chip" });
     const self = agentRow("chat-1", "This chat", "turn");
     const descendants = [
       agentRow("child-1", "Child one", "turn"),
@@ -648,9 +664,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   });
 
   it("lights the active-agents icon while any agent is mid-turn, and rests it when every one is background-only", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
-    });
+    useLayoutStore
+      .getState()
+      .setRegionValues("runningAgents", { size: "chip" });
     setAgentStopControls({
       self: agentRow("chat-1", "This chat", "background"),
       descendants: [agentRow("child-1", "Child one", "turn")],
@@ -687,9 +703,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   });
 
   it("prints the background chip from the running row count and the shared header summary sentence", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -717,9 +731,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // blink rides on it. The two axes are independent, and this is the case that
   // would have been hidden while a working chip swapped its icon out.
   it("keeps the section's mark on a background chip whose mixed rows are running", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -733,7 +745,8 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-background");
-    expect(chipText("background")).toBe("1");
+    // Total, not the running count alone: one running row plus one waiting.
+    expect(chipText("background")).toBe("2");
     expect(chip.getAttribute("aria-label")).toBe(
       "Background. 1 running · 1 waiting.",
     );
@@ -748,9 +761,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // rows' kinds are the panel's to draw; the chip never borrowed the wake's
   // clock for one kind or a neutral stack for two.
   it("rests the background chip on the section's mark, one kind or mixed", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
     renderSurfaces(
       surfacesProps({
         restoreContext: EMPTY_RESTORE,
@@ -760,23 +771,29 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-background");
-    expect(chipText("background")).toBe("0");
+    // Every group the panel lists, not just the running part: one waiting wake.
+    expect(chipText("background")).toBe("1");
     expect(chipWorking("background")).toBe(false);
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 waiting.");
     expect(
       chip.querySelector("svg.lucide-message-square-clock"),
     ).not.toBeNull();
     expect(chip.querySelector("svg.lucide-alarm-clock")).toBeNull();
 
     // A held shell joins the wake: two kinds, and the mark does not change.
-    // Held output is not running, so the chip still rests.
+    // Held output is not running, so the chip still rests, but its own group
+    // still joins the total.
     act(() => {
       managedCommandSession.setHeldUpdates([
         { commandId: "cmd-1", description: "deploy watcher", heldAtMs: 1 },
       ]);
     });
 
-    expect(chipText("background")).toBe("0");
+    expect(chipText("background")).toBe("2");
     expect(chipWorking("background")).toBe(false);
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Background. 1 held · 1 waiting.",
+    );
     expect(
       chip.querySelector("svg.lucide-message-square-clock"),
     ).not.toBeNull();
@@ -791,9 +808,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // `monitoring: true` is the case that was reported, and it must be
   // indistinguishable from any other live shell here.
   it("draws a running monitor shell as the lit section mark that says it is running", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -829,9 +844,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // and it is told apart by the sentence and the tone - never by a second
   // glyph, which is what made a live watcher read as paused.
   it("rests a shells-only background chip on the same mark, and says held", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -849,11 +862,103 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
     expect(chipWorking("background")).toBe(false);
-    expect(chipText("background")).toBe("0");
+    // Held work joins the total, so the number no longer reads "0" over a
+    // section the panel shows one row for.
+    expect(chipText("background")).toBe("1");
     expect(
       chip.querySelector("svg.lucide-message-square-clock"),
     ).not.toBeNull();
     expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
+  });
+
+  // Held-and-running is the same shell id in both sets: the panel renders it
+  // ONCE, as held, so the total must not double count it either.
+  it("counts a shell that is both running and held once, as held", () => {
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [],
+      }),
+    );
+    act(() => {
+      managedCommandSession.setCommands([
+        runningManagedCommand({
+          id: "cmd-1",
+          description: "deploy watcher",
+          monitoring: false,
+        }),
+      ]);
+    });
+    act(() => {
+      managedCommandSession.setHeldUpdates([
+        { commandId: "cmd-1", description: "deploy watcher", heldAtMs: 1 },
+      ]);
+    });
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chipText("background")).toBe("1");
+    expect(chipWorking("background")).toBe(false);
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
+  });
+
+  // A port forward outlives the turn that made it, so a chat that is
+  // otherwise idle can still hold one - and the chip's number has to include
+  // it. Seeded through the real chat session store `usePortForwardsForChat`
+  // reads, not a mock of the hook.
+  it("counts a live port forward in the background chip, with no items or shells", () => {
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [],
+      }),
+    );
+    act(() => {
+      managedCommandSession.setPortForwards([portForward("forward-1")]);
+    });
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chipText("background")).toBe("1");
+    expect(chipWorking("background")).toBe(false);
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 port forward.");
+  });
+
+  // Every part at once: a running background item, a waiting wake, a held
+  // shell and a port forward. The total sums all four, the label names each,
+  // and the chip lights because something is genuinely running.
+  it("sums every part of the background section in one mixed chip", () => {
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [
+          backgroundCommandItem("task-1", "bun test"),
+          backgroundWakeupItem("wake-1", "Review status"),
+        ],
+      }),
+    );
+    act(() => {
+      managedCommandSession.setHeldUpdates([
+        { commandId: "cmd-1", description: "deploy watcher", heldAtMs: 1 },
+      ]);
+    });
+    act(() => {
+      managedCommandSession.setPortForwards([portForward("forward-1")]);
+    });
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chipText("background")).toBe("4");
+    expect(chipWorking("background")).toBe(true);
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Background. 1 running · 1 held · 1 waiting · 1 port forward.",
+    );
   });
 
   // `BackgroundItemsPanel` counts its own header on `dedupeByTaskId(items)`, so
@@ -863,9 +968,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // item atomically at its terminal, so the duplicate is transient rather than
   // expected; it is the asymmetry that is the defect, not the input.
   it("counts a duplicated wakeup task once in the background chip, as the panel header does", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
-    });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -882,20 +985,20 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 waiting.");
   });
 
-  // The most important case: no self agent, no descendants, but the queue
-  // holds prompts *received* from other agents. `agentsChip` in
-  // `chat-tile-lower-surfaces.tsx` reads
-  // `composer.activeAgents === "compact" && (input.activeAgentsVisible || receivedAgentCount > 0)`.
-  // Delete the `receivedAgentCount > 0` half of that clause and two things
-  // happen at once: the chip stops existing (this suite's first assertion
-  // below fails), AND `folded` never gains "activeAgents" - so
-  // `foldedQueue` hands the received rows straight through and they render
-  // in the dock (the second assertion fails too). Both are needed to pin the
-  // clause; neither alone would catch every way of dropping it.
-  it("folds received A2A prompts into a '0 · N' chip and keeps only the user-typed item in the dock", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
-    });
+  // The most important case now: no self agent, no descendants, but the
+  // queue holds prompts *received* from other agents. Before this fix,
+  // `receivedAgentCount > 0` kept `agentsChip` alive on its own and
+  // `foldedQueue` hid these two rows behind it until the chip was clicked
+  // open. The queue is never a pill now (G1-G2, staging round 4): a received
+  // row buys the chip nothing, and every row in the queue renders
+  // unconditionally. Reintroduce the old `receivedAgentCount > 0` clause on
+  // `agentsChip` and the first assertion below fails (a chip with no agent
+  // behind it); reintroduce `foldedQueue` and the two received rows vanish
+  // from the second.
+  it("keeps agent-sent queued rows out of the agents chip when nothing is running", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("runningAgents", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -909,28 +1012,33 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
       }),
     );
 
-    const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    expect(chipText("activeAgents")).toBe("0 · 2");
-    expect(chip.getAttribute("aria-label")).toBe(
-      "Active agents. 0 running, 2 received from other agents and queued.",
-    );
+    expect(screen.queryByTestId("chat-dock-chip-activeAgents")).toBeNull();
 
+    // All three rows render plainly - no click needed to reveal the two the
+    // chip used to fold away.
     const queueRows = screen.getByTestId("queued-message-rows");
+    expect(within(queueRows).getAllByTestId("queued-message-row")).toHaveLength(
+      3,
+    );
     const previews = within(queueRows).getAllByTestId(
       "queued-message-content-preview",
     );
-    expect(previews).toHaveLength(1);
-    expect(previews[0]?.textContent).toContain("My own message");
+    expect(previews.map((preview) => preview.textContent)).toEqual([
+      "Received prompt one",
+      "Received prompt two",
+      "My own message",
+    ]);
+    expect(
+      within(queueRows).getAllByTestId("queued-message-provenance-chip"),
+    ).toHaveLength(2);
   });
 
-  // `foldedQueue` rebuilds the queue when it drops the received rows. The
-  // rebuild once named `status` and `items` only; `pausedReason` is an optional
-  // key, so the compiler cannot notice a copy that loses it - the held row's
-  // pill would quietly go back to a bare "Paused".
-  it("keeps the queue's pausedReason through the fold, so the held row still says why", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
-    });
+  // The queue keeps its pause reason while agent-sent and user-typed rows
+  // render together, so the held row still says why it paused.
+  it("keeps the queue's pausedReason beside received rows", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("runningAgents", { size: "chip" });
     const props = surfacesProps({
       restoreContext: EMPTY_RESTORE,
       queueItems: [
@@ -952,11 +1060,12 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
       },
     });
 
-    // The fold happened: only the user-typed row is left in the dock.
     const queueRows = screen.getByTestId("queued-message-rows");
     expect(
-      within(queueRows).getAllByTestId("queued-message-content-preview"),
-    ).toHaveLength(1);
+      within(queueRows)
+        .getAllByTestId("queued-message-content-preview")
+        .map((row) => row.textContent),
+    ).toEqual(["Received prompt one", "Held message"]);
     expect(
       within(queueRows).getByTestId("queued-message-status-badge").textContent,
     ).toBe("Paused after an error");
@@ -965,9 +1074,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // The roster is bounded by fleet size, so an uncapped join would read a
   // paragraph out before the count a listener actually wanted.
   it("names at most three agents in the chip's label and counts the rest", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
-    });
+    useLayoutStore
+      .getState()
+      .setRegionValues("runningAgents", { size: "chip" });
     setAgentStopControls({
       self: agentRow("chat-1", "This chat", "turn"),
       descendants: [
@@ -993,39 +1102,8 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
   });
 
-  // Reachable only through the received-A2A clause: with no self record the
-  // count is 0 and the panel renders nothing, so the chip must not spin or
-  // name working agents over that zero.
-  it("keeps the spinner and the roster off a chip standing for received prompts alone", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
-    });
-    setAgentStopControls({
-      self: null,
-      descendants: [agentRow("child-1", "Child one", "turn")],
-    });
-
-    renderSurfaces(
-      surfacesProps({
-        restoreContext: EMPTY_RESTORE,
-        queueItems: [receivedAgentQueueItem("received-1", "Received prompt")],
-        backgroundItems: [],
-      }),
-    );
-
-    const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    expect(chipText("activeAgents")).toBe("0 · 1");
-    expect(chipWorking("activeAgents")).toBe(false);
-    expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
-    expect(chip.getAttribute("aria-label")).toBe(
-      "Active agents. 0 running, 1 received from other agents and queued.",
-    );
-  });
-
-  it("reveals a folded row already expanded on chip click, and folds it back to a chip on the second click", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
-    });
+  it("attaches the section's panel on pill click and closes it on the second", () => {
+    useLayoutStore.getState().setRegionValues("changedFiles", { size: "chip" });
 
     renderSurfaces(
       surfacesProps({
@@ -1040,31 +1118,29 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
     const chip = screen.getByTestId("chat-dock-chip-filesChanged");
     expect(chip.getAttribute("aria-pressed")).toBe("false");
-    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    expect(screen.queryByTestId("chat-dock-attached-panel")).toBeNull();
 
     fireEvent.click(chip);
 
     expect(chip.getAttribute("aria-pressed")).toBe("true");
-    const panel = screen.getByTestId("accumulated-changes-panel");
-    // Seeded open by `useChatDockSectionRevealed` - a chip click asks for the
-    // panel, not for a second click to open it too.
-    expect(panel.getAttribute("data-state")).toBe("open");
+    // Attached above the composer with no collapsible header of its own
+    // (L-142): the pill is the header, so the rows are simply there.
+    const panel = screen.getByTestId("chat-dock-attached-panel");
+    expect(panel.getAttribute("data-dock-section")).toBe("filesChanged");
+    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
 
     fireEvent.click(chip);
 
     expect(chip.getAttribute("aria-pressed")).toBe("false");
-    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    expect(screen.queryByTestId("chat-dock-attached-panel")).toBeNull();
   });
 
-  // Landed after the initial review: a reveal belongs to its chip and must
-  // not survive the chip disappearing. Otherwise the NEXT time the section
-  // has something to show, it would silently arrive pre-expanded rather than
-  // as a chip - the exact per-tile stickiness the reveal is supposed to grant
-  // only while the chip that earned it is still there.
-  it("prunes a stale reveal when its chip's predicate goes false, so the row comes back as a chip, not revealed", () => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
-    });
+  // A pill's open state belongs to its pill and must not survive the pill
+  // disappearing. Otherwise the NEXT time the section has something to show,
+  // it would silently arrive attached rather than as a resting pill - and
+  // nothing in this dock ever opens on its own.
+  it("forgets the open pill when its section empties, so the pill comes back closed", () => {
+    useLayoutStore.getState().setRegionValues("changedFiles", { size: "chip" });
     const withChanges = surfacesProps({
       restoreContext: {
         ...EMPTY_RESTORE,
@@ -1083,20 +1159,260 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     fireEvent.click(screen.getByTestId("chat-dock-chip-filesChanged"));
     expect(
       screen
-        .getByTestId("accumulated-changes-panel")
-        .getAttribute("data-state"),
-    ).toBe("open");
+        .getByTestId("chat-dock-attached-panel")
+        .getAttribute("data-dock-section"),
+    ).toBe("filesChanged");
 
     rerender(tile(withoutChanges));
 
-    // The chip itself has nothing to show, so it disappears along with the row.
+    // The pill itself has nothing to show, so it disappears with the panel.
     expect(screen.queryByTestId("chat-dock-chip-filesChanged")).toBeNull();
-    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    expect(screen.queryByTestId("chat-dock-attached-panel")).toBeNull();
 
     rerender(tile(withChanges));
 
-    // Back as a CHIP, not silently revealed by the stale reveal from before.
+    // Back as a resting PILL, not re-attached by the memory from before.
     expect(screen.getByTestId("chat-dock-chip-filesChanged")).not.toBeNull();
-    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    expect(screen.queryByTestId("chat-dock-attached-panel")).toBeNull();
+  });
+
+  // G1-G2: the Compact preset folds every dock region into a chip - but the
+  // Message queue is not a dock region at all, so it never gets a chip and
+  // never folds. With every real region compacted, the queue still draws its
+  // full collapsible panel, and a real member's pill (Todo) still stands in
+  // the strip beside it: the queue being fixed does not take the strip off
+  // screen or absorb its neighbours.
+  it("keeps the queue drawn as its full panel in the Compact preset, never a chip", () => {
+    useLayoutStore.getState().setRegionValues("changedFiles", { size: "chip" });
+    useLayoutStore
+      .getState()
+      .setRegionValues("runningAgents", { size: "chip" });
+    useLayoutStore.getState().setRegionValues("background", { size: "chip" });
+    useLayoutStore.getState().setRegionValues("todo", { size: "chip" });
+
+    const props = surfacesProps({
+      restoreContext: EMPTY_RESTORE,
+      queueItems: [queuedItem("queued-1", "Do the thing")],
+      backgroundItems: [],
+    });
+    renderSurfaces({
+      ...props,
+      todo: {
+        id: "todo-1",
+        items: [
+          {
+            id: "t1",
+            status: "pending",
+            text: "One",
+            priority: null,
+            activeForm: null,
+          },
+        ],
+      },
+    });
+
+    expect(screen.queryByTestId("chat-dock-chip-queue")).toBeNull();
+
+    const queueRows = screen.getByTestId("queued-message-rows");
+    expect(within(queueRows).getAllByTestId("queued-message-row")).toHaveLength(
+      1,
+    );
+    expect(within(queueRows).getByTestId("pause-queue-button")).not.toBeNull();
+
+    // A real dock member's pill still renders in the strip beside the queue.
+    expect(screen.getByTestId("chat-dock-chip-todo")).not.toBeNull();
+  });
+
+  // The Default preset draws every dock member as a full row rather than a
+  // chip - no `setRegionValues` call in this test folds anything. The queue
+  // still draws below every one of them, exactly as it does when members are
+  // chips (G1-G2): its fixed position does not depend on how the rows above
+  // it are sized.
+  it("draws the queue below the other rows in the Default preset", () => {
+    const props = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 5, 0)],
+      },
+      queueItems: [queuedItem("queued-1", "Do the thing")],
+      backgroundItems: [],
+    });
+    renderSurfaces({
+      ...props,
+      todo: {
+        id: "todo-1",
+        items: [
+          {
+            id: "t1",
+            status: "pending",
+            text: "One",
+            priority: null,
+            activeForm: null,
+          },
+        ],
+      },
+    });
+
+    const changes = screen.getByTestId("accumulated-changes-panel");
+    const todo = screen.getByTestId("pinned-todo-panel");
+    const queue = screen.getByTestId("queued-message-rows");
+    expect(changes.compareDocumentPosition(queue)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(todo.compareDocumentPosition(queue)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+});
+
+/**
+ * L-153: a pill's tooltip is a compact hierarchy - the member's name, then its
+ * counts, then a quiet click affordance - and not the run-on accessible
+ * sentence it used to repeat.
+ *
+ * Read through the real tile so the DETAIL LINES are the ones the dock
+ * actually builds. The chip component's own test covers how the three lines
+ * are drawn; what is pinned here is that every kind has one and that each says
+ * something true about that section.
+ */
+describe("each pill's tooltip", () => {
+  /** Radix opens on focus, with no timer to advance. */
+  async function tooltipFor(section: string): Promise<HTMLElement> {
+    fireEvent.focus(screen.getByTestId(`chat-dock-chip-${section}`));
+    return screen.findByRole("tooltip");
+  }
+
+  function allPills(): void {
+    for (const region of [
+      "changedFiles",
+      "runningAgents",
+      "background",
+      "todo",
+    ] as const) {
+      useLayoutStore.getState().setRegionValues(region, { size: "chip" });
+    }
+  }
+
+  it("names the member, counts it, and offers the click - per kind", async () => {
+    allPills();
+    const props = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [
+          fileChangeRow("/repo/src/a.ts", 47, 0),
+          fileChangeRow("/repo/src/b.ts", 0, 9),
+          fileChangeRow("/repo/src/c.ts", 1, 0),
+        ],
+      },
+      queueItems: [queuedItem("queued-1", "Do the thing")],
+      backgroundItems: [
+        backgroundCommandItem("task-1", "bun test"),
+        backgroundWakeupItem("wake-1", "Review status"),
+      ],
+    });
+    renderSurfaces({
+      ...props,
+      todo: {
+        id: "todo-1",
+        items: [
+          {
+            id: "t1",
+            status: "completed",
+            text: "One",
+            priority: null,
+            activeForm: null,
+          },
+          {
+            id: "t2",
+            status: "pending",
+            text: "Two",
+            priority: null,
+            activeForm: null,
+          },
+        ],
+      },
+    });
+
+    // The pill's own two measurements, with the pill's own signs - not the
+    // screen reader's "47 lines added, 9 removed", which stays on the button.
+    // The queue is not a pill (G1-G2), so it carries no tooltip here.
+    expect((await tooltipFor("filesChanged")).textContent).toBe(
+      `Files changed3 files, +48 ${MINUS}9Click to open`,
+    );
+    expect((await tooltipFor("todo")).textContent).toBe(
+      "Todo1 of 2 doneClick to open",
+    );
+    // The header's own summary: the running count on the pill cannot say that
+    // something is merely waiting, and the tooltip is where that is said.
+    expect((await tooltipFor("background")).textContent).toBe(
+      "Background1 running · 1 waitingClick to open",
+    );
+  });
+
+  // Its own render: the agents pill needs a genuinely running agent now that
+  // a received A2A row alone no longer creates it (staging round 4) - that
+  // case is covered on its own above.
+  it("counts the agents rather than listing them, with the agent-sent row still in the queue", async () => {
+    allPills();
+    setAgentStopControls({
+      self: agentRow("chat-1", "This chat", "turn"),
+      descendants: [agentRow("child-1", "Child one", "background")],
+    });
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [receivedAgentQueueItem("received-1", "Received prompt")],
+        backgroundItems: [],
+      }),
+    );
+
+    // Plain running count, no "· N" split for received rows any more.
+    expect(chipText("activeAgents")).toBe("2");
+    expect(chipText("activeAgents")).not.toContain("·");
+    expect((await tooltipFor("activeAgents")).textContent).toBe(
+      "Active agents2 runningClick to open",
+    );
+    // The ROSTER - who is running, by name - stays on the accessible
+    // sentence. A tooltip that named three agents and "and 2 more" under a
+    // heading would stop being the small block L-153 asks for, and the panel
+    // one click away is the list.
+    expect(
+      screen
+        .getByTestId("chat-dock-chip-activeAgents")
+        .getAttribute("aria-label"),
+    ).toBe(
+      "Active agents. 2 running. This chat working, Child one in background.",
+    );
+
+    // The received row still sits in the queue, with no click needed.
+    const queueRows = screen.getByTestId("queued-message-rows");
+    expect(within(queueRows).getAllByTestId("queued-message-row")).toHaveLength(
+      1,
+    );
+    expect(
+      within(queueRows).getAllByTestId("queued-message-provenance-chip"),
+    ).toHaveLength(1);
+  });
+
+  it("offers to CLOSE the pill that is open", async () => {
+    allPills();
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: {
+          ...EMPTY_RESTORE,
+          accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 5, 0)],
+        },
+        queueItems: [],
+        backgroundItems: [],
+      }),
+    );
+
+    fireEvent.click(screen.getByTestId("chat-dock-chip-filesChanged"));
+
+    // The last line follows `aria-pressed` rather than restating it, so the
+    // open pill never offers to do what it has already done.
+    expect((await tooltipFor("filesChanged")).textContent).toBe(
+      "Files changed1 file, +5Click to close",
+    );
   });
 });

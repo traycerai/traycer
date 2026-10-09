@@ -10,8 +10,6 @@ import { emitHostErrorNotification } from "@/stores/notifications/app-local-noti
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 import {
   epicShareRefusalFromErrorCode,
   type EpicShareRefusal,
@@ -68,7 +66,7 @@ const TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID = "host-transport-notice-unknown";
  *
  * The `fatalDetails` clause is load-bearing and the class check alone is NOT
  * enough. `RemoteSession.notReadyRejection` settles every request parked
- * against a session that has gone TERMINAL - plan restriction, protocol
+ * against a session that has gone TERMINAL - protocol
  * incompatibility, revoked access - as a plain `HostTransportFailureError`
  * whose `code` is the generic `RPC_ERROR` and whose real verdict rides in
  * `fatalDetails`. Classifying those as transport is this epic's central
@@ -317,8 +315,8 @@ function hostTerminalVerdictMessage(error: HostRpcError): string | null {
   // load epics.") for a session that is closed for good.
   //
   // The verdict's own `reason` is used rather than new invented copy: it is
-  // host-authored, states the CONDITION ("Remote host connectivity requires a
-  // paid plan", "Host access was revoked"), and is already what
+  // host-authored, states the CONDITION ("Host access was revoked"), and is
+  // already what
   // `emitHostErrorNotification` puts in the durable row's detail. Bounded,
   // because host detail is unbounded by construction.
   const verdict = error.fatalDetails;
@@ -448,6 +446,9 @@ function hostErrorToastForSimpleCode(
   if (code === "TERMINAL_DELETING") {
     return "This terminal is being deleted. Try again in a moment.";
   }
+  if (code === "E_HOST_STORAGE_FULL") {
+    return "The host machine is out of disk space. Free some space on it, then try again.";
+  }
   return null;
 }
 
@@ -470,13 +471,9 @@ function hostErrorToastForSimpleCode(
 function shareRefusalMessage(refusal: EpicShareRefusal): string {
   switch (refusal.kind) {
     case "needs-cloud-sync":
-      // The installed mobile app may neither name the purchase nor point at a
-      // menu item that opens it (App Store guideline 3.1.1) - and that item is
-      // withheld there anyway, so the desktop sentence would name a control
-      // the reader cannot find. The reassurance is the same on both shells.
-      return isMobileApp()
-        ? `Sharing needs cloud sync, which isn't on your plan. ${PLAN_RESTRICTED_MOBILE_REMEDY} The epic keeps working locally either way.`
-        : "Sharing needs cloud sync, which isn't on your plan. Upgrade from your account menu → Manage subscription. The epic keeps working locally either way.";
+      // The host could not show that this epic is in the cloud. Cloud sync is
+      // on every plan, so this is a state of the epic, never of the account.
+      return "This epic isn't synced to the cloud yet, so it can't be shared. The epic keeps working locally either way.";
     case "not-owned":
       return "This epic was created on this machine by a different account, so it can't be shared from yours. Sign in with the account that created it.";
     case "promotion-pending":

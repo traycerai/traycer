@@ -34,6 +34,11 @@ export function providerAutoJudgeFor(state: ProviderCliState): AutoJudgeKind {
  */
 const PROVIDERS_LIST_AUTO_JUDGE_MINOR = 1;
 const PROVIDERS_LIST_AUTO_JUDGE_MAJOR = 9;
+/**
+ * `providers.list@10` is the `9.2` row over a wider provider id set and
+ * nothing else, so every minor of it publishes `autoJudge`.
+ */
+const PROVIDERS_LIST_WIDER_ID_SET_MAJOR = 10;
 
 /**
  * Whether this negotiated `providers.list` line can report the stored judge.
@@ -51,7 +56,7 @@ const PROVIDERS_LIST_AUTO_JUDGE_MAJOR = 9;
  * version predicate in the tree pins its own: a `10.0` line is a new contract
  * whose relationship to this field is not knowable from here, and reading it as
  * "newer, therefore carries it" is the inference that gets version gates wrong.
- * A `10.x` will need a line here.
+ * `10.x` has its line below for that reason; an `11.x` will need one too.
  *
  * `null` - no handshake yet - reads as NOT reporting, the safe direction: it
  * withholds a claim rather than making one from a line nobody has negotiated.
@@ -59,8 +64,9 @@ const PROVIDERS_LIST_AUTO_JUDGE_MAJOR = 9;
 export function providersListReportsAutoJudge(
   version: SchemaVersion | null,
 ): boolean {
+  if (version === null) return false;
+  if (version.major === PROVIDERS_LIST_WIDER_ID_SET_MAJOR) return true;
   return (
-    version !== null &&
     version.major === PROVIDERS_LIST_AUTO_JUDGE_MAJOR &&
     version.minor >= PROVIDERS_LIST_AUTO_JUDGE_MINOR
   );

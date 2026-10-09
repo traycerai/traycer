@@ -8,6 +8,8 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { CATALOG_PROBE_TIMEOUT_MAX_SECONDS } from "@traycer/protocol/config/schema";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import {
   CHAT_PUBLICATION_WAIT_POLL_LANE,
@@ -118,6 +120,24 @@ function checkResponse(
   };
 }
 
+const PROFILE_SYNC_FIXED_LATEST_METHODS = [
+  "providers.profileSync.overview",
+] as const;
+
+const PROFILE_SYNC_FIFO_METHODS = [
+  "providers.profileSync.syncNow",
+  "providers.profileSync.setKeepInSync",
+  "providers.profileSync.acceptAccount",
+  "host.profileSync.apply",
+  "host.profileSync.offerCredential",
+  "host.profileSync.fetchCredential",
+] as const;
+
+const PROFILE_SYNC_METHODS = [
+  ...PROFILE_SYNC_FIXED_LATEST_METHODS,
+  ...PROFILE_SYNC_FIFO_METHODS,
+] as const;
+
 // @ts-expect-error The phantom method field must reject a policy under another key.
 const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
   typedToErasedPolicy;
@@ -152,6 +172,30 @@ describe("host method poll policy table", () => {
     }
   });
 
+  it("covers every profile-sync method with an explicit scheduling posture", () => {
+    const registryProfileSyncMethods = Object.keys(hostRpcRegistry)
+      .filter((method) => method.includes("profileSync"))
+      .sort();
+    expect([...PROFILE_SYNC_METHODS].sort()).toEqual(
+      registryProfileSyncMethods,
+    );
+
+    for (const method of PROFILE_SYNC_FIXED_LATEST_METHODS) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "latest",
+        joinResponseTimeoutMs: null,
+        poll: { kind: "fixed", intervalMs: 5_000 },
+      });
+    }
+    for (const method of PROFILE_SYNC_FIFO_METHODS) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "fifo",
+        joinResponseTimeoutMs: null,
+        poll: null,
+      });
+    }
+  });
+
   it("keeps usage summary above the host and server response budgets", () => {
     expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBe(90_000);
     expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBeGreaterThan(75_000);
@@ -164,6 +208,24 @@ describe("host method poll policy table", () => {
     expect(HOST_METHOD_POLL_TABLE["host.status"].joinResponseTimeoutMs).toBe(
       null,
     );
+  });
+
+  it("lets a catalog read outlast the host's longest probe bound", () => {
+    expect(CATALOG_LIST_RESPONSE_TIMEOUT_MS).toBe(210_000);
+    expect(CATALOG_LIST_RESPONSE_TIMEOUT_MS).toBeGreaterThan(
+      CATALOG_PROBE_TIMEOUT_MAX_SECONDS * 1_000,
+    );
+    for (const method of [
+      "agent.gui.listModels",
+      "agent.gui.listCommands",
+    ] as const) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toMatchObject({
+        joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+      });
+      expect(hostRpcSchedulingPolicy.joinResponseTimeoutMs(method)).toBe(
+        CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+      );
+    }
   });
 
   it("keeps ambiguous verbs on their declared side of the command/read boundary", () => {

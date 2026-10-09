@@ -1,0 +1,443 @@
+import {
+  resolveReadingDensity,
+  type ReadingDensity,
+  type ReadingPlacement,
+} from "@/lib/layout/reading-density";
+import { cn } from "@/lib/utils";
+import type { SideTabRowVariant } from "./side-tab-row";
+
+/**
+ * The vertical tab strip's visual constants, and their only home.
+ * Pixel numbers are at a 16px root; `rounded-lg` is 8px (`--radius-lg` over
+ * `--radius: 0.375rem`).
+ */
+
+/** Expanded strip width: default, drag minimum and drag maximum. */
+export const SIDE_STRIP_DEFAULT_WIDTH_PX = 240;
+export const SIDE_STRIP_MIN_WIDTH_PX = 192;
+export const SIDE_STRIP_MAX_WIDTH_PX = 400;
+/** The expanded strip never takes more than 40% of the window. */
+export const SIDE_STRIP_MAX_WIDTH_CLASS = "max-w-[40vw]";
+/**
+ * When the strip owns the title bar (macOS, left) the expanded strip is never
+ * narrower than the traffic-light inset plus the title row's controls (S-43):
+ * back and forward, New task, the collapse toggle, their gaps and the 8px
+ * trailing inset. It follows the inset, so it shrinks when the inspector docks
+ * left and takes the lights.
+ */
+export const SIDE_STRIP_TITLE_ROW_MIN_WIDTH_CLASS =
+  "wco:min-w-[calc(var(--window-leading-inset)+8.5rem)]";
+/**
+ * The collapsed, icon-only rail (D4). On macOS with the strip at the left it
+ * widens to the traffic-light inset (D15), and the tiles stay centred.
+ */
+export const SIDE_STRIP_RAIL_WIDTH_PX = 60;
+/** A handle drag below this width snaps to the rail: the midpoint of the minimum and the rail. */
+export const SIDE_STRIP_SNAP_TO_RAIL_BELOW_PX =
+  (SIDE_STRIP_MIN_WIDTH_PX + SIDE_STRIP_RAIL_WIDTH_PX) / 2;
+
+/**
+ * The row list: an 8px inset all round, so nothing a row draws past its box is
+ * clipped by the scroller at the list's edges: the badge, the focus ring, and
+ * the waiting pulse's 8px ring. Expanded rows sit 2px apart; the rail's tiles
+ * 8px apart, the rhythm of the rail below its divider (Home, then the tiles,
+ * each 8px on from the last).
+ */
+export const SIDE_STRIP_LIST_CLASS: Readonly<
+  Record<SideTabRowVariant, string>
+> = {
+  expanded: "flex flex-col gap-0.5 p-2",
+  collapsed: "flex flex-col gap-2 p-2",
+};
+/** One expanded row: 32px tall, 8px radius, 8px padding and gap. */
+export const SIDE_TAB_ROW_CLASS = "h-8 rounded-lg px-2 gap-2";
+/**
+ * The Activity view's rows by section (owner default: the loud rows are the
+ * tall ones): Needs you and To review draw a second line in 52px, Working and
+ * Idle keep the strip's one-line row, `SIDE_TAB_ROW_CLASS`'s 32px.
+ */
+export const SIDE_TAB_TWO_LINE_ROW_CLASS = "h-13";
+/**
+ * A two-line row's trailing cell sits on its title's line: the 20px cell's
+ * centre 7px below the row's content top, where the centred title/detail pair
+ * (34px in the 52px row) puts the title's centre.
+ */
+export const SIDE_TAB_TWO_LINE_TRAILING_CLASS = "mt-1.75 self-start";
+/**
+ * The strip's own ground, so a badge reads as cut out of what it sits on: the
+ * canvas on a narrow window, the shell ground on a wide one.
+ */
+const SIDE_STRIP_GROUND_FILL_CLASS = "bg-canvas md:bg-shell-ground";
+/** A section header's button: the "Tasks" label's type, as a full-width row. */
+export const SIDE_STRIP_SECTION_HEADER_CLASS =
+  "group/side-section flex w-full shrink-0 items-center gap-1 rounded-md px-2 pt-2 pb-1 text-start text-overline font-medium uppercase tracking-wide outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]";
+/**
+ * The live list's section header sticks to the top of the list in the strip's
+ * own ground, so the rows that scroll under it are hidden and the header of the
+ * section at the top stays readable; a later header covers the one before it.
+ * Sticking is measured from inside the list's 8px padding, so `-top-2` puts it
+ * on the list's own edge.
+ */
+export const SIDE_STRIP_STICKY_SECTION_HEADER_CLASS = cn(
+  "@container/section-header sticky -top-2 z-10",
+  SIDE_STRIP_GROUND_FILL_CLASS,
+);
+/**
+ * What covers the Activity list's scrollport: the sticky header's 26px at the
+ * top and the bottom fade's 1.25rem. Revealing a row (an activation, a
+ * shortcut) keeps it clear of both.
+ */
+export const SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS =
+  "scroll-pt-6.5 scroll-pb-5";
+/**
+ * The "↑ N need you" chip's place: laid over the stuck header's own row, on
+ * its padding and its count's line, so it sits right before the count and
+ * takes no room of its own. Only the chip takes the pointer.
+ */
+export const SIDE_STRIP_NEEDS_YOU_CHIP_ROW_CLASS =
+  "pointer-events-none absolute inset-0 flex items-center justify-end gap-1 px-2 pt-2 pb-1 text-overline font-medium tracking-wide";
+/**
+ * The chip's words, which go first where the header is narrow (192px): wider
+ * than this, the longest section name, the words and the count all fit on the
+ * row, so the chip never sits over the name.
+ */
+export const SIDE_STRIP_NEEDS_YOU_CHIP_WORDS_CLASS =
+  "hidden @min-[13.5rem]/section-header:inline";
+/**
+ * A row that changes section slides from its old place to its new one in
+ * 200ms, on a strong ease-out: it starts fast so the eye catches it, then
+ * settles. The arrival glow fades over 600ms. Only the slide is motion.
+ */
+export const SIDE_STRIP_SLIDE_MS = 200;
+export const SIDE_STRIP_SLIDE_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
+export const SIDE_STRIP_ARRIVAL_GLOW_MS = 600;
+/**
+ * The 16px icon box and its 8px gap that a nav row (Notifications, All tasks,
+ * Home, New Task) keeps. A task row has no leading slot: its title starts on
+ * the row's own padding.
+ */
+export const SIDE_TAB_LEADING_CLASS = "size-4 me-2";
+export const SIDE_TAB_TITLE_CLASS = "text-[0.8125rem] leading-4";
+export const SIDE_TAB_TRAILING_CLASS = "min-w-5 h-5";
+export const SIDE_TAB_ACTIVE_CLASS = "bg-foreground/8";
+export const SIDE_TAB_HOVER_CLASS = "hover:bg-foreground/5";
+export const SIDE_TAB_SESSION_ACTIVE_CLASS = "bg-warning-foreground";
+/**
+ * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
+ * an expanded row's 4px bar down its own leading edge, inside the row's own
+ * padding - never tinted, never auto-hashed (D11's `tabAutoTint` no longer
+ * reaches this mark). Rendered on every row outside a group's block or column,
+ * coloured through `--side-tab-accent`; a colourless tab sets it to
+ * `transparent`, so the mark reserves its space without inventing a colour. A
+ * row inside a group draws none: its block or column carries the group's colour.
+ */
+export const SIDE_TAB_ACCENT_BAR_CLASS =
+  "pointer-events-none absolute inset-y-1.5 start-0 w-1 rounded-full bg-(--side-tab-accent)";
+/**
+ * The same accent, as a ring around the collapsed 40px tile (no room for a left
+ * bar there). `z-22` is one above the sheet-join bridge (`z-index: 21` in
+ * `index.css`): the ring is a shadow drawn 2px OUTSIDE the tile, so on the
+ * active, joined tile its right side lies inside the bridge's box, and at the
+ * bridge's level or below it was painted over - the ring read as a "C", cut
+ * off at the tile's edge.
+ */
+export const SIDE_TAB_TILE_ACCENT_RING_CLASS =
+  "pointer-events-none absolute inset-0 z-22 rounded-xl ring-2 ring-(--side-tab-accent)";
+/**
+ * Where a drop's 2px line sits: centred in the row gap before or after the
+ * row it is on (2px expanded, 8px on the rail).
+ */
+export const SIDE_TAB_DROP_LINE_SEAT_CLASS: Readonly<
+  Record<SideTabRowVariant, Readonly<Record<"before" | "after", string>>>
+> = {
+  expanded: { before: "-top-0.5", after: "-bottom-0.5" },
+  collapsed: { before: "-top-1.25", after: "-bottom-1.25" },
+};
+/**
+ * A tab group's fill, in the expanded strip's block and the rail's column: its
+ * colour (`--side-tab-group-color`) at 12% over the strip's ground (dark) or
+ * 16% (light), and 20% / 26% while a drop would join the group
+ * (`data-joining`). The ground is the strip's own, so the fill tints whatever
+ * the theme paints there (`SIDE_STRIP_GROUND_FILL_CLASS`).
+ */
+const SIDE_TAB_GROUP_FILL_CLASS = cn(
+  "[--side-tab-group-strength:16%] dark:[--side-tab-group-strength:12%]",
+  // A drop that would join the group brightens it a step.
+  "data-[joining=true]:[--side-tab-group-strength:26%] dark:data-[joining=true]:[--side-tab-group-strength:20%]",
+  "bg-[color-mix(in_srgb,var(--side-tab-group-color)_var(--side-tab-group-strength),var(--canvas))] md:bg-[color-mix(in_srgb,var(--side-tab-group-color)_var(--side-tab-group-strength),var(--shell-ground))]",
+);
+/**
+ * The fill of a block or column while a drag lays the strip out around it: a
+ * layer over the group's own box, which the drag moves and resizes to where the
+ * group's tabs now are while the box keeps its place (the measured geometry
+ * must not move under the model). The box paints nothing meanwhile
+ * (`data-placed`). The caller gives the layer its radius.
+ */
+export const SIDE_TAB_GROUP_FILL_LAYER_CLASS = cn(
+  "pointer-events-none absolute inset-x-0 top-0",
+  SIDE_TAB_GROUP_FILL_CLASS,
+);
+/** A tab group in the expanded strip: one rounded block holding the header and the rows, 4px inside its edge. */
+export const SIDE_TAB_GROUP_BLOCK_CLASS = cn(
+  "relative flex flex-col gap-0.5 rounded-xl p-1 text-foreground",
+  SIDE_TAB_GROUP_FILL_CLASS,
+  "data-[placed=true]:bg-transparent",
+);
+/**
+ * A tab group in the rail: one rounded column around its tiles, 4px inside its
+ * edge and 4px between them. It is 48px wide against the 44px the list leaves,
+ * so it overhangs 2px on each side, into the list's own 8px padding. The 14px
+ * radius sits concentric round the tiles' 10px. A split pair in it drops its
+ * side padding, so it is a tile wide and keeps the tiles' 4px inset.
+ */
+export const SIDE_TAB_GROUP_COLUMN_CLASS = cn(
+  "relative -mx-0.5 flex flex-col items-center gap-1 rounded-3xl p-1 [&_[data-side-split-pair]]:px-0",
+  SIDE_TAB_GROUP_FILL_CLASS,
+  "data-[placed=true]:bg-transparent",
+);
+/** The Layered view's group header: a 28px row, its name on the rows' own title edge. */
+export const SIDE_TAB_GROUP_HEADER_CLASS = "h-7";
+/**
+ * The block's header name, in the group's colour lifted to 4.5:1 on the block
+ * (`--side-tab-group-name`, set by `useGroupNameColor`); it falls back to the
+ * group's colour.
+ */
+export const SIDE_TAB_GROUP_NAME_CLASS =
+  "font-medium text-(--side-tab-group-name,var(--side-tab-group-color))";
+/**
+ * The Activity view's block label: a 20px line in 11px medium text, under the
+ * section header's own weight so the sections stay the loudest structure.
+ */
+export const SIDE_TAB_GROUP_LABEL_CLASS =
+  "flex h-5 shrink-0 items-center gap-1 px-2 text-overline font-medium select-none";
+/**
+ * A collapsed-rail tile (D4): the collapsed row itself, 40x44 with a 10px
+ * radius, stacking the monogram over the meter 4px apart.
+ */
+export const SIDE_TAB_TILE_CLASS = "h-11 w-10 rounded-xl flex-col gap-1";
+/** The collapsed tile's active and hover fills: the expanded row's own. */
+export const SIDE_TAB_TILE_ACTIVE_CLASS = "bg-foreground/8 text-foreground";
+export const SIDE_TAB_TILE_HOVER_CLASS = "hover:bg-foreground/5";
+/** A state a meter pip, and a nested agent row's dot, can draw. */
+export type MeterPip = "turn" | "background" | "waiting" | "failed" | "unread";
+/**
+ * What each pip kind fills with. The strip's nested agent rows draw their dot
+ * from it too, so a task's meter and its rows never say one state two ways.
+ */
+export const PIP_FILL: Readonly<Record<MeterPip, string>> = {
+  turn: "bg-muted-foreground",
+  background: "ring-1 ring-inset ring-muted-foreground",
+  waiting: "bg-warning",
+  failed: "bg-destructive",
+  // The completed tone's green, verified >=3:1 on the strip's grounds.
+  unread: "bg-success-foreground",
+};
+/**
+ * A task's nested agents in the Activity view (D9): a column under the task's
+ * row with a 1px guide down its inline-start edge, the Agents panel tree's own
+ * (`bg-border/70`) in dark. In light that border all but vanishes on the
+ * strip's ground, so the guide is a foreground alpha there, a quiet ~1.4:1.
+ * The guide sits on the task title's start edge (the row's 8px padding). No
+ * elbows, no colour.
+ */
+export const STRIP_AGENT_GROUP_CLASS =
+  "flex flex-col ms-2 border-s border-foreground/15 dark:border-border/70";
+/**
+ * A nested agent row: 26px tall, 12px text, muted at rest, with the strip's
+ * own hover tint. The 8px start padding sets the agent's glyph just inside the
+ * guide, and the gap takes the name one step past.
+ */
+export const STRIP_AGENT_ROW_CLASS = cn(
+  "flex h-6.5 w-full min-w-0 items-center gap-2 rounded-md px-2 text-start text-ui-xs text-muted-foreground outline-none select-none",
+  "transition-colors duration-100 ease-[ease] hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
+  SIDE_TAB_TILE_HOVER_CLASS,
+);
+/**
+ * A row whose chat is on screen, in any pane, reads in full-strength text; one
+ * that is not stays muted. Nothing else marks it: the sidebar has one
+ * selection, the current task's tint, and hue and edge bars are the tab's own.
+ */
+export const STRIP_AGENT_ON_SCREEN_CLASS = "text-foreground";
+/** An expanded task shows this many agents, then "Show N more". */
+export const STRIP_AGENT_VISIBLE_MAX = 5;
+/** The trailing text never truncates: the name gives way first. */
+export const STRIP_AGENT_TRAILING_CLASS = "shrink-0 tabular-nums";
+/** Nested rows fade in over 120ms with no height slide; reduced motion drops it. */
+export const STRIP_AGENT_FADE_IN_CLASS =
+  "animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none";
+/** A collapsed group's badge on its header: the trailing 20px cell a row's status has. */
+export const SIDE_TAB_BADGE_CLASS = "size-5 shrink-0";
+/**
+ * The rail tile's badge (D5): a 14px disc of the strip's ground holding a 12px
+ * status glyph, at the tile's top-right, 1px above and 1px in.
+ */
+export const SIDE_TAB_RAIL_BADGE_CLASS = cn(
+  "size-3.5",
+  SIDE_STRIP_GROUND_FILL_CLASS,
+);
+export const SIDE_TAB_RAIL_BADGE_GLYPH_CLASS = "size-3";
+export const SIDE_TAB_RAIL_BADGE_POSITION_CLASS = "absolute -top-px right-px";
+/**
+ * The meter: a tile's 3px pips under the monogram, a row's 6px dots 3px
+ * apart. A row's pips are round: two tall ones read as a pause icon.
+ */
+export const SIDE_TAB_METER_CLASS = {
+  tile: "h-1 gap-0.5",
+  row: "h-2.5 gap-0.75",
+} as const;
+export const SIDE_TAB_METER_PIP_CLASS = {
+  tile: "h-0.75 w-1.25 rounded-[1.5px]",
+  row: "size-1.5 rounded-full",
+} as const;
+export const SIDE_TAB_METER_MORE_CLASS = {
+  tile: "text-[0.5rem] leading-1",
+  row: "text-micro",
+} as const;
+/**
+ * A split pair in the expanded strip: one row, the strip's 8px radius, its
+ * line of the split icon and two halves 2px inside its edge, so the row is the
+ * strip's 32px (52px with the Activity view's second line, 4px under the
+ * halves). The current pair's row is what joins the sheet.
+ */
+export const SIDE_SPLIT_ROW_CLASS = "flex flex-col gap-1 rounded-lg p-0.5";
+/** The row's line: the split icon, then the two halves 4px apart. */
+export const SIDE_SPLIT_ROW_LINE_CLASS = "flex h-7 min-w-0 items-center gap-1";
+/**
+ * One half: 28px, a 6px radius concentric in the row's 8px, equal in width
+ * whatever the panes' ratio, with a title and its own trailing cell.
+ */
+export const SIDE_SPLIT_HALF_CLASS =
+  "h-7 min-w-0 flex-1 basis-0 rounded-md px-2 gap-1";
+/** A half at rest: the faint fill that parts the two titles, a step up on hover. */
+export const SIDE_SPLIT_HALF_REST_CLASS =
+  "bg-foreground/5 hover:bg-foreground/8";
+/**
+ * The current pair's focused half: the selected tab's own box, as the top bar
+ * draws a split's focused member, the background fill inside the sheets'
+ * border.
+ */
+export const SIDE_SPLIT_HALF_FOCUSED_CLASS =
+  "bg-background ring-1 ring-inset ring-canvas-border";
+/** An empty half waiting for a view: no fill, a dashed outline. */
+export const SIDE_SPLIT_HALF_EMPTY_CLASS =
+  "bg-transparent hover:bg-foreground/5 border border-dashed border-foreground/20";
+/** The dragged task's half in a split preview: titled and outlined in info blue. */
+export const SIDE_SPLIT_HALF_PREVIEW_CLASS =
+  "bg-info/10 text-info-foreground ring-1 ring-inset ring-info";
+/** A rail tile a drop would split with: the tile outlined in info blue. */
+export const SIDE_SPLIT_PREVIEW_TILE_CLASS = "ring-2 ring-inset ring-info";
+/**
+ * A split pair in the rail: its icon over its two stacked tiles in one
+ * rounded container, a 12px radius concentric round the tiles' 10px inside its
+ * 2px padding.
+ */
+export const SIDE_SPLIT_RAIL_CLASS =
+  "flex flex-col items-center gap-0.5 self-center rounded-[0.75rem] bg-foreground/6 p-0.5";
+/**
+ * The pair's second line starts under its first half: past the 24px icon and
+ * the 4px gap. It ends 8px in, with the row's own 2px, so its time lines up
+ * with every other row's.
+ */
+export const SIDE_SPLIT_DETAIL_INSET_CLASS = "ps-8 pe-1.5";
+/**
+ * The caption over one half's agents under a pair: a 12px split icon with that
+ * half's pane filled, then its title, in 11px muted text, on the agent rows'
+ * own padding and gap so the title lines up with their names.
+ */
+export const SIDE_SPLIT_CAPTION_CLASS =
+  "flex h-5 min-w-0 items-center gap-2 px-2 text-overline font-normal text-muted-foreground";
+/** The inline rename input in an expanded row's title slot. */
+export const SIDE_TAB_TITLE_INPUT_CLASS =
+  "min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring";
+/** A row's footprint before hydration: the expanded row's height and radius. */
+export const SIDE_TAB_ROW_PLACEHOLDER_CLASS = "h-8 w-full rounded-lg";
+/** The 8px inline inset of the top block's rows. */
+export const SIDE_STRIP_INSET_CLASS = "px-2";
+/** The foot: 8px around and between its controls. */
+export const SIDE_STRIP_FOOT_CLASS = "gap-2 p-2";
+/** A group header's member count. */
+export const SIDE_TAB_GROUP_COUNT_CLASS = "text-ui-xs tabular-nums";
+/**
+ * A nav control's collapsed form - the expand toggle, Notifications, All tasks, New
+ * Task and the avatar: a 32px icon tile (D6), on the rail's axis. The rail's
+ * nav tiles stand 4px apart.
+ */
+export const SIDE_STRIP_NAV_TILE_CLASS = "size-8 rounded-lg";
+/** The rail's nav tiles as a column: centred, 4px apart. */
+export const SIDE_STRIP_RAIL_NAV_CLASS = "flex flex-col items-center gap-1";
+/**
+ * The rail's hairline: 24px wide, a foreground alpha and not `bg-border`,
+ * since on the light ground `--border` is the ground's own grey.
+ */
+const SIDE_STRIP_RAIL_HAIRLINE_CLASS = "h-px w-6 bg-foreground/15";
+/**
+ * The rail's divider between New Task and Home (F1): the hairline, 8px from
+ * each, so the rail keeps its 8px rhythm from there down.
+ */
+export const SIDE_STRIP_RAIL_DIVIDER_CLASS = cn(
+  "my-2",
+  SIDE_STRIP_RAIL_HAIRLINE_CLASS,
+);
+/**
+ * The Activity rail's mark before each run of tiles: the hairline, in the
+ * list's own 8px gap so the tiles keep their rhythm. Needs you's carries a 4px
+ * amber bead on its centre, so that run is marked where every run is.
+ */
+export const SIDE_STRIP_RAIL_SECTION_SEPARATOR_CLASS = cn(
+  "relative shrink-0 self-center",
+  SIDE_STRIP_RAIL_HAIRLINE_CLASS,
+);
+export const SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS =
+  "absolute top-1/2 left-1/2 size-1 -translate-1/2 rounded-full bg-warning";
+/**
+ * The collapsed Notifications tile's marks, both cut out of the strip's ground and
+ * seated on the 16px glyph's top-right corner as a task tile's badge sits on
+ * its chip's: centred 1px out from that corner, at (25, 7) in the 32px tile.
+ * The needs-you count is a 16px pill, the status-unavailable dot 8px.
+ */
+export const SIDE_STRIP_NAV_TILE_COUNT_CLASS =
+  "absolute -top-px -right-px h-4 min-w-4 rounded-md px-1 text-overline leading-4 ring-2 ring-canvas md:ring-shell-ground";
+export const SIDE_STRIP_NAV_TILE_UNKNOWN_DOT_CLASS =
+  "absolute top-0.75 right-0.75 bg-canvas md:bg-shell-ground ring-2 ring-canvas md:ring-shell-ground";
+/** The "Tasks · N" label above the rows. */
+export const SIDE_STRIP_SECTION_LABEL_CLASS =
+  "px-2 pt-2 text-overline font-medium uppercase tracking-wide";
+/** The foot's account row: avatar, name and host line. */
+export const SIDE_STRIP_ACCOUNT_ROW_CLASS = "h-11 rounded-lg px-2 gap-2";
+/**
+ * How a reading's button draws: `glyph` is the phone header's outlined icon,
+ * `tile` the collapsed rail's rail-wide box around that same glyph, and
+ * `readout` the expanded strip's Compact tile, one of an equal-width pair.
+ */
+export type ReadingButtonForm = "glyph" | "tile" | "readout";
+/**
+ * A bar reading's forms: the ones every bar shares, plus the desktop header's
+ * two. `strip` is Compact in the top strip, a ghost icon button like its
+ * neighbours; `inline` is Detailed there, in a bounded share of the header.
+ * `rows` is Detailed in the expanded side strip: one block, not a button
+ * glyph.
+ */
+export type BarReadingForm = ReadingButtonForm | "strip" | "inline" | "rows";
+/** Where a reading's button is placed; the status bar draws its own readings. */
+export type StripReadingPlacement = Exclude<ReadingPlacement, "status-bar">;
+/**
+ * The form a reading draws at a placement: the one place the resolved density
+ * meets the button forms, so no call site picks a form from a density itself.
+ */
+export function barReadingForm(
+  placement: StripReadingPlacement,
+  density: ReadingDensity,
+): BarReadingForm {
+  const resolved = resolveReadingDensity(density, placement);
+  switch (placement) {
+    case "side-strip-collapsed":
+      return "tile";
+    case "top-strip":
+      return resolved === "compact" ? "strip" : "inline";
+    case "side-strip":
+      return resolved === "compact" ? "readout" : "rows";
+  }
+}
+/** The host-health dot on the avatar's bottom-right, cut out of the strip's ground. */
+export const SIDE_STRIP_HOST_DOT_CLASS =
+  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-canvas md:ring-shell-ground";

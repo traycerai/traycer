@@ -824,6 +824,42 @@ describe("<ToolSegment /> input rendering", () => {
     expect(screen.queryByText("mcp__browser__repl")).toBeNull();
   });
 
+  it("paints a long command's whole line in the header and stays expandable", () => {
+    // Well past the 80-unit persisted summary cap. The header span truncates
+    // itself with CSS, so it must receive the whole command, not the capped cut.
+    const command = `bun run --filter @traycer/gui-app vitest run ${"src/components/chat/segments/__tests__/tool-segment.test.tsx ".repeat(2)}--reporter verbose`;
+    const props = inputProps("Bash", { command });
+    expect(props.inputSummary?.endsWith("\u2026")).toBe(true);
+
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="bash-long-command"
+        toolName="Bash"
+        {...props}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText(command)).toBeTruthy();
+    expect(screen.queryByText(/\u2026/)).toBeNull();
+    // Still expandable: the header no longer proves the call is fully shown by
+    // the persisted summary, so the expand affordance must survive.
+    expect(screen.getByRole("button", { name: /Bash/ })).toBeTruthy();
+  });
+
   it("expands a grep call into a reconstructed command, not JSON", () => {
     render(
       <ToolSegment

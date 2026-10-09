@@ -1,4 +1,8 @@
-import type { IPushPermissionHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostLifecycleView,
+  IHostLifecycleHost,
+  IPushPermissionHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
@@ -19,10 +23,6 @@ import type { DesktopZoomBridge } from "@/lib/windows/types";
  * Each context turns on one gate at a time — every bridge absent, each bridge
  * alone, mobile and not — so an entry left always-available while its row is
  * gated fails the shell whose gate is off.
- *
- * `mobileFooter` is the one member that is not a bridge or a build flag but a
- * stored preference, so the executor has to WRITE it into `layout-store`
- * before it mounts; see `mountInShell`.
  */
 export interface SettingsSearchFixtureShell {
   readonly name: string;
@@ -66,6 +66,23 @@ const PUSH_PERMISSION: IPushPermissionHost = {
 
 const SYSTEM_SETTINGS = { open: () => Promise.resolve() };
 
+const HOST_LIFECYCLE_VIEW: HostLifecycleView = {
+  desired: { mode: "background", rev: 0, updatedBy: null, updatedAt: null },
+  applied: {
+    localHostCapability: "managed",
+    supervisor: "enforcing",
+    admittedAs: null,
+  },
+  pending: "none",
+};
+
+const HOST_LIFECYCLE: IHostLifecycleHost = {
+  get: () => Promise.resolve(HOST_LIFECYCLE_VIEW),
+  set: () => Promise.resolve({ kind: "applied", view: HOST_LIFECYCLE_VIEW }),
+  onChange: () => ({ dispose: () => undefined }),
+  quit: null,
+};
+
 const BASE_HOST = createFakeRunnerHost({});
 
 function notificationsHost(options: {
@@ -82,7 +99,7 @@ function notificationsHost(options: {
     }),
     featureSettings: null,
     mobileApp: false,
-    mobileFooter: false,
+    phoneLayout: false,
   };
 }
 
@@ -90,7 +107,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   runnerHost: null,
   featureSettings: null,
   mobileApp: false,
-  mobileFooter: false,
+  phoneLayout: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
@@ -119,7 +136,14 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
       {
         name: "the installed mobile app",
-        context: { ...NO_BRIDGES, mobileApp: true },
+        context: { ...NO_BRIDGES, mobileApp: true, phoneLayout: true },
+      },
+      {
+        name: "only the desktop host lifecycle bridge",
+        context: {
+          ...NO_BRIDGES,
+          runnerHost: createFakeRunnerHost({ hostLifecycle: HOST_LIFECYCLE }),
+        },
       },
     ],
   },
@@ -141,13 +165,14 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
     ],
   },
-  // Layout's shell-level gates are the BUILD and, in the installed mobile app
-  // alone, the `Footer status bar` switch: that build draws no footer until it
-  // is on, so the group collapses to the switch, its note and the header row -
-  // and turning it on hands the page every footer control back EXCEPT
-  // Placement, which stays withheld there because the mobile header keeps both
-  // controls either way. Three shells, so each of those three answers is
-  // asserted rather than two of them being inferred from the third.
+  // Layout's shell-level gates are two. The small-screen footer's switch
+  // (L-51) exists wherever the PHONE layout is drawn; and the rows only the
+  // desktop layout draws (the tab strip's rows, the sidebar's side, the
+  // reading width, a reading's Location, the minimap) are absent from the
+  // installed app, which draws the phone layout at every width, and kept in a
+  // browser tab that merely happens to be narrow. Every other region section
+  // renders in every shell, because a region the strip does not host is hosted
+  // by the header instead - so three shells are the whole question.
   {
     section: "layout",
     hostScope: null,
@@ -159,20 +184,20 @@ export const SETTINGS_SEARCH_FIXTURES = [
         context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
       },
       {
+        name: "a narrow browser tab",
+        context: {
+          ...NO_BRIDGES,
+          runnerHost: createFakeRunnerHost({}),
+          phoneLayout: true,
+        },
+      },
+      {
         name: "the installed mobile app",
         context: {
           ...NO_BRIDGES,
           runnerHost: createFakeRunnerHost({}),
           mobileApp: true,
-        },
-      },
-      {
-        name: "the installed mobile app with the footer on",
-        context: {
-          ...NO_BRIDGES,
-          runnerHost: createFakeRunnerHost({}),
-          mobileApp: true,
-          mobileFooter: true,
+          phoneLayout: true,
         },
       },
     ],

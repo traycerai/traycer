@@ -17,9 +17,12 @@ import {
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import {
   HostRpcError,
+  HostTransportFailureError,
+  type RequiredHostMethodVersion,
   type RequestOfMethod,
   type ResponseOfMethod,
   HostRequestAuthority,
+  HostRequestOptions,
   HostTransportEndpoint,
 } from "../../../shared/host-transport/host-messenger";
 import {
@@ -98,6 +101,7 @@ export async function callHostRpc<
     endpoint,
     auth,
     DEFAULT_TRANSPORT_RETRY_POLICY,
+    PLAIN_DISPATCH,
   );
 }
 
@@ -145,6 +149,89 @@ export async function callHostRpcFastFail<
     endpoint,
     auth,
     NO_RETRY_TRANSPORT_POLICY,
+    PLAIN_DISPATCH,
+  );
+}
+
+/**
+ * What a call needs beyond a method and its params. Every field is stated by
+ * the caller; {@link PLAIN_DISPATCH} is the ordinary unary call.
+ */
+export interface HostRpcDispatch {
+  /**
+   * How long to wait for the response frame, or null for the transport's
+   * 15s default. Only a long-poll (`providers.awaitLogin`, silent until the
+   * sign-in ends) needs more; dial and handshake keep their own deadlines.
+   */
+  readonly responseTimeoutMs: number | null;
+  /**
+   * A version this call's own handshake must clear, or nothing is sent. For a
+   * request whose meaning rides on a field a later minor added: below that
+   * minor the field is stripped and the host acts on what is left - a profile
+   * `remove` riding `providers.setEnabled` becomes a provider enable. Refused
+   * pre-send as `DOWNGRADE_UNSUPPORTED`, which the CLI reports as "update the
+   * host".
+   */
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+  /** Aborts the call (Ctrl+C during a long-poll), or null to let it run. */
+  readonly signal: AbortSignal | null;
+  /**
+   * One attempt, with no transport retry, for a best-effort call made while
+   * the user is waiting to leave (a release after Ctrl+C): the retrying
+   * policy can spend a dial timeout per attempt against a wedged host. The
+   * single re-authentication on UNAUTHORIZED still happens.
+   */
+  readonly failFast: boolean;
+}
+
+export const PLAIN_DISPATCH: HostRpcDispatch = {
+  responseTimeoutMs: null,
+  requiredHostMethodVersion: null,
+  signal: null,
+  failFast: false,
+};
+
+/**
+ * Like {@link callHostRpc}, for the calls that need one of the
+ * {@link HostRpcDispatch} controls. Same credentials and endpoint discovery,
+ * and the same retry policy unless the dispatch asks to fail fast.
+ */
+export async function callHostRpcWithDispatch<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const logger = createCliLogger(config.environment);
+  logger.debug("Host RPC requested", {
+    environment: config.environment,
+    method,
+    retryPolicy: dispatch.failFast ? "fast-fail" : "default",
+  });
+  const auth = await resolveHostAuth();
+  if (auth === null) {
+    logger.warn("Host RPC blocked by missing credentials", {
+      environment: config.environment,
+      method,
+    });
+    throw cliError({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  const endpoint = await resolveEndpoint();
+  return requestAtEndpoint(
+    method,
+    params,
+    endpoint,
+    auth,
+    dispatch.failFast
+      ? NO_RETRY_TRANSPORT_POLICY
+      : DEFAULT_TRANSPORT_RETRY_POLICY,
+    dispatch,
   );
 }
 
@@ -192,6 +279,7 @@ export async function callHostRpcAtEndpoint<
     endpoint,
     auth,
     DEFAULT_TRANSPORT_RETRY_POLICY,
+    PLAIN_DISPATCH,
   );
 }
 
@@ -201,6 +289,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   endpoint: HostTransportEndpoint,
   auth: HostAuth,
   retryPolicy: TransportRetryPolicy,
+  dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const lease = new MutableBearerLease(auth.token, auth.userId);
@@ -237,22 +326,36 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   );
 
   const callLifetime = new AbortController();
+  const abortWithCaller = (): void => callLifetime.abort("cli-call-aborted");
+  if (dispatch.signal !== null) {
+    if (dispatch.signal.aborted) abortWithCaller();
+    else dispatch.signal.addEventListener("abort", abortWithCaller);
+  }
   const authority: HostRequestAuthority = {
     endpoint,
     bearer: lease,
     abortSignal: callLifetime.signal,
   };
+  const options: HostRequestOptions = {
+    idempotencyKey: null,
+    authority,
+    // A caller's FIRST attempt. The replay requirement is raised by the
+    // `createRetryingMessenger` wrapper above, per failure, not here.
+    replayMustBeKeyed: false,
+    // Null for every call but the ones that name a floor: those dispatch
+    // whatever the handshake negotiates, as the CLI always has.
+    requiredHostMethodVersion: dispatch.requiredHostMethodVersion,
+  };
   try {
-    const response = await messenger.request(method, params, {
-      idempotencyKey: null,
-      authority,
-      // A caller's FIRST attempt. The replay requirement is raised by the
-      // `createRetryingMessenger` wrapper above, per failure, not here.
-      replayMustBeKeyed: false,
-      // The CLI names no version floor: it dispatches whatever the handshake
-      // negotiates, as it always has.
-      requiredHostMethodVersion: null,
-    });
+    const response =
+      dispatch.responseTimeoutMs === null
+        ? await messenger.request(method, params, options)
+        : await messenger.requestWithResponseTimeout(
+            method,
+            params,
+            dispatch.responseTimeoutMs,
+            options,
+          );
     logger.debug("Host RPC completed", {
       environment: config.environment,
       method,
@@ -271,6 +374,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     });
     throw err;
   } finally {
+    dispatch.signal?.removeEventListener("abort", abortWithCaller);
     callLifetime.abort("cli-call-settled");
     store.dispose();
   }
@@ -550,6 +654,8 @@ function hostRpcToCliError(err: unknown): unknown {
  *     this host, actionable by updating the host.
  *   - `INCOMPATIBLE` / `DOWNGRADE_UNSUPPORTED` → `HOST_INCOMPATIBLE`: host/CLI
  *     protocol skew, actionable via `host restart` / updating the CLI.
+ *   - a `HostTransportFailureError` of any code → `HOST_UNREACHABLE`: the
+ *     connection failed or went quiet, so nothing below applies.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
  *     host's catch-all for any resolver error (e.g. "agent not found"), so it
  *     must NOT be reported as "host not running" - the host answered. A
@@ -559,6 +665,21 @@ function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  // First, and by class rather than by code: the transport raises its own
+  // failures as `RPC_ERROR` too, so the code cannot tell "the host answered
+  // with an error" from "nothing answered". The class can. A connection that
+  // errored, closed early or timed out is a state of the machine the command
+  // has already reported to the user, not a defect in the CLI, which is what
+  // `UNEXPECTED` tells the error reporter. The message is the transport's own
+  // and carries no host text.
+  if (err instanceof HostTransportFailureError) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+      message: err.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
   if (err.code === "FORBIDDEN" || isAccessDenied(err)) {
     return cliError({
       code: CLI_ERROR_CODES.FORBIDDEN,

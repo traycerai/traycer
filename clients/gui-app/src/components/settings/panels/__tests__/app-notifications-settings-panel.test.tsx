@@ -19,8 +19,9 @@ import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runne
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import {
-  isPushPermissionGroupAvailable,
-  isSystemNotificationsGroupAvailable,
+  isPushPermissionRowAvailable,
+  isSystemNotificationsRowAvailable,
+  type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -143,10 +144,41 @@ describe("<AppNotificationsSettingsPanel />", () => {
       systemSettings: null,
     });
 
-    expect(await screen.findByText("This phone")).toBeTruthy();
+    expect(
+      await screen.findByText("Push notifications on this phone"),
+    ).toBeTruthy();
     const action = await screen.findByTestId("push-permission-action");
     expect(action.textContent).toContain("Open Settings");
     expect(action.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("always draws the Notifications group with the Notification events row", () => {
+    renderPanel({ pushPermission: null, systemSettings: null });
+
+    expect(
+      screen.getByTestId("app-notifications-notifications-section"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Notifications" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Notification events")).toBeTruthy();
+    expect(screen.queryByText("OS notifications")).toBeNull();
+    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+  });
+
+  it("draws the OS notifications row only with the system-settings bridge", () => {
+    renderPanel({
+      pushPermission: null,
+      systemSettings: { open: () => Promise.resolve() },
+    });
+
+    expect(screen.getByText("OS notifications")).toBeTruthy();
+    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+    expect(
+      screen
+        .getByTestId("app-notifications-notifications-section")
+        .contains(screen.getByText("OS notifications")),
+    ).toBe(true);
   });
 
   it("points desktop users to native notification settings", async () => {
@@ -174,9 +206,9 @@ describe("<AppNotificationsSettingsPanel />", () => {
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("notifications");
   });
 
-  // The search index offers the System and This phone groups exactly where
-  // they render: each bridge alone, both, and neither — the last is what
-  // catches an entry left always-available while its group is gated.
+  // The search index offers the OS notifications and Push notifications rows
+  // exactly where they render: each bridge alone, both, and neither — the
+  // last is what catches an entry left always-available while its row is gated.
   describe("search targets", () => {
     const cases: ReadonlyArray<{
       readonly name: string;
@@ -222,16 +254,16 @@ describe("<AppNotificationsSettingsPanel />", () => {
     for (const testCase of cases) {
       it(`matches the index with ${testCase.name}`, () => {
         const { container, runnerHost } = mountPanel(testCase.capabilities);
-        const context = {
+        const context: SettingsAvailabilityContext = {
           runnerHost,
           featureSettings: null,
           mobileApp: false,
-          mobileFooter: false,
+          phoneLayout: false,
         };
-        expect(isSystemNotificationsGroupAvailable(context)).toBe(
+        expect(isSystemNotificationsRowAvailable(context)).toBe(
           testCase.system,
         );
-        expect(isPushPermissionGroupAvailable(context)).toBe(testCase.push);
+        expect(isPushPermissionRowAvailable(context)).toBe(testCase.push);
 
         assertSettingsSearchTargets("app-notifications", context, container);
       });

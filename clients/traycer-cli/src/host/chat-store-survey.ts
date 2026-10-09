@@ -38,16 +38,29 @@
  *
  * Read-only means this connection can never write the database. It does not
  * stop SQLite mapping the `-shm` sidecar for a WAL-mode file, which is why an
- * unwritable directory is a failure rather than a silent `0`. (A WAL file
- * whose `-shm` is merely absent reads fine on both engines - verified - as
- * long as the directory can be written; it is the directory that decides.) It
- * also never runs a migration: the stamp is read off `chat_db_meta` directly,
- * not through the host's store open, which migrates on sight.
+ * unwritable directory is a failure rather than a silent `0`. A WAL file whose
+ * sidecars are absent - the state a clean close leaves - reads fine through
+ * `node:sqlite` and through Bun's bundled SQLite (Linux, Windows): the read-only
+ * open creates `-wal` and `-shm` itself when the directory can be written. Bun
+ * on macOS links Apple's system libsqlite3 instead, and that build fails the
+ * same open's first read with SQLITE_CANTOPEN (verified on 3.54.0), so the
+ * Bun engine creates the missing sidecars itself and retries once; see
+ * {@link readBunFirstRow}. It also never runs a migration: the stamp is read
+ * off `chat_db_meta` directly, not through the host's store open, which
+ * migrates on sight.
  *
  * Absent stores are neither readings nor failures. An epic directory without
  * `chat/chat.db` has nothing the target could fail to read.
+ *
+ * ## The task store
+ *
+ * {@link surveyTaskStoreFormats} reads the one other forward-only stamp under
+ * a data root - `epic-homes/epic-homes.db`'s `PRAGMA user_version` - through
+ * the SAME engine and the same read-only open. Its failure posture is the
+ * opposite of the chat survey's, on purpose: see that function.
  */
 import { lstat, readdir } from "node:fs/promises";
+import { closeSync, fchmodSync, openSync, statSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -72,6 +85,14 @@ export const CHAT_DB_RELATIVE_PATH = join(CHAT_DIRNAME, CHAT_DB_FILENAME);
 /** The table and key the host stamps its schema version under. */
 const CHAT_DB_META_TABLE = "chat_db_meta";
 const CHAT_DB_SCHEMA_VERSION_KEY = "schema_version";
+
+/** The task store's path within a data root. Mirrors the host's layout. */
+const EPIC_HOMES_DIRNAME = "epic-homes";
+const EPIC_HOMES_DB_FILENAME = "epic-homes.db";
+
+export function taskStoreDbPathFor(hostHome: string): string {
+  return join(hostHome, EPIC_HOMES_DIRNAME, EPIC_HOMES_DB_FILENAME);
+}
 
 /**
  * The `epicId` a failure carries when it is about the survey as a whole
@@ -134,7 +155,7 @@ export async function surveyChatDbStamps(
   // Resolved ONCE for the whole survey, not once per root and never per epic:
   // a missing engine is a fact about this process, and N copies of it would
   // read as N damaged files.
-  let reader: ChatDbStampReader | null = null;
+  let reader: ReadOnlyRowReader | null = null;
   // Qualified only when there is more than one root. Two roots can hold the
   // same epic id, and "epic-a at format 9; epic-a at format 8" helps nobody -
   // but the single-root case is every production machine, and prefixing there
@@ -165,7 +186,7 @@ export async function surveyChatDbStamps(
       // once a root has entries: an epic directory with no `chat.db` needs no
       // engine, and asking for one there would let a machine with epics but no
       // stores report `engine-unavailable` and refuse over nothing.
-      if (reader === null) reader = await openChatDbStampReader();
+      if (reader === null) reader = await openReadOnlyRowReader();
       if (reader === null) {
         // Everything already collected travels with it. No reading can have
         // landed - the reader is what produces them - but a root that would
@@ -179,7 +200,7 @@ export async function surveyChatDbStamps(
           ],
         };
       }
-      const outcome = reader.readStamp(path.dbPath);
+      const outcome = readStampWith(reader, path.dbPath);
       if (outcome.kind === "stamp") {
         readings.push({
           epicId: reported,
@@ -309,25 +330,40 @@ type ChatDbStampOutcome =
   | { readonly kind: "failure"; readonly reason: ChatDbStampFailureReason };
 
 /**
- * One open store, reduced to the single question this module asks it.
+ * One statement and the values bound to it.
+ *
+ * A parameter of the engine seam rather than a constant inside it, because
+ * the two stores this module reads are stamped in different places: a chat
+ * store in a `chat_db_meta` row, the task store in `PRAGMA user_version`.
+ */
+interface ReadOnlyQuery {
+  readonly sql: string;
+  readonly params: readonly string[];
+}
+
+/**
+ * Opens one database file read-only, runs one statement, and returns its
+ * first row in whatever shape the engine returns it. Throws when the file
+ * cannot be opened or read.
  *
  * The seam is the QUERY, not the client object, because the two runtimes'
  * clients differ in ways that must not leak past here: the constructor's
  * option name (`readOnly` vs `readonly`), the prepared-statement accessor
  * (`prepare` vs `query`), and the empty-row value (`undefined` vs `null`).
+ * Open, read and close are one call for the same reason they are one retried
+ * unit under Bun: nothing outside this seam ever holds a connection.
  */
-interface OpenChatDb {
-  /** The `schema_version` row, in whatever shape the engine returns it. */
-  readonly stampRow: () => unknown;
-  readonly close: () => void;
-}
+type ReadOnlyRowReader = (dbPath: string, query: ReadOnlyQuery) => unknown;
 
-/** A resolved engine: it can open a store read-only, or throw trying. */
-interface ChatDbStampReader {
-  readonly readStamp: (dbPath: string) => ChatDbStampOutcome;
-}
+const SELECT_STAMP_QUERY: ReadOnlyQuery = {
+  sql: `SELECT value FROM ${CHAT_DB_META_TABLE} WHERE key = ?`,
+  params: [CHAT_DB_SCHEMA_VERSION_KEY],
+};
 
-const SELECT_STAMP_SQL = `SELECT value FROM ${CHAT_DB_META_TABLE} WHERE key = ?`;
+const SELECT_USER_VERSION_QUERY: ReadOnlyQuery = {
+  sql: "PRAGMA user_version",
+  params: [],
+};
 
 /**
  * The engine for this runtime, or `null` when it has none.
@@ -337,75 +373,134 @@ const SELECT_STAMP_SQL = `SELECT value FROM ${CHAT_DB_META_TABLE} WHERE key = ?`
  * scripts mark `bun:sqlite` external for the same reason: it is a virtual
  * module only Bun can resolve, and the bundle never runs there.
  */
-async function openChatDbStampReader(): Promise<ChatDbStampReader | null> {
-  const open =
-    process.versions.bun === undefined
-      ? await nodeChatDbOpener()
-      : await bunChatDbOpener();
-  if (open === null) return null;
-  return { readStamp: (dbPath: string) => readStampWith(open, dbPath) };
+async function openReadOnlyRowReader(): Promise<ReadOnlyRowReader | null> {
+  return process.versions.bun === undefined
+    ? await nodeRowReader()
+    : await bunRowReader();
 }
 
-/** Opens one store read-only. Throws if the file cannot be opened. */
-type ChatDbOpener = (dbPath: string) => OpenChatDb;
-
-async function nodeChatDbOpener(): Promise<ChatDbOpener | null> {
+async function nodeRowReader(): Promise<ReadOnlyRowReader | null> {
   let DatabaseSync: typeof import("node:sqlite").DatabaseSync;
   try {
     ({ DatabaseSync } = await import("node:sqlite"));
   } catch {
     return null;
   }
-  return (dbPath: string): OpenChatDb => {
+  return (dbPath: string, query: ReadOnlyQuery): unknown => {
     const db = new DatabaseSync(dbPath, { readOnly: true });
-    return {
-      stampRow: () =>
-        db.prepare(SELECT_STAMP_SQL).get(CHAT_DB_SCHEMA_VERSION_KEY),
-      close: () => db.close(),
-    };
+    try {
+      return db.prepare(query.sql).get(...query.params);
+    } finally {
+      db.close();
+    }
   };
 }
 
-async function bunChatDbOpener(): Promise<ChatDbOpener | null> {
+async function bunRowReader(): Promise<ReadOnlyRowReader | null> {
   let Database: typeof import("bun:sqlite").Database;
   try {
     ({ Database } = await import("bun:sqlite"));
   } catch {
     return null;
   }
-  return (dbPath: string): OpenChatDb => {
-    const db = new Database(dbPath, { readonly: true });
-    return {
-      stampRow: () =>
-        db.query(SELECT_STAMP_SQL).get(CHAT_DB_SCHEMA_VERSION_KEY),
-      close: () => db.close(),
-    };
-  };
+  return (dbPath: string, query: ReadOnlyQuery): unknown =>
+    readBunFirstRow(Database, dbPath, query);
+}
+
+/**
+ * Bun's read-only read, with the one retry Apple's SQLite needs.
+ *
+ * On macOS Bun links the system libsqlite3, which will not create a WAL-mode
+ * database's `-wal`/`-shm` for a read-only connection and throws
+ * SQLITE_CANTOPEN while they are absent - and absent is the ordinary state of
+ * every idle store, because a clean close by the host's writer deletes both.
+ * The throw does not come from `new Database`, which reads nothing: SQLite
+ * opens the WAL at the first statement that touches the file. For the chat
+ * stamp that is the prepare, which reads the schema; a `PRAGMA user_version`
+ * prepares without touching the file and can throw at its first step
+ * instead. So the unit that is retried is open, prepare AND the first read -
+ * one statement's whole life - and no statement this module runs can fail
+ * outside it. Node's read-only open, and Bun's bundled SQLite elsewhere,
+ * create and leave both sidecars in that same state; this does exactly that
+ * and nothing more. Each MISSING sidecar is created empty (`wx`, so one a
+ * concurrent opener made first is left as it is) with the database file's own
+ * permission bits, which is what SQLite's unix VFS gives them, then fchmod-ed
+ * so the umask cannot change them. Then one retry, whose throw is the answer.
+ *
+ * Never a read-write open and never `immutable=1`: the first would let the
+ * survey write a store it only reads, the second would read past a live
+ * writer's WAL. Silent on purpose: the retry is a dev-loop artefact (the
+ * shipped CLI is Node), and a line about it would read as a fault in a
+ * support log.
+ */
+function readBunFirstRow(
+  Database: typeof import("bun:sqlite").Database,
+  dbPath: string,
+  query: ReadOnlyQuery,
+): unknown {
+  try {
+    return bunFirstRow(Database, dbPath, query);
+  } catch (error) {
+    if (errnoCodeOf(error) !== "SQLITE_CANTOPEN") throw error;
+  }
+  const mode = statSync(dbPath).mode & 0o777;
+  for (const suffix of WAL_SIDECAR_SUFFIXES) {
+    createMissingEmptyFile(`${dbPath}${suffix}`, mode);
+  }
+  return bunFirstRow(Database, dbPath, query);
+}
+
+/** One open, prepare and first read; the connection is closed either way. */
+function bunFirstRow(
+  Database: typeof import("bun:sqlite").Database,
+  dbPath: string,
+  query: ReadOnlyQuery,
+): unknown {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db.query(query.sql).get(...query.params);
+  } finally {
+    db.close();
+  }
+}
+
+const WAL_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
+
+function createMissingEmptyFile(path: string, mode: number): void {
+  let fd: number;
+  try {
+    fd = openSync(path, "wx", mode);
+  } catch (error) {
+    if (errnoCodeOf(error) === "EEXIST") return;
+    throw error;
+  }
+  try {
+    fchmodSync(fd, mode);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
  * One store's stamp through a resolved engine.
  *
- * Every throw below the open - a corrupt page, a missing `chat_db_meta`, a
+ * Every throw from the open on - a corrupt page, a missing `chat_db_meta`, a
  * lock, an unwritable directory under a WAL file - is the same finite answer:
  * this file could not be read. The distinction the codes DO keep is between
  * that and a file that read fine but carries no usable stamp, because only
  * one of those two is a damaged database.
  */
-function readStampWith(open: ChatDbOpener, dbPath: string): ChatDbStampOutcome {
-  let db: OpenChatDb;
+function readStampWith(
+  readFirstRow: ReadOnlyRowReader,
+  dbPath: string,
+): ChatDbStampOutcome {
+  let row: unknown;
   try {
-    db = open(dbPath);
+    row = readFirstRow(dbPath, SELECT_STAMP_QUERY);
   } catch {
     return { kind: "failure", reason: "unreadable-chat-db" };
   }
-  try {
-    return stampFromRow(db.stampRow());
-  } catch {
-    return { kind: "failure", reason: "unreadable-chat-db" };
-  } finally {
-    db.close();
-  }
+  return stampFromRow(row);
 }
 
 /**
@@ -447,6 +542,115 @@ function parseSchemaVersion(value: unknown): number | null {
 function positiveStamp(parsed: number): number | null {
   if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
   return parsed;
+}
+
+/** What the task stores under a set of data roots are stamped at. */
+export interface TaskStoreFormatSurvey {
+  /**
+   * The highest `user_version` read across the roots, or `null` when no root
+   * holds a task store this survey could read.
+   */
+  readonly onDiskMax: number | null;
+  /**
+   * Roots where a task store is, or may be, present and could not be read: a
+   * link or a non-file in the path, an open or read that threw, a stamp that
+   * is not a non-negative integer, or no SQLite engine in this runtime.
+   */
+  readonly unreadableRoots: number;
+}
+
+/**
+ * Read the task store's format stamp under every root.
+ *
+ * Each root holds at most one task store, `epic-homes/epic-homes.db`, and its
+ * stamp is SQLite's `PRAGMA user_version` - written by the host on every
+ * start, so a machine with no local tasks carries it too. Read through the
+ * same read-only open as a chat store: never `immutable=1`, which would read
+ * past a live writer's WAL, and never a parse of the file header, which is
+ * stale for exactly as long as the stamp sits in that WAL.
+ *
+ * NEVER THROWS, and never reports a failure as a stamp. Unlike the chat
+ * survey, an unreadable store here does not refuse anything - the caller
+ * stands aside and logs it - so the two answers are kept apart rather than
+ * folded into a verdict: `onDiskMax` is only what was actually read, and
+ * `unreadableRoots` is only a count. An absent store is neither.
+ */
+export async function surveyTaskStoreFormats(
+  surveyRoots: ChatStoreSurveyRoots,
+): Promise<TaskStoreFormatSurvey> {
+  let onDiskMax: number | null = null;
+  let unreadableRoots = 0;
+  let reader: ReadOnlyRowReader | null = null;
+  for (const root of surveyRoots.roots) {
+    const path = await inspectTaskStoreDbPath(root.path);
+    if (path === "absent") continue;
+    if (path === "unreadable") {
+      unreadableRoots += 1;
+      continue;
+    }
+    // Resolved at the first store there is to read, as the chat survey does.
+    if (reader === null) reader = await openReadOnlyRowReader();
+    const userVersion =
+      reader === null ? null : readUserVersionWith(reader, path.dbPath);
+    if (userVersion === null) {
+      unreadableRoots += 1;
+      continue;
+    }
+    onDiskMax =
+      onDiskMax === null ? userVersion : Math.max(onDiskMax, userVersion);
+  }
+  return { onDiskMax, unreadableRoots };
+}
+
+/**
+ * Classify a root's task-store path: `lstat` at both levels, links refused
+ * before anything is opened, ENOENT alone read as absence - the rules
+ * {@link inspectChatDbPath} follows, for the same reasons.
+ */
+async function inspectTaskStoreDbPath(
+  rootPath: string,
+): Promise<"absent" | "unreadable" | { readonly dbPath: string }> {
+  const storeDir = join(rootPath, EPIC_HOMES_DIRNAME);
+  const dbPath = join(storeDir, EPIC_HOMES_DB_FILENAME);
+  const levels = [
+    { path: storeDir, wantDirectory: true },
+    { path: dbPath, wantDirectory: false },
+  ] as const;
+  for (const level of levels) {
+    let entry: Stats;
+    try {
+      entry = await lstat(level.path);
+    } catch (error: unknown) {
+      return isNotFound(error) ? "absent" : "unreadable";
+    }
+    if (entry.isSymbolicLink()) return "unreadable";
+    const rightType = level.wantDirectory
+      ? entry.isDirectory()
+      : entry.isFile();
+    if (!rightType) return "unreadable";
+  }
+  return { dbPath };
+}
+
+/** The file's `user_version`, or `null` for every way of not reading one. */
+function readUserVersionWith(
+  readFirstRow: ReadOnlyRowReader,
+  dbPath: string,
+): number | null {
+  let row: unknown;
+  try {
+    row = readFirstRow(dbPath, SELECT_USER_VERSION_QUERY);
+  } catch {
+    return null;
+  }
+  if (row === null || typeof row !== "object") return null;
+  const value = (row as Record<string, unknown>).user_version;
+  // `0` is a real answer - a file SQLite created and no host has stamped - and
+  // it blocks nothing, so it is admitted where a chat stamp of 0 is not.
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
 }
 
 /**

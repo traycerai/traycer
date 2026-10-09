@@ -3,11 +3,11 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
+import { switcherCategories } from "@/components/epic-canvas/mobile/switcher-categories";
 import {
-  clampToSwitcherCategory,
-  isSwitcherCategory,
-  visibleSwitcherCategoryDefs,
-} from "@/components/epic-canvas/mobile/switcher-categories";
+  useLayoutRail,
+  usePanelVisibilityOverrides,
+} from "@/lib/layout/rail-view";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
 import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-browsers-list";
@@ -27,8 +27,8 @@ import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import {
   useActiveLeftPanelId,
   useLeftPanelStore,
-  type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
+import { isLeftPanelId, type LeftPanelId } from "@/lib/left-panel-ids";
 import { cn } from "@/lib/utils";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
@@ -68,7 +68,8 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
 
 /**
  * The mobile tab switcher: a drag-dismissable `vaul` bottom sheet whose
- * category bar mirrors the desktop left-panel registry and whose content region
+ * category bar is the desktop rail's panels in the user's rail order (the ones
+ * switched off in Settings > Layout behind a trailing More) and whose content region
  * shows the active category - the desktop chat tree for Agents, flat lists for
  * Terminals/Browsers/Artifacts, the
  * shared comments panel for Comments, and the embedded desktop File-tree /
@@ -86,18 +87,22 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   // theme on it so `--popover` / `--background` (and the preset tokens) resolve
   // correctly inside the portal instead of falling back to the light :root.
   const { resolvedTheme, themePreset } = useResolvedTheme();
-  const persistedCategory = useActiveLeftPanelId(tabId);
+  // Every panel is reachable (a chip or under More), so the rail-shared
+  // selection is always one the sheet can show.
+  const activeCategory = useActiveLeftPanelId(tabId);
   const setActivePanelId = useLeftPanelStore((s) => s.setActivePanelId);
-  // PRs stay reachable even when the task host has none: the panel's host
-  // picker is how the user discovers PRs on another machine. Only mounting
-  // that panel starts PR traffic; the sheet needs no presence probe.
-  const activeCategory = clampToSwitcherCategory(persistedCategory);
+  const rail = useLayoutRail();
+  const visibilityOverrides = usePanelVisibilityOverrides();
+  const categories = useMemo(
+    () => switcherCategories(rail, visibilityOverrides),
+    [rail, visibilityOverrides],
+  );
 
   const handleCategoryChange = useCallback(
     (value: string) => {
       // Persist through the SAME desktop left-panel store so mobile and desktop
-      // stay in sync; ignore any value outside the curated set defensively.
-      if (isSwitcherCategory(value)) setActivePanelId(tabId, value);
+      // stay in sync; ignore any value that is not a panel id defensively.
+      if (isLeftPanelId(value)) setActivePanelId(tabId, value);
     },
     [setActivePanelId, tabId],
   );
@@ -161,10 +166,14 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
           className="min-h-0 flex-1 gap-0"
         >
           <div className="shrink-0 border-b border-canvas-border/70">
-            <SwitcherCategoryTabs />
+            <SwitcherCategoryTabs
+              categories={categories}
+              activeCategory={activeCategory}
+              onSelect={handleCategoryChange}
+            />
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
-            {visibleSwitcherCategoryDefs().map((definition) => (
+            {[...categories.bar, ...categories.more].map((definition) => (
               <TabsContent
                 key={definition.id}
                 value={definition.id}

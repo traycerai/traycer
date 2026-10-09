@@ -19,6 +19,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // and its reveal lapses at the deadline.
 export const HOST_OVERVIEW = defineSettingsSection("host", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Overview",
     description: "The selected host's status, version, and installation.",
     // The header's words: it is drawn over every tab, so a result for any of
@@ -354,7 +355,7 @@ export function isHostOverviewTab(
 /**
  * Tab names the page no longer has, and the tab that now answers each. Status
  * was folded away: its update card, the account's wait and the offline notice
- * sit above the tab bar, and its version card leads Updates. A link that
+ * sit above the tab bar, and its update answer leads Updates. A link that
  * still names it asked for the version and the update, so it lands on Updates
  * rather than being ignored.
  */

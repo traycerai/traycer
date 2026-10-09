@@ -1,7 +1,9 @@
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   copyTerminalCommand,
+  doctorFixForegroundReason,
   fixActionLabel,
   severityBadgeClass,
   severityBorderClass,
@@ -23,6 +25,8 @@ interface HostDoctorIssueCardProps {
   readonly expanded: boolean;
   readonly recurrenceLocked: boolean;
   readonly fixPendingCode: string | null;
+  /** THIS machine's host was started in a terminal. */
+  readonly foregroundRun: boolean;
   readonly onFix: (issue: HostDoctorIssue) => void;
   readonly onToggle: (code: string) => void;
 }
@@ -31,6 +35,11 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
   const { issue, expanded, recurrenceLocked, fixPendingCode, onFix, onToggle } =
     props;
   const issueFixPending = fixPendingCode === issue.code;
+  const reasonId = useId();
+  const blockedReason =
+    issue.fixAction === null
+      ? null
+      : doctorFixForegroundReason(issue.fixAction, props.foregroundRun);
   return (
     <div
       className={cn(
@@ -59,8 +68,10 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
                 size="sm"
                 disabled={
                   (recurrenceLocked && issue.fixAction !== "host-logs") ||
-                  fixPendingCode !== null
+                  fixPendingCode !== null ||
+                  blockedReason !== null
                 }
+                aria-describedby={blockedReason === null ? undefined : reasonId}
                 onClick={() => onFix(issue)}
               >
                 {issueFixPending ? (
@@ -89,6 +100,14 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
             >
               {expanded ? "Hide details" : "Show details"}
             </Button>
+            {blockedReason === null ? null : (
+              <p
+                id={reasonId}
+                className="basis-full text-ui-xs text-muted-foreground"
+              >
+                {blockedReason}
+              </p>
+            )}
           </div>
           {expanded && issue.terminalCommand !== null ? (
             <pre

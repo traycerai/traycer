@@ -31,9 +31,19 @@ export const CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME =
 export const CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 
 /**
- * Restarts `animate-pulse` when `generation` advances so a repeated jump to
- * the same composer card flashes again. Does not remount the element — the
- * interview card keeps focus and draft state.
+ * The landing on a pending card in the composer slot (an approval or an
+ * interview): a warning ring that fades over 600ms, then goes away. The
+ * card's flag is cleared after the same 600ms, so with reduced motion the
+ * ring shows that long instead of fading.
+ */
+export const PENDING_CARD_HIGHLIGHT_CLASSNAME = "pending-card-highlight";
+
+export const PENDING_CARD_HIGHLIGHT_DURATION_MS = 600;
+
+/**
+ * Restarts the highlight's animation when `generation` advances so a repeated
+ * jump to the same composer card flashes again. Does not remount the element,
+ * so the interview card keeps focus and draft state.
  */
 export function useRestartHighlightPulse(
   highlighted: boolean,

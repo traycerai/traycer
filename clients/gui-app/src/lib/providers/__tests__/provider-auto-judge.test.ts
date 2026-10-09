@@ -26,8 +26,16 @@ describe("providersListReportsAutoJudge", () => {
   // whose relationship to this field is not knowable from here - must not be
   // read as "newer, therefore carries it". This is the case that would catch
   // a `version.major >= 9` typo replacing the pinned `=== 9` check.
+  // 10.x is the 9.2 row over a wider provider id set, so it is NAMED as
+  // reporting `autoJudge` on every minor; the control is the old "later major"
+  // case moved one major out.
+  it("is true on major 10, the line that opened for the Command Code provider id", () => {
+    expect(providersListReportsAutoJudge({ major: 10, minor: 0 })).toBe(true);
+    expect(providersListReportsAutoJudge({ major: 10, minor: 5 })).toBe(true);
+  });
+
   it("is false on a different (later) major, even with a high minor", () => {
-    const laterMajor: SchemaVersion = { major: 10, minor: 5 };
+    const laterMajor: SchemaVersion = { major: 11, minor: 5 };
 
     expect(providersListReportsAutoJudge(laterMajor)).toBe(false);
   });

@@ -28,8 +28,9 @@
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { assistantRowTurnKey } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { findTextMatches } from "@/lib/find-engine/find-text";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /** The question the bar last searched, as the adapter ran it. */
 export interface ChatFindSearch {
@@ -346,7 +347,7 @@ export function chatFindTranscriptPlacement(
 function heldRecord(
   window: TranscriptWindow,
   messageId: string,
-): Message | null {
+): OpenMessage | null {
   return (
     window.records.messages.get(messageId)?.record ??
     window.liveMessages.find((message) => message.messageId === messageId) ??
@@ -391,7 +392,7 @@ function placeHitInWindow(
  */
 function nearestHydratedFirst(
   index: WindowPlacementIndex,
-  record: Message,
+  record: OpenMessage,
   rows: ReadonlyArray<SkeletonRow>,
 ): ReadonlyArray<SkeletonRow> {
   const hydrated =
@@ -420,7 +421,7 @@ function nearestHydratedFirst(
  */
 function unhydratedRowsOfRecord(
   index: WindowPlacementIndex,
-  record: Message,
+  record: OpenMessage,
 ): ReadonlyArray<SkeletonRow> {
   if (record.role === "assistant") {
     return index.unhydratedByTurnKey.get(assistantTurnKey(record)) ?? [];

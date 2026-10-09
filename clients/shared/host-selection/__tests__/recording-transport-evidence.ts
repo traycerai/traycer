@@ -28,7 +28,6 @@ export type RecordedTransportEvidence =
       readonly hostId: string;
       readonly attemptId: string;
       readonly transportKind: SelectionTransportKind;
-      readonly refusalDetail: "plan-restricted" | null;
     }
   | {
       readonly kind: "dialTimeout";
@@ -100,14 +99,12 @@ export class RecordingTransportEvidence implements TransportEvidenceReporter {
     hostId: string,
     attemptId: string,
     transportKind: SelectionTransportKind,
-    refusalDetail: "plan-restricted" | null,
   ): void {
     this.events.push({
       kind: "dialRefusal",
       hostId,
       attemptId,
       transportKind,
-      refusalDetail,
     });
   }
 

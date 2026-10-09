@@ -20,10 +20,6 @@ import {
   projectTranscriptRows,
   type TranscriptRowProjectionInput,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { buildChatFindRows } from "@/components/chat/chat-find-projection";
@@ -43,6 +39,11 @@ import {
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * # The auto-mode judge notices, end to end through the windowed store
@@ -92,7 +93,7 @@ const UNAVAILABLE_TEXT =
 const POLICY_TEXT =
   "This repository's Auto mode rules can add restrictions but not permissions; only its Ask first and Never allow sections were applied.";
 
-function userMessage(messageId: string, timestamp: number): Message {
+function userMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "user",
     messageId,
@@ -114,7 +115,7 @@ function noticeEvent(input: {
   readonly message: string;
   readonly timestamp: number;
   readonly turnId: string | null;
-}): ChatEvent {
+}): OpenChatEvent {
   return {
     eventId: input.eventId,
     type: "permission.blocked",
@@ -133,7 +134,7 @@ function noticeEvent(input: {
 }
 
 /** One persisted transcript: two sends, with all three notices between. */
-const PERSISTED: TranscriptRowProjectionInput = {
+const PERSISTED: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent> = {
   messages: [userMessage("u-1", 1000), userMessage("u-2", 5000)],
   events: [
     noticeEvent({
@@ -176,7 +177,7 @@ const PERSISTED_DRAWN = [
 ];
 
 /** A chat open on one send, before the live notice arrives. */
-const OPENED: TranscriptRowProjectionInput = {
+const OPENED: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent> = {
   messages: [userMessage("u-1", 1000)],
   events: [],
   activeTurnId: null,
@@ -192,7 +193,10 @@ const LIVE_NOTICE = noticeEvent({
 });
 
 /** The same chat once the live notice is on the host's disk. */
-const AFTER_LIVE_NOTICE: TranscriptRowProjectionInput = {
+const AFTER_LIVE_NOTICE: TranscriptRowProjectionInput<
+  OpenMessage,
+  OpenChatEvent
+> = {
   ...OPENED,
   events: [LIVE_NOTICE],
 };
@@ -242,7 +246,9 @@ function createHarness(): Harness {
   };
 }
 
-const EMPTY_TAIL = (rowCount: number): TranscriptTailSlice => ({
+const EMPTY_TAIL = (
+  rowCount: number,
+): TranscriptTailSlice<OpenMessage, OpenChatEvent> => ({
   fromOrdinal: rowCount,
   rowIds: [],
   incompleteRowIds: [],
@@ -252,7 +258,9 @@ const EMPTY_TAIL = (rowCount: number): TranscriptTailSlice => ({
 });
 
 /** The whole transcript as one tail slice, as a host serves a short chat. */
-function wholeTail(input: TranscriptRowProjectionInput): TranscriptTailSlice {
+function wholeTail(
+  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
+): TranscriptTailSlice<OpenMessage, OpenChatEvent> {
   return sliceTranscriptTail(
     projectTranscriptRows(input),
     buildTranscriptRecordLookup(input.messages, input.events),
@@ -263,7 +271,7 @@ function wholeTail(input: TranscriptRowProjectionInput): TranscriptTailSlice {
 
 function snapshot(input: {
   readonly rowCount: number;
-  readonly tail: TranscriptTailSlice;
+  readonly tail: TranscriptTailSlice<OpenMessage, OpenChatEvent>;
   readonly indexRevision: number | null;
 }): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   const derived: ChatTranscriptDerived = {
@@ -329,7 +337,7 @@ function snapshot(input: {
 
 /** The whole skeleton of `input` in one final chunk, as the host builds it. */
 function skeletonChunk(
-  input: TranscriptRowProjectionInput,
+  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
 ): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
   return {
     kind: "skeletonChunk",
@@ -347,7 +355,7 @@ function skeletonChunk(
 
 /** The shared frame an append broadcast leads with. */
 function eventAppended(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): Parameters<ChatStreamCallbacks["onEventAppended"]>[0] {
   return {
     kind: "eventAppended",
@@ -363,7 +371,7 @@ function eventAppended(
  * `before` to `after`: the new row's skeleton entry, as the host builds it.
  */
 function appendedDelta(input: {
-  readonly after: TranscriptRowProjectionInput;
+  readonly after: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>;
   readonly indexRevision: number;
 }): Parameters<ChatStreamCallbacks["onIndexChanged"]>[0] {
   const entries = buildRowSkeleton(
@@ -388,7 +396,7 @@ function appendedDelta(input: {
 /** Answer the harness's latest `loadRange` from `input`, as the host would. */
 function answerLatestRange(
   harness: Harness,
-  input: TranscriptRowProjectionInput,
+  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
 ): ChatLoadRangeRequest {
   const request = harness.rangeRequests.at(-1);
   if (request === undefined) throw new Error("expected a loadRange");
@@ -739,8 +747,10 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       for (const notice of notices) {
         expect(screen.queryByText(notice.message)).toBeNull();
         expect(
-          buildChatFindRows([notice.model], "tile-notice", new Set(), null)[0]
-            ?.units,
+          buildChatFindRows([notice.model], "tile-notice", new Set(), {
+            hideReasoning: false,
+            queuePauseReasonProtocolSupported: null,
+          })[0]?.units,
         ).toEqual([]);
       }
     } finally {

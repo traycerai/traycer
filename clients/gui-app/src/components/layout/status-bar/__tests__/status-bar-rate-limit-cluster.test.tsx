@@ -21,9 +21,9 @@ import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 
 interface MockState {
   cluster: StatusBarRateLimitClusterModel;
@@ -81,6 +81,7 @@ function segmentFixture(
     providerId,
     profileId: null,
     account: null,
+    hidden: false,
     state: "live",
     reason: null,
     windows: tightest === null ? [] : [tightest],
@@ -100,7 +101,9 @@ function windowFixture(overrides: {
     kind: "session",
     usedPercent: overrides.usedPercent,
     resetsAt: null,
-    severity: "healthy",
+    // Expanded, so every reading prints its percentage and countdown; a
+    // healthy profile is a bare bar (`status-bar-provider-segment.test.tsx`).
+    severity: "running_low",
   };
 }
 
@@ -124,6 +127,7 @@ function renderCluster(props: {
             hostId="host-a"
             providers={props.providers ?? []}
             profileSelection={PROFILE_SELECTION}
+            editing={false}
           />
         </Popover>
       </TooltipProvider>
@@ -132,7 +136,7 @@ function renderCluster(props: {
 }
 
 beforeEach(() => {
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 afterEach(() => {
@@ -148,7 +152,7 @@ afterEach(() => {
     httpRefetches: [],
     httpFetching: false,
   };
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 describe("<StatusBarRateLimitCluster />", () => {
@@ -242,6 +246,23 @@ describe("<StatusBarRateLimitCluster />", () => {
     expect(trigger.getAttribute("data-state")).toBe("open");
   });
 
+  it("draws the glyph, not the connect sentence, for no-providers when Density is Compact", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { density: "compact" });
+    mocks.cluster = { kind: "no-providers" };
+    renderCluster({});
+
+    expect(screen.getByTestId("rate-limit-gauge-icon")).not.toBeNull();
+    expect(
+      screen.queryByText("Connect a supported provider to see usage here."),
+    ).toBeNull();
+
+    const trigger = screen.getByTestId("status-bar-rate-limit-trigger");
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("data-state")).toBe("open");
+  });
+
   it("renders 'Usage hidden' for the hidden cluster and still opens the panel on click", () => {
     mocks.cluster = { kind: "hidden" };
     renderCluster({});
@@ -307,15 +328,9 @@ describe("<StatusBarRateLimitCluster />", () => {
     });
 
     it("switches to remaining phrasing under percentMode: remaining", () => {
-      useLayoutStore.setState({
-        statusBar: {
-          ...DEFAULT_STATUS_BAR_LAYOUT,
-          rateLimits: {
-            ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-            percentMode: "remaining",
-          },
-        },
-      });
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "remaining" });
       const codexUsed = 34;
       mocks.cluster = {
         kind: "segments",
@@ -380,6 +395,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               hostId={hostId}
               providers={[]}
               profileSelection={PROFILE_SELECTION}
+              editing={false}
             />
           </Popover>
         </TooltipProvider>
@@ -497,7 +513,23 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     }
   });
 
-  it("prints the mode word, the bar and the countdown on every reading when the switches are on", () => {
+  it("draws the usage glyph instead of the readings when Density is Compact", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { density: "compact" });
+    sixAccountCluster(null);
+    renderScrollingCluster();
+
+    expect(screen.getByTestId("rate-limit-gauge-icon")).not.toBeNull();
+    expect(screen.queryByTestId(/^status-bar-provider-segment-/)).toBeNull();
+    // The trigger still names every reading, so the glyph loses no information
+    // for a screen reader.
+    expect(
+      screen.getByTestId(TRIGGER_TESTID).getAttribute("aria-label"),
+    ).toContain("Codex · work 34% used");
+  });
+
+  it("prints the bar, the percentage and the countdown on every expanded reading when Reset time is on", () => {
     vi.useFakeTimers();
     sixAccountCluster(Date.now() + 4 * 60 * MINUTE_MS + 15 * MINUTE_MS + 5_000);
     renderScrollingCluster();
@@ -505,37 +537,29 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     const windows = screen.getAllByTestId(/^status-bar-window-(?!percent-)/);
     expect(windows).toHaveLength(6);
     for (const window of windows) {
-      expect(window.textContent).toMatch(/^\d+% used 4h 15m$/);
+      expect(window.textContent).toMatch(/^\d+%4h 15m$/);
     }
     expect(screen.getAllByTestId("status-bar-provider-mini-bar")).toHaveLength(
       6,
     );
   });
 
-  it("drops the mode word, the bar and the countdown from every reading when the switches are off", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-          showModeWord: false,
-          showBar: false,
-          showTimer: false,
-        },
-      },
-    });
+  it("drops the countdown from every expanded reading when Reset time is off", () => {
+    useLayoutStore.getState().setRegionValues("usageLimits", { reset: false });
     vi.useFakeTimers();
     sixAccountCluster(Date.now() + 4 * 60 * MINUTE_MS + 15 * MINUTE_MS + 5_000);
     renderScrollingCluster();
 
     const windows = screen.getAllByTestId(/^status-bar-window-(?!percent-)/);
     expect(windows).toHaveLength(6);
-    // The percentage and the window's static name are the floor: no switch
-    // takes them away, so a reading is never a bare icon.
+    // The bar and the percentage are the floor in the detailed form: no
+    // switch takes them away. The window's name takes the countdown's place.
     for (const window of windows) {
-      expect(window.textContent).toMatch(/^\d+% 5h$/);
+      expect(window.textContent).toMatch(/^\d+%5h$/);
     }
-    expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual([]);
+    expect(screen.getAllByTestId("status-bar-provider-mini-bar")).toHaveLength(
+      6,
+    );
   });
 
   it("turns a vertical wheel over the readings into a horizontal scroll", () => {
@@ -767,6 +791,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               hostId="host-a"
               providers={[]}
               profileSelection={PROFILE_SELECTION}
+              editing={false}
             />
           </Popover>
         </TooltipProvider>

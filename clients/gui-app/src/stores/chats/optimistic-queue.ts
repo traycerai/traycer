@@ -1,7 +1,7 @@
 import type {
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
-  ChatQueueState,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
+  OpenChatQueueState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 const OPTIMISTIC_QUEUED_ITEM_ID_PREFIX = "optimistic-send:";
@@ -18,15 +18,15 @@ export function optimisticQueuedItemClientActionId(
 }
 
 export function isOptimisticQueuedItem(
-  item: Pick<ChatQueuedItem, "queueItemId">,
+  item: Pick<OpenChatQueuedItem, "queueItemId">,
 ): boolean {
   return optimisticQueuedItemClientActionId(item.queueItemId) !== null;
 }
 
 export function appendOptimisticQueuedItem(
-  queue: ChatQueueState,
-  item: ChatQueuedPromptItem,
-): ChatQueueState {
+  queue: OpenChatQueueState,
+  item: OpenChatQueuedPromptItem,
+): OpenChatQueueState {
   if (queueContainsQueuedSend(queue, item)) return queue;
   return queueWithStatus(
     queue,
@@ -36,10 +36,10 @@ export function appendOptimisticQueuedItem(
 }
 
 export function mergeQueueWithOptimisticQueuedItems(
-  authoritativeQueue: ChatQueueState,
-  currentQueue: ChatQueueState,
+  authoritativeQueue: OpenChatQueueState,
+  currentQueue: OpenChatQueueState,
   retainedClientActionIds: ReadonlySet<string>,
-): ChatQueueState {
+): OpenChatQueueState {
   const retainedOptimisticItems = currentQueue.items.filter((item) =>
     shouldRetainOptimisticQueuedItem(
       item,
@@ -59,9 +59,9 @@ export function mergeQueueWithOptimisticQueuedItems(
 }
 
 export function removeOptimisticQueuedItemByClientActionId(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   clientActionId: string,
-): ChatQueueState {
+): OpenChatQueueState {
   return withoutOptimisticQueuedItems(
     queue,
     (item) => item.queueItemId === optimisticQueuedItemId(clientActionId),
@@ -69,9 +69,9 @@ export function removeOptimisticQueuedItemByClientActionId(
 }
 
 export function removeOptimisticQueuedItemByMessageId(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   messageId: string,
-): ChatQueueState {
+): OpenChatQueueState {
   return withoutOptimisticQueuedItems(
     queue,
     (item) => item.kind === "prompt" && item.messageId === messageId,
@@ -79,8 +79,8 @@ export function removeOptimisticQueuedItemByMessageId(
 }
 
 function shouldRetainOptimisticQueuedItem(
-  item: ChatQueuedItem,
-  authoritativeQueue: ChatQueueState,
+  item: OpenChatQueuedItem,
+  authoritativeQueue: OpenChatQueueState,
   retainedClientActionIds: ReadonlySet<string>,
 ): boolean {
   // Only an optimistic user send can be retained across a snapshot swap; the
@@ -94,9 +94,9 @@ function shouldRetainOptimisticQueuedItem(
 }
 
 function queueStatusWithOptimisticItems(
-  authoritativeStatus: ChatQueueState["status"],
-  currentStatus: ChatQueueState["status"],
-): ChatQueueState["status"] {
+  authoritativeStatus: OpenChatQueueState["status"],
+  currentStatus: OpenChatQueueState["status"],
+): OpenChatQueueState["status"] {
   if (authoritativeStatus === "paused" || currentStatus === "paused") {
     return "paused";
   }
@@ -104,9 +104,9 @@ function queueStatusWithOptimisticItems(
 }
 
 function withoutOptimisticQueuedItems(
-  queue: ChatQueueState,
-  shouldRemove: (item: ChatQueuedItem) => boolean,
-): ChatQueueState {
+  queue: OpenChatQueueState,
+  shouldRemove: (item: OpenChatQueuedItem) => boolean,
+): OpenChatQueueState {
   const items = queue.items.filter(
     (item) => !isOptimisticQueuedItem(item) || !shouldRemove(item),
   );
@@ -131,18 +131,18 @@ function withoutOptimisticQueuedItems(
  * older host) is left without one.
  */
 function queueWithStatus(
-  queue: ChatQueueState,
-  status: ChatQueueState["status"],
-  items: ChatQueueState["items"],
-): ChatQueueState {
-  const next: ChatQueueState = { ...queue, status, items };
+  queue: OpenChatQueueState,
+  status: OpenChatQueueState["status"],
+  items: OpenChatQueueState["items"],
+): OpenChatQueueState {
+  const next: OpenChatQueueState = { ...queue, status, items };
   if (status === "paused" || (queue.pausedReason ?? null) === null) return next;
   return { ...next, pausedReason: null };
 }
 
 function queueContainsQueuedSend(
-  queue: ChatQueueState,
-  item: ChatQueuedPromptItem,
+  queue: OpenChatQueueState,
+  item: OpenChatQueuedPromptItem,
 ): boolean {
   const content = JSON.stringify(item.message.content);
   const sender = JSON.stringify(item.sender);

@@ -400,6 +400,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     const applyPromise = applyHostWithAttempt(
       fakeCapability,
       fakeContenderOptions,
+      "terminal",
       {
         environment: ENV,
         force: false,
@@ -486,7 +487,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     let beforeSwapCommitCalled = false;
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -536,7 +537,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     let afterSwapCalled = false;
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -591,7 +592,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     );
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -722,9 +723,10 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
     // immediately off win32, and on win32 stops the service because a running
     // host holds the executable open against the swap rename. Asserting `[]`
     // unconditionally made this suite fail on a Windows developer's machine.
-    // No CI job runs vitest on Windows - `test-windows-cli-exit` builds the
-    // SEA and runs the two smokes - so nothing here was red; the suite simply
-    // could not be trusted where the branch it covers actually executes.
+    // No CI job runs THIS suite on Windows - `test-windows-cli-exit` does
+    // run vitest there now (clients/shared's denied-read test), but no
+    // traycer-cli suite - so nothing here was red; the suite simply could
+    // not be trusted where the branch it covers actually executes.
     expect(harness.order).toEqual(
       process.platform === "win32" ? ["controller.stop"] : [],
     );

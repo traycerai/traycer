@@ -75,5 +75,10 @@ export const harnessIdSchemaPreReasonix = lazySchema(() =>
 );
 
 export const harnessIdSchema = lazySchema(() =>
-  z.enum([...harnessIdSchemaPreReasonix.options, "reasonix", "antigravity"]),
+  z.enum([
+    ...harnessIdSchemaPreReasonix.options,
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
 );

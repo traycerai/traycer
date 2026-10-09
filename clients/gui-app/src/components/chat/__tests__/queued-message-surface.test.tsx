@@ -7,11 +7,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatQueuedManagedCommandItem,
   ChatQueuedPortForwardItem,
   ChatRunSettings,
@@ -290,7 +290,7 @@ describe("<QueuedMessagePanel />", () => {
     const header = screen.getByTestId("queued-message-header");
     const toggle = screen.getByTestId("queued-message-header-toggle");
     const runningDot = screen.getByLabelText("Queue running");
-    const title = screen.getByText("Message Queue");
+    const title = screen.getByText("Message queue");
     const divider = screen.getByTestId("queued-message-header-divider");
     const statusIcon = screen.getByTestId("queued-message-header-status-icon");
     const count = screen.getByText("2 messages");
@@ -437,11 +437,11 @@ describe("<QueuedMessagePanel />", () => {
     expect(toolbar.className).toContain("float-right");
     expect(toolbar.className).not.toContain("border-border/60");
     expect(toolbar.className).not.toContain("shadow-lg");
-    expect(within(toolbar).getByText("Waiting for steer")).not.toBeNull();
+    expect(within(toolbar).getByText("Waiting for provider")).not.toBeNull();
   });
 
   it("offers an un-stage control for a safe-point steer still waiting", () => {
-    const waiting: ChatQueuedItem = {
+    const waiting: OpenChatQueuedItem = {
       ...queuedItem("queue-1", "Waiting prompt", "steer_requested"),
       delivery: "same_turn",
       targetTurnId: "turn-1",
@@ -473,7 +473,7 @@ describe("<QueuedMessagePanel />", () => {
   });
 
   it("hides the un-stage control for an interrupt-restart steer", () => {
-    const restarting: ChatQueuedItem = {
+    const restarting: OpenChatQueuedItem = {
       ...queuedItem("queue-1", "Restart prompt", "steer_requested"),
       targetTurnId: "turn-1",
       steerRequest: {
@@ -514,7 +514,7 @@ describe("<QueuedMessagePanel />", () => {
     const content = within(
       screen.getByTestId("queued-message-row"),
     ).getByTestId("queued-message-content-scroll");
-    expect(content.className).toContain("max-h-[3lh]");
+    expect(content.className).toContain("max-h-[calc(3lh+--spacing(1))]");
     expect(content.className).toContain("overflow-y-auto");
   });
 
@@ -558,7 +558,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(3);
     expect(screen.getAllByTestId("queued-message-drag-handle")).toHaveLength(3);
     expect(screen.getByText("Frozen steering prompt")).not.toBeNull();
-    expect(screen.getByText("Waiting for steer")).not.toBeNull();
+    expect(screen.getByText("Waiting for provider")).not.toBeNull();
 
     const frozenRow = screen.getAllByTestId("queued-message-row")[1];
     expect(within(frozenRow).queryByRole("button")).toBeNull();
@@ -568,7 +568,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(frozenHandle.getAttribute("data-disabled")).toBe("true");
   });
 
-  it("renders optimistic queued sends as locked queuing rows", () => {
+  it("renders optimistic queued sends as locked sending rows", () => {
     renderPanel({
       queue: queueState([
         queuedItem(
@@ -584,7 +584,7 @@ describe("<QueuedMessagePanel />", () => {
 
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(1);
     expect(screen.getByText("Attachment prompt")).not.toBeNull();
-    expect(screen.getByText("Queuing")).not.toBeNull();
+    expect(screen.getByText("Sending to host")).not.toBeNull();
     expect(
       within(screen.getByTestId("queued-message-row")).queryByRole("button"),
     ).toBeNull();
@@ -1058,7 +1058,7 @@ describe("<QueuedMessagePanel />", () => {
     function steerRequestedItem(
       queueItemId: string,
       mode: "safe_point" | "interrupt_restart",
-    ): ChatQueuedPromptItem {
+    ): OpenChatQueuedPromptItem {
       return {
         ...queuedItem(queueItemId, `${queueItemId} text`, "steer_requested"),
         delivery: mode === "safe_point" ? "same_turn" : "next_turn",
@@ -1162,7 +1162,7 @@ describe("<QueuedMessagePanel />", () => {
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
-    it("renders a received A2A item's retained pending reason inline in its row", () => {
+    it("renders a received A2A item's retained pending reason inline in its row once the row is unfolded", () => {
       const reason = "Retained after the turn ended before it could steer.";
       renderPanel({
         queue: queueState([
@@ -1178,6 +1178,9 @@ describe("<QueuedMessagePanel />", () => {
 
       const row = screen.getByTestId("queued-message-row");
       expect(within(row).getByText("Agent response")).not.toBeNull();
+      // A folded agent row is one line, its reason included (#2441).
+      expect(within(row).queryByText(reason)).toBeNull();
+      fireEvent.click(within(row).getByTestId("queued-message-agent-fold"));
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
@@ -1394,7 +1397,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
 
     function renderReasonRow(
       queue: ChatSessionState["queue"],
-      item: ChatQueuedItem,
+      item: OpenChatQueuedItem,
     ): HTMLElement {
       renderPanel({
         queue: { ...queue, items: [item] },
@@ -1406,9 +1409,9 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     }
 
     function promptWithReason(
-      status: ChatQueuedPromptItem["status"],
+      status: OpenChatQueuedPromptItem["status"],
       reason: string | null,
-    ): ChatQueuedPromptItem {
+    ): OpenChatQueuedPromptItem {
       return {
         ...queuedItem("queue-reason", "Held prompt", status),
         fallbackReason: reason,
@@ -1559,42 +1562,54 @@ interface PanelInput {
   readonly onPause?: () => string | null;
   readonly onResume?: () => string | null;
   readonly onReorder:
-    | ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void)
+    | ((item: OpenChatQueuedItem, beforeQueueItemId: string | null) => void)
     | null;
 }
 
 function renderPanel(input: PanelInput) {
   return render(
     <TooltipProvider delayDuration={0}>
-      <QueuedMessagePanel
-        queue={input.queue}
-        activeTurnStatus="running"
-        canAct={input.canAct}
-        resumeRequested={input.resumeRequested ?? false}
-        keepPausedRequested={input.keepPausedRequested ?? false}
-        readOnly={input.readOnly}
-        editingQueueItemId={null}
-        scrollRegionMaxHeightClass="max-h-96"
-        onPause={input.onPause ?? (() => null)}
-        onResume={input.onResume ?? (() => null)}
-        onEdit={vi.fn()}
-        onCancel={onCancelSpy}
-        onAbortSteer={onAbortSteerSpy}
-        onReorder={input.onReorder ?? vi.fn()}
-        onSteerNow={vi.fn()}
-      />
+      <StatefulQueuePanel input={input} />
     </TooltipProvider>,
   );
 }
 
+/** The dock owns the fold in production; this holds it the same way. */
+function StatefulQueuePanel(props: { readonly input: PanelInput }) {
+  const { input } = props;
+  const [open, setOpen] = useState<boolean>(true);
+  return (
+    <QueuedMessagePanel
+      queue={input.queue}
+      activeTurnStatus="running"
+      canAct={input.canAct}
+      resumeRequested={input.resumeRequested ?? false}
+      keepPausedRequested={input.keepPausedRequested ?? false}
+      readOnly={input.readOnly}
+      editingQueueItemId={null}
+      scrollRegionMaxHeightClass="max-h-96"
+      separated={false}
+      open={open}
+      onOpenChange={setOpen}
+      onPause={input.onPause ?? (() => null)}
+      onResume={input.onResume ?? (() => null)}
+      onEdit={vi.fn()}
+      onCancel={onCancelSpy}
+      onAbortSteer={onAbortSteerSpy}
+      onReorder={input.onReorder ?? vi.fn()}
+      onSteerNow={vi.fn()}
+    />
+  );
+}
+
 function queueState(
-  items: ReadonlyArray<ChatQueuedItem>,
+  items: ReadonlyArray<OpenChatQueuedItem>,
 ): ChatSessionState["queue"] {
   return { status: "idle", items: [...items] };
 }
 
 function runningQueueState(
-  items: ReadonlyArray<ChatQueuedItem>,
+  items: ReadonlyArray<OpenChatQueuedItem>,
 ): ChatSessionState["queue"] {
   return { status: "running", items: [...items] };
 }
@@ -1602,8 +1617,8 @@ function runningQueueState(
 function queuedItem(
   queueItemId: string,
   text: string,
-  status: ChatQueuedItem["status"],
-): ChatQueuedPromptItem {
+  status: OpenChatQueuedItem["status"],
+): OpenChatQueuedPromptItem {
   return {
     kind: "prompt",
     queueItemId,
@@ -1666,7 +1681,7 @@ function portForwardQueuedItem(
 function agentQueuedItem(
   queueItemId: string,
   text: string,
-): ChatQueuedPromptItem {
+): OpenChatQueuedPromptItem {
   return {
     ...queuedItem(queueItemId, text, "pending"),
     sender: {

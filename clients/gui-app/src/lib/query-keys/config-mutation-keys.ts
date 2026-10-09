@@ -21,4 +21,6 @@ export const configMutationKeys = {
   envRename: () => ["config.env.rename"] as const,
   logLevelsSet: () => ["config.logLevels.set"] as const,
   browserSet: () => ["config.browser.set"] as const,
+  worktreesSet: () => ["config.worktrees.set"] as const,
+  catalogSet: () => ["config.catalog.set"] as const,
 };

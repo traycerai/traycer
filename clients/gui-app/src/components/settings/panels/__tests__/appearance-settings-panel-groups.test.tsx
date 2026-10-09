@@ -1,4 +1,11 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
@@ -25,22 +32,11 @@ vi.mock("@/lib/appearance/curated-wallpapers", () => ({
   fetchCuratedWallpaperManifest: () => Promise.resolve([]),
 }));
 
-const GROUP_TITLES = [
-  "Themes",
-  "Start page",
-  "Interface",
-  "Fonts and text",
-  "Motion and readability",
-  "Terminal",
-  "Icon colors",
-] as const;
-
 function resetAppearanceSettings(): void {
   useSettingsStore.setState({
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     pointerCursors: true,
-    chatTurnMinimapSide: "right",
     codeFontFamily: null,
     codeFontSize: DEFAULT_CODE_FONT_SIZE,
     terminalFontFamily: null,
@@ -63,81 +59,20 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     resetAppearanceSettings();
   });
 
-  it("renders the named group headings in order", () => {
+  it("renders the Agent office default view row in the Tasks area, wired to the store", async () => {
     renderPanel(queryClient);
+    await goToArea("Tasks");
 
-    const themes = screen.getByRole("heading", { level: 2, name: "Themes" });
-    const startPage = screen.getByRole("heading", {
-      level: 2,
-      name: "Start page",
-    });
-    const iface = screen.getByRole("heading", {
-      level: 2,
-      name: "Interface",
-    });
-    const fontsAndText = screen.getByRole("heading", {
-      level: 2,
-      name: "Fonts and text",
-    });
-    const motion = screen.getByRole("heading", {
-      level: 2,
-      name: "Motion and readability",
-    });
-    const terminal = screen.getByRole("heading", {
-      level: 2,
-      name: "Terminal",
-    });
-    const iconColors = screen.getByRole("heading", {
-      level: 2,
-      name: "Icon colors",
-    });
+    const panel = activeTabPanel();
+    expect(panel.getAttribute("aria-label")).toBe("Tasks");
+    expect(within(panel).getByText("Agent office default view")).toBeTruthy();
+    expect(
+      within(panel).getByRole("switch", { name: "Color icons by type" }),
+    ).toBeTruthy();
 
-    expect(documentPosition(themes, iface)).toBe("before");
-    expect(documentPosition(themes, startPage)).toBe("before");
-    expect(documentPosition(startPage, iface)).toBe("before");
-    expect(documentPosition(iface, fontsAndText)).toBe("before");
-    expect(documentPosition(fontsAndText, motion)).toBe("before");
-    expect(documentPosition(motion, terminal)).toBe("before");
-    expect(documentPosition(terminal, iconColors)).toBe("before");
-  });
-
-  it("renders the Agent office group between Terminal and Icon colors, with its Default view row wired to the store", () => {
-    // The case above is PAIRWISE: it asserts Terminal before Icon colors,
-    // which stays true whether or not Agent office renders between them at
-    // all - a port that added the definitions module entries but never
-    // wired the panel's own `<SettingsGroup>` would leave that case green.
-    // This pins the group by NAME, ties its row to it rather than to its
-    // neighbors, and exercises the row's control end to end.
-    renderPanel(queryClient);
-
-    const terminal = screen.getByRole("heading", {
-      level: 2,
-      name: "Terminal",
+    const select = screen.getByRole("combobox", {
+      name: "Agent office default view",
     });
-    const agentOffice = screen.getByRole("heading", {
-      level: 2,
-      name: "Agent office",
-    });
-    const iconColors = screen.getByRole("heading", {
-      level: 2,
-      name: "Icon colors",
-    });
-    expect(documentPosition(terminal, agentOffice)).toBe("before");
-    expect(documentPosition(agentOffice, iconColors)).toBe("before");
-
-    // Tied to its OWN section, the way "places representative rows under
-    // the correct section headers" ties every other row to its heading -
-    // not merely somewhere after Terminal and before Icon colors, but
-    // inside Agent office's own `<section>`.
-    const defaultViewRow = screen.getByText("Default view");
-    expect(agentOffice.closest("section")).toBe(
-      defaultViewRow.closest("section"),
-    );
-    expect(iconColors.closest("section")).not.toBe(
-      defaultViewRow.closest("section"),
-    );
-
-    const select = screen.getByRole("combobox", { name: "Default view" });
     expect(select.textContent).toBe(
       OFFICE_VIEW_LABELS[DEFAULT_AGENT_OFFICE_VIEW],
     );
@@ -154,15 +89,18 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
   });
 
-  it("sizes the Default view selector as a fluid width with a tokenized cap (Finding 16)", () => {
+  it("sizes the Agent office default view selector as a fluid width with a tokenized cap (Finding 16)", async () => {
     // A fixed `w-[min(40vw,8rem)]` caps a new layout surface at an arbitrary
     // rem, which the GUI fluid-sizing rule forbids - `w-[40vw]` (fluid)
     // plus a tokenized `max-w-32` ceiling replaces it. Scoped to the
-    // "Default view" trigger only: "Display zoom" carries the same
+    // Agent office default view trigger only: "Display zoom" carries the same
     // `w-[min(40vw,8rem)]` shape and is deliberately out of scope here.
     renderPanel(queryClient);
+    await goToArea("Tasks");
 
-    const select = screen.getByRole("combobox", { name: "Default view" });
+    const select = screen.getByRole("combobox", {
+      name: "Agent office default view",
+    });
     expect(select.className).toContain("w-[40vw]");
     expect(select.className).toContain("max-w-32");
     expect(select.className).not.toContain("w-[min(40vw,8rem)]");
@@ -179,173 +117,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     ).toBeNull();
   });
 
-  it("renders named sections as h2 headings outside separate bordered cards", () => {
+  it("places representative rows in the area that names them, sharing a card per area", () => {
     renderPanel(queryClient);
-
-    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a
-    // single shared card. Each group is its own <section>; the h2 and the
-    // bordered rows-container are siblings.
-    const headings = GROUP_TITLES.map((title) =>
-      screen.getByRole("heading", { level: 2, name: title }),
-    );
-
-    for (const heading of headings) {
-      const section = heading.closest("section");
-      expect(section).not.toBeNull();
-      // Heading sits outside the bordered card (sibling of the card div).
-      expect(heading.closest("div.rounded-lg")).toBeNull();
-      expect(section?.contains(heading)).toBe(true);
-    }
-
-    const themesHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Themes",
-    });
-    const interfaceHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Interface",
-    });
-    const fontsAndTextHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Fonts and text",
-    });
-    const motionHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Motion and readability",
-    });
-    const terminalHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Terminal",
-    });
-    const iconColorsHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Icon colors",
-    });
-
-    const schemeButton = screen.getByRole("button", { name: "Follow device" });
-    const preset = screen.getByRole("button", { name: "Light theme" });
-    const pointerCursors = screen.getByText(
-      "Show a hand cursor over clickable controls",
-    );
-    const interfaceFont = screen.getByText("Interface font");
-    const codeFont = screen.getByText("Code font");
-    const promptFont = screen.getByText("Prompt font");
-    const fontLigatures = screen.getByText("Use font ligatures");
-    const panelAnimations = screen.getByText("Panel animations");
-    const terminalFont = screen.getByText("Terminal font");
-    const terminalCursor = screen.getByText("Terminal cursor");
-    const blinkCursor = screen.getByText("Blink cursor");
-    const iconColors = screen.getAllByText("Color icons by type")[0];
-
-    expect(themesHeading.closest("div.rounded-lg")).toBeNull();
-    // The theme-mode control is a row of the Themes group, so it shares that
-    // group's section and its bordered card with the theme slots.
-    expect(schemeButton.closest("section")).toBe(
-      themesHeading.closest("section"),
-    );
-    expect(schemeButton.closest("div.rounded-lg")).toBe(
-      preset.closest("div.rounded-lg"),
-    );
-    expect(preset.closest("section")).toBe(themesHeading.closest("section"));
-    expect(interfaceFont.closest("div.rounded-lg")).toBe(
-      codeFont.closest("div.rounded-lg"),
-    );
-    expect(promptFont.closest("div.rounded-lg")).toBe(
-      interfaceFont.closest("div.rounded-lg"),
-    );
-    expect(fontLigatures.closest("div.rounded-lg")).toBe(
-      interfaceFont.closest("div.rounded-lg"),
-    );
-    expect(terminalFont.closest("div.rounded-lg")).toBe(
-      terminalCursor.closest("div.rounded-lg"),
-    );
-    expect(terminalCursor.closest("div.rounded-lg")).toBe(
-      blinkCursor.closest("div.rounded-lg"),
-    );
-
-    // Rows from different groups do NOT share a card.
-    expect(preset.closest("div.rounded-lg")).not.toBe(
-      pointerCursors.closest("div.rounded-lg"),
-    );
-    expect(pointerCursors.closest("div.rounded-lg")).not.toBe(
-      interfaceFont.closest("div.rounded-lg"),
-    );
-    expect(interfaceFont.closest("div.rounded-lg")).not.toBe(
-      terminalFont.closest("div.rounded-lg"),
-    );
-    expect(terminalFont.closest("div.rounded-lg")).not.toBe(
-      iconColors.closest("div.rounded-lg"),
-    );
-
-    // Each heading's section owns its representative row.
-    const themeModeGroup = screen.getByRole("group", {
-      name: "Theme mode",
-    });
-    const themeList = themesHeading.nextElementSibling;
-    expect(themeModeGroup.contains(schemeButton)).toBe(true);
-    expect(themeList?.contains(preset)).toBe(true);
-    expect(interfaceHeading.closest("section")).toBe(
-      pointerCursors.closest("section"),
-    );
-    expect(fontsAndTextHeading.closest("section")).toBe(
-      interfaceFont.closest("section"),
-    );
-    expect(motionHeading.closest("section")).toBe(
-      panelAnimations.closest("section"),
-    );
-    expect(terminalHeading.closest("section")).toBe(
-      terminalFont.closest("section"),
-    );
-    expect(iconColorsHeading.closest("section")).toBe(
-      iconColors.closest("section"),
-    );
-
-    // Distinct sections per group.
-    expect(themesHeading.closest("section")).not.toBe(
-      interfaceHeading.closest("section"),
-    );
-    expect(interfaceHeading.closest("section")).not.toBe(
-      fontsAndTextHeading.closest("section"),
-    );
-    expect(fontsAndTextHeading.closest("section")).not.toBe(
-      motionHeading.closest("section"),
-    );
-    expect(motionHeading.closest("section")).not.toBe(
-      terminalHeading.closest("section"),
-    );
-    expect(terminalHeading.closest("section")).not.toBe(
-      iconColorsHeading.closest("section"),
-    );
-  });
-
-  it("places representative rows under the correct section headers", () => {
-    renderPanel(queryClient);
-
-    const themes = screen.getByRole("heading", { level: 2, name: "Themes" });
-    const startPage = screen.getByRole("heading", {
-      level: 2,
-      name: "Start page",
-    });
-    const iface = screen.getByRole("heading", {
-      level: 2,
-      name: "Interface",
-    });
-    const fontsAndText = screen.getByRole("heading", {
-      level: 2,
-      name: "Fonts and text",
-    });
-    const motion = screen.getByRole("heading", {
-      level: 2,
-      name: "Motion and readability",
-    });
-    const terminal = screen.getByRole("heading", {
-      level: 2,
-      name: "Terminal",
-    });
-    const iconColors = screen.getByRole("heading", {
-      level: 2,
-      name: "Icon colors",
-    });
 
     const schemeButton = screen.getByRole("button", { name: "Follow device" });
     const preset = screen.getByRole("button", { name: "Light theme" });
@@ -364,49 +137,65 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     const blinkCursor = screen.getByText("Blink cursor");
     const artifactIconColors = screen.getAllByText("Color icons by type")[0];
 
-    // Theme controls sit between the Themes heading and Start page, the mode
-    // row first.
-    expect(documentPosition(themes, schemeButton)).toBe("before");
-    expect(documentPosition(schemeButton, preset)).toBe("before");
-    expect(documentPosition(themes, startPage)).toBe("before");
-    expect(documentPosition(preset, iface)).toBe("before");
+    expect(areaPanel("Themes").contains(schemeButton)).toBe(true);
+    expect(areaPanel("Themes").contains(preset)).toBe(true);
+    expect(schemeButton.closest("div.rounded-lg")).toBe(
+      preset.closest("div.rounded-lg"),
+    );
 
-    // Interface rows sit between that header and Fonts and text.
-    expect(documentPosition(iface, pointerCursors)).toBe("before");
-    expect(documentPosition(pointerCursors, fontsAndText)).toBe("before");
-    // Pointer cursors is not still in Theme.
-    expect(documentPosition(themes, pointerCursors)).toBe("before");
-    expect(documentPosition(pointerCursors, iface)).not.toBe("before");
+    expect(areaPanel("Interface").contains(pointerCursors)).toBe(true);
+    expect(areaPanel("Interface").contains(panelAnimations)).toBe(true);
+    expect(areaPanel("Interface").contains(animationDuration)).toBe(true);
+    expect(areaPanel("Interface").contains(textContrast)).toBe(true);
+    expect(pointerCursors.closest("div.rounded-lg")).toBe(
+      panelAnimations.closest("div.rounded-lg"),
+    );
 
-    // Fonts and text rows precede Motion and readability.
-    expect(documentPosition(fontsAndText, interfaceFont)).toBe("before");
-    expect(documentPosition(interfaceFont, codeFont)).toBe("before");
-    expect(documentPosition(codeFont, promptFont)).toBe("before");
-    expect(documentPosition(promptFont, fontLigatures)).toBe("before");
-    expect(documentPosition(fontLigatures, motion)).toBe("before");
+    expect(areaPanel("Fonts and text").contains(interfaceFont)).toBe(true);
+    expect(areaPanel("Fonts and text").contains(codeFont)).toBe(true);
+    expect(areaPanel("Fonts and text").contains(promptFont)).toBe(true);
+    expect(areaPanel("Fonts and text").contains(fontLigatures)).toBe(true);
+    expect(interfaceFont.closest("div.rounded-lg")).toBe(
+      codeFont.closest("div.rounded-lg"),
+    );
+    expect(promptFont.closest("div.rounded-lg")).toBe(
+      interfaceFont.closest("div.rounded-lg"),
+    );
+    expect(fontLigatures.closest("div.rounded-lg")).toBe(
+      interfaceFont.closest("div.rounded-lg"),
+    );
 
-    expect(documentPosition(motion, panelAnimations)).toBe("before");
-    expect(documentPosition(panelAnimations, animationDuration)).toBe("before");
-    expect(documentPosition(animationDuration, textContrast)).toBe("before");
-    expect(documentPosition(textContrast, terminal)).toBe("before");
+    expect(areaPanel("Terminal").contains(terminalFont)).toBe(true);
+    expect(areaPanel("Terminal").contains(terminalCursor)).toBe(true);
+    expect(areaPanel("Terminal").contains(blinkCursor)).toBe(true);
+    expect(terminalFont.closest("div.rounded-lg")).toBe(
+      terminalCursor.closest("div.rounded-lg"),
+    );
+    expect(terminalCursor.closest("div.rounded-lg")).toBe(
+      blinkCursor.closest("div.rounded-lg"),
+    );
 
-    // Terminal rows before Icon colors.
-    expect(documentPosition(terminal, terminalFont)).toBe("before");
-    expect(documentPosition(terminalFont, terminalCursor)).toBe("before");
-    expect(documentPosition(terminalCursor, blinkCursor)).toBe("before");
-    expect(documentPosition(blinkCursor, iconColors)).toBe("before");
+    expect(areaPanel("Tasks").contains(artifactIconColors)).toBe(true);
 
-    // Icon colors content after its header.
-    expect(documentPosition(iconColors, artifactIconColors)).toBe("before");
+    // Rows from different areas do NOT share a card.
+    expect(preset.closest("div.rounded-lg")).not.toBe(
+      pointerCursors.closest("div.rounded-lg"),
+    );
+    expect(pointerCursors.closest("div.rounded-lg")).not.toBe(
+      interfaceFont.closest("div.rounded-lg"),
+    );
+    expect(interfaceFont.closest("div.rounded-lg")).not.toBe(
+      terminalFont.closest("div.rounded-lg"),
+    );
+    expect(terminalFont.closest("div.rounded-lg")).not.toBe(
+      artifactIconColors.closest("div.rounded-lg"),
+    );
   });
 
-  it("renders the terminal preview inside the Terminal card without a row label", () => {
+  it("renders the terminal preview inside the Terminal card without a row label", async () => {
     renderPanel(queryClient);
+    await goToArea("Terminal");
 
-    const terminalHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Terminal",
-    });
     const terminalFont = screen.getByText("Terminal font");
     const terminalCursor = screen.getByText("Terminal cursor");
     const blinkCursor = screen.getByText("Blink cursor");
@@ -416,9 +205,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     // the card next to the terminal controls.
     expect(screen.queryByText("Terminal preview")).toBeNull();
 
-    const terminalSection = terminalHeading.closest("section");
-    expect(terminalSection).not.toBeNull();
-    expect(terminalSection?.contains(previewPrompt)).toBe(true);
+    const terminalSection = areaPanel("Terminal");
+    expect(terminalSection.contains(previewPrompt)).toBe(true);
 
     const terminalCard = terminalFont.closest("div.rounded-lg");
     expect(terminalCard).not.toBeNull();
@@ -431,12 +219,13 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(previewRoot).toBe(previewPrompt.closest('[aria-hidden="true"]'));
   });
 
-  it("applies terminal font family override to the terminal preview", () => {
+  it("applies terminal font family override to the terminal preview", async () => {
     useSettingsStore.setState({
       terminalFontFamily: "Custom Term Font",
       codeFontFamily: "Should Not Win",
     });
     renderPanel(queryClient);
+    await goToArea("Terminal");
 
     const previewRoot = terminalPreviewRoot();
     expect(previewRoot.style.fontFamily).toBe(
@@ -444,18 +233,19 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     );
   });
 
-  it("applies terminal font size override to the terminal preview", () => {
+  it("applies terminal font size override to the terminal preview", async () => {
     useSettingsStore.setState({
       terminalFontSize: 18,
       codeFontSize: 11,
     });
     renderPanel(queryClient);
+    await goToArea("Terminal");
 
     const previewRoot = terminalPreviewRoot();
     expect(previewRoot.style.fontSize).toBe("18px");
   });
 
-  it("falls back to code font family and size when terminal overrides are null", () => {
+  it("falls back to code font family and size when terminal overrides are null", async () => {
     useSettingsStore.setState({
       terminalFontFamily: null,
       terminalFontSize: null,
@@ -463,6 +253,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       codeFontSize: 15,
     });
     renderPanel(queryClient);
+    await goToArea("Terminal");
 
     const previewRoot = terminalPreviewRoot();
     expect(previewRoot.style.fontFamily).toBe(
@@ -471,19 +262,21 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(previewRoot.style.fontSize).toBe("15px");
   });
 
-  it("falls back to the default mono stack when terminal and code families are null", () => {
+  it("falls back to the default mono stack when terminal and code families are null", async () => {
     useSettingsStore.setState({
       terminalFontFamily: null,
       codeFontFamily: null,
     });
     renderPanel(queryClient);
+    await goToArea("Terminal");
 
     const previewRoot = terminalPreviewRoot();
     expect(previewRoot.style.fontFamily).toBe(DEFAULT_MONO_FONT_STACK);
   });
 
-  it("toggles icon color palette visibility and preserves colors across re-enable", () => {
+  it("toggles icon color palette visibility and preserves colors across re-enable", async () => {
     renderPanel(queryClient);
+    await goToArea("Tasks");
 
     const enableSwitch = screen.getByRole("switch", {
       name: "Color icons by type",
@@ -547,14 +340,24 @@ function colorInput(name: string): HTMLInputElement {
   return el;
 }
 
-function documentPosition(
-  earlier: HTMLElement,
-  later: HTMLElement,
-): "before" | "after" | "unrelated" {
-  const relation = earlier.compareDocumentPosition(later);
-  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
-  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
-  return "unrelated";
+async function goToArea(label: string): Promise<void> {
+  await userEvent.click(screen.getByRole("tab", { name: label }));
+}
+
+function areaPanel(label: string): HTMLElement {
+  const panel = document.querySelector(
+    `[role="tabpanel"][aria-label="${label}"]`,
+  );
+  if (!(panel instanceof HTMLElement)) {
+    throw new Error(`no tabpanel for ${label}`);
+  }
+  return panel;
+}
+
+function activeTabPanel(): HTMLElement {
+  const panel = document.querySelector('[role="tabpanel"]:not([hidden])');
+  if (!(panel instanceof HTMLElement)) throw new Error("no active tabpanel");
+  return panel;
 }
 
 function createQueryClient(): QueryClient {

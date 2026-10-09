@@ -1,12 +1,11 @@
-import type {
-  ImageResolutionEntry,
-  Message,
-} from "@traycer/protocol/persistence/epic/messages";
+import type { ImageResolutionEntry } from "@traycer/protocol/persistence/epic/messages";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   retainedValueSize,
   type RetainedValueSize,
 } from "@/stores/replica-memory/retained-value-size";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * # Witnessed image-resolution writes: the evidence rule 2 compares
@@ -122,7 +121,7 @@ export interface ImageWitnessStore {
     entry: ImageResolutionEntry,
   ) => number | null;
   /** The held copy's stamp for one source. 0 = no rule-2 evidence. */
-  readonly heldStamp: (copy: Message, canonicalSource: string) => number;
+  readonly heldStamp: (copy: OpenMessage, canonicalSource: string) => number;
   /**
    * Stamp every held copy of `messageId` in the window with an applied
    * witness's exact sequence - called after `rewriteWindowMessage`, which
@@ -145,7 +144,10 @@ export interface ImageWitnessStore {
    * would be unreachable for any record with two or more differing sources.
    * Absent evidence carries as absent.
    */
-  readonly carryRewrittenCopy: (previous: Message, next: Message) => void;
+  readonly carryRewrittenCopy: (
+    previous: OpenMessage,
+    next: OpenMessage,
+  ) => void;
   /**
    * Seat-time stamping for a copy that just arrived by serve: per-source
    * unique content match (nothing on no match or an ambiguous one), plus the
@@ -153,9 +155,9 @@ export interface ImageWitnessStore {
    * held substitute that survived the seat keeps the stamps it already
    * carries.
    */
-  readonly stampSeatedCopy: (copy: Message) => void;
+  readonly stampSeatedCopy: (copy: OpenMessage) => void;
   /** The copy's capture moment; 0 for an object this store never saw seat. */
-  readonly capturedAt: (copy: Message) => number;
+  readonly capturedAt: (copy: OpenMessage) => number;
   /**
    * Per-record reset on an authoritative snapshot serve: clears the record's
    * occurrences and moves its lineage floor. NOT called for `updated` index
@@ -189,7 +191,7 @@ export function createImageWitnessStore(): ImageWitnessStore {
   /** Receipt order; oldest first, evicted first. */
   let occurrences: WitnessOccurrence[] = [];
   let occurrenceSizes: RetainedValueSize[] = [];
-  const heldEvidence = new WeakMap<Message, HeldCopyEvidence>();
+  const heldEvidence = new WeakMap<OpenMessage, HeldCopyEvidence>();
   const resetFloors = new Map<string, number>();
   let invalidationFloor = 0;
   const truncated = new Set<string>();
@@ -230,7 +232,7 @@ export function createImageWitnessStore(): ImageWitnessStore {
     return match;
   };
 
-  const evidenceFor = (copy: Message): HeldCopyEvidence | undefined =>
+  const evidenceFor = (copy: OpenMessage): HeldCopyEvidence | undefined =>
     heldEvidence.get(copy);
 
   return {
@@ -271,7 +273,7 @@ export function createImageWitnessStore(): ImageWitnessStore {
     heldStamp: (copy, canonicalSource) =>
       evidenceFor(copy)?.stamps.get(canonicalSource) ?? 0,
     stampRewrittenCopies: (window, messageId, canonicalSource, applied) => {
-      const stamp = (message: Message): void => {
+      const stamp = (message: OpenMessage): void => {
         if (message.messageId !== messageId) return;
         const existing = heldEvidence.get(message);
         if (existing !== undefined) {

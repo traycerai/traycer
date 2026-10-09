@@ -6,6 +6,7 @@ import type {
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
 import { SplitFocusIcon, SplitTabLayout } from "./split-tab-chrome";
+import { useHeaderSplitJoinPane } from "./surface-join-pane";
 import {
   headerTabClassName,
   splitFillableMemberClassName,
@@ -29,9 +30,9 @@ interface SplitTabDragOverlayProps {
 
 export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
   const { item } = props;
+  const joinPane = useHeaderSplitJoinPane(item);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const geometryRef = useRef<{
-    offset: number;
     memberWidth: number | null;
   } | null>(null);
   const { tabKind, tabId } = props.source;
@@ -42,21 +43,11 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
       const source = Array.from(
         document.querySelectorAll<HTMLElement>("[data-tab-kind]"),
       ).find((element) => element.dataset.testid === `tab-${tabKind}-${tabId}`);
-      const frame = source?.closest<HTMLElement>("[data-strip-item-id]");
-      // dnd-kit anchors to the grabbed member. Move only the preview's paint
-      // back to the group origin without changing the measured drag rectangle.
-      const offset =
-        source === undefined || frame === null || frame === undefined
-          ? 0
-          : frame.getBoundingClientRect().left -
-            source.getBoundingClientRect().left;
       geometryRef.current = {
-        offset,
         memberWidth: source?.getBoundingClientRect().width ?? null,
       };
     }
     const geometry = geometryRef.current;
-    overlay.style.transform = `translateX(${props.tearOff ? 0 : geometry.offset}px)`;
     const width = props.tearOff ? geometry.memberWidth : props.width;
     overlay.style.width = width === null ? "" : `${width}px`;
   }, [tabId, tabKind, props.tearOff, props.width]);
@@ -82,14 +73,14 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
             ghost={props.ghost}
             chrome="own"
             isActive
+            joined={false}
           />
         </div>
       ) : (
         <SplitTabLayout
-          leftColor={splitMemberColor(item.left, leftGhost)}
-          rightColor={splitMemberColor(item.right, rightGhost)}
           splitId={item.id}
           selectedSide={props.isActive ? item.focusedSide : null}
+          joined={props.isActive ? joinPane : null}
           control={
             <span
               className={cn(
@@ -102,6 +93,7 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
               <SplitFocusIcon
                 splitId={item.id}
                 focusedSide={item.focusedSide}
+                size="size-5"
               />
             </span>
           }
@@ -148,15 +140,8 @@ function SplitMemberOverlay(props: {
         ghost={props.ghost}
         chrome="member"
         isActive={focused}
+        joined={false}
       />
     </div>
   );
-}
-
-function splitMemberColor(
-  member: HeaderStripMember,
-  ghost: HeaderTabDragGhost | null,
-): string | null {
-  if (ghost !== null) return ghost.appearance?.color ?? null;
-  return member.kind === "tab" ? (member.tab.appearance?.color ?? null) : null;
 }

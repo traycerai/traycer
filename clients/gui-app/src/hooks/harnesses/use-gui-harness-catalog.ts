@@ -4,6 +4,7 @@ import {
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -407,6 +408,7 @@ export function useGuiHarnessModelsQueryForClient(
     cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listModels",
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     params,
     options: {
       enabled: activity.enabled,
@@ -463,6 +465,7 @@ export function useGuiHarnessModelsWarmup(
   }, [harnessId]);
   return useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
     options: {
@@ -488,6 +491,7 @@ export function useGuiHarnessCommandsQuery(
     cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listCommands",
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     params,
     options: {
       enabled: activity.enabled,
@@ -551,6 +555,7 @@ export function useGuiHarnessCatalogForClient(
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
     options: {
@@ -599,6 +604,7 @@ export function useGuiHarnessCatalogForClient(
     "agent.gui.listModels"
   >({
     client,
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests: pendingRequests,
     options: { enabled: false, staleTime: Infinity, gcTime: Infinity },

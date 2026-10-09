@@ -45,7 +45,7 @@ interface TuiHeaderFields {
  * live GUI harness catalog, with a raw-slug fallback whenever the catalog
  * lacks the entry (or the owner's host cannot be resolved at all).
  *
- * It renders only while the hover card is open (mounted by `HoverCardContent`,
+ * It renders only while the hover card is open (mounted by `HoverCard`,
  * which has no `forceMount`), so nothing here can fire before open: the catalog
  * observer attaches on open and detaches on close.
  *

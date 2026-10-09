@@ -217,6 +217,7 @@ function GeometryHarness(props: GeometryHarnessProps): ReactNode {
       style={{ transform: "translate(0, -200%)" }}
     >
       <NotificationsPopover
+        variant="center"
         onNavigate={() => undefined}
         headingRef={headingRef}
         shellRef={geometry.shellRef}

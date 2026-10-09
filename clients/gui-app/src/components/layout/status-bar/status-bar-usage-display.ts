@@ -4,10 +4,10 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import {
-  useLayoutStore,
-  type PercentMode,
-} from "@/stores/settings/layout-store";
+import { useRegionValues } from "@/lib/layout-overrides";
+import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
+import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
+import type { AmountMode, ReadingStyle } from "@/lib/layout/layout-values";
 
 /**
  * The box the readings sit in, at its NATURAL width.
@@ -68,6 +68,30 @@ export function statusBarUsageScrollKey(
   ]);
 }
 
+const SEVERITY_RANK: Readonly<Record<RateLimitWindowSeverity, number>> = {
+  healthy: 0,
+  running_low: 1,
+  limited: 2,
+};
+
+/**
+ * The severity a profile is drawn at: the worst of the windows the strip shows
+ * for it. The host decides each window's tier (`semantics.ts`); this only picks
+ * between them, so a profile showing two limits is never calmer than either.
+ * A segment with nothing to show (cold, unavailable) is calm.
+ */
+export function statusBarSegmentSeverity(
+  segment: StatusBarProviderSegmentModel,
+): RateLimitWindowSeverity {
+  return segment.shown.reduce<RateLimitWindowSeverity>(
+    (worst, window) =>
+      SEVERITY_RANK[window.severity] > SEVERITY_RANK[worst]
+        ? window.severity
+        : worst,
+    "healthy",
+  );
+}
+
 /** One empty list for the three cluster states that draw no segments. */
 const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
 
@@ -75,62 +99,34 @@ const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
  * Everything about the readings that the user chose.
  *
  * One value because two surfaces draw these readings - the strip and the
- * Settings preview - and both need the same four answers to one question:
- * what a segment prints. Passing them together is what keeps a preview from
- * being a second opinion about the settings it exists to show. Which of a
- * provider's limits are drawn is NOT here: that is resolved into the segment
- * model itself, so a segment already carries the windows it should draw.
+ * Settings preview - and both need the same answers to one question: what a
+ * segment prints. Passing them together is what keeps a preview from being a
+ * second opinion about the settings it exists to show. Which of a provider's
+ * limits are drawn is NOT here: that is resolved into the segment model
+ * itself, so a segment already carries the windows it should draw. Neither is
+ * the density, which decides which component draws the readings at all.
  */
 export interface StatusBarUsageDisplay {
-  readonly percentMode: PercentMode;
-  readonly showModeWord: boolean;
-  readonly showBar: boolean;
+  readonly percentMode: AmountMode;
   readonly showTimer: boolean;
+  readonly readingStyle: ReadingStyle;
 }
 
 /**
- * What a reading is made of, as three independent answers the render path
- * can test rather than a preference object it would have to interpret.
+ * Through the override seam (`lib/layout-overrides.ts`), so a style example or
+ * a specimen stage can draw the real readings under a different answer.
  *
- * The strip draws every drawn account at exactly this detail at every width -
- * the percentage and the window's label are always printed, and nothing is
- * taken away to make room, because what does not fit scrolls into view
- * instead. So the parts are the preferences and nothing else: a part is off
- * only when the user switched it off.
- */
-export interface StatusBarUsageParts {
-  readonly modeWord: boolean;
-  readonly bar: boolean;
-  readonly timer: boolean;
-}
-
-export function statusBarUsageParts(
-  display: StatusBarUsageDisplay,
-): StatusBarUsageParts {
-  return {
-    modeWord: display.showModeWord,
-    bar: display.showBar,
-    timer: display.showTimer,
-  };
-}
-
-/**
- * Field by field rather than one object selector: a selector returning a fresh
- * object every call makes `useSyncExternalStore` see a new snapshot on each
- * read and re-render forever.
+ * One region read rather than two: every one of these leaves lives in the
+ * `usageLimits` bag, so a reader of one is a reader of the region, and the
+ * delta's identity changes only when that region does.
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
-  const percentMode = useLayoutStore(
-    (state) => state.statusBar.rateLimits.percentMode,
-  );
-  const showModeWord = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showModeWord,
-  );
-  const showBar = useLayoutStore((state) => state.statusBar.rateLimits.showBar);
-  const showTimer = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showTimer,
-  );
-  return { percentMode, showModeWord, showBar, showTimer };
+  const values = useRegionValues("usageLimits");
+  return {
+    percentMode: values.amount,
+    showTimer: values.reset,
+    readingStyle: values.readingStyle,
+  };
 }
 
 /** The segments a cluster is drawing, or one shared empty list for the rest. */
@@ -163,4 +159,36 @@ export function statusBarSegmentTooltip(
   }
   if (segment.state === "cold") return `${providerName} · no reading yet`;
   return providerName;
+}
+
+/**
+ * What a screen reader hears on a usage trigger - the status bar's, or the
+ * tab strip's when the reading lives there: the headline, then the
+ * tightest reading for each segment it is showing - named by provider, and by
+ * account too where the provider has more than one.
+ *
+ * One reading per segment rather than every window, because this is a control
+ * name and a name is read in full before anything else can happen. The tightest
+ * window is the one the segment model selects by default for the same reason -
+ * it is the number that decides whether the panel is worth opening. Every
+ * segment is in the name whether or not it is currently scrolled into view:
+ * what a screen reader hears cannot depend on where the strip is scrolled to.
+ */
+export function statusBarUsageTriggerName(
+  cluster: StatusBarRateLimitCluster,
+  percentMode: AmountMode,
+): string {
+  if (cluster.kind !== "segments") return "Usage limits";
+  const readings = cluster.segments.flatMap((segment) =>
+    segment.tightest === null
+      ? []
+      : [
+          `${statusBarSegmentName(segment)} ${windowPercentText(
+            segment.tightest.usedPercent,
+            percentMode,
+          )}`,
+        ],
+  );
+  if (readings.length === 0) return "Usage limits";
+  return `Usage limits: ${readings.join(", ")}`;
 }

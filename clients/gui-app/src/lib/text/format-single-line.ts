@@ -19,6 +19,20 @@ export interface FormatSingleLineOptions {
 }
 
 /**
+ * Trim and collapse whitespace onto one line, WITHOUT a length cap. Returns the
+ * empty string when the input has no non-whitespace characters.
+ *
+ * For text rendered into an element that already cuts itself to the width it
+ * is given (`truncate`, `line-clamp-*`): that cut follows the reading width, so
+ * a character cap in front of it could only end the text early on a wide
+ * column. Use {@link formatSingleLine} where no layout does the cutting (an
+ * accessible name, a search preview, a persisted log line).
+ */
+export function collapseToSingleLine(input: string): string {
+  return input.trim().replace(/\s+/g, " ");
+}
+
+/**
  * Trim, collapse whitespace, and truncate with an ellipsis. Returns the
  * empty string when the input has no non-whitespace characters.
  */
@@ -26,9 +40,8 @@ export function formatSingleLine(
   input: string,
   options: FormatSingleLineOptions,
 ): string {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return "";
-  const singleLine = trimmed.replace(/\s+/g, " ");
+  const singleLine = collapseToSingleLine(input);
+  if (singleLine.length === 0) return "";
   const { maxLength, ellipsis } = options;
   if (singleLine.length <= maxLength) return singleLine;
   const cutoff = Math.max(0, maxLength - ellipsis.length);

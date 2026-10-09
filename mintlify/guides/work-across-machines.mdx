@@ -1,0 +1,61 @@
+---
+title: "Work across two machines"
+description: "Add another machine as a host, run agents there from this window, open its dev servers here, and keep going when one machine is offline."
+---
+
+Use this guide when you want agents to run on another machine, such as a workstation or a build box, while you work from this one. Each machine runs its own [host](/concepts/hosts). Once both hosts are on your account, one Traycer window can start and follow work on either.
+
+You can also operate Traycer from your phone to follow and steer work on either machine. See [Mobile App](/account/mobile-app) for setup and sign-in.
+
+## Before You Start
+
+- Traycer Desktop installed and signed in on this machine. See [Install](/install).
+- A terminal on the other machine, with Node.js 22.13 or newer for the npm install, or Homebrew on macOS and Linux.
+- On a Linux machine, systemd: the host runs as a systemd user service.
+- The code you want agents to work on, checked out on the other machine.
+
+## Set Up and Use the Second Machine
+
+<Steps>
+  <Step title="Open Add host">
+    On this machine, open Settings (⌘, / Ctrl+,). In the host picker at the top of the **Host** group, choose **Add host…**.
+  </Step>
+  <Step title="Install the host on the other machine">
+    Run the commands the dialog lists, in a terminal on the other machine:
+
+    ```bash
+    npm install -g @traycerai/cli   # or: brew install traycerai/traycer/traycer
+    traycer login                   # approve the sign-in from any device
+    traycer host ensure             # installs, registers and starts the host
+    ```
+
+    When the host joins your account, the dialog shows **Host connected**. Click **Set up host** to open its **Overview**, and rename it with the pencil (**Edit name**) if the name isn't clear. If the dialog shows **Host registered** instead, the host is in your account but this window has no live connection to it: **Set up host** still opens its settings, but check the connection before you start agents there. If `traycer host ensure` can't register the host, or it doesn't connect, run `traycer host doctor` there. See [Remote hosts](/concepts/hosts/remote-hosts).
+  </Step>
+  <Step title="Choose where new work starts">
+    To start new work on the other machine by default, click **Activate** on its Overview; this changes the active host for every window. To keep the active host and use the other machine for one piece of work, pick it in the host picker of the start-page composer, the new agent dialog, **New terminal**, or **Fork agent**.
+  </Step>
+  <Step title="Start a Task there">
+    On the start page, pick the other machine in the composer's host picker, click **Add folder**, and choose a folder on that machine. Choose a run location, write the prompt, and send. You can follow the agent live from any of your devices while its host is reachable. To open a shell on that machine, click **New terminal** in the Terminals panel and pick its host.
+  </Step>
+  <Step title="Open its dev server here">
+    When an agent starts a dev server on the other machine, ask it to forward the port, for example "forward the dev server to my laptop". The forward appears in the agent's **Background** panel as **Forwarding**; click **Open localhost:&lt;port&gt; in the browser**. Only agents on the Chat interface can forward ports. See [Port forwarding](/concepts/hosts/port-forwarding).
+  </Step>
+  <Step title="Let agents work across both">
+    An agent can also start a child agent or a worktree on another of your machines, run a command there, or copy files between machines. Ask for it in the prompt. What works across machines is covered in [Agent-to-Agent](/concepts/agent-to-agent).
+  </Step>
+  <Step title="Keep going when a machine is offline">
+    An agent on the Chat interface whose host is offline opens read-only from its last published copy. Click **Clone agent** to continue in a new agent on the active host; the original stays bound to its own host. Files and uncommitted changes stay on the original machine. A Terminal-interface agent can't move; it becomes available again when its host is back. A terminal on that machine is closed, so start a new one later. See [Sync and offline](/concepts/sync-and-offline).
+  </Step>
+</Steps>
+
+<Tip>
+  Each host updates on its own. Turn on **Auto-update** for each machine in **Settings › Host › Overview › Updates**. See [Overview](/settings/host#updates).
+</Tip>
+
+## Related
+
+- [Hosts](/concepts/hosts)
+- [Remote hosts](/concepts/hosts/remote-hosts)
+- [Port forwarding](/concepts/hosts/port-forwarding)
+- [Sync and offline](/concepts/sync-and-offline)
+- [Settings overview](/settings#host-picker): the host picker in Settings.

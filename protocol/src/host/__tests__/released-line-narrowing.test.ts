@@ -2,10 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
-import {
-  hostRpcRegistry,
-  hostStreamRpcRegistry,
-} from "@traycer/protocol/host/index";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**
@@ -89,9 +86,9 @@ describe("released chat.subscribe lines never lose a field they shipped", () => 
   it("describes every property the released baseline carries, on every frozen minor", () => {
     const baseline: unknown = JSON.parse(readFileSync(fixturePath, "utf8"));
     const mine = buildProtocolSurface({
-      unary: hostRpcRegistry,
+      unary: {},
       unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
-      stream: hostStreamRpcRegistry,
+      stream: { "chat.subscribe": hostStreamRpcRegistry["chat.subscribe"] },
     });
 
     const baselineStream = isRecord(baseline) ? baseline.stream : undefined;

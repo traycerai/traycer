@@ -1,3 +1,4 @@
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import type {
@@ -5,14 +6,10 @@ import type {
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type {
-  HeldManagedCommandUpdate,
-  ManagedCommand,
-} from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
@@ -21,29 +18,19 @@ import {
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { SubagentContinueAsChatButton } from "@/components/chat/segments/subagent-continue-as-chat-button";
+import type { SubagentDockView } from "@/components/chat/segments/subagent-open-as-chat";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
-import {
-  ChatDockCompactStrip,
-  ChatDockCompactStripProvider,
-  type ChatDockCompactChipModel,
-  type ChatDockCompactStripValue,
-  type ChatDockSection,
-} from "@/components/chat/chat-dock-compact-strip";
-import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
+import { ChatDockCompactStripProvider } from "@/components/chat/chat-dock-compact-strip";
 import {
   type ChatLowerSurfaceTopSpacing,
   type ChatPinnedStackTopSpacing,
 } from "@/components/chat/chat-pinned-stack";
-import {
-  chatChangesPanelHasContent,
-  chatPinnedStackVisible,
-} from "@/components/chat/chat-pinned-stack-utils";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
-import {
-  useAgentStopControls,
-  type AgentRow,
-} from "@/hooks/agent/use-agent-stop-controls";
+import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
@@ -62,23 +49,21 @@ import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/com
 import {
   chatBackgroundSectionVisible,
   lowerScrollRegionMaxHeightClass,
+  lowerSurfaceFrame,
 } from "@/lib/chat/chat-lower-scroll-budget";
-import { accumulatedDiffTotals } from "@/lib/chat/accumulated-change-rows";
-import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
-import {
-  backgroundHeaderSummary,
-  backgroundRunningRowCount,
-  dedupeByTaskId,
-} from "@/lib/chat/background-item-tree";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { usePortForwardsForChat } from "@/stores/port-forwards/port-forwards-for-chat";
 import {
   useHeldManagedCommandsForChat,
+  useManagedCommandsForChat,
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
-import { useLayoutStore } from "@/stores/settings/layout-store";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_STREAM_RECONNECTING_COPY,
+  ChatComposerDeliveryStatus,
+} from "@/components/chat/composer/chat-composer-delivery-status";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -87,6 +72,10 @@ import {
   composerHasBlockingApprovals,
   visibleComposerApprovals,
 } from "./chat-approval-visibility";
+import {
+  failedManagedCommandPulseToken,
+  useChatDockChrome,
+} from "./use-chat-dock-chrome";
 
 type ComposerSlotBottomSpacing = "normal" | "none";
 
@@ -122,6 +111,21 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly backgroundStopAllPending: boolean;
   readonly backgroundSessionStopPending: boolean;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
+  /**
+   * Set while a subagent card's conversation covers the transcript, `null`
+   * while the transcript itself is showing.
+   *
+   * Everything this surface draws belongs to the PARENT chat: its model, its
+   * context, its workspace, its queue, its running work, and a composer that
+   * messages it. Under a subagent's conversation all of that reads as the
+   * subagent's, and none of it is - a message typed there went to the parent
+   * and queued behind its running turn. So one notice stands in for both,
+   * saying whose conversation this is and how to get back: the dock is hidden
+   * and the composer is not mounted.
+   * Approvals and interview questions stay: one of them may be what the
+   * subagent on screen is blocked on.
+   */
+  readonly subagentView: SubagentDockView | null;
 }
 
 export interface ChatLowerRuntimeState {
@@ -155,7 +159,7 @@ function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
   if (access.readOnlyNotice !== null) return access.readOnlyNotice;
   if (access.isViewer) return "You have view-only access to this chat";
-  return "Reconnecting to the host — sending is paused";
+  return CHAT_STREAM_RECONNECTING_COPY;
 }
 
 export interface ChatLowerTurnState {
@@ -231,25 +235,25 @@ export interface ChatLowerApprovalsState {
 }
 
 export interface ChatLowerQueueState {
-  readonly editingItem: ChatQueuedPromptItem | null;
+  readonly editingItem: OpenChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
   readonly resumeRequested: boolean;
   readonly keepPausedRequested: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onCancel: (item: OpenChatQueuedItem) => void;
+  readonly onAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
   readonly onStopBackgroundSession: () => string | null;
   readonly onReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: OpenChatQueuedPromptItem) => void;
 }
 
 export interface ChatLowerComposerState {
@@ -267,6 +271,11 @@ export interface ChatLowerComposerState {
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
+  /**
+   * The host's `suggestedPrompt` (`chat.subscribe@1.20`), offered as the
+   * composer's placeholder.
+   */
+  readonly suggestedPrompt: string | undefined;
 }
 
 interface ComposerSurfaceModel {
@@ -288,6 +297,8 @@ interface ComposerSurfaceModel {
   readonly providerFallback: ChatProviderFallbackState;
   readonly pendingApprovalCount: number;
   readonly hasPendingApprovals: boolean;
+  /** See `ChatLowerInteractionSurfacesProps.subagentView`. */
+  readonly subagentView: SubagentDockView | null;
 }
 
 interface ComposerSurfaceLayout {
@@ -296,19 +307,13 @@ interface ComposerSurfaceLayout {
 }
 
 /**
- * The chat composer's bottom strip: where this chat runs, then what it is
- * DOING, then how much context is left.
+ * The chat composer's bottom strip: where this chat runs, then how much
+ * context is left.
  *
- * The compact chips close the left cell, hard against the context-usage
- * cluster. They come and go with the chat's activity, and the host / workspace
- * pickers ahead of them must not shift under the pointer when one appears -
- * which is exactly what putting the chips first did. That ordering is the
- * whole of the fix, so it lives in a named component with a suite on it rather
- * than inline in the tile that happens to mount it.
- *
- * The strip is rendered here rather than handed in, so this node's identity
- * does not move when a count does - it reads its own contents from the dock's
- * context.
+ * The compact chips used to close the left cell, hard against the
+ * context-usage cluster. They live above the composer now (A12, L-97), which
+ * is where the artifact draws them and where they are adjacent to the rows
+ * they open - so this row is back to the two leaves it names.
  */
 export function ChatDockWorkspaceControls(props: {
   /** The host + workspace picker cluster, first and left-aligned. */
@@ -318,9 +323,10 @@ export function ChatDockWorkspaceControls(props: {
 }): ReactNode {
   return (
     <>
+      {/* No passive marker on this cell: the host / workspace label marks its
+          own root instead - see `host-workspace-selector.tsx`. */}
       <div className="flex min-w-0 items-center gap-2 overflow-hidden">
         {props.hostWorkspaceSelector}
-        <ChatDockCompactStrip />
       </div>
       {props.usageChip}
     </>
@@ -463,6 +469,20 @@ export function ChatLowerInteractionSurfaces(
     hostId: props.hostId,
   });
   const heldManagedCommandCount = heldManagedCommands.length;
+  // A third read of the same slice, for the one thing the running list cannot
+  // say: a shell that is no longer running because it FAILED. The Background
+  // pill's ring is the section's only channel while its row is folded away,
+  // and a failure is the one arrival on that strip that is not simply news, so
+  // it radiates the destructive tone instead of the primary one.
+  const managedCommands = useManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+    props.hostId,
+  );
+  const backgroundFailureToken = useMemo(
+    () => failedManagedCommandPulseToken(managedCommands),
+    [managedCommands],
+  );
   // A forward outlives the turn that made it, so an otherwise idle chat can
   // still hold one; it opens the section on its own, like a hold does.
   const portForwards = usePortForwardsForChat({
@@ -479,8 +499,10 @@ export function ChatLowerInteractionSurfaces(
   });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
+  const dockShown = props.subagentView === null;
   const chrome = useChatDockChrome({
     snapshotLoaded: props.runtime.snapshotLoaded,
+    chatId: props.chatId,
     restore: props.restoreContext,
     selfAgent: stopControls.self,
     activeAgents,
@@ -489,25 +511,34 @@ export function ChatLowerInteractionSurfaces(
     backgroundItems: props.backgroundItems,
     runningManagedCommands,
     heldManagedCommands,
+    backgroundFailureToken,
     portForwardCount,
     queue: props.queue.value,
+    todo: props.todo,
   });
-  const pinnedStackVisible =
-    props.runtime.snapshotLoaded &&
-    chatPinnedStackVisible({
-      todo: props.todo,
-      restore: props.restoreContext,
-      changesFolded: chrome.folded.has("filesChanged"),
-    });
-  // Show the queue surface whenever it holds anything - user-typed sends and
-  // received A2A responses alike (the latter render read-only). Received rows
-  // follow the Active agents mode, so a folded chip takes them with it and this
-  // reads the queue the dock will actually be handed.
-  const queueVisible = chrome.dockQueue.items.length > 0;
-  const dockAgentsVisible =
-    activeAgentsVisible && !chrome.folded.has("activeAgents");
-  const dockBackgroundVisible =
-    backgroundVisible && !chrome.folded.has("background");
+  // What each dock member DRAWS below the transcript, and what that means for
+  // the composer's top edge: `lowerSurfaceFrame`
+  // (`lib/chat/chat-lower-scroll-budget.ts`) is the one place that decides it,
+  // and the browser fixture calls the same function.
+  const {
+    pinnedStackVisible,
+    queueVisible,
+    dockAgentsVisible,
+    dockBackgroundVisible,
+    topSpacing: lowerSurfaceTopSpacing,
+  } = lowerSurfaceFrame({
+    folded: chrome.folded,
+    // The dock is not drawn under a subagent's conversation (see
+    // `subagentView`), so none of its members shapes the spacing below it.
+    openSection: dockShown ? chrome.openSection : null,
+    todoHasContent:
+      dockShown && props.runtime.snapshotLoaded && props.todo !== null,
+    filesChangedHasContent:
+      dockShown && chrome.hotspots.filesChanged.hasContent,
+    activeAgentsHasContent: dockShown && activeAgentsVisible,
+    backgroundHasContent: dockShown && backgroundVisible,
+    queueItemCount: dockShown ? props.queue.value.items.length : 0,
+  });
   const approvalVisible = approvalSurfaceVisible(
     props.runtime.snapshotLoaded,
     props.access.isViewer,
@@ -520,13 +551,6 @@ export function ChatLowerInteractionSurfaces(
     activeAgentsVisible: dockAgentsVisible,
     approvalVisible,
   });
-  const lowerSurfaceTopSpacing: ChatLowerSurfaceTopSpacing =
-    pinnedStackVisible ||
-    queueVisible ||
-    dockAgentsVisible ||
-    dockBackgroundVisible
-      ? "connected"
-      : "normal";
   const pinnedStackTopSpacing: ChatPinnedStackTopSpacing = approvalVisible
     ? "compact"
     : "normal";
@@ -568,6 +592,7 @@ export function ChatLowerInteractionSurfaces(
       providerFallback: props.providerFallback,
       pendingApprovalCount,
       hasPendingApprovals,
+      subagentView: props.subagentView,
     }),
     [
       props.viewTabId,
@@ -582,6 +607,7 @@ export function ChatLowerInteractionSurfaces(
       props.providerFallback,
       pendingApprovalCount,
       hasPendingApprovals,
+      props.subagentView,
     ],
   );
 
@@ -592,44 +618,55 @@ export function ChatLowerInteractionSurfaces(
           model={composerModel}
           layout={approvalLayout}
         />
-        <ChatLowerDock
-          snapshotLoaded={props.runtime.snapshotLoaded}
-          epicId={props.epicId}
-          chatId={props.chatId}
-          viewTabId={props.viewTabId}
-          selfAgent={stopControls.self}
-          activeAgents={activeAgents}
-          todo={props.todo}
-          restore={props.restoreContext}
-          queue={chrome.dockQueue}
-          folded={chrome.folded}
-          backgroundItems={props.backgroundItems}
-          runningManagedCommandCount={runningManagedCommandCount}
-          heldManagedCommandCount={heldManagedCommandCount}
-          portForwardCount={portForwardCount}
-          backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
-          backgroundStopAllPending={props.backgroundStopAllPending}
-          backgroundSessionStopPending={props.backgroundSessionStopPending}
-          activeTurnStatus={props.turn.activeTurnStatus}
-          canAct={props.access.canAct}
-          queueResumeRequested={props.queue.resumeRequested}
-          queueKeepPausedRequested={props.queue.keepPausedRequested}
-          readOnly={props.access.isViewer}
-          editingQueueItemId={props.queue.editingItemId}
-          topSpacing={pinnedStackTopSpacing}
-          scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
-          onQueuePause={props.queue.onPause}
-          onQueueResume={props.queue.onResume}
-          onQueueEdit={props.queue.onEdit}
-          onQueueCancel={props.queue.onCancel}
-          onQueueAbortSteer={props.queue.onAbortSteer}
-          onQueueReorder={props.queue.onReorder}
-          onQueueSteerNow={props.queue.onSteerNow}
-          onBackgroundItemClick={props.onBackgroundItemClick}
-          onBackgroundItemStop={props.queue.onStopBackgroundItem}
-          onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
-          onBackgroundSessionStop={props.queue.onStopBackgroundSession}
-        />
+        {/* Hidden, never unmounted, under a subagent's conversation (see
+            `subagentView`): the dock holds state a remount would lose - which
+            panel is open, where it is scrolled, the Background rows' own
+            memory of their parents. */}
+        <div
+          className={cn(dockShown ? "contents" : "hidden")}
+          inert={!dockShown}
+        >
+          <ChatLowerDock
+            snapshotLoaded={props.runtime.snapshotLoaded}
+            epicId={props.epicId}
+            chatId={props.chatId}
+            viewTabId={props.viewTabId}
+            selfAgent={stopControls.self}
+            activeAgents={activeAgents}
+            todo={props.todo}
+            restore={props.restoreContext}
+            queue={props.queue.value}
+            folded={chrome.folded}
+            dockOrder={chrome.dockOrder}
+            hotspots={chrome.hotspots}
+            backgroundItems={props.backgroundItems}
+            runningManagedCommandCount={runningManagedCommandCount}
+            heldManagedCommandCount={heldManagedCommandCount}
+            portForwardCount={portForwardCount}
+            backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
+            backgroundStopAllPending={props.backgroundStopAllPending}
+            backgroundSessionStopPending={props.backgroundSessionStopPending}
+            activeTurnStatus={props.turn.activeTurnStatus}
+            canAct={props.access.canAct}
+            queueResumeRequested={props.queue.resumeRequested}
+            queueKeepPausedRequested={props.queue.keepPausedRequested}
+            readOnly={props.access.isViewer}
+            editingQueueItemId={props.queue.editingItemId}
+            topSpacing={pinnedStackTopSpacing}
+            scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
+            onQueuePause={props.queue.onPause}
+            onQueueResume={props.queue.onResume}
+            onQueueEdit={props.queue.onEdit}
+            onQueueCancel={props.queue.onCancel}
+            onQueueAbortSteer={props.queue.onAbortSteer}
+            onQueueReorder={props.queue.onReorder}
+            onQueueSteerNow={props.queue.onSteerNow}
+            onBackgroundItemClick={props.onBackgroundItemClick}
+            onBackgroundItemStop={props.queue.onStopBackgroundItem}
+            onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
+            onBackgroundSessionStop={props.queue.onStopBackgroundSession}
+          />
+        </div>
         <ChatComposerRegion model={composerModel} layout={composerLayout} />
         <StopChildrenDialog
           open={stopConfirmation?.kind === "children"}
@@ -678,374 +715,6 @@ export function ChatLowerInteractionSurfaces(
       </ChatDockCompactStripProvider>
     </ChatComposerBannerPortalProvider>
   );
-}
-
-interface ChatDockChrome {
-  /** Sections standing as a chip right now, for the dock and for the spacing. */
-  readonly folded: ReadonlySet<ChatDockSection>;
-  /** The queue as the dock should render it - see `foldedQueue`. */
-  readonly dockQueue: ChatSessionState["queue"];
-  readonly strip: ChatDockCompactStripValue;
-}
-
-interface ChatDockChromeInput {
-  readonly snapshotLoaded: boolean;
-  readonly restore: ChatRestoreContextValue;
-  readonly selfAgent: AgentRow | null;
-  readonly activeAgents: ReadonlyArray<AgentRow>;
-  readonly activeAgentsVisible: boolean;
-  readonly backgroundVisible: boolean;
-  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
-  readonly runningManagedCommands: ReadonlyArray<ManagedCommand>;
-  readonly heldManagedCommands: ReadonlyArray<HeldManagedCommandUpdate>;
-  readonly portForwardCount: number;
-  readonly queue: ChatSessionState["queue"];
-}
-
-const NO_BACKGROUND_ITEMS: ReadonlyArray<BackgroundItem> = [];
-
-/**
- * Which dock rows are folded into a chip, what those chips say, and how the
- * user gets a row back.
- *
- * Expansion is component state, so it dies with the tile and is never written
- * to the setting: `compact` is a statement about how a chat OPENS, and having
- * one glance at a row silently redefine that for every chat is the failure a
- * per-tile reveal exists to avoid.
- */
-function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
-  const composer = useLayoutStore((state) => state.composer);
-  const [expanded, setExpanded] = useState<ReadonlySet<ChatDockSection>>(
-    () => new Set<ChatDockSection>(),
-  );
-  const onToggle = useCallback((section: ChatDockSection) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (!next.delete(section)) next.add(section);
-      return next;
-    });
-  }, []);
-
-  const changesPresent =
-    input.snapshotLoaded && chatChangesPanelHasContent(input.restore);
-  const receivedAgentCount = input.queue.items.filter(
-    isReceivedAgentResponse,
-  ).length;
-  // The root agent counts as running too when it is itself active, exactly as
-  // `ActiveAgentsPanel`'s own header counts it.
-  const agentsRunningCount =
-    input.selfAgent === null
-      ? 0
-      : input.activeAgents.length +
-        (input.selfAgent.activity === false ? 0 : 1);
-  // Gated on `selfAgent` exactly as the count is, so the three never disagree:
-  // with no self record the count is 0, the panel declines to render at all,
-  // and a chip surviving on received A2A rows alone must not spin or name
-  // agents over that zero.
-  //
-  // Mid-turn is the only tier that lights the chip. An agent kept alive by
-  // background work alone is counted, but nothing is being written on its
-  // behalf right now, and the sidebar's own row draws that tier at rest too.
-  const agentsWorking =
-    input.selfAgent !== null &&
-    (input.selfAgent.activity === "turn" ||
-      input.activeAgents.some((agent) => agent.activity === "turn"));
-  const selfAgent = input.selfAgent;
-  const agentsRoster = useMemo(
-    () =>
-      selfAgent === null
-        ? null
-        : agentRoster([selfAgent, ...input.activeAgents]),
-    [selfAgent, input.activeAgents],
-  );
-  const backgroundItems = input.backgroundItems ?? NO_BACKGROUND_ITEMS;
-  // Counted on the deduped list, exactly as `BackgroundItemsPanel` counts its
-  // own header: a transient duplicate `taskId` renders one row there, so
-  // counting the raw list here would make the chip say "2 waiting" against the
-  // panel's "1 waiting".
-  const dedupedBackgroundItems = useMemo(
-    () => dedupeByTaskId(backgroundItems),
-    [backgroundItems],
-  );
-  const backgroundRunning = useMemo(
-    () =>
-      backgroundRunningRowCount({
-        items: dedupedBackgroundItems,
-        runningManagedCommandIds: input.runningManagedCommands.map(
-          (command) => command.id,
-        ),
-        heldManagedCommandIds: input.heldManagedCommands.map(
-          (held) => held.commandId,
-        ),
-      }),
-    [
-      dedupedBackgroundItems,
-      input.runningManagedCommands,
-      input.heldManagedCommands,
-    ],
-  );
-  const backgroundSummary = useMemo(
-    () =>
-      backgroundHeaderSummary({
-        runningCount: backgroundRunning,
-        heldCount: input.heldManagedCommands.length,
-        waitingWakeCount: dedupedBackgroundItems.filter(
-          (item) => item.kind === "wakeup",
-        ).length,
-        portForwardCount: input.portForwardCount,
-      }),
-    [
-      backgroundRunning,
-      input.heldManagedCommands,
-      dedupedBackgroundItems,
-      input.portForwardCount,
-    ],
-  );
-  const changeTotals = useMemo(
-    () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),
-    [input.restore.accumulatedFileChanges],
-  );
-  const changedFileCount =
-    input.restore.accumulatedFileChanges.length +
-    input.restore.undeliveredChangeCount;
-
-  // A chip exists for every compact section that HAS something to show, whether
-  // or not its row is currently revealed - the chip is the way back, so it
-  // cannot be the thing that disappears when the row appears.
-  const filesChip = composer.filesChanged === "compact" && changesPresent;
-  // Received A2A rows follow this mode, so the chip is also owed when they are
-  // the only thing folded: without it, folding would make them unreachable.
-  const agentsChip =
-    composer.activeAgents === "compact" &&
-    (input.activeAgentsVisible || receivedAgentCount > 0);
-  const backgroundChip =
-    composer.background === "compact" && input.backgroundVisible;
-
-  // A reveal belongs to a chip, so it dies with one. Per-tile stickiness is the
-  // point - a revealed row stays revealed for as long as the tile lives - but
-  // stickiness across a section going EMPTY is a different thing: the user
-  // reverts every change, the chip goes away, and the next turn's changes would
-  // otherwise arrive as a full row in a chat configured to fold them.
-  // Adjusted during render, and the pruned set is what this render uses, so the
-  // correction never costs a painted frame.
-  const chipPresent: Readonly<Record<ChatDockSection, boolean>> = {
-    filesChanged: filesChip,
-    activeAgents: agentsChip,
-    background: backgroundChip,
-  };
-  const revealed = prunedReveals(expanded, chipPresent);
-  if (revealed !== expanded) setExpanded(revealed);
-
-  const folded = useMemo(() => {
-    const sections = new Set<ChatDockSection>();
-    if (filesChip && !revealed.has("filesChanged")) {
-      sections.add("filesChanged");
-    }
-    if (agentsChip && !revealed.has("activeAgents")) {
-      sections.add("activeAgents");
-    }
-    if (backgroundChip && !revealed.has("background")) {
-      sections.add("background");
-    }
-    return sections;
-  }, [filesChip, agentsChip, backgroundChip, revealed]);
-
-  const dockQueue = useMemo(
-    () => foldedQueue(input.queue, folded.has("activeAgents")),
-    [input.queue, folded],
-  );
-
-  const chips = useMemo<ReadonlyArray<ChatDockCompactChipModel>>(() => {
-    const models: ChatDockCompactChipModel[] = [];
-    if (filesChip) {
-      models.push({
-        section: "filesChanged",
-        glyph: "filesChanged",
-        working: false,
-        // The file count leads and the line counts follow, the same order and
-        // the same tones the panel's own header uses - the chip stands in for
-        // that header, so reading one after the other should feel like reading
-        // the same row twice, not like two different measurements.
-        text: `${changedFileCount}`,
-        lineDeltas: changeTotals,
-        label: filesChangedLabel(changedFileCount, changeTotals),
-        // Constant, so this fires on the chip's arrival and never again -
-        // which is the first change of the chat, since the chip exists only
-        // once there is one. Keying it on the line counts instead reads well
-        // in the abstract and is unbearable in practice: they are summed per
-        // edit while a turn is still writing, so a turn touching twelve files
-        // rang the chip beside the input twelve times.
-        pulseToken: "changed",
-      });
-    }
-    if (agentsChip) {
-      models.push({
-        section: "activeAgents",
-        glyph: "activeAgents",
-        // Mid-turn is the live state here, exactly as the roster in `label`
-        // words it - the chip draws it, the sentence says it.
-        working: agentsWorking,
-        lineDeltas: null,
-        text:
-          receivedAgentCount > 0
-            ? `${agentsRunningCount} · ${receivedAgentCount}`
-            : `${agentsRunningCount}`,
-        // The roster is the panel's row list folded into the sentence: the
-        // chip is the only door to that list while the row is away, so its
-        // tooltip has to say WHO is running, not just how many.
-        label: `Active agents. ${agentsRunningCount} running${receivedAgentCount > 0 ? `, ${receivedAgentCount} received from other agents and queued` : ""}.${agentsRoster === null ? "" : ` ${agentsRoster}.`}`,
-        // Only the first agent starting is worth an eye-flick - which is the
-        // moment this chip appears; a count moving between two non-zero values
-        // is the same fact, updated.
-        pulseToken: agentsRunningCount > 0 ? "running" : null,
-      });
-    }
-    if (backgroundChip) {
-      models.push({
-        section: "background",
-        // The section's own mark whatever the rows are - activity lights it
-        // rather than replacing it, and the kinds are the panel's to draw.
-        glyph: "background",
-        // The count IS the running count, so anything in it lights the chip -
-        // and a shell whose process is alive is in that count whether or not it
-        // is monitoring, since the host reports it as `running` either way
-        // (`managedCommandStatusSchema`).
-        working: backgroundRunning > 0,
-        lineDeltas: null,
-        text: `${backgroundRunning}`,
-        // The number on the chip is the running count, but the section can be
-        // on screen for a held shell or a pending wake with nothing running at
-        // all - so the sentence is the header's own summary, which names every
-        // part rather than letting a bare `0` stand for "nothing here".
-        label: `Background. ${backgroundSummary}.`,
-        pulseToken: backgroundRunning > 0 ? "running" : null,
-      });
-    }
-    return models;
-  }, [
-    filesChip,
-    agentsChip,
-    backgroundChip,
-    backgroundSummary,
-    changeTotals,
-    changedFileCount,
-    agentsRunningCount,
-    agentsWorking,
-    agentsRoster,
-    receivedAgentCount,
-    backgroundRunning,
-  ]);
-
-  const strip = useMemo<ChatDockCompactStripValue>(
-    () => ({ chips, expanded: revealed, onToggle }),
-    [chips, revealed, onToggle],
-  );
-
-  return { folded, dockQueue, strip };
-}
-
-/** How many agents the chip's sentence names before it starts counting. */
-const ROSTER_NAME_LIMIT = 3;
-
-/**
- * The agents by name and state, as one clause: `Planner working, Reviewer in
- * background`. Null when there is no one to name, so the sentence it joins
- * ends cleanly instead of trailing an empty clause.
- *
- * Capped, because the roster is bounded by fleet size and nothing else - a
- * workflow fanning out to a dozen agents with free-form titles would put a
- * paragraph on the chip's accessible name, read out in full before the count
- * the listener actually asked for. The names past the cap become a number; the
- * panel one click away is still the whole list.
- */
-function agentRoster(agents: ReadonlyArray<AgentRow>): string | null {
-  if (agents.length === 0) return null;
-  const named = agents
-    .slice(0, ROSTER_NAME_LIMIT)
-    .map((agent) => `${agent.title} ${agentStateWord(agent.activity)}`);
-  const remaining = agents.length - named.length;
-  if (remaining > 0) named.push(`and ${remaining} more`);
-  return named.join(", ");
-}
-
-function agentStateWord(activity: AgentRow["activity"]): string {
-  switch (activity) {
-    case "turn":
-      return "working";
-    case "background":
-      return "in background";
-    case false:
-      return "idle";
-  }
-  const unreachable: never = activity;
-  return unreachable;
-}
-
-/**
- * `expanded` minus any section whose chip is no longer there, or `expanded`
- * itself when there is nothing to drop - identity is the loop guard, since this
- * runs during render and feeds its own state.
- */
-function prunedReveals(
-  expanded: ReadonlySet<ChatDockSection>,
-  chipPresent: Readonly<Record<ChatDockSection, boolean>>,
-): ReadonlySet<ChatDockSection> {
-  const stale = [...expanded].filter((section) => !chipPresent[section]);
-  if (stale.length === 0) return expanded;
-  const next = new Set(expanded);
-  for (const section of stale) next.delete(section);
-  return next;
-}
-
-/**
- * The queue minus its received-A2A rows when the Active agents chip is standing
- * for them, and the identical object otherwise - the dock's queue section and
- * the surrounding spacing both key off this array's length, so handing back a
- * fresh copy of an unchanged queue would churn both.
- */
-function foldedQueue(
-  queue: ChatSessionState["queue"],
-  agentsFolded: boolean,
-): ChatSessionState["queue"] {
-  if (!agentsFolded) return queue;
-  const items = queue.items.filter((item) => !isReceivedAgentResponse(item));
-  if (items.length === queue.items.length) return queue;
-  // Spread, so `pausedReason` (and any later optional key) survives the fold.
-  return { ...queue, items };
-}
-
-function fileCountPhrase(count: number): string {
-  return count === 1 ? "1 file" : `${count} files`;
-}
-
-/**
- * The chip's accessible name, spelling out what it draws: the `+` and `−` on
- * screen are two colours and a pair of signs, and neither reads aloud.
- *
- * A zero side is dropped here exactly as it is dropped on screen, so the name
- * and the chip say the same thing - and with both zero the sentence stops
- * after the file count rather than claiming "0 lines added".
- */
-function filesChangedLabel(fileCount: number, totals: DiffLineCounts): string {
-  const parts = [fileCountPhrase(fileCount)];
-  if (totals.additions > 0) {
-    parts.push(`${totals.additions} ${lineWord(totals.additions)} added`);
-  }
-  // The noun rides on whichever clause comes first: "12 lines added, 4
-  // removed" says what it means, and repeating "lines" in the second clause
-  // only makes the sentence longer.
-  if (totals.deletions > 0) {
-    parts.push(
-      totals.additions > 0
-        ? `${totals.deletions} removed`
-        : `${totals.deletions} ${lineWord(totals.deletions)} removed`,
-    );
-  }
-  return `Files changed. ${parts.join(", ")}.`;
-}
-
-function lineWord(count: number): string {
-  return count === 1 ? "line" : "lines";
 }
 
 function approvalSurfaceVisible(
@@ -1106,27 +775,7 @@ function ComposerSurface(props: {
     return null;
   }
   if (model.access.isViewer) {
-    // The workspace row is LIVE: its selector targets the reading host and this
-    // surface's chat id, and both create/re-bind and remove are real mutations.
-    // For a viewer of a live chat that is the chat's own workspace and the row
-    // is informative. For a COPY (`readOnlyNotice` is set only by the published
-    // and doc-replica surfaces) the binding shown is `null` and the chat id is
-    // the one the OWNER minted, so acting on the row would commit a workspace
-    // change against whatever local lineage happens to hold that id here.
-    // A copy has no live workspace to show, so it shows none.
-    const isCopy = model.access.readOnlyNotice !== null;
-    return (
-      <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
-        <div className="flex flex-col gap-3">
-          <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
-          {isCopy ? null : (
-            <ComposerReadonlyWorkspaceModeRow
-              workspaceSlot={model.composer.workspaceControls}
-            />
-          )}
-        </div>
-      </ComposerSlotShell>
-    );
+    return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
   // either: a stuck block can coexist with an answerable one, and the composer
@@ -1178,6 +827,21 @@ function ComposerSurface(props: {
       </>
     );
   }
+  // Unmounted under a subagent's conversation, not hidden: a composer that is
+  // merely out of sight is still this tile's active one, so the dictation and
+  // model-picker chords, the palette's composer commands and its portalled
+  // banners all go on acting on the parent chat from behind the notice.
+  // Unmounting is the path a pending interview already takes above.
+  if (model.subagentView !== null) {
+    return (
+      <>
+        {escapeHatch}
+        <ComposerSlotShell topSpacing={belowSpacing} bottomSpacing="normal">
+          <SubagentViewNotice view={model.subagentView} />
+        </ComposerSlotShell>
+      </>
+    );
+  }
   return (
     <>
       {escapeHatch}
@@ -1187,6 +851,42 @@ function ComposerSurface(props: {
         hasPendingApprovals={model.hasPendingApprovals}
       />
     </>
+  );
+}
+
+/** What stands in the composer's slot for someone who cannot send. */
+function ViewerComposerSurface(props: {
+  readonly model: ComposerSurfaceModel;
+  readonly layout: ComposerSurfaceLayout;
+}): ReactNode {
+  const { model, layout } = props;
+  if (model.subagentView !== null) {
+    return (
+      <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
+        <SubagentViewNotice view={model.subagentView} />
+      </ComposerSlotShell>
+    );
+  }
+  // The workspace row is LIVE: its selector targets the reading host and this
+  // surface's chat id, and both create/re-bind and remove are real mutations.
+  // For a viewer of a live chat that is the chat's own workspace and the row
+  // is informative. For a COPY (`readOnlyNotice` is set only by the published
+  // and doc-replica surfaces) the binding shown is `null` and the chat id is
+  // the one the OWNER minted, so acting on the row would commit a workspace
+  // change against whatever local lineage happens to hold that id here.
+  // A copy has no live workspace to show, so it shows none.
+  const isCopy = model.access.readOnlyNotice !== null;
+  return (
+    <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
+      <div className="flex flex-col gap-3">
+        <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
+        {isCopy ? null : (
+          <ComposerReadonlyWorkspaceModeRow
+            workspaceSlot={model.composer.workspaceControls}
+          />
+        )}
+      </div>
+    </ComposerSlotShell>
   );
 }
 
@@ -1231,7 +931,10 @@ function LiveChatComposer(props: {
       workspaceAvailability={model.composer.workspaceAvailability}
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
-      topSlot={null}
+      // This chat's own stream and delivery state, held beside the composer
+      // for as long as it is true rather than behind a tooltip.
+      topSlot={<ChatComposerDeliveryStatus />}
+      suggestedPrompt={model.composer.suggestedPrompt}
     />
   );
 }
@@ -1269,24 +972,70 @@ function PendingApprovalQueues(props: {
   );
 }
 
-function ComposerSlotShell(props: {
+/**
+ * The box every centered lower surface is painted in: the edge-lane outer, the
+ * reading column, the canvas fill, the top and bottom spacing, and the
+ * pseudo-element that seals the seam over the transcript's scrollbar.
+ *
+ * Exported for ONE other caller, the layout editor's sample workspace (L-87,
+ * L-98). The sample used to hand-roll this stack and drifted: it paid no top
+ * padding at all, so the pill row sat flush on the composer's border in the
+ * editor while the real chat held it a clear step above (L-153). The scene is
+ * a picture of the real thing, so it uses the real thing.
+ */
+export function ComposerSlotShell(props: {
   readonly children: ReactNode;
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
   readonly bottomSpacing: ComposerSlotBottomSpacing;
 }) {
+  const readingWidth = useReadingWidthStyle();
   return (
     <div className="pointer-events-none px-4">
       <div
         className={cn(
-          "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas",
+          "pointer-events-auto relative mx-auto w-full bg-canvas",
+          readingWidth.className,
           props.topSpacing === "normal" ? "pt-4" : "pt-0",
           props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
           props.bottomSpacing === "normal" &&
             "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
         )}
+        style={{ maxWidth: readingWidth.maxWidth }}
       >
         {props.children}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Stands where the composer does while a subagent's conversation is open. The
+ * same frame as the viewer's read-only notice, because it is the same fact
+ * about this surface - nothing can be typed here - for a different reason.
+ */
+function SubagentViewNotice(props: { readonly view: SubagentDockView }) {
+  const { view } = props;
+  return (
+    <div
+      data-testid="subagent-view-notice"
+      className="flex items-center gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground"
+    >
+      <Lock className="size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1">
+        {view.name === null
+          ? "You're viewing a subagent's conversation."
+          : `You're viewing ${view.name}'s conversation.`}{" "}
+        Subagents can't take messages.
+      </span>
+      {view.runningCount > 0 ? (
+        <Badge variant="secondary" className="shrink-0">
+          {view.runningCount} running
+        </Badge>
+      ) : null}
+      <SubagentContinueAsChatButton testId="subagent-view-notice-continue" />
+      <Button type="button" variant="outline" size="xs" onClick={view.close}>
+        Back to chat
+      </Button>
     </div>
   );
 }

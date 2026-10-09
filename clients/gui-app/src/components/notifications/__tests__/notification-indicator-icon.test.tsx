@@ -24,6 +24,21 @@ const DEFAULT_STATE = {
 
 afterEach(cleanup);
 
+/**
+ * The tone/status a testid's `StatusGlyph` draws. The testId sits on the
+ * glyph itself for a tone icon, and on the spinner nested inside the
+ * `data-status-glyph="running"` span for the running case - `closest` covers
+ * both, since it matches the element itself before climbing.
+ */
+function glyphKind(testId: string): string | null {
+  return (
+    screen
+      .getByTestId(testId)
+      .closest("[data-status-glyph]")
+      ?.getAttribute("data-status-glyph") ?? null
+  );
+}
+
 describe("<NotificationIndicatorIcon />", () => {
   it("renders status icons ahead of running, then running ahead of completion", () => {
     const { rerender } = renderIcon(
@@ -37,12 +52,10 @@ describe("<NotificationIndicatorIcon />", () => {
       "turn",
     );
 
+    expect(glyphKind("indicator-failure-subject-1")).toBe("failure");
     expect(
       screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
     ).toContain("text-destructive");
-    expect(
-      screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
-    ).toContain("lucide-message-square-x");
     expect(anyTooltipHasText("Task needs attention")).toBe(true);
     expect(screen.queryByTestId("indicator-activity-subject-1")).toBeNull();
 
@@ -76,9 +89,7 @@ describe("<NotificationIndicatorIcon />", () => {
         "turn",
       ),
     );
-    expect(
-      screen.getByTestId("indicator-interview-subject-1").getAttribute("class"),
-    ).toContain("lucide-message-square-question-mark");
+    expect(glyphKind("indicator-interview-subject-1")).toBe("interview");
 
     rerender(
       renderIconContent(
@@ -92,12 +103,10 @@ describe("<NotificationIndicatorIcon />", () => {
         "turn",
       ),
     );
+    expect(glyphKind("indicator-approval-subject-1")).toBe("approval");
     expect(
       screen.getByTestId("indicator-approval-subject-1").getAttribute("class"),
     ).toContain("text-warning-foreground");
-    expect(
-      screen.getByTestId("indicator-approval-subject-1").getAttribute("class"),
-    ).toContain("lucide-message-square-warning");
 
     rerender(
       renderIconContent(
@@ -126,15 +135,13 @@ describe("<NotificationIndicatorIcon />", () => {
         false,
       ),
     );
+    expect(glyphKind("indicator-done-subject-1")).toBe("done");
     expect(
       screen.getByTestId("indicator-done-subject-1").getAttribute("class"),
     ).toContain("text-success-foreground");
-    expect(
-      screen.getByTestId("indicator-done-subject-1").getAttribute("class"),
-    ).toContain("lucide-message-square-check");
 
     rerender(renderIconContent(DEFAULT_STATE, "turn"));
-    expect(screen.getByTestId("indicator-activity-subject-1")).toBeDefined();
+    expect(glyphKind("indicator-activity-subject-1")).toBe("running");
 
     rerender(
       <NotificationIndicatorIcon
@@ -147,7 +154,6 @@ describe("<NotificationIndicatorIcon />", () => {
         style={undefined}
         runningTitle="Task activity in progress"
         defaultIcon={<span data-testid="default-icon" />}
-        statusPresentation="message"
         agentSurface="gui"
       />,
     );
@@ -183,9 +189,7 @@ describe("<NotificationIndicatorIcon />", () => {
       false,
     );
 
-    expect(
-      screen.getByTestId("indicator-done-subject-1").getAttribute("class"),
-    ).toContain("lucide-message-square-check");
+    expect(glyphKind("indicator-done-subject-1")).toBe("done");
     expect(screen.queryByTestId("indicator-failure-subject-1")).toBeNull();
   });
 
@@ -220,62 +224,13 @@ describe("<NotificationIndicatorIcon />", () => {
       false,
     );
 
-    expect(
-      screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
-    ).toContain("lucide-message-square-x");
+    expect(glyphKind("indicator-failure-subject-1")).toBe("failure");
     expect(screen.queryByTestId("indicator-done-subject-1")).toBeNull();
   });
 
-  it("keeps the chat glyph for a latest failure on a GUI surface", () => {
-    renderIcon(
-      {
-        unreadFailure: true,
-        unreadTerminalFailure: true,
-        pendingFork: false,
-        pendingApproval: false,
-        pendingInterview: false,
-        unreadDone: false,
-      },
-      false,
-    );
-
-    const failure = screen.getByTestId("indicator-failure-subject-1");
-    expect(failure.getAttribute("class")).toContain("lucide-message-square-x");
-    expect(failure.getAttribute("class")).not.toContain(
-      "lucide-square-terminal",
-    );
-  });
-
-  it("uses the terminal glyph for the same latest failure on a TUI surface", () => {
-    render(
-      <NotificationIndicatorIcon
-        state={{
-          unreadFailure: true,
-          unreadTerminalFailure: true,
-          pendingFork: false,
-          pendingApproval: false,
-          pendingInterview: false,
-          unreadDone: false,
-        }}
-        running={false}
-        activityCoverage="indeterminate"
-        subjectId="subject-1"
-        testIdPrefix="indicator"
-        className={undefined}
-        style={undefined}
-        runningTitle="Task activity in progress"
-        defaultIcon={<span data-testid="default-icon" />}
-        statusPresentation="message"
-        agentSurface="tui"
-      />,
-    );
-
-    const failure = screen.getByTestId("indicator-failure-subject-1");
-    expect(failure.getAttribute("class")).toContain("lucide-square-terminal");
-    expect(failure.getAttribute("class")).not.toContain(
-      "lucide-message-square-x",
-    );
-  });
+  // The GUI-vs-TUI split (a terminal-specific lucide icon on the TUI surface)
+  // is `terminalFailureTone`'s own distinction, exercised through the
+  // `agentSurface` prop - see notification-indicator-icon-glyph.test.tsx.
 
   it("renders the background tier as a muted waiting chat distinct from the turn spinner", () => {
     renderIcon(DEFAULT_STATE, "background");
@@ -290,12 +245,10 @@ describe("<NotificationIndicatorIcon />", () => {
     ).toBeNull();
     const glyph = screen.getByTestId("indicator-background-activity-subject-1");
     expect(glyph.tagName).toBe("svg");
+    expect(glyph.getAttribute("data-status-glyph")).toBe("background");
     expect(glyph.getAttribute("class")).toContain(
       "lucide-message-square-clock",
     );
-    expect(
-      glyph.querySelector('circle[cx="16"][cy="16"][r="6"]'),
-    ).not.toBeNull();
     expect(glyph.getAttribute("class")).toContain("size-3.5");
     expect(glyph.getAttribute("class")).toContain("text-muted-foreground");
   });
@@ -367,7 +320,6 @@ function renderIconContent(
       style={undefined}
       runningTitle="Task activity in progress"
       defaultIcon={<span data-testid="default-icon" />}
-      statusPresentation="message"
       agentSurface="gui"
     />
   );

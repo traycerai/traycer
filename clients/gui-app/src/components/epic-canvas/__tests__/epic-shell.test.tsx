@@ -6,7 +6,14 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
+import {
+  DEFAULT_ARRANGEMENT,
+  type EdgeSide,
+  type TabStripPlacement,
+} from "@/lib/layout/layout-arrangement";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { setMobileApp } from "@/lib/mobile-app";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   __getOpenEpicRegistryForTests,
@@ -95,6 +102,14 @@ vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
 
 vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
   TileCanvas: () => <div data-testid="tile-canvas-stub" />,
+}));
+
+// A marker for the pane's `resources.subscribe` lease: the suite asks only
+// whether the shell holds one, not what the stream does.
+vi.mock("@/providers/resources-stream-mount", () => ({
+  EpicResourcesFallbackMount: (props: { readonly epicId: string }) => (
+    <div data-testid="resources-fallback" data-epic-id={props.epicId} />
+  ),
 }));
 
 interface ControlledStream {
@@ -278,10 +293,28 @@ async function waitForSessionReady(): Promise<void> {
   });
 }
 
+function placeArrangement(patch: {
+  readonly tabStripPlacement: TabStripPlacement;
+  readonly sidebarSide: EdgeSide;
+}): void {
+  useLayoutStore.setState({
+    arrangement: { ...DEFAULT_ARRANGEMENT, ...patch },
+  });
+}
+
+function canvasFrame(): HTMLElement {
+  const frame = screen
+    .getByTestId("tile-canvas-loading")
+    .closest("[data-epic-canvas-frame]");
+  if (frame === null) throw new Error("canvas frame not rendered");
+  return frame as HTMLElement;
+}
+
 describe("<EpicShell />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     __getOpenEpicRegistryForTests().disposeAll();
+    useLayoutStore.setState({ arrangement: DEFAULT_ARRANGEMENT });
   });
 
   afterEach(() => {
@@ -289,7 +322,30 @@ describe("<EpicShell />", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     // RESTORED, not nulled - see `previousWorkerFactory`.
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
+    useLayoutStore.setState({ arrangement: DEFAULT_ARRANGEMENT });
   });
+
+  // No platform branch: the chips lease the epic's own stream wherever they
+  // draw, so every shell's pane holds only the old-host fallback.
+  it.each([false, true])(
+    "holds only the old-host fallback lease (installed app: %s)",
+    async (mobileApp) => {
+      setMobileApp(mobileApp);
+      try {
+        installControlledFactory();
+        const queryClient = new QueryClient();
+        renderShell(queryClient);
+        await waitForSessionReady();
+
+        expect(
+          screen.getByTestId("resources-fallback").getAttribute("data-epic-id"),
+        ).toBe(EPIC_ID);
+        queryClient.clear();
+      } finally {
+        setMobileApp(false);
+      }
+    },
+  );
 
   it("renders the stable shell frame while the session is not ready", () => {
     render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
@@ -299,8 +355,18 @@ describe("<EpicShell />", () => {
     expect(shell.dataset.sessionReady).toBe("false");
     expect(shell.className).not.toContain("rounded-r-lg");
     expect(canvas.className).not.toContain("rounded-t-lg");
+    // The content sheet owns the border; a second one here doubles it.
+    expect(canvas.className).not.toMatch(/\bborder\b/);
     expect(screen.queryByTestId("epic-session-loading")).toBeNull();
     expect(screen.queryByTestId("chat-stream-prewarm")).toBeNull();
+  });
+
+  it("draws no divider of its own: the canvas frame below it owns the border now (flush surface)", () => {
+    render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+    const statusRow = screen.getByTestId("epic-shell-status-row");
+    expect(statusRow.className).not.toContain("border-b");
+    expect(statusRow.className).not.toContain("border-canvas-border/70");
   });
 
   it("is canvas-only: the sidebar is hoisted out of the keep-alive pane", () => {
@@ -604,5 +670,89 @@ describe("<EpicShell />", () => {
 
       queryClient.clear();
     });
+  });
+
+  describe("the canvas frame's border (flush surface)", () => {
+    it("draws a 1px canvas-border frame around the canvas, on every side by default", () => {
+      render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+      const frame = canvasFrame();
+      expect(frame.className).toContain("border");
+      expect(frame.className).toContain("border-canvas-border/70");
+      expect(frame.className).toContain("max-md:border-0");
+      expect(frame.className).not.toContain("md:border-s-0");
+      expect(frame.className).not.toContain("md:border-e-0");
+    });
+
+    it("suppresses its bottom border while the app status bar is shown below it, so the two never double up", () => {
+      render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+      // DEFAULT_ARRANGEMENT hosts both readings on the status bar, so it is
+      // shown by default - the canvas frame's own border-b would otherwise
+      // stack directly on the status bar's border-t.
+      expect(canvasFrame().className).toContain("md:border-b-0");
+    });
+
+    it("draws its own bottom border once the status bar has nothing hosted there to show", () => {
+      useLayoutStore.setState({
+        arrangement: {
+          ...DEFAULT_ARRANGEMENT,
+          usageHost: "header",
+          resourceHost: "header",
+        },
+      });
+      render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+      expect(canvasFrame().className).not.toContain("md:border-b-0");
+    });
+
+    it("keeps its own bottom border when both readings name the status bar but both are hidden, since no strip is mounted to draw one", () => {
+      // Placement says the footer hosts them; the shell mounts nothing for two
+      // hidden readings (U1), so the frame is the only bottom edge.
+      useLayoutStore.getState().setRegionValues("usageLimits", {
+        shown: "hidden",
+      });
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        shown: "hidden",
+      });
+      render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+      expect(canvasFrame().className).not.toContain("md:border-b-0");
+    });
+
+    // `seam = stripEdge === sidebarSide ? null : stripEdge`: only a side strip
+    // on the side AWAY from the sidebar meets the canvas, and only that edge
+    // drops its border. `suppressed: null` rows keep the full frame.
+    it.each([
+      {
+        tabStripPlacement: "left",
+        sidebarSide: "right",
+        suppressed: "md:border-s-0",
+      },
+      {
+        tabStripPlacement: "right",
+        sidebarSide: "left",
+        suppressed: "md:border-e-0",
+      },
+      { tabStripPlacement: "top", sidebarSide: "left", suppressed: null },
+      { tabStripPlacement: "top", sidebarSide: "right", suppressed: null },
+      { tabStripPlacement: "left", sidebarSide: "left", suppressed: null },
+      { tabStripPlacement: "right", sidebarSide: "right", suppressed: null },
+    ] as const)(
+      "suppresses only the seam-side border where the canvas meets the side strip: strip=$tabStripPlacement, sidebar=$sidebarSide",
+      ({ tabStripPlacement, sidebarSide, suppressed }) => {
+        placeArrangement({ tabStripPlacement, sidebarSide });
+        render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+        const frame = canvasFrame();
+        for (const seamClass of ["md:border-s-0", "md:border-e-0"]) {
+          if (seamClass === suppressed) {
+            expect(frame.className).toContain(seamClass);
+          } else {
+            expect(frame.className).not.toContain(seamClass);
+          }
+        }
+      },
+    );
   });
 });

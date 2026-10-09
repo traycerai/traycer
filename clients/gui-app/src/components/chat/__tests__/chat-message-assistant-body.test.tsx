@@ -11,6 +11,11 @@ import type { Mock } from "vitest";
 import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
+import {
+  OpenSubagentAsChatContext,
+  queryOpenAsChatControl,
+  type OpenSubagentAsChat,
+} from "@/components/chat/segments/subagent-open-as-chat";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
@@ -19,6 +24,7 @@ import type {
   ChatMessageStoppedInfo,
   ApprovalSegment,
   MessageSegment,
+  SubagentSegment as SubagentSegmentModel,
   ToolSegment,
 } from "@/stores/composer/chat-store";
 
@@ -87,6 +93,24 @@ const AUTONOMOUS_RESUME_SEGMENT: MessageSegment = {
   ],
 };
 
+const MCP_FAILED_RESUME_SEGMENT: MessageSegment = {
+  id: "seg-resume-mcp",
+  kind: "autonomous_resume",
+  triggers: [
+    {
+      kind: "monitor",
+      title: "ignored when mcp is set",
+      status: "failed",
+      live: false,
+      summary: "Connection reset.",
+      blockId: "mcp-1",
+      outputFile: null,
+      mcp: { serverName: "docs", toolName: "search" },
+      managedCommand: null,
+    },
+  ],
+};
+
 const ERROR_SEGMENT: MessageSegment = {
   id: "seg-2",
   kind: "error",
@@ -96,6 +120,33 @@ const ERROR_SEGMENT: MessageSegment = {
   // No typed failure: this fixture is a plain provider-stream error, and the
   // fallback affordances on the row are gated on one being present.
   failure: null,
+};
+
+const PROMOTED_SUBAGENT_SEGMENT: SubagentSegmentModel = {
+  id: "subagent-from-transcript",
+  kind: "subagent",
+  name: "reviewer",
+  agentType: null,
+  task: "Review the implementation",
+  progressUpdates: [],
+  result: null,
+  isStreaming: false,
+  endState: null,
+  stopped: false,
+  startedAt: null,
+  durationMs: null,
+  spawnToolCallId: null,
+  parentId: null,
+  workflowMeta: null,
+  children: [
+    {
+      id: "subagent-transcript-text",
+      kind: "text",
+      markdown: "Child transcript",
+      isStreaming: false,
+      parentId: "subagent-from-transcript",
+    },
+  ],
 };
 
 const STOPPED: ChatMessageStoppedInfo = {
@@ -138,6 +189,7 @@ interface BodyPropsOverrides {
   readonly elapsedStartedAt?: number;
   readonly turnHasOnlyAutonomousResumeSegments?: boolean;
   readonly showCompletionFooter?: boolean;
+  readonly autonomousResumeOwed?: boolean;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
   readonly meta?: AssistantTurnMeta | null;
@@ -152,6 +204,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     elapsedStartedAt: overrides.elapsedStartedAt ?? 0,
     turnHasOnlyAutonomousResumeSegments:
       overrides.turnHasOnlyAutonomousResumeSegments ?? false,
+    autonomousResumeOwed: overrides.autonomousResumeOwed ?? false,
     showCompletionFooter: overrides.showCompletionFooter ?? true,
     pausedDurationMs: 0,
     pausedSinceMs: null,
@@ -221,6 +274,159 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     const footer = screen.getByTestId("assistant-elapsed-footer");
     expect(footer.textContent).toMatch(/ for 5s$/);
     expect(footer.textContent).not.toContain("Resumed · no response");
+  });
+
+  it('draws a never-resumed notification as a compact note ending in "Agent not resumed"', () => {
+    const { container } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [MCP_FAILED_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(container.querySelector("[data-row-header]")).not.toBeNull();
+    expect(screen.getByText("Background MCP tool failed")).toBeTruthy();
+    expect(screen.getByTestId("assistant-agent-not-resumed").textContent).toBe(
+      "Agent not resumed",
+    );
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it('keeps the resumed-no-response footer under the compact note and omits "Agent not resumed"', () => {
+    const { container } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: true,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(container.querySelector("[data-row-header]")).not.toBeNull();
+    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toBe(
+      "Resumed · no response · 5s",
+    );
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
+
+  it("keeps the card divider and normal footer when the resumed agent replied", () => {
+    const { container } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT, TEXT_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Here is the answer.")).toBeTruthy();
+    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toMatch(
+      / for 5s$/,
+    );
+    expect(container.querySelector("[data-row-header]")).toBeNull();
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
+
+  it("holds the ending back while the resume is still owed", () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [MCP_FAILED_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          autonomousResumeOwed: true,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it('never says "Agent not resumed" on a stopped notification row', () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [MCP_FAILED_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          completedAt: 8_000,
+          stopped: STOPPED,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
+});
+
+describe("AssistantMessageBody promoted subagent controls", () => {
+  it("opens by the transcript id and exposes that id's control for focus restoration", () => {
+    const open = vi.fn<OpenSubagentAsChat>();
+    const { container } = render(
+      <OpenSubagentAsChatContext.Provider value={open}>
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({ segments: [PROMOTED_SUBAGENT_SEGMENT] })}
+        />
+      </OpenSubagentAsChatContext.Provider>,
+    );
+
+    const button = screen.getByRole("button", { name: "Open as chat" });
+    fireEvent.click(button);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect({
+      openedId: open.mock.calls[0]?.[0],
+      focusControl: queryOpenAsChatControl(
+        container,
+        PROMOTED_SUBAGENT_SEGMENT.id,
+      ),
+    }).toEqual({
+      openedId: PROMOTED_SUBAGENT_SEGMENT.id,
+      focusControl: button,
+    });
+  });
+});
+
+describe("AssistantMessageBody reply-only promoted subagent", () => {
+  it("offers Open as chat on a finished card with no nested activity", () => {
+    const open = vi.fn<OpenSubagentAsChat>();
+    const replyOnly: SubagentSegmentModel = {
+      ...PROMOTED_SUBAGENT_SEGMENT,
+      id: "reply-only-subagent",
+      result: "All done.",
+      children: [],
+    };
+    render(
+      <OpenSubagentAsChatContext.Provider value={open}>
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({ segments: [replyOnly] })}
+        />
+      </OpenSubagentAsChatContext.Provider>,
+    );
+
+    fireEvent.click(
+      screen.getByTestId("subagent-open-as-chat-reply-only-subagent"),
+    );
+
+    expect(open).toHaveBeenCalledWith("reply-only-subagent");
   });
 });
 

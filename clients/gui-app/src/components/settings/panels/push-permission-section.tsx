@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import type { PushPermissionState } from "@traycer-clients/shared/platform/runner-host";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
-import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -44,54 +43,49 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
  * tests - `pushPermission` is `null` and this renders nothing at all, so the
  * panel is byte-identical there.
  *
- * The group is titled "This phone", never "This device": in this GUI "device"
- * is the UI word for a HOST (Settings → Devices lists hosts), so "This device"
- * would read as one more host-scoped setting - the exact confusion the row is
- * here to end.
+ * The row is labelled "on this phone", never "on this device": in this GUI
+ * "device" is the UI word for a HOST (Settings → Devices lists hosts), so
+ * "this device" would read as one more host-scoped setting - the exact
+ * confusion the row is here to end. It is one row of the Sounds page's
+ * Notifications group, which the panel draws.
  *
- * The gate is the only thing rendered above it: every hook the group uses
+ * The gate is the only thing rendered above it: every hook the row uses
  * reaches the runner host, which throws in a host-less shell, so they live in
  * the child and run only once the gate has passed.
  */
 export function PushPermissionSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
-  if (!APP_NOTIFICATIONS.definitions.thisPhone.availableWhen(availability)) {
+  if (
+    !APP_NOTIFICATIONS.definitions.pushNotifications.availableWhen(availability)
+  ) {
     return null;
   }
-  return <PushPermissionGroup />;
+  return <PushPermissionRow />;
 }
 
-function PushPermissionGroup(): ReactNode {
+function PushPermissionRow(): ReactNode {
   const query = usePushPermissionQuery();
   const request = usePushPermissionRequestMutation();
   const openSettings = usePushPermissionOpenSettingsMutation();
   const view = pushPermissionView(query);
   return (
-    <SettingsGroup
-      group={APP_NOTIFICATIONS.definitions.thisPhone}
-      showTitle
-      tone="default"
-      dataTestId="push-permission-section"
-      fill={false}
-    >
-      <SettingsRow
-        row={APP_NOTIFICATIONS.definitions.pushNotifications}
-        status={viewDescription(view)}
-        control={
-          <div
-            data-testid="push-permission-state"
-            data-state={view.kind}
-            className="flex items-center gap-2"
-          >
-            <PushPermissionControl
-              kind={view.kind}
-              request={request}
-              openSettings={openSettings}
-            />
-          </div>
-        }
-      />
-    </SettingsGroup>
+    <SettingsRow
+      row={APP_NOTIFICATIONS.definitions.pushNotifications}
+      status={viewDescription(view)}
+      control={
+        <div
+          data-testid="push-permission-state"
+          data-state={view.kind}
+          className="flex items-center gap-2"
+        >
+          <PushPermissionControl
+            kind={view.kind}
+            request={request}
+            openSettings={openSettings}
+          />
+        </div>
+      }
+    />
   );
 }
 

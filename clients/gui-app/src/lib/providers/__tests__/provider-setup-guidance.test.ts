@@ -144,6 +144,31 @@ describe("TERMINAL_SIGN_IN_COPY", () => {
     expect(guidance.manualCommand).toBeNull();
   });
 
+  it("re-words Command Code around the browser page its CLI opens itself, not a printed sign-in code, and keeps the generic labels", () => {
+    const guidance = providerTerminalGuidance("commandcode");
+    expect(providerSetupGuidance("commandcode")).toBeNull();
+    expect(guidance.summary).toBe(
+      "Command Code signs in from a terminal: it opens its sign-in page in a browser and waits in that terminal.",
+    );
+    expect(guidance.stepsAfterAction).toEqual([
+      "Finish the sign-in in the browser page that terminal opens, on the machine it runs on.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.terminalHint).toBe(
+      "Command Code opens its sign-in page in a browser on that machine and waits in the terminal. Finish there, then use Refresh above.",
+    );
+    // Not the generic "prints a sign-in code" sentence, which would be false.
+    expect(guidance.summary).not.toContain("sign-in code");
+    expect(guidance.terminalHint).not.toContain("sign-in code");
+    // The generic labels still apply.
+    expect(guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(guidance.manualCommand).toBeNull();
+    // Positive control: a provider with no override DOES get the generic copy.
+    expect(defaultTerminalSignInGuidance("copilot").summary).toContain(
+      "sign-in code",
+    );
+  });
+
   it("re-words Amp around a printed sign-in link that finishes in the terminal, without promising a code paste or that a browser opens", () => {
     const guidance = providerTerminalGuidance("amp");
     expect(providerSetupGuidance("amp")).toBeNull();
@@ -309,7 +334,7 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.manualCommand).toBe("hermes setup model");
   });
 
-  it.each(["kilocode", "amp", "kiro"] as const)(
+  it.each(["kilocode", "amp", "kiro", "commandcode"] as const)(
     "gives %s the terminal-sign-in copy when the capability is present, and nothing when it is absent",
     (providerId: ProviderId) => {
       const withCapability = resolveProviderTerminalSetup(
@@ -464,12 +489,23 @@ describe("providerSetupActionPlacement", () => {
   });
 
   it("returns 'here' when canStartTerminal is true and this surface has the action", () => {
-    const setup = resolveProviderTerminalSetup(
-      "reasonix",
-      stateWith(capabilityWithTerminalLogin(["setup"])),
-    );
+    // A runnable candidate, so the host block that gates the button clears -
+    // this test is about the SURFACE answer, not the CLI-availability one.
+    const setup = resolveProviderTerminalSetup("reasonix", {
+      ...stateWith(capabilityWithTerminalLogin(["setup"])),
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/reasonix",
+          version: "1.35.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+    });
     expect(setup).not.toBeNull();
     if (setup === null) return;
+    expect(setup.hostBlock).toBeNull();
     expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
@@ -520,7 +556,7 @@ describe("providerSetupActionPlacement", () => {
     expect(setup).not.toBeNull();
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(true);
-    expect(setup.packPreparing).not.toBeNull();
+    expect(setup.hostBlock).not.toBeNull();
     expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
       "preparing",
     );
@@ -556,7 +592,7 @@ describe("providerSetupActionPlacement", () => {
     });
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(setup.packPreparing).toBeNull();
+    expect(setup.hostBlock).toBeNull();
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBeNull();
     expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
@@ -577,12 +613,21 @@ describe("providerSetupActionPlacement", () => {
   });
 
   it("returns 'other-surface' when canStartTerminal is true but this surface has no action", () => {
-    const setup = resolveProviderTerminalSetup(
-      "reasonix",
-      stateWith(capabilityWithTerminalLogin(["setup"])),
-    );
+    const setup = resolveProviderTerminalSetup("reasonix", {
+      ...stateWith(capabilityWithTerminalLogin(["setup"])),
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/reasonix",
+          version: "1.35.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+    });
     expect(setup).not.toBeNull();
     if (setup === null) return;
+    expect(setup.hostBlock).toBeNull();
     expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "other-surface",
     );

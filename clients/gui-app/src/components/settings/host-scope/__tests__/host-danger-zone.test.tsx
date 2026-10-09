@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -72,7 +73,10 @@ const runnerHostMock: { hostManagement: object | null } = vi.hoisted(() => ({
 const uninstallMock = vi.hoisted(() => ({
   data: undefined as
     | {
+        // The completed arm of `TraycerUninstallResult`; the row switches on it.
+        readonly kind: "removed";
         readonly serviceRegistrationRetained: boolean | null;
+        readonly serviceWarning: string | null;
       }
     | undefined,
   isSuccess: false,
@@ -84,6 +88,13 @@ vi.mock("@/providers/use-runner-host", () => ({
     hostManagement: runnerHostMock.hostManagement,
     traycerCli: null,
   }),
+}));
+
+// No host started in a terminal in any row here: this suite renders without a
+// QueryClient, and the foreground gate has its own suite over the real hook
+// chain (`host-danger-zone-foreground.test.tsx`).
+vi.mock("@/hooks/host/use-local-host-foreground-run", () => ({
+  useLocalHostForegroundRun: () => false,
 }));
 
 vi.mock("@/hooks/runner/use-runner-uninstall-traycer-mutation", () => ({
@@ -214,7 +225,11 @@ describe("HostDangerZone", () => {
   it("offers retry when the service is positively retained", () => {
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     uninstallMock.isSuccess = true;
-    uninstallMock.data = { serviceRegistrationRetained: true };
+    uninstallMock.data = {
+      kind: "removed",
+      serviceRegistrationRetained: true,
+      serviceWarning: null,
+    };
 
     render(<LocalRecoveryDangerZone />);
 
@@ -233,7 +248,11 @@ describe("HostDangerZone", () => {
   it("reports unknown service teardown without offering a pointless retry", () => {
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     uninstallMock.isSuccess = true;
-    uninstallMock.data = { serviceRegistrationRetained: null };
+    uninstallMock.data = {
+      kind: "removed",
+      serviceRegistrationRetained: null,
+      serviceWarning: null,
+    };
 
     render(<LocalRecoveryDangerZone />);
 
@@ -244,6 +263,31 @@ describe("HostDangerZone", () => {
     expect(screen.queryByText("Traycer removed")).toBeNull();
     expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
     expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
+  });
+
+  // The host's Scheduled Task is another Windows user's: the removal left it
+  // alone on purpose and removed everything of this account's, so the row is
+  // the finished one with the warning - not "incomplete", no retry.
+  it("a removal that left another Windows user's task shows the removed row with the warning, Quit, and no retry", () => {
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    uninstallMock.isSuccess = true;
+    const warning =
+      "The Traycer Host task on this PC is owned by another Windows user, so it was left in place; everything of yours was removed.";
+    uninstallMock.data = {
+      kind: "removed",
+      serviceRegistrationRetained: true,
+      serviceWarning: warning,
+    };
+
+    render(<LocalRecoveryDangerZone />);
+
+    expect(
+      screen.getByTestId("settings-remove-traycer-service-warning").textContent,
+    ).toBe(warning);
+    expect(screen.getByTestId("settings-quit-after-uninstall")).not.toBeNull();
+    expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
+    expect(screen.queryByText("Traycer removal incomplete")).toBeNull();
+    expect(screen.queryByText("Traycer removal unverified")).toBeNull();
   });
 
   it("keeps remote account removal available while the host is unreachable", () => {
@@ -428,5 +472,49 @@ describe("HostDangerZone", () => {
       within(dialog).getByRole("button", { name: "Remove from account" }),
     );
     expect(removeFromAccountSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns Settings to the active host once the removal succeeds, and not before", () => {
+    // Left pinned to the removed id, the page fell to the `vanished` notice
+    // ("<uuid> is no longer registered") the moment the lists refreshed - for a
+    // removal the user had just confirmed.
+    const returnToActive = vi.fn();
+    const captured: { onSuccess: (() => void) | null } = { onSuccess: null };
+    removeFromAccountSpy.mockImplementationOnce(
+      (
+        _variables: undefined,
+        callbacks: { readonly onSuccess: () => void },
+      ) => {
+        captured.onSuccess = callbacks.onSuccess;
+      },
+    );
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: remoteHost("host-b"),
+          status: "ready",
+          client: SOME_CLIENT,
+          returnToActive,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("settings-remove-host-from-account"));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Remove from account",
+      }),
+    );
+    // In flight, or refused: the host is still on the account, so the page
+    // must stay on it.
+    expect(returnToActive).not.toHaveBeenCalled();
+
+    const { onSuccess } = captured;
+    if (onSuccess === null) {
+      throw new Error("expected mutate to be called with an onSuccess");
+    }
+    act(() => {
+      onSuccess();
+    });
+    expect(returnToActive).toHaveBeenCalledOnce();
   });
 });

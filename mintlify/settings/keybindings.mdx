@@ -1,107 +1,222 @@
 ---
 title: "Keybindings"
-description: "Default Traycer Desktop keyboard shortcuts and how to customize them."
+description: "Default Traycer Desktop keyboard shortcuts, which ones you can rebind, and how to change them."
 ---
 
-Keybindings are local keyboard shortcuts. They are a local UI preference, not shared Task content.
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+Keybindings are local keyboard shortcuts. They are a UI preference stored on this device, not shared Task content.
+
+This page covers four kinds of shortcut:
+
+- [Shortcuts you can rebind](#default-shortcuts) in **Settings → Keybindings**.
+- [Number shortcuts](#number-shortcuts), which are fixed.
+- The [global Summon shortcut](#global-shortcut), which works even when Traycer is in the background.
+- [Menu shortcuts](#menu-shortcuts), which belong to the app menu and are fixed.
+
+Linux uses the same defaults as Windows.
 
 ## Customize Shortcuts
 
-Every shortcut below can be changed. Open **Settings → Keybindings**, then:
+Open **Settings → Keybindings**. Every action is in one list, followed by the **Sub-leader** section and, in the desktop app, **Global shortcuts**.
 
 <Steps>
   <Step title="Find the command">
     Locate the action you want to change in the list.
   </Step>
   <Step title="Capture a new shortcut">
-    Click the shortcut chord chip. When it reads **Press chord…**, press the key combination you want to assign. Press **Esc** to cancel.
+    Click the shortcut chord chip. When it reads **Press chord…**, press the key combination you want to assign. Press **Esc**, or click away from the chip, to cancel.
   </Step>
   <Step title="Clear or reset (optional)">
-    Press **Backspace** while capturing to unbind an action, or click **Reset all to defaults** at the bottom of the page to restore every shortcut at once.
+    Press **Backspace** while capturing to unbind an action. The chip then reads **Unbound**. Click **Reset all to defaults** at the bottom of the page to restore every shortcut at once, including the Summon shortcut.
   </Step>
 </Steps>
 
-<Note>
-**Sub-leader configuration** sets the secondary modifier (default <kbd>Opt</kbd> / <kbd>Alt</kbd>) used by the number shortcuts in the tables below.
-</Note>
+Number shortcuts, such as **Switch tab by number**, appear in the list with their keys but can't be rebound. See [Number Shortcuts](#number-shortcuts).
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Rebind a shortcut with its chord chip">
-  <source src="https://assets.traycer.ai/docs/videos/keybindings-capture.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/keybindings-capture.mp4" label="Rebind a shortcut with its chord chip" />
+
+### Conflicts
+
+Traycer checks each new chord as you capture it:
+
+| Situation | What happens |
+|---|---|
+| Another action already uses the chord | The chord is not saved, and a message under the chip says it is already bound. Pick a different chord, or unbind the other action first. |
+| The chord is the Summon shortcut | The chord is not saved while Summon is enabled. |
+| The chord is a common system shortcut that no other action uses, such as <kbd>Cmd</kbd> + <kbd>P</kbd> or <kbd>Cmd</kbd> + <kbd>F</kbd> | The chord is saved, with a warning that it overrides the system shortcut. |
+| A focused browser tile keeps the chord for itself | The chord is saved, with a warning that it won't fire while a browser tile has focus. |
+| On macOS, **Voice input** or **Toggle model picker** gets a <kbd>Cmd</kbd> chord | The chord is not saved. These two actions need <kbd>Control</kbd>, because macOS can't detect when <kbd>Cmd</kbd> is released. |
+
+### Shortcuts In A Focused Terminal
+
+On Windows and Linux, many <kbd>Ctrl</kbd> chords mean something to the shell. While a terminal tile has focus, these default shortcuts go to the terminal instead of Traycer: **New task**, **New tab**, **Close tab**, **Close other tabs**, **Next tab**, **Previous tab**, **Add current tab to new split view**, **Split group horizontally**, **Split group to the right**, **Focus active tab editor**, **Toggle left panel**, **Open history**, **Toggle terminal panel**, **Maximize terminal panel**, **Drafts**, and <kbd>Ctrl</kbd> + <kbd>K</kbd> for the command palette.
+
+Use <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> to open the command palette from a terminal. A shortcut you rebind yourself always goes to Traycer. On macOS, <kbd>Cmd</kbd> shortcuts always go to Traycer.
 
 ## Default Shortcuts
 
-Number shortcuts are leader chords: hold the modifier and press a digit.
+These shortcuts can be rebound. An action marked "Unbound" has no default shortcut: give it one in Settings, or run it from the command palette.
 
 ### Tasks
 
-Each tab in the header strip is a Task.
+Each tab in the header strip holds a Task, a draft, History, or Settings.
 
-| Command | macOS | Windows | What it does |
+| Command | macOS | Windows / Linux | What it does |
 |---|---|---|---|
-| New Task | <kbd>Cmd</kbd> + <kbd>N</kbd> | <kbd>Ctrl</kbd> + <kbd>N</kbd> | Open the landing page to start a new Task. |
-| Duplicate Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> | Duplicate the active Task tab and its tiling layout. |
-| Next Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>]</kbd> | Activate the next Task tab in the header strip. |
-| Previous Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> | Activate the previous Task tab in the header strip. |
-| Close active tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | Close the active strip tab — Task, draft, history, or settings. |
-| Switch Task by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | Hold and type a tab number to jump to that Task tab. |
+| New task | <kbd>Cmd</kbd> + <kbd>N</kbd> | <kbd>Ctrl</kbd> + <kbd>N</kbd> | Open the landing page to start a new Task. |
+| Duplicate tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> | Duplicate the active Task tab and its tiling layout. |
+| Next Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>]</kbd> | Activate the next tab in the header strip. |
+| Previous Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> | Activate the previous tab in the header strip. |
+| Close active tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | Close the active header tab, whatever it holds: a Task, a draft, History, or Settings. |
 
 ### Tabs
 
-Within a Task, panels open as tabs (agents, terminals, artifacts).
+Within a Task, agents, terminals, artifacts, files, and diffs open as tabs in groups.
 
-| Command | macOS | Windows | What it does |
+| Command | macOS | Windows / Linux | What it does |
 |---|---|---|---|
-| New tab | <kbd>Cmd</kbd> + <kbd>T</kbd> | <kbd>Ctrl</kbd> + <kbd>T</kbd> | Open a new blank tab in the active group; the inline opener is focused. |
-| Close tab | <kbd>Cmd</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>W</kbd> | Close the active tab. The last tab in a non-root group collapses it. |
+| Reopen closed tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> | Restore the last closed Task, draft, or group of tabs in this window. |
+| New tab | <kbd>Cmd</kbd> + <kbd>T</kbd> | <kbd>Ctrl</kbd> + <kbd>T</kbd> | Open a blank tab in the active group with the [pane opener](/panels#pane-opener) focused. On the start page, open a new terminal tab instead. |
+| Close tab | <kbd>Cmd</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>W</kbd> | Close the active tab. Closing the last tab in a split group collapses that group. On the start page, close the active terminal tab. |
 | Close other tabs | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>W</kbd> | Close every tab in the focused group except the active one. |
 | Close tabs to the right | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Opt</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>]</kbd> | Close every tab to the right of the active tab. |
-| Close all tabs in group | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Opt</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>W</kbd> | Close every tab in the focused group. |
-| Next tab | <kbd>Cmd</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>]</kbd> | Activate the next tab in the focused group. |
-| Previous tab | <kbd>Cmd</kbd> + <kbd>[</kbd> | <kbd>Ctrl</kbd> + <kbd>[</kbd> | Activate the previous tab in the focused group. |
-| Switch tab by number | <kbd>Cmd</kbd> + number | <kbd>Ctrl</kbd> + number | Hold and press 1–9 to jump to that tab in the active group. |
+| Close all tabs in group | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Opt</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>W</kbd> | Close every tab in the focused group. On the start page, close every terminal tab. |
+| Next tab | <kbd>Cmd</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>]</kbd> | Activate the next tab in the focused group, or in the start page's panel. |
+| Previous tab | <kbd>Cmd</kbd> + <kbd>[</kbd> | <kbd>Ctrl</kbd> + <kbd>[</kbd> | Activate the previous tab in the focused group, or in the start page's panel. |
+
+### Split View
+
+These act on a header tab split into two halves. See [Window Split View](/panels#window-split-view).
+
+| Command | macOS | Windows / Linux | What it does |
+|---|---|---|---|
+| Add current tab to new split view | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>N</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>N</kbd> | Put the current tab on the left of a new split and focus the empty right half. |
+| Swap split sides | Unbound | Unbound | Swap the left and right halves. |
+| Separate split view | Unbound | Unbound | Turn the two halves back into separate header tabs. |
+| Close left split view | Unbound | Unbound | Close the left half. |
+| Close right split view | Unbound | Unbound | Close the right half. |
 
 ### Groups
 
-| Command | macOS | Windows | What it does |
+| Command | macOS | Windows / Linux | What it does |
 |---|---|---|---|
 | Split group horizontally | <kbd>Cmd</kbd> + <kbd>D</kbd> | <kbd>Ctrl</kbd> + <kbd>D</kbd> | Split the focused group, placing an empty group on the right. |
-| Split group vertically | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> | Split the focused group, placing an empty group on the bottom. |
-| Split group to the right | <kbd>Cmd</kbd> + <kbd>&#92;</kbd> | <kbd>Ctrl</kbd> + <kbd>&#92;</kbd> | Create an empty new group to the right; it becomes active. |
+| Split group vertically | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> | Split the focused group, placing an empty group below. |
+| Split group to the right | <kbd>Cmd</kbd> + <kbd>&#92;</kbd> | <kbd>Ctrl</kbd> + <kbd>&#92;</kbd> | Create an empty group on the right; it becomes active. |
 | Focus group above | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>↑</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>↑</kbd> | Move group focus to the nearest group above. |
 | Focus group below | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>↓</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>↓</kbd> | Move group focus to the nearest group below. |
 | Focus group left | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>←</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>←</kbd> | Move group focus to the nearest group on the left. |
 | Focus group right | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>→</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>→</kbd> | Move group focus to the nearest group on the right. |
 | Focus active tab editor | <kbd>Cmd</kbd> + <kbd>L</kbd> | <kbd>Ctrl</kbd> + <kbd>L</kbd> | Place the cursor in the editor of the active tab. |
 
+<Note>
+**Split group horizontally** (<kbd>Cmd</kbd> + <kbd>D</kbd>) and **Split group to the right** (<kbd>Cmd</kbd> + <kbd>&#92;</kbd>) do the same thing: both add an empty group on the right and focus it. You can rebind either one.
+</Note>
+
 #### Split Groups
 
-Use the tab strip’s split button to open a new group on the right, or Shift-click to split down. Choose a surface in the new pane.
+Use the tab strip's **Split group right** button to open a new group on the right, or Shift-click it to split down. Choose a surface in the new pane.
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Split a group and open a terminal beside a chat">
-  <source src="https://assets.traycer.ai/docs/videos/tiling-split.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/tiling-split.mp4" label="Split a group and open a terminal beside a chat" />
 
-### App
+### Navigation And Panels
 
-| Command | macOS | Windows | What it does |
+| Command | macOS | Windows / Linux | What it does |
 |---|---|---|---|
-| Toggle left panel | <kbd>Cmd</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>B</kbd> | Show or hide the Task left panel; the rail stays visible. |
-| Open history | <kbd>Cmd</kbd> + <kbd>Y</kbd> | <kbd>Ctrl</kbd> + <kbd>Y</kbd> | Open Task history, or focus the History tab if present. |
-| Open settings | <kbd>Cmd</kbd> + <kbd>,</kbd> | <kbd>Ctrl</kbd> + <kbd>,</kbd> | Navigate to the settings screen. |
-| Open command palette | <kbd>Cmd</kbd> + <kbd>K</kbd> | <kbd>Ctrl</kbd> + <kbd>K</kbd> | Search commands, navigation targets, and recent actions. |
-| Voice input | <kbd>Control</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | Dictate into the composer. Tap to toggle, or hold to talk. Transcribed on-device. |
-| Switch settings section by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | On the settings screen, hold and press a digit to jump to a section. |
-| Switch model provider by number | <kbd>Cmd</kbd> + number | <kbd>Ctrl</kbd> + number | While the model picker is open, hold and press a digit to switch provider rail. |
-| Switch thinking level by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | While the model picker is open, hold and press a digit to set thinking level. |
+| Open command palette | <kbd>Cmd</kbd> + <kbd>K</kbd>, or <kbd>Control</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> | <kbd>Ctrl</kbd> + <kbd>K</kbd>, or <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> | Search commands, navigation targets, and recent actions. Only the first chord can be rebound; the second is fixed. |
+| Go back | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>,</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>,</kbd> | Go back through the app's navigation history. |
+| Go forward | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>.</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>.</kbd> | Go forward through the app's navigation history. |
+| Search chats | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd> | Search chat titles and messages on the active host, in this Task or across every Task. |
+| Go to Home | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> | Show the Home tab. Listed only while **Home tab** is turned on in [Layout](/settings/layout) settings. |
+| Open history | <kbd>Cmd</kbd> + <kbd>Y</kbd> | <kbd>Ctrl</kbd> + <kbd>Y</kbd> | Open Task history, or focus the History tab if it is open. |
+| Open settings | <kbd>Cmd</kbd> + <kbd>,</kbd> | <kbd>Ctrl</kbd> + <kbd>,</kbd> | Open Settings. |
+| Toggle left panel | <kbd>Cmd</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>B</kbd> | Show or hide the Task's sidebar panel; the rail stays visible. |
+| Toggle status bar | Unbound | Unbound | Move usage limits and the resource monitor between the header and the status bar. |
+| Open notifications | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> | Open the notification center; use the arrow keys to move between notifications. Press it again to close. |
+| Open usage limits | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd> | Open the provider usage and rate-limit monitor. |
+| Open Resource Monitor | <kbd>Shift</kbd> + <kbd>Esc</kbd> | <kbd>Shift</kbd> + <kbd>Esc</kbd> | Open the Resource Monitor. Unbind it if you need <kbd>Shift</kbd> + <kbd>Esc</kbd> in a terminal. |
+| Find and replace in active tile | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>F</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> | Open the active tile's [find bar](/panels#find-in-a-tile), with the **Replace** row expanded where the tile supports it. |
 
-#### Command Palette
+For the command palette, Search chats, Back and Forward, and reopening tabs, see [Search and navigation](/concepts/search-and-navigation).
 
-Open the command palette, type part of a command name, and select the matching action.
+### Start Page Panel
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Find and run a command from the command palette">
-  <source src="https://assets.traycer.ai/docs/videos/command-palette.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+These act on the terminal and browser panel on the start page. See [Start Page Panel](/panels#start-page-panel).
+
+| Command | macOS | Windows / Linux | What it does |
+|---|---|---|---|
+| Toggle terminal panel | <kbd>Cmd</kbd> + <kbd>J</kbd> | <kbd>Ctrl</kbd> + <kbd>J</kbd> | Show or hide the panel. When several folders are attached, choose where to open the terminal. |
+| New terminal | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>J</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>J</kbd> | Open a new terminal tab in the panel. When several folders are attached, choose one. |
+| Maximize terminal panel | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>J</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>J</kbd> | Switch the panel between maximized and its docked width, opening it if it is collapsed. |
+| New browser tab | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>B</kbd> | Open a new browser tab in the panel, on the selected device. |
+
+### Zoom
+
+| Command | macOS | Windows / Linux | What it does |
+|---|---|---|---|
+| Zoom in | <kbd>Cmd</kbd> + <kbd>=</kbd> | <kbd>Ctrl</kbd> + <kbd>=</kbd> | Increase the whole-app zoom. |
+| Zoom out | <kbd>Cmd</kbd> + <kbd>-</kbd> | <kbd>Ctrl</kbd> + <kbd>-</kbd> | Decrease the whole-app zoom. |
+| Reset zoom | <kbd>Cmd</kbd> + <kbd>0</kbd> | <kbd>Ctrl</kbd> + <kbd>0</kbd> | Reset the whole-app zoom to 100%. |
+
+### Composer
+
+| Command | macOS | Windows / Linux | What it does |
+|---|---|---|---|
+| Voice input | <kbd>Control</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | Dictate into the composer. Tap to toggle, or hold to talk. Speech is transcribed on-device. |
+| Drafts | <kbd>Cmd</kbd> + <kbd>S</kbd> | <kbd>Ctrl</kbd> + <kbd>S</kbd> | Open the drafts list. See [Composer](/panels/agents/composer). |
+| Toggle model picker | <kbd>Control</kbd> + <kbd>Opt</kbd> + <kbd>M</kbd> | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | Open or close the model picker for the composer you're editing. |
+
+## Number Shortcuts
+
+Number shortcuts are leader chords: hold the modifier and press a digit. They are shown in **Settings → Keybindings** for reference and can't be rebound.
+
+| Command | macOS | Windows / Linux | What it does |
+|---|---|---|---|
+| Switch tab by number | <kbd>Cmd</kbd> + <kbd>1</kbd>–<kbd>9</kbd> | <kbd>Ctrl</kbd> + <kbd>1</kbd>–<kbd>9</kbd> | Jump to that tab in the active group, or in the start page's panel. |
+| Switch model provider by number | <kbd>Cmd</kbd> + digit | <kbd>Ctrl</kbd> + digit | While the model picker is open, switch the provider you are browsing. |
+| Change model settings by number | <kbd>Opt</kbd> + <kbd>1</kbd>–<kbd>9</kbd>, <kbd>Opt</kbd> + <kbd>0</kbd> | <kbd>Alt</kbd> + <kbd>1</kbd>–<kbd>9</kbd>, <kbd>Alt</kbd> + <kbd>0</kbd> | While the model picker is open, 1–9 set the thinking effort and 0 turns **Fast** on or off, where the model offers it. |
+| Switch profile by number | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + digit | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + digit | While the model picker is open and the provider has two or more profiles, switch to that profile. |
+
+### Sub-leader
+
+The **Sub-leader** section of **Settings → Keybindings** lists the two number shortcuts that use <kbd>Opt</kbd> / <kbd>Alt</kbd> rather than the primary leader. It is a reference, not a setting.
+
+| Command | macOS | Windows / Linux | What it does |
+|---|---|---|---|
+| Switch task by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | Jump to that header tab. For tab 10 and above, keep holding the modifier and type both digits. |
+| Switch settings section by number | <kbd>Opt</kbd> + <kbd>1</kbd>–<kbd>9</kbd>, <kbd>Opt</kbd> + <kbd>0</kbd> | <kbd>Alt</kbd> + <kbd>1</kbd>–<kbd>9</kbd>, <kbd>Alt</kbd> + <kbd>0</kbd> | In Settings, jump to that sidebar section. 0 is the tenth section; later sections have no number shortcut. |
+
+## Global Shortcut
+
+**Summon Traycer** shows and focuses Traycer from anywhere, even when another app is in front. It is under **Global shortcuts** in **Settings → Keybindings**, in the desktop app only.
+
+| Command | macOS | Windows / Linux |
+|---|---|---|
+| Summon Traycer | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> |
+
+- It is on by default. Turn it off with the **Enable summon shortcut** switch.
+- Rebind it with its chord chip, like any other shortcut. A global shortcut needs at least one modifier key. Pressing **Backspace** while capturing restores the default chord instead of unbinding it.
+- If another application already holds the chord, the row shows "In use by another application." Pick a different chord.
+- While Summon is enabled, no other action can use its chord.
+
+## Menu Shortcuts
+
+These belong to the app's menu and can't be changed in Settings.
+
+| Menu item | macOS | Windows / Linux |
+|---|---|---|
+| **File → New Window** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd> |
+| **File → Open Task in New Window…** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>O</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>O</kbd> |
+| **Edit → Find** | <kbd>Cmd</kbd> + <kbd>F</kbd> | Use <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> |
+| **Edit → Find Next** | <kbd>Cmd</kbd> + <kbd>G</kbd> | None |
+| **Edit → Find Previous** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>G</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>G</kbd> |
+| **Window → Minimize** | <kbd>Cmd</kbd> + <kbd>M</kbd> | None |
+
+On Windows and Linux, <kbd>Ctrl</kbd> + <kbd>F</kbd>, <kbd>Ctrl</kbd> + <kbd>G</kbd>, and <kbd>Ctrl</kbd> + <kbd>M</kbd> are left to terminals. Inside an open find bar, <kbd>Enter</kbd> and <kbd>Shift</kbd> + <kbd>Enter</kbd> move to the next and previous match on every platform.
+
+## Command Palette
+
+Open the command palette, type part of a command name, and select the matching action. Actions with no default shortcut, such as the split view actions and **Toggle status bar**, can still be run from the palette. See [Search and navigation](/concepts/search-and-navigation).
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/command-palette.mp4" label="Find and run a command from the command palette" />

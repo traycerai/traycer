@@ -1,9 +1,4 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type {
-  ImageResolutionEntry,
-  Message,
-} from "@traycer/protocol/persistence/epic/messages";
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { ImageResolutionEntry } from "@traycer/protocol/persistence/epic/messages";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
@@ -12,6 +7,12 @@ import {
   pushContentFingerprint,
   startContentFingerprint,
 } from "@traycer/protocol/utils/text/digest";
+
+import type {
+  OpenChatEvent,
+  OpenContentBlock,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * Everything the transcript measures or fingerprints by ENCODING it.
@@ -25,9 +26,9 @@ import {
  * what an encoding is, is the whole point of this module.
  */
 export type FingerprintedRecord =
-  | Message
-  | ChatEvent
-  | ContentBlock
+  | OpenMessage
+  | OpenChatEvent
+  | OpenContentBlock
   | readonly ImageResolutionEntry[];
 
 /**
@@ -56,7 +57,7 @@ export function encodeRecord(record: FingerprintedRecord): string {
  * wants {@link RecordFingerprintMemo.lookup}, whose `byteLength` is this number
  * computed from the same encoding as the digest beside it.
  */
-export function recordByteLength(record: Message | ChatEvent): number {
+export function recordByteLength(record: OpenMessage | OpenChatEvent): number {
   return utf8ByteLength(encodeRecord(record));
 }
 

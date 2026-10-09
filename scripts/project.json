@@ -17,7 +17,8 @@
         "{projectRoot}/**/*.sh",
         "{projectRoot}/**/*.json",
         "{projectRoot}/vitest.config.*",
-        "{workspaceRoot}/.github/workflows/test.yml",
+        "{workspaceRoot}/.github/workflows/*.yml",
+        "{workspaceRoot}/.github/workflows/*.yaml",
         "sharedGlobals"
       ]
     }

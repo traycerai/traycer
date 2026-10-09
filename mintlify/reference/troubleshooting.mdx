@@ -1,110 +1,234 @@
 ---
 title: "Troubleshooting"
-description: "Common Traycer Desktop issues and what they mean."
+description: "What Traycer's status words, startup screens and messages mean, how to collect logs, and how to report an issue."
 ---
 
-Use this page to recognize common unavailable states in Traycer Desktop.
+Use this page to recognize what Traycer is telling you and what to do next. For how hosts work, see [Hosts](/concepts/hosts). Host controls are in [Settings › Host › Overview](/settings/host).
 
 ## Host Status
 
-For the Host mental model, see [Hosts](/concepts/hosts). For Host controls, see [Settings > Host](/settings/host).
+Each host shows a status word in the host picker and in its Overview header.
 
-| State | Meaning |
+| Status | Meaning |
 |---|---|
-| **Running** | The host is running and reachable. |
-| **Stopped** | The host is installed, but the process is not running. |
-| **Not installed** | The host is not installed for this channel. |
-| **Registry unreachable** | Traycer could not reach the host registry. |
-| **Update check unavailable** | Traycer could not check for host updates. |
+| **Online** | The host is running and reachable. "Connection is unstable." means the connection keeps dropping. |
+| **Restarting…** | The host is restarting on purpose, for example after an update. The app reconnects on its own. |
+| **Offline** | The host can't be reached. The detail says when it was last seen. |
+| **Stopped** | Traycer is installed on this computer, but the host isn't running. Restart it or run [Doctor](#doctor). |
+| **Not installed** | No Traycer host is installed on this computer yet. |
+| **Update required** | The host runs an older version than this app supports. Click **Update host**. |
+| **Removed** | The host was removed from your account. |
+| **Reported reachable** | Your account heard from the host recently, but nothing on this device has connected to it yet. |
+| **Status unknown** | The host hasn't reported to your account yet, or its live status is unavailable right now. |
+| **You're offline** | This device has no connection, so it can't check the host. |
 
-If Desktop shows **Starting local host…** for too long, use the retry action or open [Settings > Host](/settings/host).
+If a host can't check for updates, its Overview's Updates tab shows **Update check failed** with the reason. Click **Check now**, next to **Pick a different version**, to try again.
 
-## Report An Issue
+## Starting Traycer
 
-Use **Report Issue** when you want to send a bug report with desktop and host details attached.
+While Traycer starts, it shows **Starting Traycer…**. When the host on this computer has work to do first, the line changes to what it is doing, such as **Downloading Traycer Host…**, **Setting up Traycer Host…**, **Installing Traycer Host…** or **Applying the host update…**.
 
-To open it:
+If startup needs your attention, a card explains why:
 
-1. Open the desktop **Help** menu.
-2. Select **Report Issue**.
-3. Fill in the title, what happened, steps to reproduce, expected behavior, and actual behavior.
-4. Select **Submit Report**. Traycer uploads the report privately and opens a pre-filled GitHub issue.
+| Card | Meaning | What to do |
+|---|---|---|
+| **Setting up Traycer** | First launch on this machine. "This runs once, and the app opens as soon as it's done." | Wait. |
+| **Traycer Host didn't start** | The host on this computer failed to start. The card shows each attempt and the startup log. | **Retry**. If it keeps failing, **Open settings** (for example to change the shell in [Shell](/settings/shell)) or **Report issue**. |
+| **No host is available** | "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back." | Wait, or check that a host machine is on and connected. |
+| **Update Traycer to continue** | The host needs a newer version of the app. | Update the app. See [Updates](/install#updates). |
+| Host update required | The host is too old for this app. | **Update host**. For a host on another machine, update Traycer on that machine. |
+| **Traycer was removed** | You removed Traycer's background components from this computer. | **Quit Traycer** to finish uninstalling, **Reinstall**, or **Open settings** to use another host. |
 
-You can also open **Report Issue** from the command palette. If an app-update error appears, its toast can include a **Report Issue** button that opens the same dialog.
+Every card offers **Open settings**. **Retry** and **Report issue** appear once something has failed.
 
-## Open Logs
+## Missing Home Activity
 
-Use logs when an issue involves startup, host status, updates, provider setup, terminal sessions, or other desktop/host behavior.
+**Some activity may be missing** on the **Home** tab means Home can't see every running Task right now. When only some of your machines are affected, the notice sits under that machine's heading.
 
-To open logs from the app:
+A line under the notice names each affected machine and why, worst first:
 
-1. Open the desktop **Help** menu.
-2. Select **Open Logs**.
-3. In the **Open Logs** dialog, expand a log entry to preview recent output.
-4. Select **Reveal** to open the selected log file in your file manager.
+| Line | What it means |
+|---|---|
+| Lost connection to _host_. Its tasks aren't shown. | This app's connection to that host is down, so that host's Tasks are left out until it reconnects. |
+| Reconnecting to _host_… | That connection is coming back. |
+| _host_ isn't connected to Traycer, so tasks from your other machines may be missing. | That host's own Tasks still show. Activity from your other machines reaches Home through the host's link to Traycer, and that link is down. |
+| _host_ is reconnecting to Traycer, so tasks from your other machines may be missing. | The same, while the link comes back. |
 
-You can also open logs from the Traycer tray menu with **Open Logs**. The tray path opens **Settings → Host** and the logs dialog.
+When no machine has reported yet, the line is about your sign-in instead:
 
-From a terminal, use:
+| Line | What to do |
+|---|---|
+| You're signed out, so running tasks can't be loaded. | Sign in. See [Sign In](/account/sign-in). |
+| Signing in… | Wait. |
+| Can't reach Traycer to confirm your sign-in, so running tasks may not load until it can. | Check your connection. Running Tasks load once Traycer can be reached. |
+| Your session has expired. Sign in again to see running tasks. | Sign in again. |
+| This account is no longer available, so running tasks can't be loaded. | Sign in with another account. |
+| This window's session was ended from another window, so running tasks can't be loaded here. | Sign in again in this window. |
+| Connecting to your machines… | Wait. |
+
+A Task missing from Home hasn't been deleted. To check a machine, see its [status](#host-status). To find a Task, use [History](/concepts/history).
+
+## Updates
+
+**App updates.** When a new version of Traycer is available, a download button appears in the header. See [Updates](/install#updates).
+
+**Host updates.** The update card on a host's Overview reports progress. If an update is waiting, it says why:
+
+| Message | Meaning |
+|---|---|
+| "Update waits for N sessions to finish" | The host applies the update when its running agents and terminals finish. **Force update…** ends them now. |
+| "Update waits for Traycer's command-line tools to be updated — see installation help" | The update needs newer command-line tools first. The **Updates** tab shows the command to run. |
+| "Update installed — restart host to finish" | Click **Restart** to start the new version. |
+
+If you restart or update a busy host, a **Host is busy** dialog names what is still running. Choose **Defer** to wait, or **Force restart** / **Force update** to end that work now.
+
+## Doctor
+
+Doctor checks a host's installation, service, port and credentials. Run it from **Settings › Host › Overview › ⋯ › Run doctor**, or with `traycer host doctor` on the host's machine. The fix buttons are described in [Overview](/settings/host#doctor).
+
+Common issues:
+
+| Issue | What to do |
+|---|---|
+| **Host not installed** | **Install host**, or run `traycer host install`. |
+| **Service not registered** | **Register service**, or run `traycer host service install`. |
+| **Service registered but host stopped** | **Start host**, or run `traycer host restart`. |
+| **Host port held by another process** | **Free port + restart** asks that process to exit and restarts the host. |
+| **Host endpoint unreachable** | **Restart host**. |
+| **systemd user manager unreachable** | Linux only. The host needs a systemd user session. In WSL, enable systemd (see [Windows via WSL](/install#windows-via-wsl)). On a headless machine, log in through a systemd session or enable lingering. |
+| **Host stops at logout (lingering disabled)** | Linux only. Run `loginctl enable-linger <user>` so the host keeps running after you log out. |
+| **Host service is failing to start** | Linux only. The card gives a `journalctl` command that prints why the service failed. |
+| **Host rejected the stored credentials** | Run `traycer login`. |
+| **Host credential needs re-authorization** | Open Traycer Desktop, signed in as the host's owner, and let it connect. It replaces the credential on its own. Signing in again doesn't fix this. |
+| **Service managed by Traycer Desktop** | Not a problem. Traycer Desktop manages this host's startup on macOS. |
+
+## Logs
+
+Before you reproduce a problem, raise the log level to **Debug**, then set it back afterwards:
+
+- **App log level** in [Settings › Application › Diagnostics](/settings/diagnostics) covers the desktop app.
+- **CLI log level** and **Host log level** in [Settings › Host › Diagnostics](/settings/host-diagnostics) cover the command-line tools and the host. They apply to every Traycer host on that machine.
+
+To open the logs:
+
+1. Choose **Help › Open Logs**, or **Open Logs** in the Traycer tray menu.
+2. In the **Open Logs** dialog, expand **Desktop Log** or **Host Log** to preview recent output. In-app browser logs are listed too when there are any.
+3. Click **Reveal** to show the file in your file manager.
+
+From a terminal on the host's machine:
 
 ```bash
 traycer host logs --tail 200
 ```
 
-Use `traycer host logs --follow` to stream new host log lines.
+Use `traycer host logs --follow` to stream new lines. The host log is `~/.traycer/host/host.log` and the CLI log is `~/.traycer/cli/cli.log`.
 
-## Provider Auth
+## Report An Issue
 
-Provider setup states can include:
+Open **Report an issue** from **Help › Report Issue**, **Report issue** in the command palette, or the **Report issue** button on an error card or toast.
 
-| State | Meaning |
-|---|---|
-| **Checking account** | Traycer is checking provider/account availability. |
-| **Not authenticated** | The provider needs login, API key, or CLI auth. |
-| **API key set** | A required key is configured. |
-| **Account status unavailable** | Traycer could not confirm provider status. |
+<Steps>
+  <Step title="Choose a type">
+    **Bug**, **Idea** or **Something else**.
+  </Step>
+  <Step title="Describe it">
+    Answer the main question, such as "What were you trying to do, and what went wrong?" for a bug, and set **Where did this happen?** if the dialog asks. For a bug, also choose **How often?**: **Once**, **Sometimes**, **Every time** or **Not sure**. Paste or drop screenshots if they help; they stay private.
+  </Step>
+  <Step title="Choose what to attach">
+    **App log tail** and **Host log tail** attach the end of each log. They start on for a bug and off for other types; you can change either. **Browser diagnostics** appears when in-app browser logs exist.
+  </Step>
+  <Step title="Send it">
+    Click **Send report**. The report goes privately to the Traycer team, and you get a report ID to copy. New reports get a first look within 1 business day.
+  </Step>
+</Steps>
 
-For Cursor, add the Cursor API key in **Settings → Providers** or export `CURSOR_API_KEY` in the environment used by the host.
+**Post it on GitHub too.** After sending, click **Also post publicly on GitHub**, then review **Preview the public issue**. Logs, stack traces and identifiers stay in the private report. **Open GitHub draft** opens the issue in your browser; nothing is posted from the app.
 
-## Terminal and Host-Bound Tabs
+**Offline.** "You're offline, so your report is saved on this machine - it will be sent automatically when the connection returns."
 
-For why tabs bind to a Host, see [Hosts](/concepts/hosts).
+**When private reporting isn't available**, the dialog offers **Save diagnostic bundle** and **Open a GitHub issue**. The bundle contains scrubbed logs; review it before you share it publicly.
+
+## Host-Bound Tabs
+
+Every tab belongs to the host it was opened on. See [Tabs and their host](/concepts/hosts#tabs-and-their-host).
 
 | Message | Meaning |
 |---|---|
-| `Host "{label}" is unreachable. This terminal is permanently closed.` | A raw terminal PTY is gone and cannot move to another Host. Close the tab and start a new terminal session. |
-| `Host "{label}" is unreachable, so this agent is unavailable until that host is back.` | An Agent on the Terminal interface remains bound to its owning Host. The Agent and its transcript are preserved; closing the tab only removes it from the canvas. |
-| `Bound host "{label}" is offline. Continuing here creates a new agent on the active host; this one stays bound to "{label}".` | An Agent on the Chat interface can continue by cloning onto the Current Host. The clone is a new Agent; the original stays bound to its Host. |
-| `This file is on host "{label}", which is currently unreachable.` | A file preview cannot load until the host comes back. |
-| `This file is on host "{label}". Switch your active host to "{label}" to view it.` | The file is reachable, but not through the Current Host. |
-| `This diff is on host "{label}", which is currently unreachable.` | A diff cannot load until the host comes back. |
+| `Host "{label}" is unreachable. This terminal is permanently closed.` | A terminal can't move to another host. Close the tab and open a new terminal. |
+| `Host "{label}" is unreachable, so this agent is unavailable until that host is back.` | An agent on the Terminal interface stays on its host. The agent and its transcript are kept; closing the tab only removes it from the canvas. |
+| `This agent is not running on "{label}" right now, and it can only be started on that machine.` | An agent on the Terminal interface on another machine isn't running. Start it from that machine. |
+| `Bound host "{label}" is offline. Continuing here creates a new agent on the active host; this one stays bound to "{label}".` | An agent on the Chat interface. Continuing clones it onto the active host; the original stays where it was. With view-only access to the Task, it can't be cloned. |
+| `This agent lives on {host}, which is offline — showing the last published copy. Sending resumes when that host is back.` | You're reading a read-only copy. See [Sync and offline](/concepts/sync-and-offline). |
+| `This agent belongs to another collaborator, and its history isn't available here.` | A shared agent whose live history isn't on this host. The tab may show its last published copy, and cloning creates your own agent on the active host. |
+| `This agent is no longer shared with you.` | Access was removed while the tab was open. |
+| `This file is on host "{label}", which is currently unreachable.` | The file preview loads once that host is back. |
+| `This diff is on host "{label}", which is currently unreachable.` | The diff loads once that host is back. |
+| `Waiting for the host to start…` | The tab's host is starting or restarting. The tab continues on its own. |
 
-The important distinction: an Agent on the Chat interface can clone to another Host; raw terminals and Agents on the Terminal interface cannot migrate. Cloning never moves the original Agent—it creates a second one.
+## File Not Found In A Preview
+
+An image, PDF or Word preview shows **File not found**, with the file's name and "It may have been moved, renamed or deleted.", when its file is no longer on disk. The toolbar above it still shows the file's path. There's no **Open Externally**, because there is no file to open.
+
+- **The file moved or was renamed:** open it again from its new place, for example from the [File Tree](/panels/file-tree).
+- **You put it back at the same path:** click into another pane and back. The preview checks the file again each time its pane regains focus.
+
+This is different from a file Traycer can't preview, which still offers **Open Externally** when the file exists.
+
+## Other Messages
+
+| Message | Meaning and what to do |
+|---|---|
+| **System clock is incorrect** | A banner reads "Your system clock appears to be …". If your clock is ahead, Traycer can't connect until it's corrected; if it is behind, times in the app are wrong. Set your system clock to update automatically. |
+| **Authorize background work** | "Enter the code sent to your email so &lt;machine&gt; can keep running your work after you disconnect." Enter the 6-digit code from your email and click **Verify**. **Resend code** sends a new one. |
+| **Finish updating Traycer** | Linux only. The update was downloaded but this install can't apply it automatically. Run the command shown, then restart Traycer. See [Updates](/install#updates). |
+| **Rebind local store** | Creating a Task failed because the host's local store isn't available. **Rebind local store** claims the data folder for this host; first make sure no other Traycer host uses it. If the host can't repair it from here, follow the steps in the dialog on that machine. |
 
 ## Worktree Setup
 
-Agent worktree setup can show states such as:
+When an agent runs in a new worktree, its chat shows a setup card. See [Setup and teardown scripts](/concepts/worktrees/scripts).
 
 | State | Meaning |
 |---|---|
-| **Creating worktree** | Traycer is creating the worktree for the run. |
-| **Setting up worktree** | Setup is still running. |
-| **Worktree ready** | The worktree is ready. |
-| **Setup failed** | Setup failed before the first message could run. |
-| **Setup cancelled** | Setup was cancelled. |
-| **Worktree setup incomplete** | The run cannot continue until setup is resolved. |
+| **Creating worktree** | Git is creating the worktree. |
+| **Setting up worktree** | The setup script is running. It has no overall time limit, but it is cancelled after 5 minutes with no output. |
+| **Worktree ready** | The worktree was created and setup finished. |
+| **Setup failed** | The setup script exited with an error, shown as "(exit N)". Click **Retry setup**. |
+| **Setup cancelled** | Setup was stopped: Ctrl+C, the setup terminal was closed, or 5 minutes passed with no output. Click **Retry setup**. |
+| **Worktree creation failed** | Git couldn't create the worktree. Click **Retry creation**; queued messages resume after it succeeds. |
+| **Worktree setup incomplete** | An earlier setup never reported a result, for example because the host stopped. It isn't running and can't be retried. |
 
-If a workspace folder no longer exists or became unreachable, choose an available workspace folder and retry the run.
+The agent's first message waits for setup, but still runs if setup fails. With several folders, the card reads "Setting up N worktrees", "N of M done" or "Worktree setup failed".
+
+If a workspace folder no longer exists or can't be reached, choose an available folder and try again.
+
+## Provider Auth
+
+| State | Meaning |
+|---|---|
+| **Checking account…** | Traycer is checking the provider account. |
+| **Not authenticated** | The provider needs a login, an API key or CLI sign-in. |
+| **API key set** | A required key is configured. |
+| **Account status unavailable** | Traycer couldn't confirm the provider's status. |
+
+For Cursor, add the Cursor API key in [Settings › Providers](/settings/providers), or set `CURSOR_API_KEY` in the host's environment in [Shell](/settings/shell).
 
 ## Model Picker
 
 | State | Meaning |
 |---|---|
-| **Loading models** | Traycer is loading available model options. |
-| **Couldn't load providers** | Provider list failed to load. |
-| **Couldn't load models** | Model list failed to load for the selected provider. |
+| **Loading models** | Traycer is loading the model list. |
+| **Couldn't load providers** | The provider list failed to load. |
+| **Couldn't load models** | The model list failed to load for the selected provider. |
 | **No models available** | The selected provider returned no usable models. |
-| **No models match** | Search/filtering removed all model choices. |
-| **Connect Cursor** / **Add API key** | Cursor needs a configured API key before use. |
+| **No models match** | Your search filtered out every model. |
+| **Connect &lt;provider&gt;** / **Add API key** | The provider needs an API key. **Add API key** opens its settings. |
 
-If a provider is missing from the picker, it may be unavailable, not installed, or not configured.
+If a provider is missing from the picker, it may not be installed or configured on that host.
+
+## App Menus
+
+**Help menu:** **Documentation**, **Release Notes**, **Report Issue**, **Open Logs**, **Restart Host**, **Check for Updates** and **About Traycer**.
+
+**Tray menu:** **Open Traycer**, your recent Tasks, **Settings…**, **Update to &lt;version&gt;** (when a host update is available), **Check for Updates**, **Restart Host**, **Open Logs**, your account with **Sign In** or **Sign Out**, and **Quit Traycer**.
+
+On macOS, the **Traycer** menu also holds **Settings…**, **Sign In** / **Sign Out**, **Restart Host** and **Check for Updates**. On Windows and Linux, **Settings…** and **Sign In** / **Sign Out** are in the **File** menu.

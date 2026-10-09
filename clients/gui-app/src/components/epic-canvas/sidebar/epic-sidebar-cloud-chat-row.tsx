@@ -10,7 +10,11 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { cloudChatRowLastActiveAt } from "@/lib/chats/unified-chat-list";
+import {
+  cloudChatRowKey,
+  cloudChatRowLastActiveAt,
+  type UnifiedCloudChatEntry,
+} from "@/lib/chats/unified-chat-list";
 import {
   useIsActiveEpicArtifact,
   useIsActiveTile,
@@ -18,12 +22,14 @@ import {
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useChatTreeSurface } from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   makePublishedChatTileRef,
   publishedChatTileId,
 } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { TreeChevronSpacer } from "@/components/ui/tree-chevron";
+import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
+import { NodeChevron } from "@/components/epic-canvas/sidebar/tree-node-chevron";
+import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-guide";
 import {
   BASE_PAD_LEFT,
   INDENT_PX,
@@ -40,17 +46,35 @@ import {
  * chat gets a lock glyph and opens the ordinary chat surface rendered from the
  * last copy that host published, with the composer locked.
  *
- * It is a LEAF. The cloud row carries a `parentChatId`, but the parent it names
- * is a chat on another machine that this device may not be able to see at all,
- * so a row that silently re-nested itself as a sibling loaded would be worse
- * than a flat one.
+ * It nests exactly as a local row does. A collaborator's orchestrator carries
+ * the subagents it created beneath it (`childEntries`, built by
+ * `mergeChatListEntries` from each row's `parentChatId` under the same owner),
+ * behind the same chevron and the same expansion store a local branch uses,
+ * so the person the chats were shared with sees the tree their owner sees. A
+ * row whose parent this device cannot see - private, terminal, or forked under
+ * a clone id - sits at the root, never dropped and never re-nested under a
+ * guess.
  */
 
 /** Exactly what a local chat row draws - see the note at its use site. */
 const ChatIcon = EPIC_NODE_ICONS.chat;
 
+/**
+ * The slice of the sidebar's expansion controller a cloud branch needs. Keyed
+ * by the row's `cloudChatRowKey`, in the same per-panel store as local rows, so
+ * a collapsed shared orchestrator stays collapsed across re-renders and
+ * reorders exactly as a local one does.
+ */
+export interface CloudChatRowExpansion {
+  readonly expandedIds: ReadonlySet<string>;
+  readonly toggleExpanded: (id: string) => void;
+}
+
 export interface EpicSidebarCloudChatRowProps {
   readonly chat: CloudChatSummary;
+  /** The subagents nested under this row, already sorted. Empty for a leaf. */
+  readonly childEntries: readonly UnifiedCloudChatEntry[];
+  readonly expansion: CloudChatRowExpansion;
   readonly tabId: string;
   readonly depth: number;
   /**
@@ -66,8 +90,10 @@ export interface EpicSidebarCloudChatRowProps {
 export function EpicSidebarCloudChatRow(
   props: EpicSidebarCloudChatRowProps,
 ): ReactNode {
-  const { chat } = props;
+  const { chat, childEntries, expansion } = props;
   const title = chat.title ?? "Untitled chat";
+  const placement = useColumnOverlayPlacement("row");
+  const branch = useCloudRowBranch(chat, childEntries, expansion);
   // The Epic SESSION's host - not `useTabHostId()`, and not the app-wide one.
   // The sidebar is not a tab (it sits outside every `<TabHostProvider>`, so a
   // tab-scoped read throws here - it did), and it is not an app-wide surface
@@ -211,7 +237,13 @@ export function EpicSidebarCloudChatRow(
   const ownerLabel = ownerReachability.hostLabel;
   const lockCopy = lockedRowCopy(ownerLabel);
   return (
-    <li role="treeitem" aria-selected={isActive}>
+    <li
+      role="treeitem"
+      aria-selected={isActive}
+      // Absent on a leaf: an absent `aria-expanded` is what tells a screen
+      // reader the row hides nothing.
+      aria-expanded={branch.ariaExpanded}
+    >
       <button
         type="button"
         // The lock is state, not decoration, so it belongs in the row's
@@ -238,7 +270,11 @@ export function EpicSidebarCloudChatRow(
         onClick={props.selectionMode ? undefined : open}
         onDoubleClick={props.selectionMode ? undefined : openPermanent}
       >
-        <TreeChevronSpacer />
+        <NodeChevron
+          hasChildren={branch.hasChildren}
+          expanded={branch.expanded}
+          onToggle={branch.handleToggle}
+        />
         {/* The SAME icon a local chat row renders - glyph AND tint. A distinct
             glyph or a muted tint for "arrived via the cloud list" would
             re-encode the demolished "other devices" section as iconography -
@@ -255,11 +291,11 @@ export function EpicSidebarCloudChatRow(
               reach - so it travels with the row rather than with a section, and
               it is absent when that is not true of this chat. */}
           {ownerReachable ? null : (
-            <TooltipWrapper
+            <LazySidebarTooltipWrapper
               label={lockCopy.tooltip}
-              side="right"
+              side={placement?.side ?? "right"}
               sideOffset={undefined}
-              align={undefined}
+              align={placement?.align}
             >
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"
@@ -269,7 +305,7 @@ export function EpicSidebarCloudChatRow(
                 // button contributes nothing but noise.
                 aria-hidden="true"
               />
-            </TooltipWrapper>
+            </LazySidebarTooltipWrapper>
           )}
           <CloudRowIdleTime
             publishedAt={cloudChatRowLastActiveAt(
@@ -279,7 +315,83 @@ export function EpicSidebarCloudChatRow(
           />
         </span>
       </button>
+      <CloudRowChildren
+        visible={branch.expanded}
+        childEntries={childEntries}
+        expansion={expansion}
+        tabId={props.tabId}
+        depth={props.depth}
+        selectionMode={props.selectionMode}
+      />
     </li>
+  );
+}
+
+/**
+ * The branch state of one cloud row: whether it has subagents beneath it,
+ * whether they are shown, and the chevron handler. Keyed by the row's
+ * `cloudChatRowKey` in the sidebar's expansion store.
+ */
+function useCloudRowBranch(
+  chat: CloudChatSummary,
+  childEntries: readonly UnifiedCloudChatEntry[],
+  expansion: CloudChatRowExpansion,
+): {
+  readonly hasChildren: boolean;
+  readonly expanded: boolean;
+  /** `undefined` on a leaf, so the attribute is absent rather than `false`. */
+  readonly ariaExpanded: boolean | undefined;
+  readonly handleToggle: (event: MouseEvent<HTMLSpanElement>) => void;
+} {
+  const rowKey = cloudChatRowKey(chat.identity);
+  const hasChildren = childEntries.length > 0;
+  const expanded = hasChildren && expansion.expandedIds.has(rowKey);
+  const { toggleExpanded } = expansion;
+  const handleToggle = useCallback(
+    (event: MouseEvent<HTMLSpanElement>) => {
+      // The chevron sits inside the row button; the toggle must not also open
+      // the chat, exactly as a local row's chevron does not.
+      event.stopPropagation();
+      toggleExpanded(rowKey);
+    },
+    [rowKey, toggleExpanded],
+  );
+  return {
+    hasChildren,
+    expanded,
+    ariaExpanded: hasChildren ? expanded : undefined,
+    handleToggle,
+  };
+}
+
+/**
+ * The group under a shared orchestrator: its subagents, one level in. Nothing
+ * while collapsed, exactly as the local tree's child list is nothing.
+ */
+function CloudRowChildren(props: {
+  readonly visible: boolean;
+  readonly childEntries: readonly UnifiedCloudChatEntry[];
+  readonly expansion: CloudChatRowExpansion;
+  readonly tabId: string;
+  readonly depth: number;
+  readonly selectionMode: boolean;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <ul role="group" className="relative space-y-0.5">
+      <TreeGroupGuide parentDepth={props.depth} />
+      {props.childEntries.map((child) => (
+        <EpicSidebarCloudChatRow
+          key={child.key}
+          chat={child.chat}
+          childEntries={child.children}
+          expansion={props.expansion}
+          tabId={props.tabId}
+          depth={props.depth + 1}
+          selectionMode={props.selectionMode}
+        />
+      ))}
+    </ul>
   );
 }
 

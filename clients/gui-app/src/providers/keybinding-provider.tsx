@@ -434,6 +434,11 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
+      // AltGr is Ctrl+Alt to the event on Windows and Linux, and it types a
+      // character (AltGr+N is ń on a Polish layout, AltGr+2 is @ on a German
+      // one). The key is the text's, so no chord or digit action sees it,
+      // whatever the binding - a user's rebind included.
+      if (event.getModifierState("AltGraph")) return;
       // A Diffs editor boundary claims bare typing plus its native history
       // commands. Other modified chords (⌘1, a reserved shortcut, ...) still
       // resolve as app actions below. Undo/redo are different: Diffs owns a

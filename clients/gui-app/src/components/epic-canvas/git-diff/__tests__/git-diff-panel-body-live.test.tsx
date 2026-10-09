@@ -156,7 +156,7 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 interface PinTestReachability {
   status: "reachable" | "unreachable" | "checking" | "host-starting";
   hostLabel: string;
-  unavailability: "offline" | "plan-restricted" | null;
+  unavailability: "offline" | null;
 }
 
 interface PinTestState {

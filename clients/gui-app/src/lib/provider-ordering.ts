@@ -1,3 +1,4 @@
+import { GUI_HARNESS_BY_PROVIDER_ID } from "@traycer-clients/shared/providers/provider-harness-ids";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -31,6 +32,7 @@ const PROVIDER_ID_ORDER = [
   "hermes",
   "omp",
   "reasonix",
+  "commandcode",
 ] as const satisfies ReadonlyArray<ProviderId>;
 
 type MissingProviderIdFromOrder = Exclude<
@@ -44,30 +46,6 @@ type ExhaustiveOrderedProviders = [MissingProviderIdFromOrder] extends [never]
       "Missing ProviderId in PROVIDER_ID_ORDER",
       MissingProviderIdFromOrder,
     ];
-
-const GUI_HARNESS_BY_PROVIDER_ID = {
-  codex: "codex",
-  "claude-code": "claude",
-  opencode: "opencode",
-  traycer: "traycer",
-  openrouter: "openrouter",
-  huggingface: "huggingface",
-  droid: "droid",
-  cursor: "cursor",
-  copilot: "copilot",
-  grok: "grok",
-  kiro: "kiro",
-  kilocode: "kilocode",
-  kimi: "kimi",
-  qwen: "qwen",
-  antigravity: "antigravity",
-  amp: "amp",
-  devin: "devin",
-  pi: "pi",
-  hermes: "hermes",
-  omp: "omp",
-  reasonix: "reasonix",
-} satisfies Readonly<Record<ProviderId, GuiHarnessId>>;
 
 export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
   PROVIDER_ID_ORDER.map((providerId) => ({

@@ -5,6 +5,7 @@ import type {
 import type { BrowserViewDebugger } from "../browser-view-port";
 import { describeLogError, log } from "../../app/logger";
 import { recordValue, stringValue } from "../guards";
+import { FileChooserInterception } from "./file-chooser-interception";
 
 type ChildFrameRoute = {
   readonly kind: "unresolved" | "same-process";
@@ -24,6 +25,8 @@ interface ChildSession {
   route: FrameRoute;
   state: "attaching" | "ready" | "retiring";
   sessionId: string | null;
+  /** This target's file-chooser setting; null until its session exists. */
+  fileChooser: FileChooserInterception | null;
   readonly readiness: Promise<string>;
   readonly rejectReadiness: (reason: Error) => void;
   retirement: Promise<boolean> | null;
@@ -65,6 +68,8 @@ export interface BrowserFrameRoutesPort {
   ) => Promise<T>;
   /** Resolves when the current attachment ends. */
   readonly attachmentEnded: () => Promise<void>;
+  /** The session's file-chooser reading; see `BrowserDebugSessionOptions`. */
+  readonly interceptFileChooser: () => boolean;
 }
 
 /**
@@ -267,6 +272,25 @@ export class BrowserFrameRoutes {
     this.frameRouteById.clear();
     for (const [targetId, childSession] of this.childSessionByTargetId) {
       this.retireChildSessionRecord(targetId, childSession);
+    }
+  }
+
+  /**
+   * The chooser interception is per TARGET: set on the root, it does not reach
+   * an out-of-process iframe (measured on Electron 42.11.10: with the root
+   * intercepting and the iframe's own session not, a click on a file input
+   * inside a cross-site iframe raised no `Page.fileChooserOpened`). So every
+   * child session carries the same reading as the root - from its enable
+   * batch, and here on every later edge.
+   *
+   * A child session exists for exactly the iframes an agent has reached into,
+   * which are the only ones it can give the user activation a chooser needs:
+   * every agent action resolves an element through its frame's own session.
+   */
+  syncFileChooserInterception(): void {
+    for (const childSession of this.childSessionByTargetId.values()) {
+      if (childSession.state !== "ready") continue;
+      void childSession.fileChooser?.sync();
     }
   }
 
@@ -517,6 +541,7 @@ export class BrowserFrameRoutes {
       route,
       state: "attaching",
       sessionId: null,
+      fileChooser: null,
       readiness: deferred.promise,
       rejectReadiness: deferred.reject,
       retirement: null,
@@ -532,6 +557,32 @@ export class BrowserFrameRoutes {
       attachmentGeneration,
       childSession,
     );
+  }
+
+  /**
+   * One per child session, alive exactly as long as that session is the
+   * target's current one: a retiring or replaced session takes no more
+   * commands, and a detached one took its setting with it.
+   */
+  private fileChooserInterceptionFor(
+    childSession: ChildSession,
+    sessionId: string,
+  ): FileChooserInterception {
+    const browserDebugger = this.port.browserDebugger();
+    return new FileChooserInterception({
+      live: () =>
+        this.port.isAttached() &&
+        childSession.sessionId === sessionId &&
+        childSession.state !== "retiring" &&
+        childSession.attachmentGeneration === this.port.generation(),
+      desired: () => this.port.interceptFileChooser(),
+      send: (enabled) =>
+        browserDebugger.sendCommand(
+          "Page.setInterceptFileChooserDialog",
+          { enabled },
+          sessionId,
+        ),
+    });
   }
 
   private discoverIframeTargetIds(): Promise<ReadonlySet<string>> {
@@ -591,17 +642,25 @@ export class BrowserFrameRoutes {
         throw new Error("Child debugger session ended while enabling");
       }
       this.assertChildSessionCurrent(targetId, childSession);
+      const fileChooser = this.fileChooserInterceptionFor(
+        childSession,
+        sessionId,
+      );
+      childSession.fileChooser = fileChooser;
       await this.port.raceWithSessionEnd(
         Promise.all([
           browserDebugger.sendCommand("Page.enable", {}, sessionId),
           browserDebugger.sendCommand("Runtime.enable", {}, sessionId),
           browserDebugger.sendCommand("Network.enable", {}, sessionId),
           browserDebugger.sendCommand("DOM.enable", {}, sessionId),
+          fileChooser.sync(),
         ]).then(() => undefined),
         "Child debugger session ended while enabling",
       );
       this.assertChildSessionCurrent(targetId, childSession);
       childSession.state = "ready";
+      // The on-screen reading may have moved while the batch was in flight.
+      void fileChooser.sync();
       return sessionId;
     } catch (err) {
       log.warn("[browser-view] child debugger domain enable failed", {

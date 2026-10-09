@@ -11,6 +11,7 @@ import {
   useHostReadinessController,
   type DefaultHostReadinessPresentation,
 } from "@/components/layout/host-readiness-controller-context";
+import { HostEnsureFailureMessage } from "@/components/host/host-ensure-failure-message";
 import { LocalBootstrapAttempts } from "@/components/host/local-bootstrap-attempts";
 import {
   BootstrapLogDisclosure,
@@ -348,7 +349,15 @@ function hasSettledFailure(
     // treated as ambient host state. Under `cold-start` the modal is on screen
     // precisely because nothing has served this window yet, which is the scope
     // that error still explains.
-    failed: presentation.provisioningError !== null,
+    //
+    // `ensureFailure` settles it too, and has none of that staleness: it is
+    // main's record of the last ensure, launch ones included, which main
+    // clears on the next success - and it is withheld while one is in flight.
+    // Without it a launch ensure that failed left this card on "Starting
+    // Traycer…" with no failure to show and nothing to retry.
+    failed:
+      presentation.provisioningError !== null ||
+      presentation.ensureFailure !== null,
     slow: presentation.stage === "slow",
   };
 }
@@ -361,11 +370,9 @@ interface ResolvedRetry {
 /**
  * Which recovery this state actually has, and whether it has one at all.
  *
- * `plan-restricted` gets NO retry, deliberately: the hosts are healthy and
- * running on their own machines, and a Retry there is a button that can only
- * ever fail while implying the failure is transient. The upgrade action is the
- * whole answer. `update-host` likewise - retrying a version disagreement just
- * re-reads the same versions.
+ * `update-host` gets NO retry, deliberately: retrying a version disagreement
+ * just re-reads the same versions, so a Retry there is a button that can only
+ * ever fail while implying the failure is transient.
  *
  * For `offline` the answer depends on whose machine this is. When the app
  * manages this machine's host, re-running the install/start is a real recovery
@@ -404,7 +411,7 @@ function resolveUpdateHost(
   if (variant.kind !== "update-host") return null;
   // `canManageHost` asks "is the TARGET this machine"; the card asks "which
   // host is incompatible". Arm 1 of `deriveNoHostVariant` makes those the same
-  // host, arm 3 does not - so `canManageHost` alone is a guard argued against
+  // host, arm 2 does not - so `canManageHost` alone is a guard argued against
   // only the population it can see. Without this line the button offers to
   // update the host the card names and re-provisions THIS machine instead.
   //
@@ -423,8 +430,8 @@ function resolveUpdateHost(
 /**
  * The boot body, or null when this state has none.
  *
- * Only the `offline` variant gets one: a plan gate and a version mismatch are
- * both about a host that is up and answering, so a bootstrap log and a
+ * Only the `offline` variant gets one: a version mismatch is
+ * about a host that is up and answering, so a bootstrap log and a
  * "Configure shell…" button would be diagnostics for a failure that did not
  * happen.
  *
@@ -519,6 +526,14 @@ function buildBootBody(args: {
     // alignment or none. One contract, both arms.
     return (
       <LocalHostBodyShell>
+        {/* The failed ensure's own words first: they say why, where the
+            attempt panel says what was tried. */}
+        {args.presentation.ensureFailure === null ? null : (
+          <HostEnsureFailureMessage
+            message={args.presentation.ensureFailure.message}
+            code={args.presentation.ensureFailure.code}
+          />
+        )}
         <LocalBootstrapAttempts />
         {/* No trailing peer: this arm HAS a real action row (Retry, Report
             issue, Open settings), so the toggle keeps its own line rather

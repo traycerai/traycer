@@ -158,7 +158,7 @@ describe("withCliInvocationRecord", () => {
         },
       }),
     );
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
     expect(mocks.uninstalls).toEqual([label.id]);
     expect(mocks.order).toEqual(["txn-open", "os-uninstall", "txn-commit"]);
   });
@@ -188,9 +188,9 @@ describe("withCliInvocationRecord", () => {
         },
       }),
     );
-    await expect(controller.uninstall({ label })).rejects.toThrow(
-      "os-uninstall-refused",
-    );
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toThrow("os-uninstall-refused");
   });
 
   it("leaves every other controller method untouched", () => {
@@ -343,7 +343,7 @@ describe("invocation-record decorator nesting order", () => {
         }),
       ),
     );
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
     expect(mocks.order).toEqual([
       "txn-open",
       "stop-intent",
@@ -363,9 +363,9 @@ describe("invocation-record decorator nesting order", () => {
         }),
       ),
     );
-    await expect(controller.uninstall({ label })).rejects.toThrow(
-      "txn-acquire-failed",
-    );
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toThrow("txn-acquire-failed");
     expect(mocks.order).toEqual(["txn-open"]);
   });
 });
@@ -386,7 +386,7 @@ describe("createServiceController wiring", () => {
   it("routes uninstall through the invocation-record wrapper without requiring OS mutation", async () => {
     mocks.callUninstall = false;
     const controller = createServiceController();
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
     expect(mocks.uninstalls).toEqual([label.id]);
   });
 
@@ -404,7 +404,7 @@ describe("createServiceController wiring", () => {
       cli: { command: "/abs/traycer", args: [] },
       enableLinger: false,
     });
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
     expect(mocks.registrations).toEqual([label.id]);
     expect(mocks.uninstalls).toEqual([label.id]);
   });

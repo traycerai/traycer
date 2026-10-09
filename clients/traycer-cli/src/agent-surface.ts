@@ -71,6 +71,9 @@ export function resolveAgentCliSurface(
  *
  * `traycer monitor` is deliberately absent; see `MONITOR_SURFACE_NOTE`.
  */
+const PROFILE_CHANGE_REFUSAL =
+  "this session can list provider profiles but cannot change them - use Settings ▸ Providers, or run this from a full-surface session.";
+
 export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "agent create":
     "this session can inspect agents but cannot create or change them.",
@@ -88,6 +91,12 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
     "this session can list role claims but cannot release one.",
   "worktree delete":
     "remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
+  "profile add": PROFILE_CHANGE_REFUSAL,
+  "profile login": PROFILE_CHANGE_REFUSAL,
+  "profile rename": PROFILE_CHANGE_REFUSAL,
+  "profile enable": PROFILE_CHANGE_REFUSAL,
+  "profile disable": PROFILE_CHANGE_REFUSAL,
+  "profile remove": PROFILE_CHANGE_REFUSAL,
 };
 
 /**
@@ -126,10 +135,15 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
  * already running.
  *
  * Not in scope of that reasoning, and not gated today because the readonly
- * surface has never hidden them either: `comments set-status` and
- * `worktree create` are both agent-typed mutations that a readonly session can
- * still run. Whether the surface should cover them is a contract question for
- * the host, not something this table should decide unilaterally.
+ * surface has never hidden it either: `comments set-status` is an agent-typed
+ * mutation that a readonly session can still run. Whether the surface should
+ * cover it is a contract question for the host, not something this table
+ * should decide unilaterally.
+ *
+ * `worktree create` is not in the table for a different reason: what an agent
+ * may do there is the user's Agent worktrees setting, not the surface, and it
+ * is checked beside this table by `assertAgentWorktreeCreateAllowed`
+ * (`agent-worktree-create.ts`) on either surface.
  */
 export const MONITOR_SURFACE_NOTE =
   "traycer monitor is an explicit readonly-surface exception: refusing the delivery daemon would break inbox delivery rather than remove a capability";

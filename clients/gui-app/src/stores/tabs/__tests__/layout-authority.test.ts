@@ -35,17 +35,18 @@ import {
   type SystemTabs,
 } from "@/stores/tabs/layout";
 import {
-  isRegisteredTabKind,
   TAB_KINDS,
   TAB_KINDS_SURFACE_CONTRACT,
   tabSurfaceDescriptor,
   type HeaderTabKind,
 } from "@/stores/tabs/registry";
+import { isRegisteredTabKind } from "@/stores/tabs/tab-kind-policy";
 import { epicTabModule } from "@/stores/tabs/kinds/epic";
 import { draftTabModule } from "@/stores/tabs/kinds/draft";
 import { historyTabModule } from "@/stores/tabs/kinds/history";
 import { settingsTabModule } from "@/stores/tabs/kinds/settings";
 import { homeTabModule } from "@/stores/tabs/kinds/home";
+import { sampleWorkspaceTabModule } from "@/stores/tabs/kinds/sample-workspace";
 import {
   EMPTY_LANDING_DRAFT_CONTENT,
   emptyLandingDraftWorkspaceSnapshot,
@@ -246,6 +247,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       "epic",
       "history",
       "home",
+      "sample-workspace",
       "settings",
     ];
     expect(Object.keys(TAB_KINDS).length).toBe(expectedKinds.length);
@@ -260,6 +262,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     expectTypeOf(TAB_KINDS).toHaveProperty("history");
     expectTypeOf(TAB_KINDS).toHaveProperty("settings");
     expectTypeOf(TAB_KINDS).toHaveProperty("home");
+    expectTypeOf(TAB_KINDS).toHaveProperty("sample-workspace");
 
     expectTypeOf(tabSurfaceDescriptor("epic")).toEqualTypeOf<
       TabSurfaceDescriptor<"epic">
@@ -275,6 +278,9 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     >();
     expectTypeOf(tabSurfaceDescriptor("home")).toEqualTypeOf<
       TabSurfaceDescriptor<"home">
+    >();
+    expectTypeOf(tabSurfaceDescriptor("sample-workspace")).toEqualTypeOf<
+      TabSurfaceDescriptor<"sample-workspace">
     >();
 
     expectTypeOf(TAB_KINDS.epic.descriptor.surface).toExtend<
@@ -292,6 +298,9 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     expectTypeOf(TAB_KINDS.home.descriptor.surface).toExtend<
       TabSurfaceDescriptor<"home">
     >();
+    expectTypeOf(TAB_KINDS["sample-workspace"].descriptor.surface).toExtend<
+      TabSurfaceDescriptor<"sample-workspace">
+    >();
 
     const headerKinds: ReadonlyArray<HeaderTabKind> = [
       "epic",
@@ -299,6 +308,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       "history",
       "settings",
       "home",
+      "sample-workspace",
     ];
     headerKinds.forEach((kind) => {
       const surface = tabSurfaceDescriptor(kind);
@@ -355,6 +365,12 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       {
         tab: homeTabModule.build(null),
         surface: homeTabModule.descriptor.surface,
+        expectedNewWindow: "none",
+      },
+      // Sample workspace is window-local and ephemeral too.
+      {
+        tab: sampleWorkspaceTabModule.build(null),
+        surface: sampleWorkspaceTabModule.descriptor.surface,
         expectedNewWindow: "none",
       },
     ];
@@ -442,6 +458,27 @@ describe("layout reducers preserve invariants", () => {
       });
       expect(next.activeItemId).toBe("split-1");
       expect(next.items.some((item) => item.kind === "tab")).toBe(true);
+    });
+
+    it("puts a pair made on a destination in that tab's place, and any other pair in the earlier tab's", () => {
+      // A dragged first tab dropped on the last one: the pair is where the
+      // last one was, whichever side the dragged tab takes.
+      const base = withTabs([EPIC_A, EPIC_B, DRAFT_A]);
+      const order = (targetRef: TabRef | undefined) =>
+        pairLayoutRefs(
+          base,
+          {
+            ...(targetRef === undefined ? {} : { targetRef }),
+            left: EPIC_A,
+            right: DRAFT_A,
+            splitId: "split-1",
+            leftRatio: 0.5,
+          },
+          allowAllSplits,
+        ).items.map((item) => item.id);
+      expect(order(DRAFT_A)).toEqual([tabItemId(EPIC_B), "split-1"]);
+      expect(order(EPIC_A)).toEqual(["split-1", tabItemId(EPIC_B)]);
+      expect(order(undefined)).toEqual(["split-1", tabItemId(EPIC_B)]);
     });
 
     it("rejects same-ref, missing refs, and descriptor-ineligible refs (inv 5, 7)", () => {
@@ -860,7 +897,7 @@ describe("layout reducers preserve invariants", () => {
         },
         allowAllSplits,
       );
-      const afterOne = removeLayoutRef(paired, EPIC_A);
+      const afterOne = removeLayoutRef(paired, EPIC_A, true);
       assertLayoutInvariants(afterOne);
       expect(findStripItemForRef(afterOne, EPIC_B)?.kind).toBe("tab");
       expect(afterOne.activeItemId).toBe(tabItemId(EPIC_B));
@@ -876,7 +913,7 @@ describe("layout reducers preserve invariants", () => {
         },
         allowAllSplits,
       );
-      const cleared = removeLayoutRef(incomplete, EPIC_A);
+      const cleared = removeLayoutRef(incomplete, EPIC_A, true);
       assertLayoutInvariants(cleared);
       expect(cleared.items).toEqual([]);
       expect(cleared.activeItemId).toBeNull();
@@ -890,14 +927,17 @@ describe("layout reducers preserve invariants", () => {
       const leftmost = removeLayoutRef(
         { ...base, activeItemId: tabItemId(EPIC_A) },
         EPIC_A,
+        true,
       );
       const middle = removeLayoutRef(
         { ...base, activeItemId: tabItemId(EPIC_B) },
         EPIC_B,
+        true,
       );
       const rightmost = removeLayoutRef(
         { ...base, activeItemId: tabItemId(EPIC_C) },
         EPIC_C,
+        true,
       );
 
       [leftmost, middle, rightmost].forEach(assertLayoutInvariants);
@@ -911,7 +951,7 @@ describe("layout reducers preserve invariants", () => {
       layout = focusLayoutRef(layout, EPIC_B);
       layout = focusLayoutRef(layout, EPIC_D);
 
-      const afterClose = removeLayoutRef(layout, EPIC_D);
+      const afterClose = removeLayoutRef(layout, EPIC_D, true);
 
       expect(afterClose.activeItemId).toBe(tabItemId(EPIC_B));
       expect(tabActivationHistory(afterClose)).toEqual([

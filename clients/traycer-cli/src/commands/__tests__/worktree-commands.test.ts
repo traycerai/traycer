@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
 import { buildProgram } from "../../index";
+
+// `worktree create` is hidden for an agent session whose user turned
+// agent-created worktrees off. This suite runs inside a live Traycer agent
+// session, which already has `TRAYCER_AGENT_ID` set, so pin it to "" (a
+// person): the registration checks below then neither depend on the session
+// running them nor read the user's real `~/.traycer/cli/config.json`. The
+// agent-session help is covered in `rendered-help.test.ts`.
+beforeEach(() => {
+  vi.stubEnv("TRAYCER_AGENT_ID", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function findSubcommand(parent: Command, name: string): Command | null {
   for (const child of parent.commands) {

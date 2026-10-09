@@ -85,6 +85,7 @@ function renderPopover(
         taskId="task-1"
         snapshot={snapshot}
         onDismiss={onDismiss}
+        onQuoted={() => undefined}
         boundaryRef={NO_BOUNDARY}
         bottomOverlayInsetPx={0}
       />
@@ -136,6 +137,37 @@ describe("QuoteSelectionPopover - quote action", () => {
     const draft = readComposerDraftSnapshot("task-1");
     expect(JSON.stringify(draft.content)).toContain("blockquote");
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onQuoted once, after the quote is in the draft and before onDismiss", () => {
+    const { snapshot } = makeAnchoredSnapshot();
+    const calls: string[] = [];
+    let draftHadQuoteAtQuoted = false;
+    render(
+      <TooltipProvider>
+        <QuoteSelectionPopover
+          taskId="task-1"
+          snapshot={snapshot}
+          onDismiss={() => {
+            calls.push("dismiss");
+          }}
+          onQuoted={() => {
+            calls.push("quoted");
+            draftHadQuoteAtQuoted = JSON.stringify(
+              readComposerDraftSnapshot("task-1").content,
+            ).includes("blockquote");
+          }}
+          boundaryRef={NO_BOUNDARY}
+          bottomOverlayInsetPx={0}
+        />
+      </TooltipProvider>,
+    );
+    expect(calls).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Quote" }));
+
+    expect(calls).toEqual(["quoted", "dismiss"]);
+    expect(draftHadQuoteAtQuoted).toBe(true);
   });
 });
 
@@ -234,6 +266,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
           taskId="task-1"
           snapshot={snapshot}
           onDismiss={onDismiss}
+          onQuoted={() => undefined}
           boundaryRef={boundaryRef}
           bottomOverlayInsetPx={bottomOverlayInsetPx}
         />

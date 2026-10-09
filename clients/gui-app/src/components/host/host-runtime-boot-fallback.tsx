@@ -25,6 +25,12 @@ import { isMobileApp } from "@/lib/mobile-app";
 export function HostRuntimeBootFallback(props: {
   readonly onConfigureShell: () => void;
   readonly onOpenSettings: () => void;
+  /**
+   * The desktop's "Settings…" (menu, tray, jump list) while this surface is
+   * up. Separate from the card's own `Open settings`, because only the command
+   * may reach the quit card on a launch that settles signed out.
+   */
+  readonly onMenuOpenSettings: () => void;
 }): ReactNode {
   // On the installed mobile app this window is a KEYCHAIN READ, not a host
   // start: there is no bundled local host to install or boot (`onLocalHostChange`
@@ -60,8 +66,8 @@ export function HostRuntimeBootFallback(props: {
       className="flex min-h-safe-svh w-full flex-col bg-background text-foreground"
       data-testid="host-runtime-boot-fallback"
     >
-      <BootDesktopMenus onOpenSettings={props.onOpenSettings} />
-      <DesktopMenuHeader />
+      <BootDesktopMenus onMenuOpenSettings={props.onMenuOpenSettings} />
+      <DesktopMenuHeader variant="boot" />
       <div className="flex flex-1 items-center justify-center p-6">
         <HostBootSurface
           testId={null}

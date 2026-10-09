@@ -22,6 +22,12 @@ const mocks = vi.hoisted(() => ({
   busyCalls: [] as Array<string | undefined>,
   lockCalls: [] as Array<{ reason: string }>,
   stopForRestartForceValues: [] as boolean[],
+  // When set, the stub's relaunch crosses the REAL service spawn edge, which
+  // is what publishes the adoption proof - so the proof's origin becomes
+  // observable in `publishedOrigins`. Off by default: every other case pins
+  // command-level wiring and never publishes.
+  crossSpawnEdge: false,
+  publishedOrigins: [] as string[],
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -56,6 +62,11 @@ vi.mock("../../service", async (importOriginal) => {
       },
       relaunchAfterRestart: async () => {
         mocks.controllerCalls.push("relaunchAfterRestart");
+        if (mocks.crossSpawnEdge) {
+          const { atServiceSpawnEdge } =
+            await import("../../service/spawn-edge");
+          await atServiceSpawnEdge();
+        }
       },
       hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
@@ -68,10 +79,18 @@ vi.mock("../../service", async (importOriginal) => {
 // the adoption handshake (that's `host-start-adoption.test.ts`), so
 // replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
-  publishHostStartAdoption: async () => ({
-    waitForSpawn: async () => undefined,
-    cancel: async () => undefined,
-  }),
+  publishHostStartAdoption: async (
+    _capability: unknown,
+    _contenderOptions: unknown,
+    _serviceLabel: string,
+    origin: string,
+  ) => {
+    mocks.publishedOrigins.push(origin);
+    return {
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    };
+  },
 }));
 
 vi.mock("../../host/busy-check", () => ({
@@ -167,7 +186,7 @@ async function writeInstallRecordForAttestation(): Promise<HostInstallRecord> {
 }
 
 describe("buildHostRestartCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-cmd-test-"));
     osHome.current = workHome;
     process.env.HOME = workHome;
@@ -176,11 +195,17 @@ describe("buildHostRestartCommand", () => {
     // module cache so each test (and the dynamic import below) sees its
     // own tmp HOME, matching host-restart-finalize.test.ts's pattern.
     vi.resetModules();
+    // HOME-safety guard: prove the redirect actually took before any test
+    // can touch a real path under it.
+    const { hostHomeDir } = await import("../../store/paths");
+    expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.controllerCalls = [];
     mocks.busyOverride = null;
     mocks.busyCalls = [];
     mocks.lockCalls = [];
     mocks.stopForRestartForceValues = [];
+    mocks.crossSpawnEdge = false;
+    mocks.publishedOrigins = [];
   });
 
   afterEach(() => {
@@ -203,6 +228,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -214,6 +240,27 @@ describe("buildHostRestartCommand", () => {
     ]);
   });
 
+  it("publishes the relaunch's adoption proof as `maintenance`, whoever asked for the restart", async () => {
+    // Lifecycle modes: a restart brings back a run that already
+    // existed, so its relaunch leg records `maintenance` in the proof the
+    // supervisor consumes - never the caller's `--lifecycle-origin`.
+    mocks.crossSpawnEdge = true;
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+      lifecycleOrigin: "terminal",
+    });
+    await command(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
+  });
+
   it("plain restart proceeds unconditionally even when the host is busy", async () => {
     mocks.busyOverride = "busy";
     const { buildHostRestartCommand } = await import("../host-restart");
@@ -221,6 +268,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
@@ -239,6 +287,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     const result = await command(fakeCtx());
@@ -256,6 +305,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -273,6 +323,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
@@ -291,6 +342,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: true,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
@@ -307,6 +359,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: true,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -323,6 +376,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -348,6 +402,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -372,6 +427,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -397,6 +453,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -422,6 +479,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -463,6 +521,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -496,6 +555,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -538,6 +598,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -573,6 +634,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -612,6 +674,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -644,6 +707,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -687,6 +751,7 @@ describe("buildHostRestartCommand", () => {
           ifIdle: false,
           force: false,
           deferIfParked: false,
+          lifecycleOrigin: "terminal",
         });
         const result = await command(fakeCtx());
 
@@ -762,6 +827,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
@@ -778,6 +844,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 

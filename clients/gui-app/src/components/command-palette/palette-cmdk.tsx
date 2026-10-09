@@ -17,7 +17,7 @@ import { useCommandState } from "cmdk";
 import { Bot, Folder, FolderOpen, MessageSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
+import { StatusGlyph } from "@/components/notifications/status-glyph";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
@@ -132,8 +132,11 @@ function AgentTreeItemLabel(props: {
   } else if (row.activity === "background") {
     statusLabel = "Agent working in background";
     icon = (
-      <BackgroundActivityGlyph
+      <StatusGlyph
+        status="background"
+        className="size-3.5"
         testId={`agent-opener-background-${props.item.id}`}
+        label={null}
       />
     );
   }

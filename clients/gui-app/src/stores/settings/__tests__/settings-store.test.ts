@@ -5,11 +5,8 @@ import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferen
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 import {
   DEFAULT_AGENT_OFFICE_VIEW,
-  DEFAULT_CONTEXT_INDICATOR_STYLE,
   DEFAULT_LINK_OPEN_SETTINGS,
-  DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
   DEFAULT_TILE_PLACEMENT_SETTINGS,
-  DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   linkOpenModeForKind,
   tilePlacementForCategory,
@@ -33,12 +30,6 @@ function resetSettingsStore(): void {
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     defaultPermission: DEFAULT_PERMISSION,
     defaultEditor: "vscode",
-    showGlobalResourceMonitor: true,
-    navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
-    pinContextUsageBreakdown: false,
-    pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
-    contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
-    chatTurnMinimapSide: "right",
     agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
     quoteReplyEnabled: true,
     linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
@@ -63,10 +54,6 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().artifactIconColors).toEqual(
       DEFAULT_EPIC_NODE_ICON_COLORS,
     );
-  });
-
-  it("defaults the chat turn minimap to the right side", () => {
-    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
   });
 
   it("persists and rehydrates notification chimes by event type", async () => {
@@ -173,47 +160,6 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().notificationChimeSounds).toEqual(
       DEFAULT_NOTIFICATION_CHIME_SOUNDS,
     );
-  });
-
-  it("persists and rehydrates the chat turn minimap side", async () => {
-    useSettingsStore.getState().setMinimapSide("left");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"chatTurnMinimapSide":"left"');
-
-    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
-    if (persisted === null) throw new Error("expected persisted settings");
-    window.localStorage.setItem("traycer-gui-app:settings", persisted);
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
-  });
-
-  it("persists and rehydrates a hidden chat turn minimap", async () => {
-    useSettingsStore.getState().setMinimapSide("hide");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"chatTurnMinimapSide":"hide"');
-
-    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
-    if (persisted === null) throw new Error("expected persisted settings");
-    window.localStorage.setItem("traycer-gui-app:settings", persisted);
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
-  });
-
-  it("repairs an invalid persisted chat turn minimap side to right", async () => {
-    useSettingsStore.setState({ chatTurnMinimapSide: "left" });
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { chatTurnMinimapSide: "top" },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
   });
 
   it("defaults the agent office default view to floor", () => {
@@ -441,270 +387,6 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().defaultEditor).toBe("vscode");
-  });
-
-  it("defaults the global resource monitor button to on", () => {
-    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(true);
-  });
-
-  it("toggles and persists the global resource monitor button preference", () => {
-    useSettingsStore.getState().setShowGlobalResourceMonitor(false);
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-
-    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
-    expect(persisted ?? "").toContain('"showGlobalResourceMonitor":false');
-  });
-
-  it("rehydrates the global resource monitor button preference", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { showGlobalResourceMonitor: false },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
-  });
-
-  it("defaults the navigator resource chip to no metrics, as the switch defaulted to off", () => {
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-  });
-
-  it("toggles one navigator metric at a time, keeps chip order and persists the list", () => {
-    const { toggleNavigatorResourceMetric } = useSettingsStore.getState();
-
-    // Picked processes first, memory second, cpu last: the list still comes
-    // out in chip order, never insertion order.
-    toggleNavigatorResourceMetric("processes");
-    toggleNavigatorResourceMetric("memory");
-    toggleNavigatorResourceMetric("cpu");
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-      "cpu",
-      "memory",
-      "processes",
-    ]);
-
-    toggleNavigatorResourceMetric("memory");
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-      "cpu",
-      "processes",
-    ]);
-
-    toggleNavigatorResourceMetric("processes");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"navigatorResourceMetrics":["cpu"]');
-    expect(persisted ?? "").not.toContain("showNavigatorResourceStats");
-
-    toggleNavigatorResourceMetric("cpu");
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-  });
-
-  it("rehydrates the navigator metric list, dropping unknown ids and restoring chip order", async () => {
-    await rehydrateFrom({
-      navigatorResourceMetrics: ["processes", "ramShare", "cpu"],
-    });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-      "cpu",
-      "processes",
-    ]);
-
-    await rehydrateFrom({ navigatorResourceMetrics: [] });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-  });
-
-  it("migrates the retired navigator resource switch: on becomes every metric, off becomes none", async () => {
-    await rehydrateFrom({ showNavigatorResourceStats: true });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-      "cpu",
-      "memory",
-      "processes",
-    ]);
-
-    await rehydrateFrom({ showNavigatorResourceStats: false });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-  });
-
-  it("collapses duplicates when rehydrating the navigator metric list", async () => {
-    await rehydrateFrom({
-      navigatorResourceMetrics: ["cpu", "cpu", "memory"],
-    });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-      "cpu",
-      "memory",
-    ]);
-  });
-
-  it("prefers the persisted metric list over the retired switch when both are present", async () => {
-    await rehydrateFrom({
-      showNavigatorResourceStats: true,
-      navigatorResourceMetrics: ["memory"],
-    });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-      "memory",
-    ]);
-  });
-
-  it("keeps an EMPTY persisted list over the retired switch, rather than resurrecting the chips", async () => {
-    // A user who turned every chip off wrote `[]`; falling back to the legacy
-    // `true` on that would hand all three straight back.
-    await rehydrateFrom({
-      showNavigatorResourceStats: true,
-      navigatorResourceMetrics: [],
-    });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-  });
-
-  it("falls back to no navigator metrics when neither key is persisted or the list is malformed", async () => {
-    await rehydrateFrom({});
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-
-    await rehydrateFrom({ navigatorResourceMetrics: "cpu" });
-    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-  });
-
-  it("defaults the pinned context usage breakdown to off", () => {
-    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
-  });
-
-  it("toggles the pinned context usage breakdown on", () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
-
-    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
-  });
-
-  it("persists the pinned context usage breakdown preference", () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-
-    expect(persisted ?? "").toContain('"pinContextUsageBreakdown":true');
-  });
-
-  it("rehydrates the pinned context usage breakdown from persisted settings", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { pinContextUsageBreakdown: true },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
-  });
-
-  it("rehydrates old settings without the field to the default off", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { artifactIconColorMode: "none" },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
-  });
-
-  it("defaults the pinned context breakdown to every field in strip order", () => {
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
-      "used",
-      "fresh",
-      "cacheRead",
-      "cacheWrite",
-      "output",
-    ]);
-  });
-
-  it("toggles pinned context breakdown fields off and back on in canonical order", () => {
-    const { togglePinnedContextBreakdownField } = useSettingsStore.getState();
-
-    togglePinnedContextBreakdownField("used");
-    togglePinnedContextBreakdownField("cacheRead");
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
-      "fresh",
-      "cacheWrite",
-      "output",
-    ]);
-
-    // Re-inserted where the strip draws it, not appended.
-    togglePinnedContextBreakdownField("used");
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
-      "used",
-      "fresh",
-      "cacheWrite",
-      "output",
-    ]);
-  });
-
-  it("refuses to toggle off the last pinned context breakdown field", () => {
-    useSettingsStore.setState({ pinnedContextBreakdownFields: ["output"] });
-    const before = useSettingsStore.getState().pinnedContextBreakdownFields;
-
-    useSettingsStore.getState().togglePinnedContextBreakdownField("output");
-
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toBe(
-      before,
-    );
-  });
-
-  it("persists the pinned context breakdown fields", () => {
-    useSettingsStore.getState().togglePinnedContextBreakdownField("fresh");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-
-    expect(persisted ?? "").toContain(
-      '"pinnedContextBreakdownFields":["used","cacheRead","cacheWrite","output"]',
-    );
-  });
-
-  it("drops unknown pinned context breakdown fields and restores canonical order on rehydrate", async () => {
-    await rehydrateFrom({
-      pinnedContextBreakdownFields: ["output", "baseline", "used", "used", 42],
-    });
-
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
-      "used",
-      "output",
-    ]);
-  });
-
-  it("falls back to every pinned context breakdown field when the persisted list is empty or not a list", async () => {
-    await rehydrateFrom({ pinnedContextBreakdownFields: ["baseline"] });
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual(
-      DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
-    );
-
-    await rehydrateFrom({ pinnedContextBreakdownFields: "used" });
-    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual(
-      DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
-    );
-  });
-
-  it("defaults the context indicator style to text", () => {
-    expect(useSettingsStore.getState().contextIndicatorStyle).toBe("text");
-  });
-
-  it("persists and rehydrates the context indicator style", async () => {
-    useSettingsStore.getState().setContextIndicatorStyle("ring-only");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"contextIndicatorStyle":"ring-only"');
-    if (persisted === null) throw new Error("expected persisted settings");
-
-    resetSettingsStore();
-    window.localStorage.setItem("traycer-gui-app:settings", persisted);
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().contextIndicatorStyle).toBe("ring-only");
-  });
-
-  it("repairs an invalid persisted context indicator style to text", async () => {
-    await rehydrateFrom({ contextIndicatorStyle: "donut" });
-
-    expect(useSettingsStore.getState().contextIndicatorStyle).toBe("text");
   });
 
   it("defaults quote reply on text selection to on", () => {
@@ -1430,47 +1112,5 @@ describe("useSettingsStore", () => {
 
     // Still false: the mismatched-key event must not have triggered a rehydrate.
     expect(useSettingsStore.getState().showGreeting).toBe(false);
-  });
-});
-
-describe("useSettingsStore task tab layout", () => {
-  beforeEach(() => {
-    resetSettingsStore();
-    useSettingsStore.setState({ taskTabLayout: "scroll" });
-  });
-  afterEach(() => {
-    resetSettingsStore();
-    useSettingsStore.setState({ taskTabLayout: "scroll" });
-  });
-
-  it("defaults to scroll", () => {
-    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
-  });
-
-  it("persists a chosen layout and rehydrates it", async () => {
-    useSettingsStore.getState().setTaskTabLayout("shrink");
-    const raw = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(raw).not.toBeNull();
-    const parsed: unknown = JSON.parse(raw ?? "{}");
-    expect(parsed).toMatchObject({ state: { taskTabLayout: "shrink" } });
-    // setState persists too, so restore the saved bytes before rehydrating.
-    useSettingsStore.setState({ taskTabLayout: "scroll" });
-    window.localStorage.setItem("traycer-gui-app:settings", raw ?? "");
-    await useSettingsStore.persist.rehydrate();
-    expect(useSettingsStore.getState().taskTabLayout).toBe("shrink");
-  });
-
-  it.each([
-    { name: "an unknown string", value: "wrap" },
-    { name: "a non-string", value: 3 },
-    { name: "null", value: null },
-  ])("falls back to scroll for $name", async ({ value }) => {
-    await rehydrateFrom({ taskTabLayout: value });
-    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
-  });
-
-  it("uses scroll when a legacy payload has no taskTabLayout", async () => {
-    await rehydrateFrom({ homeTabEnabled: true });
-    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
   });
 });

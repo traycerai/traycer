@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
@@ -17,6 +18,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import {
   copyTerminalCommand,
   describeFreePortPrompt,
+  doctorFixForegroundReason,
   doctorFixRoute,
   fixActionLabel,
   freePortConfirmWentStale,
@@ -26,6 +28,7 @@ import {
   type DoctorFixRoute,
 } from "@/components/settings/panels/host-doctor-actions";
 import { HostSettingsDisclosure } from "@/components/settings/panels/host-settings-disclosure";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
 import {
   describeCliShellFailure,
   describeOverviewDegrade,
@@ -105,8 +108,15 @@ export function HostDoctorRpcCard(props: {
   readonly onBridgeLogs: () => Promise<readonly string[]>;
   /** True while that bridge read is in flight. */
   readonly bridgeLogsPending: boolean;
-  /** Runs the local-only repair actions on this computer. */
-  readonly onLocalFix: (issue: HostDoctorIssue) => void;
+  /**
+   * Runs the local-only repair actions on this computer. `onApplied` is
+   * called once, and only when the repair was applied - never for one that
+   * was declined or failed. The card passes its own `run`, so the report is
+   * re-read rather than left showing an issue the fix just changed, beside a
+   * fix button that is still live. That is the bridge card's contract
+   * (`host-doctor-card.tsx` invalidates its report on "Fix applied").
+   */
+  readonly onLocalFix: (issue: HostDoctorIssue, onApplied: () => void) => void;
   readonly localFixPendingCode: string | null;
 }): ReactNode {
   const { client, hostName } = props;
@@ -121,6 +131,10 @@ export function HostDoctorRpcCard(props: {
   const logsViaBridge =
     !props.rpcLogsSupported && props.isLocalMachine && props.hasLocalBridge;
   const logsServable = props.rpcLogsSupported || logsViaBridge;
+  // THIS machine's host started in a terminal: its restart fixes are
+  // withheld with the reason (`doctorFixForegroundReason`). A remote host's
+  // runs are not this machine's view to judge.
+  const foregroundRun = useLocalHostForegroundRun() && props.isLocalMachine;
   const doctorRun = useHostDoctorRun(client);
   const [report, setReport] = useState<HostDoctorResponse | null>(null);
   const [logTail, setLogTail] = useState<readonly string[] | null>(null);
@@ -276,6 +290,7 @@ export function HostDoctorRpcCard(props: {
           })}
           restartPending={restartMutation.isPending}
           bridgeRestartPending={props.bridgeRestartPending}
+          foregroundRun={foregroundRun}
           logsServable={logsServable}
           logsPending={
             logsViaBridge ? props.bridgeLogsPending : logsMutation.isPending
@@ -354,43 +369,23 @@ export function HostDoctorRpcCard(props: {
               props.onBridgeRestart();
               return;
             }
-            props.onLocalFix(issue);
+            props.onLocalFix(issue, run);
           }}
         />
       ))}
-      {split.disprovenByTransport.length === 0 ? null : (
-        <HostSettingsDisclosure
-          label={`${split.disprovenByTransport.length} check${split.disprovenByTransport.length === 1 ? "" : "s"} this connection already answers`}
-          defaultOpen={false}
-        >
-          <div
-            className="space-y-2"
-            data-testid="host-doctor-disproven-by-transport"
-          >
-            <p className="text-ui-xs text-muted-foreground">
-              Doctor ran on {hostName} and reported these, but the connection
-              carrying its report contradicts them — this app is talking to the
-              very listener they say is unavailable. Listed for completeness,
-              not as something to fix.
-            </p>
-            {split.disprovenByTransport.map((issue) => (
-              <div
-                key={issue.code}
-                className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2"
-                data-testid={`host-doctor-disproven-${issue.code}`}
-              >
-                <div className="font-medium text-ui-sm">{issue.title}</div>
-                <div className="text-ui-xs text-muted-foreground">
-                  {issue.message}
-                </div>
-              </div>
-            ))}
-          </div>
-        </HostSettingsDisclosure>
-      )}
+      <DisprovenByTransportDisclosure
+        hostName={hostName}
+        issues={split.disprovenByTransport}
+      />
       <DoctorRerunRow pending={doctorRun.isPending} onRerun={run} />
       <ConfirmDestructiveDialog
-        blockedReason={null}
+        // A host started in a terminal began under the open prompt: the fix
+        // that opened it is withheld now (`doctorFixForegroundReason`), so its
+        // Confirm is too, with the same reason.
+        blockedReason={doctorFixForegroundReason(
+          "host-free-port-and-restart",
+          foregroundRun,
+        )}
         open={freePortIssue !== null}
         onOpenChange={(open) => {
           if (!open) setFreePortIssue(null);
@@ -411,11 +406,53 @@ export function HostDoctorRpcCard(props: {
           // restart landing after the competing write - the one outcome this
           // gate exists to prevent.
           if (props.bridgeRestartPending) return;
-          props.onLocalFix(freePortIssue);
+          props.onLocalFix(freePortIssue, run);
           setFreePortIssue(null);
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The issues this connection already disproves, collapsed and listed for
+ * completeness; nothing at all when there are none.
+ */
+function DisprovenByTransportDisclosure(props: {
+  readonly hostName: string;
+  readonly issues: readonly HostDoctorIssue[];
+}): ReactNode {
+  const { issues } = props;
+  if (issues.length === 0) return null;
+  return (
+    <HostSettingsDisclosure
+      label={`${issues.length} check${issues.length === 1 ? "" : "s"} this connection already answers`}
+      defaultOpen={false}
+    >
+      <div
+        className="space-y-2"
+        data-testid="host-doctor-disproven-by-transport"
+      >
+        <p className="text-ui-xs text-muted-foreground">
+          Doctor ran on {props.hostName} and reported these, but the connection
+          carrying its report contradicts them — this app is talking to the very
+          listener they say is unavailable. Listed for completeness, not as
+          something to fix.
+        </p>
+        {issues.map((issue) => (
+          <div
+            key={issue.code}
+            className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2"
+            data-testid={`host-doctor-disproven-${issue.code}`}
+          >
+            <div className="font-medium text-ui-sm">{issue.title}</div>
+            <div className="text-ui-xs text-muted-foreground">
+              {issue.message}
+            </div>
+          </div>
+        ))}
+      </div>
+    </HostSettingsDisclosure>
   );
 }
 
@@ -425,6 +462,8 @@ function DoctorRpcIssueCard(props: {
   readonly route: DoctorFixRoute;
   readonly restartPending: boolean;
   readonly bridgeRestartPending: boolean;
+  /** THIS machine's host was started in a terminal. */
+  readonly foregroundRun: boolean;
   /** False when neither the RPC nor the bridge can honestly read this log. */
   readonly logsServable: boolean;
   readonly logsPending: boolean;
@@ -474,6 +513,7 @@ function DoctorRpcIssueCard(props: {
               route={route}
               restartPending={props.restartPending}
               bridgeRestartPending={props.bridgeRestartPending}
+              foregroundRun={props.foregroundRun}
               logsServable={props.logsServable}
               logsPending={props.logsPending}
               localFixPending={props.localFixPending}
@@ -536,6 +576,8 @@ function DoctorFixControl(props: {
   readonly localFixPending: boolean;
   /** True while the page's restart write — or any lifecycle intent — is armed. */
   readonly bridgeRestartPending: boolean;
+  /** THIS machine's host was started in a terminal. */
+  readonly foregroundRun: boolean;
   /** False when neither the RPC nor the bridge can honestly read this log. */
   readonly logsServable: boolean;
   readonly onRestart: () => void;
@@ -543,6 +585,7 @@ function DoctorFixControl(props: {
   readonly onLocalFix: () => void;
 }): ReactNode {
   const { issue, route } = props;
+  const reasonId = useId();
   if (issue.fixAction === null) return null;
   if (route === "copy-command") return null;
   // Three destinations, and the fix action decides which: showing a log is the
@@ -573,23 +616,40 @@ function DoctorFixControl(props: {
   } else if (isBridgeLifecycle) {
     pending = props.localFixPending || props.bridgeRestartPending;
   }
+  const blockedReason = doctorFixForegroundReason(
+    issue.fixAction,
+    props.foregroundRun,
+  );
   return (
-    <Button
-      variant="default"
-      size="sm"
-      disabled={pending}
-      onClick={onClick}
-      data-testid={`host-doctor-fix-${issue.code}`}
-    >
-      {pending ? (
-        <AgentSpinningDots
-          className="mr-2 size-3"
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
-      {fixActionLabel(issue.fixAction)}
-    </Button>
+    <>
+      <Button
+        variant="default"
+        size="sm"
+        disabled={pending || blockedReason !== null}
+        aria-describedby={blockedReason === null ? undefined : reasonId}
+        onClick={onClick}
+        data-testid={`host-doctor-fix-${issue.code}`}
+      >
+        {pending ? (
+          <AgentSpinningDots
+            className="mr-2 size-3"
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        {fixActionLabel(issue.fixAction)}
+      </Button>
+      {blockedReason === null ? null : (
+        // Last in the row, on a line of its own, so it reads as the reason
+        // under the actions rather than splitting them.
+        <p
+          id={reasonId}
+          className="order-last basis-full text-ui-xs text-muted-foreground"
+        >
+          {blockedReason}
+        </p>
+      )}
+    </>
   );
 }
 

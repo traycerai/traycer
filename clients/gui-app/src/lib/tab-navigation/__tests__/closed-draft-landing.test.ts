@@ -17,7 +17,6 @@ import {
   tabNavigationController,
 } from "@/lib/tab-navigation";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import { epicPathname } from "@/lib/routes";
 import {
   __resetTabSyncCoordinatorForTesting,
@@ -52,7 +51,6 @@ function resetStores(): void {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useSettingsStore.setState({ homeTabEnabled: false });
   __resetTabSyncCoordinatorForTesting();
   __resetTabNavigationControllerForTesting();
 }

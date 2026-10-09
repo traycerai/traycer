@@ -581,6 +581,7 @@ function renderUpdatesHook({
         installDegrade: null,
         busy: false,
         incarnation: "test-incarnation",
+        foregroundUpdateLine: null,
       }),
     {
       wrapper: (props: { readonly children: ReactNode }) => (
@@ -861,12 +862,100 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     );
     expect(
       (await screen.findByTestId("confirm-destructive-dialog")).textContent,
-    ).toContain("Install v1.3.0 and lose access to newer chats?");
+    ).toContain("Install v1.3.0 over newer data?");
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(installRequests).toEqual([
         { version: "1.3.0", force: false, acceptStoreFormatLoss: false },
         { version: "1.3.0", force: false, acceptStoreFormatLoss: true },
+      ]);
+    });
+  });
+
+  it("turns the host's task-store refusal of one dispatched version into Install anyway on that row alone", async () => {
+    const installRequests: Array<{
+      readonly version: string;
+      readonly force: boolean;
+      readonly acceptStoreFormatLoss: boolean;
+    }> = [];
+    let installCalls = 0;
+    // A staging host: no table places its version, so the page cannot
+    // pre-label any row and the refusal is the host's own.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.4.3-staging.92.g8b2f6ce",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.4.2", "1.4.1"]),
+          }),
+        "host.update.install": (request) => {
+          installRequests.push(request);
+          installCalls += 1;
+          return installCalls === 1
+            ? {
+                outcome: "cli-failed" as const,
+                reason: "task-store-format-floor",
+                storeFloor: null,
+              }
+            : { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await selectHostOverviewTab("updates");
+    const rows = await screen.findByTestId("host-version-rows");
+    const [dispatchedRow, otherRow] = within(rows).getAllByRole("listitem");
+    expect(dispatchedRow.textContent).toContain("v1.4.2");
+    expect(otherRow.textContent).toContain("v1.4.1");
+    fireEvent.click(
+      within(dispatchedRow).getByRole("button", { name: "Install 1.4.2" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        within(dispatchedRow).getByRole("button", {
+          name: "Install 1.4.2 anyway",
+        }),
+      ).toHaveProperty("disabled", false);
+    });
+    // The failure line is the task sentence, and the other version's row is
+    // not affected by a refusal that named no version of its own.
+    expect(
+      (await screen.findByTestId("host-overview-version-install-refused"))
+        .textContent,
+    ).toMatch(
+      /^Can't install 1\.4\.2: it reads an older task store format than this device has/,
+    );
+    expect(
+      within(otherRow).getByRole("button", { name: "Install 1.4.1" }),
+    ).toHaveProperty("disabled", false);
+    expect(
+      within(otherRow).queryByRole("button", { name: "Install 1.4.1 anyway" }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(dispatchedRow).getByRole("button", {
+        name: "Install 1.4.2 anyway",
+      }),
+    );
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Install v1.4.2 over newer data?");
+    expect(dialog.textContent).toContain("task store");
+    expect(dialog.textContent).toContain("Nothing is deleted");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(installRequests).toEqual([
+        { version: "1.4.2", force: false, acceptStoreFormatLoss: false },
+        { version: "1.4.2", force: false, acceptStoreFormatLoss: true },
       ]);
     });
   });
@@ -1965,11 +2054,11 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
     await selectHostOverviewTab("updates");
 
-    await waitFor(() => {
-      expect(
-        screen.queryByText("This host is running the latest version."),
-      ).toBeNull();
-    });
+    // The answer card is the positive proof it did not claim "latest": a
+    // host that IS the latest draws no card at all, so a card here, of the
+    // stranded kind, is the answer saying a newer version exists.
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("stranded");
     const summary = await screen.findByText(/2\.1\.0 is available/);
     // Names the newer version AND says it will not be taken automatically, so
     // the sentence and the enabled row below it agree.
@@ -2009,11 +2098,12 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
     await selectHostOverviewTab("updates");
 
-    await waitFor(() => {
-      expect(
-        screen.getByText("This host is running the latest version."),
-      ).toBeTruthy();
-    });
+    // "Up to date" is a QUIET answer now: the card draws nothing. Settle on
+    // the version list (the check has answered by the time it shows a row),
+    // then the absence of a card is the answer.
+    await screen.findByTestId("host-version-rows");
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    expect(screen.queryByTestId("host-overview-updates")).toBeNull();
   });
 
   it("falls back to the HIGHEST later same-line RC when the line's stable is unusable", async () => {
@@ -2089,16 +2179,17 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
     await selectHostOverviewTab("updates");
 
-    await waitFor(() => {
-      expect(
-        screen.getByText("This host is running the latest version."),
-      ).toBeTruthy();
-    });
+    // On the newest stable, so the answer is the quiet "latest": no card, and
+    // the version list's installed row wears `latest` beside `installed`.
+    const rows = within(await screen.findByTestId("host-version-rows"));
+    const installed = rowFor(rows.getAllByRole("listitem"), "1.9.0");
+    expect(installed.textContent).toContain("latest");
+    expect(installed.textContent).toContain("installed");
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
     expect(screen.queryByText(/follows its own release line/)).toBeNull();
 
     // The RC the user asked to see is still there and still installable — the
     // gate changes the sentence, never the manual route.
-    const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.0.0-rc.1");
     expect(
       within(row)
@@ -2477,9 +2568,9 @@ describe("Overview updates — CLI floor remedy", () => {
       // The answer sentence is the catalog's remedy sentence again (the
       // failure-first arm is gone — `describeCheckState` never returns a
       // refusal as the answer); the refusal itself is the separate line
-      // below it. The remedy being on screen is what keeps `role="status"`
-      // present at all while the park is in flight.
-      expect(screen.getByRole("status").textContent).toContain(
+      // below it. The remedy being on screen is what keeps the answer
+      // sentence present at all while the park is in flight.
+      expect(screen.getByTestId("host-overview-updates").textContent).toContain(
         "First update Traycer's command-line tools on host-a.",
       );
       expect(
@@ -2525,7 +2616,7 @@ describe("Overview updates — CLI floor remedy", () => {
     await waitFor(() => expect(checks).toBeGreaterThan(checksBeforeFailure));
     // checks=4: the check itself now fails (`cli-failed`), so there is no
     // manifest to derive a remedy or an offer from — no floor, no fix, and
-    // (still in flight, no debt) no `role="status"` answer at all. Only the
+    // (still in flight, no debt) no answer sentence at all. Only the
     // failed line is assertable here; deleting only the guarded
     // checkRefutesForceRefusal/setForceRefusal(null) retirement block would
     // keep every earlier repair assertion green but revive the old floor
@@ -2538,7 +2629,7 @@ describe("Overview updates — CLI floor remedy", () => {
       );
       expect(notice.textContent).not.toContain("needs Traycer CLI");
     });
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByTestId("host-overview-updates")).toBeNull();
     expect(installCalls).toEqual([]);
   });
 
@@ -3030,8 +3121,9 @@ describe("Overview updates — CLI floor remedy", () => {
 // nothing running. The settled cases below anchor on the query cache
 // reaching `status: "success"` for `host.update.check` (never on absent
 // text, which a still-loading frame would also satisfy), then read the
-// card. The control is a check that never settles, to pin the genuine
-// first-load arm this fix must leave alone.
+// card, which says the check failed on its line and carries the failure's
+// reason in the footer. The control is a check that never settles, to pin the genuine first-load arm this fix must
+// leave alone: a QUIET answer, so no card, with Check now spinning instead.
 describe("Overview updates — a settled first check with no catalog (T2 fixup 1)", () => {
   async function waitForCheckSettled(
     queryClient: QueryClient,
@@ -3066,22 +3158,24 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
 
     await waitForCheckSettled(queryClient, "host-a");
 
-    const card = await screen.findByTestId("host-overview-version-card");
-    expect(screen.getByRole("status").textContent).toBe(
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("check-failed");
+    expect(card.textContent).toContain("Update check failed");
+    expect(card.textContent).not.toMatch(/Checking/);
+    // The card's line is the check's own sentence; the failure's reason is
+    // the red footer INSIDE that same card, said once.
+    expect(screen.getByTestId("host-overview-updates").textContent).toBe(
       "Couldn't check for updates on host-a.",
     );
-    expect(screen.queryByTestId("host-overview-version-tag")).toBeNull();
-    expect(card.textContent).not.toMatch(/Checking/);
-    const failures = screen.getAllByTestId(
+    const footer = within(card).getByTestId(
       "host-overview-update-attempt-failed",
     );
-    expect(failures).toHaveLength(1);
-    expect(failures[0].textContent).toBe(
+    expect(footer.textContent).toBe(
       "host-a's Traycer CLI answered in a format this app doesn't understand. It's probably a different version than this app expects.",
     );
-    expect(screen.getByRole("status").textContent).not.toContain(
-      "doesn't understand",
-    );
+    expect(
+      screen.getAllByTestId("host-overview-update-attempt-failed"),
+    ).toHaveLength(1);
     const checkNow = screen.getByTestId("host-overview-update-check");
     expect(checkNow.hasAttribute("disabled")).toBe(false);
   });
@@ -3104,27 +3198,27 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
 
     await waitForCheckSettled(queryClient, "host-a");
 
-    const card = await screen.findByTestId("host-overview-version-card");
-    expect(screen.getByRole("status").textContent).toBe(
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("check-failed");
+    expect(card.textContent).toContain("Update check failed");
+    expect(card.textContent).not.toMatch(/Checking/);
+    expect(screen.getByTestId("host-overview-updates").textContent).toBe(
       "Couldn't check for updates on host-a.",
     );
-    expect(screen.queryByTestId("host-overview-version-tag")).toBeNull();
-    expect(card.textContent).not.toMatch(/Checking/);
-    const failures = screen.getAllByTestId(
+    const footer = within(card).getByTestId(
       "host-overview-update-attempt-failed",
     );
-    expect(failures).toHaveLength(1);
-    expect(failures[0].textContent).toBe(
+    expect(footer.textContent).toBe(
       "host-a's Traycer CLI couldn't complete the request.",
     );
-    expect(screen.getByRole("status").textContent).not.toContain(
-      "couldn't complete",
-    );
+    expect(
+      screen.getAllByTestId("host-overview-update-attempt-failed"),
+    ).toHaveLength(1);
     const checkNow = screen.getByTestId("host-overview-update-check");
     expect(checkNow.hasAttribute("disabled")).toBe(false);
   });
 
-  it("control: a genuine first load with no failure still reads Checking for updates… with the checking tag", async () => {
+  it("control: a genuine first load with no failure draws no card, and Check now is what shows it is checking", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -3142,12 +3236,17 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
     renderPanel();
     await selectHostOverviewTab("updates");
 
-    expect(await screen.findByRole("status")).toHaveProperty(
-      "textContent",
-      "Checking for updates…",
-    );
-    const tag = screen.getByTestId("host-overview-version-tag");
-    expect(tag.getAttribute("data-tag")).toBe("checking");
+    // "Checking" is a QUIET answer: the card draws nothing, and the one sign
+    // of the check running is Check now, disabled, on the version list's
+    // heading, over the list's own "asking this host" loading shape.
+    await screen.findByText("Asking this host which versions it can install…");
+    expect(
+      screen.getByTestId("host-overview-update-check").hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    expect(
+      screen.queryByTestId("host-overview-update-attempt-failed"),
+    ).toBeNull();
   });
 });
 
@@ -3498,6 +3597,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
           installDegrade: null,
           busy: false,
           incarnation: "test-incarnation",
+          foregroundUpdateLine: null,
         }),
       {
         wrapper: (props: { readonly children: ReactNode }) => (
@@ -3579,6 +3679,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
             installDegrade: null,
             busy: false,
             incarnation: "test-incarnation",
+            foregroundUpdateLine: null,
           }),
         {
           wrapper: (props: { readonly children: ReactNode }) => (
@@ -3666,7 +3767,7 @@ describe("Overview updates — activation debt", () => {
 
     // T2: the debt is an in-flight park (`waiting-to-activate`), so it is the
     // notices strip's operation card that carries the sentence now - the
-    // version card withholds its own tag and answer for any in-flight kind
+    // answer card withholds its own answer for any in-flight kind
     // (see host-overview-notices.test.tsx's duplication regression), so
     // asserting the installed-version text there would just find nothing.
     const card = await screen.findByTestId("host-overview-operation-card");
@@ -3706,10 +3807,10 @@ describe("Overview updates — activation debt", () => {
 
     // Debt outranks the catalog sentence even though there IS something to
     // offer - see `describeCheckState`'s ordering comment. Activation debt is
-    // itself an in-flight park (`waiting-to-activate`), and T2's version card
+    // itself an in-flight park (`waiting-to-activate`), and the Updates tab
     // withholds Update now and Check now for every in-flight kind - the debt
     // sentence stays (it is about the wait itself, and now lives on the
-    // notices strip's operation card, not the version card), but there is no
+    // notices strip's operation card, not the answer card), but there is no
     // button to press until the restart resolves the debt.
     const card = await screen.findByTestId("host-overview-operation-card");
     expect(card.textContent).toContain(
@@ -3802,7 +3903,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
 
     // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
     // the catalog's rc.3 is what is installed - no offer, a restart. T2's
-    // notices strip carries this while it is live (the version card
+    // notices strip carries this while it is live (the answer card
     // withholds its own answer for any in-flight kind - see
     // host-overview-notices.test.tsx's duplication regression), and its
     // Restart control lives there too.
@@ -3821,7 +3922,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     // with its Restart control - but `legacyFactsRead` (the catalog's
     // baseline, qualified by liveness rather than erased by it) still holds
     // the debt, no longer in-flight from the panel's own perspective, so the
-    // version card picks the answer back up, said as last known.
+    // answer card picks the answer back up, said as last known.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
@@ -3830,7 +3931,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       expect(screen.queryByTestId("host-overview-notices")).toBeNull();
     });
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
+      expect(screen.getByTestId("host-overview-updates").textContent).toBe(
         "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
       );
     });
@@ -3902,7 +4003,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
-    // Live, on the notices strip - the version card withholds its own
+    // Live, on the notices strip - the answer card withholds its own
     // answer for any in-flight kind (see host-overview-notices.test.tsx's
     // duplication regression).
     await waitFor(() => {
@@ -3915,8 +4016,8 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     // "Last seen: …" mechanism host-overview-lifecycle-gate.test.tsx pins at
     // the model level) - unlike the record-read failure above, this leaves
     // `usable` and the notices strip itself untouched, so the card stays and
-    // is what carries the qualifier, not `role="status"` on the version card
-    // (which the strip's in-flight card keeps suppressed throughout).
+    // is what carries the qualifier, not the answer card's sentence (which
+    // the strip's in-flight card keeps suppressed throughout).
     await act(async () => {
       await queryClient.invalidateQueries();
     });
@@ -3987,7 +4088,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     // Help on screen, no command - and no recheck behind it.
     await waitFor(() => expect(checks).toBe(1));
     await waitForButton("Show installation help");
-    expect(screen.getByRole("status").textContent).toBe(
+    expect(screen.getByTestId("host-overview-updates").textContent).toBe(
       "Traycer couldn't verify the required command-line tools version on host-a.",
     );
     expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
@@ -4063,12 +4164,12 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     expect(card.textContent).toContain("Update waits for 1 session to finish");
     // The asset itself reports available (`floorManifest("1.3.0", true)`), so
     // this park earns no CLI-floor remedy at all - and with no remedy and no
-    // debt, T2's version card shows no `role="status"` answer while in
+    // debt, the answer card shows no answer sentence while in
     // flight. The check having ANSWERED is read off the query cache's OWN
-    // settled state rather than a rendered sentence (no region may be on
-    // screen to read one off), and NOT off the handler's call count: a count
-    // can pass during the still-loading frame, before the negative
-    // assertions below have anything to be negative about.
+    // settled state rather than a rendered sentence (the card draws nothing
+    // to read one off), and NOT off the handler's call count: a count can
+    // pass during the still-loading frame, before the negative assertions
+    // below have anything to be negative about.
     await waitFor(() => {
       const queries = queryClient.getQueryCache().findAll({
         queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
@@ -4078,14 +4179,19 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       );
     });
     await act(async () => {});
+    // The Updates tab body only exists once visited, so visit it: the two
+    // negatives below are about what IS on that tab, not about an unmounted
+    // one.
+    await selectHostOverviewTab("updates");
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
-    // T2's version card also withholds Check now while an update is in
-    // flight - the recheck below therefore goes through the query client
-    // directly rather than a click, the same seam the "rechecks a repaired
-    // manifest" suite uses.
+    expect(screen.queryByTestId("host-overview-updates")).toBeNull();
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    // Check now (on the version list's heading) is withheld too while an
+    // update is in flight - the recheck below therefore goes through the
+    // query client directly rather than a click, the same seam the "rechecks
+    // a repaired manifest" suite uses.
     expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
 
     // Positive control: the same entry with a readable floor the asset

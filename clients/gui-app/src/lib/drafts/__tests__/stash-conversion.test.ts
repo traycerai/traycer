@@ -153,7 +153,9 @@ describe("stash-entry conversion", () => {
     expect(drafts[0]?.lastTouchedAt).toBe(4242);
     expect(drafts[0]?.id).not.toBe("stash-1");
     expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
-    expect(cloudDraftIngestSeq()).toBeGreaterThan(fenceBefore);
+    // Reading the sequence now takes a position of its own (+1), so a
+    // conversion that reserved the fence moved it by more than that.
+    expect(cloudDraftIngestSeq()).toBeGreaterThan(fenceBefore + 1);
     expect(deletes).toEqual(["stash-1"]);
 
     // The same row listed again: the converted map blocks a second draft and

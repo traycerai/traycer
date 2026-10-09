@@ -2,7 +2,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { RootLandingPage } from "@/components/layout/root-landing-page";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { admitsLocalPlane } from "@/stores/auth/auth-store";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 
 export const Route = createFileRoute("/")({
   // Sends an admitted user with no restored tabs onward - to Home where the

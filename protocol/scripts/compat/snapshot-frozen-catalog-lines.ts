@@ -22,6 +22,8 @@ import {
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV90,
+  listAgentsResponseSchemaV91,
+  listAgentsResponseSchemaV92,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -37,13 +39,16 @@ import {
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchemaV91,
+  listGuiHarnessesResponseSchemaV92,
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
+  getChatRunSettingsResponseSchemaV30,
   getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsBatchResponseSchemaV10,
 } from "../../src/host/epic/chat-records";
 import {
   providersListRequestSchema,
@@ -52,6 +57,7 @@ import {
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
+  providersListResponseSchemaV92,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -101,9 +107,13 @@ const FIXTURES = {
   // 9.1 froze when 9.2 opened for the row's `judgeDefaultModel`; its dump did
   // not change by the freeze.
   "agent.gui.listHarnesses@9.1": dump(listGuiHarnessesResponseSchemaV91),
-  // The head line, pinned for the same reason `providers.list@9.2` is: growth
+  // 9.2 froze when 10.0 opened for the first harness id after 1.5.0 (Command
+  // Code): the 1.5.0 tags shipped 9.2, so it keeps the twenty-one-id row those
+  // peers negotiate. Its dump did not change by the freeze.
+  "agent.gui.listHarnesses@9.2": dump(listGuiHarnessesResponseSchemaV92),
+  // The head line, pinned for the same reason `providers.list@10.0` is: growth
   // of the live row now has nothing else to fail against.
-  "agent.gui.listHarnesses@9.2": dump(listGuiHarnessesResponseSchema),
+  "agent.gui.listHarnesses@10.0": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),
@@ -120,7 +130,15 @@ const FIXTURES = {
   // which this row stopped being when major 9 opened against live under a
   // major-8 name. `@9.0` holds the pre-session-facet bytes it used to dump.
   "agent.list@9.0": dump(listAgentsResponseSchemaV90),
-  "agent.list@9.1": dump(listAgentsResponseSchema),
+  // 9.1 froze when 9.2 opened to put `archived` on the row. It is RELEASED
+  // (`host-v1.4.2` registers `agent.list@9.1`), so it names its own frozen
+  // schema and must not regenerate. 9.2 froze when 10.0 opened for the first
+  // harness id after 1.5.0; its dump did not change by the freeze. 10.0 is the
+  // head line and dumps LIVE, so the next attempt to grow the row goes red on
+  // that line.
+  "agent.list@9.1": dump(listAgentsResponseSchemaV91),
+  "agent.list@9.2": dump(listAgentsResponseSchemaV92),
+  "agent.list@10.0": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
@@ -179,11 +197,15 @@ const FIXTURES = {
   // - the published host `host-v1.3.2-staging.39.g3a73077` advertises it - so
   // it names its own frozen schema and must not regenerate.
   "providers.list@9.1": dump(providersListResponseSchemaV91),
+  // 9.2 froze when 10.0 opened for the first provider id after 1.5.0 (Command
+  // Code). It is RELEASED - the 1.5.0 tags ship it - so it names its own frozen
+  // schema and must not regenerate. Its dump did not change by the freeze.
+  "providers.list@9.2": dump(providersListResponseSchemaV92),
   // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
   // live shape goes red on this row rather than on the release that ships the
   // growth. Same response then applies - freeze the line that stopped being
   // head, open the next one.
-  "providers.list@9.2": dump(providersListResponseSchema),
+  "providers.list@10.0": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was
@@ -196,18 +218,26 @@ const FIXTURES = {
   // test stayed green while it silently absorbed `reasonix`. Only the tag-based
   // `protocol-compat` gate caught it.
   //
-  // These THREE rows are what make that class fail locally from now on. `1.0`
-  // and `2.0` are both FROZEN released lines - `2.0` stopped being the live one
-  // when `auto` opened `3.0` - and `3.0` dumps LIVE, so the next growth attempt
-  // goes red here first. Regenerate the live row when a growth is intended;
+  // These rows are what make that class fail locally from now on. `1.0`, `2.0`
+  // and `3.0` are all FROZEN released lines - `2.0` stopped being the live one
+  // when `auto` opened `3.0`, and `3.0` when the first harness id after 1.5.0
+  // opened `4.0` - and `4.0` dumps LIVE, so the next growth attempt goes red
+  // here first. The batch method follows the same split: `1.0` frozen, `2.0`
+  // live. Regenerate the live row when a growth is intended;
   // never regenerate a frozen one, which is the mistake this comment previously
   // invited by naming `2.0` as the live dump. The lesson generalizes - "the
   // three id-carrying methods" was never the real boundary; grep RESPONSES for
   // id enums.
   "epic.getChatRunSettings@1.0": dump(getChatRunSettingsResponseSchemaV10),
   "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchemaV20),
-  "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchema),
-  "epic.getChatRunSettingsBatch@1.0": dump(getChatRunSettingsBatchResponseSchema),
+  "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchemaV30),
+  "epic.getChatRunSettings@4.0": dump(getChatRunSettingsResponseSchema),
+  "epic.getChatRunSettingsBatch@1.0": dump(
+    getChatRunSettingsBatchResponseSchemaV10,
+  ),
+  "epic.getChatRunSettingsBatch@2.0": dump(
+    getChatRunSettingsBatchResponseSchema,
+  ),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.

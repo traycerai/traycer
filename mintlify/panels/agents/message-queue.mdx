@@ -3,20 +3,47 @@ title: "Message queue"
 description: "Queue, reorder, edit, and steer follow-up messages while an agent runs."
 ---
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Queue, reorder, edit, steer, delete, and pause follow-ups">
-  <source src="https://assets.traycer.ai/docs/videos/message-queue.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-While an agent is running on the Chat interface, press **Enter** to queue a follow-up. Queued messages appear in the **Message Queue** above the composer. When the current turn ends, the next message is picked up automatically unless the queue is paused.
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/message-queue.mp4" label="Queue, reorder, edit, steer, delete, and pause follow-ups" />
+
+While an agent is running on the Chat interface, press **Enter** to queue a follow-up. Queued messages appear in the **Message Queue** above the composer. When the current turn ends, the next message is sent automatically unless the queue is paused.
 
 ## Manage Queued Messages
 
-- Drag a row by its grip to change its position.
-- Choose **Edit** to load a queued message into the composer, change it, and press Enter to save. **Cancel** leaves the queued message as it was.
-- Choose **Delete** to remove a message from the queue.
-- Use **Pause** to hold the queue and **Resume** to continue processing it.
+- **Reorder:** drag a row by its grip.
+- **Edit:** click the pencil on a row. The message loads into the composer with an **Editing** pill; press **Enter** to save it back to the same place in the queue, or click **Cancel** to leave it unchanged. On a row marked **Can steer**, the pencil is **Move queued message to composer** instead: it removes the row from the queue and puts its text in the composer.
+- **Delete:** click the trash icon to remove a message from the queue.
+- **Pause and resume:** **Pause** holds the queue, and **Resume** continues sending. After you click **Resume**, **Keep paused** lets you change your mind until the queue starts again.
+
+Messages that other agents send to this agent can also appear in the queue. You can reorder them, but not edit or steer them; they show **Will steer** when they are going into the running turn.
 
 ## Steer The Current Turn
 
-When steering is available, choose the row's steer action to send that message into the running turn. The row can show **Waiting for steer** before it becomes **Steering**. You can also use the composer's displayed steering shortcut, **Cmd+Enter** on macOS.
+Steering sends a message into the turn that is already running, instead of waiting for it to end.
+
+- Type in the composer and press **⌘Enter / Ctrl+Enter**. The message jumps the queue and goes into the running turn. Plain **Enter** still queues it.
+- Or click the steer button on a queued row to send that message now.
+
+Turn the shortcut on or off with **Steer with ⌘+Enter** (**Steer with Ctrl+Enter** on Windows and Linux) in [General settings](/settings/general), under **Chat & composer**. It is on by default.
+
+| Row label             | Meaning                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Queuing**           | The message is on its way to the host.                                                                                   |
+| **Can steer**         | The message is set to go into the running turn.                                                                          |
+| **Waiting for steer** | The message waits for the turn's next safe point. **Cancel steer** returns it to the queue.                              |
+| **Restart pending**   | The turn will end and restart with this message.                                                                          |
+| **Steering**          | The message is going into the turn now.                                                                                  |
+| **After turn**        | This coding agent can't take a message mid-turn, so it is sent when the turn ends. The reason shows under the row.       |
+| **Paused**            | The message is held until you resume the queue.                                                                          |
+| **Paused after an error** | The last turn failed, so the queue is holding this message. Resume the queue to send it; retrying or switching the failed turn doesn't send it. See [Usage limits and model routing](/agents-and-models/usage-limits-and-routing#when-a-turn-fails). |
+
+### Coding Agents That Can't Steer
+
+Cursor, Droid, Kimi, Kilo Code, Amp, Devin, Antigravity, and Command Code can't take a message in the middle of a turn. With these agents, the steer shortcut queues the message as **After turn**. The row's steer button still works, but it ends the current turn and restarts it with your message, so the row shows **Restart pending**.
+
+### Steering After Changing Settings
+
+If you change the model, thinking effort, fast mode, or provider profile while a turn is running and then steer, Traycer asks **End the current turn to send with new settings?**, because the running turn can't switch to them. **End turn & send** ends the turn and sends your message with the new settings. **Cancel** keeps the message queued and the turn running.
+
+Messages you queue with plain **Enter** use the settings you picked when their turn starts.

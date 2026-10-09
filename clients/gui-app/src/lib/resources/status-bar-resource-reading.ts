@@ -1,7 +1,4 @@
-import type {
-  ResourceMetric,
-  ResourceScope,
-} from "@/stores/settings/layout-store";
+import type { ResourceMetric } from "@/lib/layout/layout-values";
 import {
   formatCpuPercent,
   formatMemoryBytes,
@@ -11,22 +8,17 @@ import {
   attributedProjection,
   hostMemorySharePercent,
 } from "@/lib/resources/headline-resource-summary";
-import type { DesktopAppResourceUsage } from "@/lib/resources/desktop-app-resource-usage";
 import type { GlobalResourceProjection } from "@/stores/resources/resources-registry";
 
 /**
- * The status bar's resource numbers, as an either/or over the two scopes it
- * offers.
+ * The status bar's resource numbers, for the watched host's process tree.
  *
  * Deliberately NOT built on `combineHeadlineResourceSummary` /
  * `resolveResourceMonitorHostReading`, which the resource monitor uses and
  * which look close enough to reuse. Both ADD the local desktop shell to the
- * watched host's tree — the popover reports one machine's complete load, so
+ * watched host's tree - the popover reports one machine's complete load, so
  * the Electron app belongs in its total whenever the watched host IS this
- * computer. The status bar's `scope` is the opposite question: "the host's
- * processes" and "this desktop app" are two readings the user picks BETWEEN,
- * and folding one into the other would make the two settings differ by a
- * rounding error instead of by subject.
+ * computer. The strip reports the host's processes and only those.
  */
 export interface StatusBarResourceReading {
   readonly cpuPercent: number | null;
@@ -70,15 +62,10 @@ export interface StatusBarResourceMetricView {
  * one. Reading the registry's raw projection through this is the mistake the
  * attribution exists to prevent, so go through the views.
  */
-export function statusBarResourceReading(input: {
-  readonly scope: ResourceScope;
-  readonly projection: GlobalResourceProjection;
-  readonly desktopApp: DesktopAppResourceUsage | null;
-}): StatusBarResourceReading {
-  if (input.scope === "desktop-app") {
-    return desktopAppReading(input.desktopApp);
-  }
-  return hostTreeReading(input.projection);
+export function statusBarResourceReading(
+  projection: GlobalResourceProjection,
+): StatusBarResourceReading {
+  return hostTreeReading(projection);
 }
 
 /**
@@ -112,23 +99,6 @@ function hostTreeReading(
 }
 
 /**
- * THIS Electron app, always — never the watched host's copy of it. The scope
- * names the process the user is sitting in front of, so it must not move when
- * the watch pick does.
- */
-function desktopAppReading(
-  desktopApp: DesktopAppResourceUsage | null,
-): StatusBarResourceReading {
-  if (desktopApp === null) return EMPTY_READING;
-  return {
-    cpuPercent: desktopApp.cpuPercent,
-    memoryBytes: desktopApp.rssBytes,
-    processCount: desktopApp.processCount,
-    ramSharePercent: null,
-  };
-}
-
-/**
  * The whole segment, in the order the store holds — which is the canonical
  * metric order, not the order the user switched things on in, so the strip
  * reads the same for everybody.
@@ -138,21 +108,12 @@ function desktopAppReading(
  * and "this host is too old" — three states with three different remedies.
  */
 export function statusBarResourceMetricViews(input: {
-  readonly scope: ResourceScope;
   readonly metrics: ReadonlyArray<ResourceMetric>;
   /** Straight from the registry — attributed here, before a number is read. */
   readonly projection: GlobalResourceProjection;
   /** The host the strip is WATCHING, and `hasExplicitPick` beside it. */
   readonly watchedHostId: string | null;
   readonly hasExplicitPick: boolean;
-  readonly desktopApp: DesktopAppResourceUsage | null;
-  /**
-   * Whether this build HAS an Electron diagnostics bridge, which is a different
-   * question from whether it has produced a reading yet — see
-   * `unavailableReason`. Passed in rather than read here, so this stays a pure
-   * function of its arguments and a test can state both answers.
-   */
-  readonly desktopBridgePresent: boolean;
   /** The watched host cannot serve a global `resources.subscribe` at all. */
   readonly globalStreamUnsupported: boolean;
   readonly hostLabel: string;
@@ -173,11 +134,7 @@ export function statusBarResourceMetricViews(input: {
     hasExplicitPick: input.hasExplicitPick,
     streamed: input.projection,
   });
-  const reading = statusBarResourceReading({
-    scope: input.scope,
-    projection,
-    desktopApp: input.desktopApp,
-  });
+  const reading = statusBarResourceReading(projection);
   return input.metrics.map((metric) => {
     const value = formatStatusBarMetric(metric, reading);
     return {
@@ -188,9 +145,6 @@ export function statusBarResourceMetricViews(input: {
         value === null
           ? unavailableReason({
               metric,
-              scope: input.scope,
-              desktopApp: input.desktopApp,
-              desktopBridgePresent: input.desktopBridgePresent,
               globalStreamUnsupported: input.globalStreamUnsupported,
               // A sample from the watched host DID arrive; this one field is
               // not in it. Attributed, so a foreign projection cannot pass for
@@ -249,21 +203,8 @@ const METRIC_SUBJECTS: Record<ResourceMetric, string> = {
 /**
  * Why one metric has no number, most specific cause first.
  *
- * The scope-level causes outrank the metric-level one: in a browser build
- * every desktop-app metric is missing for the same reason, and naming RAM
- * share's own limitation there would explain the wrong thing.
- *
- * "Waiting" is reserved for a reading that has NOT arrived — which is a
- * different claim from one that never will, and the desktop-app scope is where
- * the two are easiest to confuse. `useDesktopAppResourceUsage` answers `null`
- * in THREE states that look identical from here: no bridge (a browser build),
- * a bridge whose first `getMetrics()` round trip is still in flight, and a
- * bridge whose call rejected. Only the first is "this build has none of" — and
- * said in the other two it is flatly false, on a surface whose whole job is
- * telling three indistinguishable dashes apart. So the BRIDGE decides that
- * sentence and the SAMPLE decides "waiting": a build that has the bridge is
- * always waiting for the next second's sample, including after a rejection,
- * where the 1 Hz sampler retries and "waiting" comes true on its own.
+ * "Waiting" is reserved for a reading that has NOT arrived, which is a
+ * different claim from one that never will.
  *
  * On the host-tree side a sample can land with one field missing — `rssBytes`
  * is nullable on the wire from @1.5 on, and `hostTotalMemoryBytes` is `0` on a
@@ -279,10 +220,6 @@ const METRIC_SUBJECTS: Record<ResourceMetric, string> = {
  */
 function unavailableReason(input: {
   readonly metric: ResourceMetric;
-  readonly scope: ResourceScope;
-  readonly desktopApp: DesktopAppResourceUsage | null;
-  /** This build has the Electron diagnostics bridge, sample or no sample. */
-  readonly desktopBridgePresent: boolean;
   readonly globalStreamUnsupported: boolean;
   /** A projection attributed to the watched host exists. */
   readonly hasSample: boolean;
@@ -290,14 +227,6 @@ function unavailableReason(input: {
   readonly hostTotalMemoryKnown: boolean;
   readonly hostLabel: string;
 }): string {
-  if (input.scope === "desktop-app") {
-    if (input.desktopApp === null) {
-      return input.desktopBridgePresent
-        ? "Waiting for resource data."
-        : "Desktop app only — this reading comes from the Traycer desktop shell, which this build has none of.";
-    }
-    return "RAM share needs a total-memory reading for this machine, and the desktop app scope has none — the watched host's total would be the wrong denominator.";
-  }
   if (input.globalStreamUnsupported) {
     return `${input.hostLabel} is running an older Traycer host, which doesn't stream resource usage. Update it to see its processes here.`;
   }
@@ -308,4 +237,23 @@ function unavailableReason(input: {
     return `${input.hostLabel} didn't report ${METRIC_SUBJECTS[input.metric]} in this sample.`;
   }
   return "Waiting for resource data.";
+}
+
+/**
+ * The button's whole accessible name: what it is, then each metric the strip is
+ * showing and what it currently reads.
+ *
+ * `label: value` per metric, in the order they are drawn, so the name matches
+ * the readout left to right. An unavailable metric says so rather than being
+ * dropped - a name that silently omitted it would leave a reader who turned
+ * the metric on with no way to tell it from one this build never draws.
+ */
+export function statusBarResourceSegmentLabel(
+  views: ReadonlyArray<StatusBarResourceMetricView>,
+): string {
+  if (views.length === 0) return "Resources, no metrics selected";
+  const readings = views
+    .map((view) => `${view.label} ${view.value ?? "unavailable"}`)
+    .join(", ");
+  return `Resources: ${readings}`;
 }

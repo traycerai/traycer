@@ -1,61 +1,49 @@
 import {
-  LEFT_PANEL_DEFINITIONS,
+  getLeftPanelDefinition,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
+import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
 import {
-  DEFAULT_LEFT_PANEL_ID,
   type LeftPanelId,
-} from "@/stores/epics/left-panel-store";
+  type PanelVisibilityOverrideById,
+} from "@/lib/left-panel-ids";
 
 /**
- * The mobile "Switch tab" sheet exposes the desktop left-panel categories as a
- * horizontally-scrollable tab bar: Agents (`chats`), Artifacts, File tree, Git
- * diff, Pull requests, Terminals, Browsers, Sharing and Comments.
+ * The mobile "Switch tab" sheet's categories: the desktop rail's panels, read
+ * off the same layout the rail draws from, since a phone has no rail.
  *
- * The bar's order is its OWN, not the rail's - the rail runs chats, terminals,
- * browsers, artifacts, git-diff, pull-requests, file-tree - and only the local
- * adjacencies are shared: `pull-requests` sits directly after `git-diff`, and
- * `browsers` directly after `terminals`, so a category is found beside the one
- * it is found beside on the desktop. Identity (title + icon) is reused verbatim
- * from `LEFT_PANEL_DEFINITIONS` so mobile never forks the category copy.
+ * - `bar` is the scrollable chip row, in the user's rail order (the order
+ *   Settings > Layout > Sidebar lists and drags).
+ * - `more` is every panel the user explicitly turned off there, in the same
+ *   order, behind the bar's trailing "More" entry. On the desktop that switch
+ *   removes the icon; on the phone it only demotes the chip.
  *
- * Every panel the rail carries is on this bar. A category left off would be
- * unreachable on a phone rather than merely tidier: an agent can open a
- * terminal or a browser tab the user never asked for, and the sheet is the only
- * surface that lists them.
+ * Every panel is always on one of the two. The desktop rail's presence rules
+ * (Pull requests only with PRs, Comments only with a revealed thread) do NOT
+ * apply here: `Auto` reads as shown. The sheet is the only surface that lists
+ * a panel's contents on a phone - the PR panel's host picker is how PRs on
+ * another machine are discovered, and an anchor tap lands on Comments - so a
+ * panel that came and went with presence would strand the user.
+ *
+ * Identity (title + icon) is the registry's, so mobile never forks the copy.
  */
-const CURATED_ORDER: readonly LeftPanelId[] = [
-  "chats",
-  "artifacts",
-  "file-tree",
-  "git-diff",
-  "pull-requests",
-  "terminals",
-  "browsers",
-  "sharing",
-  "comments",
-];
+export interface SwitcherCategories {
+  readonly bar: ReadonlyArray<LeftPanelMetadataDefinition>;
+  readonly more: ReadonlyArray<LeftPanelMetadataDefinition>;
+}
 
-const DEFINITION_BY_ID = new Map<LeftPanelId, LeftPanelMetadataDefinition>(
-  LEFT_PANEL_DEFINITIONS.map((definition) => [definition.id, definition]),
-);
-
-const CURATED_CATEGORY_DEFS: ReadonlyArray<LeftPanelMetadataDefinition> =
-  CURATED_ORDER.flatMap((id) => {
-    const definition = DEFINITION_BY_ID.get(id);
-    return definition === undefined ? [] : [definition];
-  });
-
-const CURATED_CATEGORY_IDS: ReadonlyArray<LeftPanelId> =
-  CURATED_CATEGORY_DEFS.map((definition) => definition.id);
-
-/**
- * All curated categories remain reachable on mobile. In particular, the PR
- * panel's host picker must be accessible when the canvas host has no PRs or
- * cannot serve its stream. Opening the category is what starts discovery.
- */
-export function visibleSwitcherCategoryDefs(): ReadonlyArray<LeftPanelMetadataDefinition> {
-  return CURATED_CATEGORY_DEFS;
+export function switcherCategories(
+  rail: ReadonlyArray<RailEntry>,
+  visibilityOverrideById: PanelVisibilityOverrideById,
+): SwitcherCategories {
+  const bar: LeftPanelMetadataDefinition[] = [];
+  const more: LeftPanelMetadataDefinition[] = [];
+  for (const panelId of visibleRailPanelIds(rail, () => true)) {
+    const definition = getLeftPanelDefinition(panelId);
+    if (visibilityOverrideById[panelId] === false) more.push(definition);
+    else bar.push(definition);
+  }
+  return { bar, more };
 }
 
 /**
@@ -72,14 +60,4 @@ export function switcherCategoryTitle(
   definition: LeftPanelMetadataDefinition,
 ): string {
   return MOBILE_SWITCHER_TITLE_OVERRIDES[definition.id] ?? definition.title;
-}
-
-/** Clamp a persisted desktop panel to the mobile curated categories. */
-export function clampToSwitcherCategory(id: LeftPanelId): LeftPanelId {
-  return CURATED_CATEGORY_IDS.includes(id) ? id : DEFAULT_LEFT_PANEL_ID;
-}
-
-/** Membership in the curated set, independent of present-moment visibility. */
-export function isSwitcherCategory(value: string): value is LeftPanelId {
-  return CURATED_CATEGORY_IDS.some((id) => id === value);
 }

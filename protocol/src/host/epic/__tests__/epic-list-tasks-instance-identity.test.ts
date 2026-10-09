@@ -10,6 +10,7 @@ import {
   listTasksResponseSchemaPre14,
   listTasksResponseSchemaPre15,
   listTasksResponseSchemaPre16,
+  listTasksResponseSchemaPre17,
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
@@ -30,13 +31,13 @@ import {
  * protocol package.
  */
 describe("epic.listTasks instance identity", () => {
-  // The LATEST installed minor, which `@1.6` now is - bump alongside
+  // The LATEST installed minor, which `@1.7` now is - bump alongside
   // `latestMinor` in the registry. The index is spelled rather than derived
   // because the invariant is about the canonical contract specifically; a
   // derived lookup would keep passing while silently pointing at whatever
   // happened to be last.
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[6].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[7].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -44,6 +45,21 @@ describe("epic.listTasks instance identity", () => {
 
   it("host response schema is the canonical listTasksResponseSchema instance", () => {
     expect(hostContract.responseSchema).toBe(listTasksResponseSchema);
+  });
+
+  it("keeps the 1.6 response frozen before the per-viewer activity key", () => {
+    const v16 = hostRpcRegistry["epic.listTasks"][1].versions[6].contract;
+    expect(v16.responseSchema).toBe(listTasksResponseSchemaPre17);
+    const page = {
+      tasks: [{ epic: null, phase: null, recentAt: 1_700_000_000_000 }],
+      hasMore: false,
+    };
+    expect(
+      listTasksResponseSchemaPre17.parse(page).tasks[0],
+    ).not.toHaveProperty("recentAt");
+    expect(listTasksResponseSchema.parse(page).tasks[0]?.recentAt).toBe(
+      page.tasks[0]?.recentAt,
+    );
   });
 
   it("keeps v1.5 one-shot list requests and responses frozen against local-first", () => {

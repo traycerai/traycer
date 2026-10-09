@@ -23,6 +23,8 @@
   "include": [
     "vitest.config.ts",
     "vitest.react-compiler.config.ts",
+    "vite.browser-tests.config.ts",
+    "playwright.config.ts",
     "scripts",
     "types",
     "vite"

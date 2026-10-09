@@ -287,6 +287,22 @@ export function createHarness(): BrowserDebugSessionHarness {
     onDetached: (reason) => {
       detachReports.push(reason);
     },
+    interceptFileChooser: () => false,
+  });
+  return { session, webContents, detachReports };
+}
+
+export function createHarnessWith(options: {
+  readonly interceptFileChooser: () => boolean;
+}): BrowserDebugSessionHarness {
+  const webContents = new FakeWebContents();
+  const detachReports: string[] = [];
+  const session = new BrowserDebugSession({
+    webContents,
+    onDetached: (reason) => {
+      detachReports.push(reason);
+    },
+    interceptFileChooser: options.interceptFileChooser,
   });
   return { session, webContents, detachReports };
 }

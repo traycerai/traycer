@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
+import { AGENT_WORKTREE_CREATE_POLICIES } from "@traycer/protocol/config/schema";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
@@ -330,4 +331,90 @@ export type ConfigBrowserSetRequest = z.infer<
 export const configBrowserSetResponseSchema = configBrowserResponseSchema;
 export type ConfigBrowserSetResponse = z.infer<
   typeof configBrowserSetResponseSchema
+>;
+
+/**
+ * Reads the machine-user-global policy for worktrees agents create. Like the
+ * browser switch it is not keyed by host id or deploy slot: the file is one per
+ * OS user, so the answer covers every host environment that user runs on this
+ * machine, and it governs the agents running there.
+ */
+export const configWorktreesGetRequestSchema = emptyRequestSchema;
+export type ConfigWorktreesGetRequest = z.infer<
+  typeof configWorktreesGetRequestSchema
+>;
+
+export const configWorktreesResponseSchema = lazySchema(() =>
+  z.object({
+    agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+  }),
+);
+export type ConfigWorktreesResponse = z.infer<
+  typeof configWorktreesResponseSchema
+>;
+
+/** Sets the machine-user-global policy for worktrees agents create. */
+export const configWorktreesSetRequestSchema = lazySchema(() =>
+  z.object({
+    agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+  }),
+);
+export type ConfigWorktreesSetRequest = z.infer<
+  typeof configWorktreesSetRequestSchema
+>;
+
+export const configWorktreesSetResponseSchema = configWorktreesResponseSchema;
+export type ConfigWorktreesSetResponse = z.infer<
+  typeof configWorktreesSetResponseSchema
+>;
+
+/**
+ * Reads the machine-wide catalog probe timeout: how long the host waits for a
+ * provider to list its models or commands. Like the worktrees policy it is not
+ * keyed by host id or deploy slot: the file is one per OS user.
+ */
+export const configCatalogGetRequestSchema = emptyRequestSchema;
+export type ConfigCatalogGetRequest = z.infer<
+  typeof configCatalogGetRequestSchema
+>;
+
+/**
+ * The host-enforced range, sent so the GUI's control cannot offer a value the
+ * host will refuse. Bounds are host constants, not user policy - they travel
+ * as data so they can move without a protocol change.
+ */
+export const configCatalogBoundsSchema = lazySchema(() =>
+  z.object({
+    minSeconds: z.number().int().positive(),
+    maxSeconds: z.number().int().positive(),
+  }),
+);
+export type ConfigCatalogBounds = z.infer<typeof configCatalogBoundsSchema>;
+
+export const configCatalogResponseSchema = lazySchema(() =>
+  z.object({
+    // Whole seconds, already clamped into `bounds` by the host.
+    probeTimeoutSeconds: z.number().int().positive(),
+    bounds: configCatalogBoundsSchema,
+  }),
+);
+export type ConfigCatalogResponse = z.infer<typeof configCatalogResponseSchema>;
+
+/**
+ * Sets the machine-wide catalog probe timeout. The schema proves only a
+ * positive whole number: the host refuses a value outside its bounds, so a
+ * schema-level range would freeze an implementation constant into the wire.
+ */
+export const configCatalogSetRequestSchema = lazySchema(() =>
+  z.object({
+    probeTimeoutSeconds: z.number().int().positive(),
+  }),
+);
+export type ConfigCatalogSetRequest = z.infer<
+  typeof configCatalogSetRequestSchema
+>;
+
+export const configCatalogSetResponseSchema = configCatalogResponseSchema;
+export type ConfigCatalogSetResponse = z.infer<
+  typeof configCatalogSetResponseSchema
 >;

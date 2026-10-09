@@ -10,6 +10,7 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
@@ -110,6 +111,12 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
+      // The Sync profiles dialog is mounted at the app root and survives a
+      // switch, so its module-level store is on this boundary too: left
+      // standing, account B would see A's open dialog - A's profile names and
+      // A's captured source host id, which it would then dial under B's
+      // session.
+      useProfileSyncModalStore.getState().close();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the

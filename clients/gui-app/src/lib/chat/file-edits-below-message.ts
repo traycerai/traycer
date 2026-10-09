@@ -4,15 +4,16 @@ import {
   latestCheckpointPerTurn,
   turnCheckpointManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import type {
-  ChatEvent,
-  Message,
-  UserMessage,
-} from "@traycer/protocol/persistence/epic/schemas";
 import {
   holdsEveryRecordFrom,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+  OpenUserMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * True when the turn triggered by `fromMessageId` - or any turn after it -
@@ -27,8 +28,8 @@ import {
  * (`latestCheckpointPerTurn`).
  */
 export function hasUndoableFileEditsFromMessage(
-  messages: ReadonlyArray<Message>,
-  events: ReadonlyArray<ChatEvent>,
+  messages: ReadonlyArray<OpenMessage>,
+  events: ReadonlyArray<OpenChatEvent>,
   fromMessageId: string,
 ): boolean {
   const fromIndex = messages.findIndex(
@@ -38,7 +39,7 @@ export function hasUndoableFileEditsFromMessage(
   const includedMessageIds = new Set(
     messages
       .slice(fromIndex)
-      .filter((message): message is UserMessage => message.role === "user")
+      .filter((message): message is OpenUserMessage => message.role === "user")
       .map((message) => message.messageId),
   );
   return scopedLatestCheckpointEvents(events, includedMessageIds).some(
@@ -63,9 +64,9 @@ export function hasUndoableFileEditsFromMessage(
  * what it reverts.
  */
 function scopedLatestCheckpointEvents(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
   includedMessageIds: ReadonlySet<string>,
-): ChatEvent[] {
+): OpenChatEvent[] {
   return latestCheckpointPerTurn(
     events.filter(
       (event) =>
@@ -88,8 +89,8 @@ function scopedLatestCheckpointEvents(
  * each turn's last checkpoint included.
  */
 export function scopedArtifactCountFromMessage(
-  messages: ReadonlyArray<Message>,
-  events: ReadonlyArray<ChatEvent>,
+  messages: ReadonlyArray<OpenMessage>,
+  events: ReadonlyArray<OpenChatEvent>,
   fromMessageId: string,
 ): number {
   const fromIndex = messages.findIndex(
@@ -99,7 +100,7 @@ export function scopedArtifactCountFromMessage(
   const includedMessageIds = new Set(
     messages
       .slice(fromIndex)
-      .filter((message): message is UserMessage => message.role === "user")
+      .filter((message): message is OpenUserMessage => message.role === "user")
       .map((message) => message.messageId),
   );
   const seen = new Set<string>();
@@ -153,8 +154,8 @@ export type RevertScope =
  * ARE the whole transcript and the answer is therefore always known.
  */
 export function resolveRevertScope(input: {
-  readonly messages: ReadonlyArray<Message>;
-  readonly events: ReadonlyArray<ChatEvent>;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly events: ReadonlyArray<OpenChatEvent>;
   readonly transcriptWindow: TranscriptWindow | null;
   readonly fromMessageId: string;
 }): RevertScope {

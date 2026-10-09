@@ -12,7 +12,6 @@ export interface AttachGrantFailure {
 /** What a grant-provider call yielded — the session picks its response by kind. */
 export type AttachGrantProvision =
   | { readonly kind: "ok"; readonly grant: AttachGrant }
-  | { readonly kind: "plan-restricted" }
   | ({ readonly kind: "unavailable" } & AttachGrantFailure);
 
 /** Injectable grant source the session calls on attach + resume + re-auth. */

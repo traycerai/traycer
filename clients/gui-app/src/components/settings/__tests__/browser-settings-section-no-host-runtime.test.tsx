@@ -1,4 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
+import type { ReactNode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
@@ -26,6 +27,10 @@ vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
   }),
 }));
 
+function agentOpenedTabsStub(): ReactNode {
+  return <div data-testid="agent-opened-tabs-stub">Agent-opened tabs stub</div>;
+}
+
 describe("<BrowserSettingsSection /> without a host runtime", () => {
   afterEach(() => {
     cleanup();
@@ -34,9 +39,13 @@ describe("<BrowserSettingsSection /> without a host runtime", () => {
 
   it("renders the panel instead of throwing, and leaves the website-session group out", () => {
     useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
-    render(<BrowserSettingsSection />);
+    render(
+      <BrowserSettingsSection agentOpenedTabsRow={agentOpenedTabsStub()} />,
+    );
 
+    expect(screen.getByTestId("settings-browser-agents")).not.toBeNull();
     expect(screen.getByText("Detected dev origins")).not.toBeNull();
+    expect(screen.getByTestId("agent-opened-tabs-stub")).not.toBeNull();
     expect(screen.queryByText("Website sessions")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });

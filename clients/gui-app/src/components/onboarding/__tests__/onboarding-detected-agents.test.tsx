@@ -11,7 +11,20 @@ import {
 import { StrictMode } from "react";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 
-type StartLoginData = { readonly started: boolean };
+type StartLoginData = {
+  readonly started: boolean;
+  // Optional: every existing fixture answer omits these, exactly as a raw
+  // test double (never parsed through the real schema) may. Present only on
+  // the answers the pending-aware tests construct.
+  readonly url?: string | null;
+  readonly profileId?: string | null;
+  readonly pending?: "pack_preparing" | "starting" | null;
+  readonly pack?: {
+    readonly percent: number | null;
+    readonly reason: string | null;
+    readonly retryAtMs: number | null;
+  } | null;
+};
 type StartLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
@@ -26,11 +39,22 @@ type StartLoginMutate = (
   options: StartLoginOptions,
 ) => void;
 
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the caller's `AbortSignal`, `undefined` for a wait that
+// only ever runs to the end (onboarding's).
 type AwaitLoginVariables = {
-  readonly providerId: string;
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 type AwaitLoginCompletion = {
+  // Absent from a host before `providers.awaitLogin@2.2`.
+  readonly refusal?: {
+    readonly reason: string;
+    readonly actionUrl: string | null;
+  } | null;
   readonly state: {
     readonly auth: { readonly status: string };
     // The host's "my auth probe has not answered yet" flag. Carried here
@@ -63,6 +87,12 @@ type SetEnabledMutate = (variables: {
   readonly profileAction: unknown;
 }) => void;
 type SetEnabledVariables = Parameters<SetEnabledMutate>[0];
+
+type CancelLoginVariables = {
+  readonly providerId: string;
+  readonly profileId: string | null;
+  readonly holderId: string | null;
+};
 
 // `codex` is disabled with a DETECTED candidate, so it's the one row that
 // satisfies `providerNeedsSignInToEnable` (`!state.enabled && installDetected`)
@@ -126,8 +156,15 @@ const fixtures = vi.hoisted(() => {
     startLoginPending: false,
     startLoginSuccess: false,
     startLoginData: undefined as StartLoginData | undefined,
+    // The flow now calls `mutateAsync`, not `mutate` - see the mock below,
+    // which adapts it onto this same recorded `(variables, options)` fake so
+    // every existing `latestStartLoginCall()` assertion keeps working.
+    ensurePackMutateAsync: vi.fn<(vars: unknown) => Promise<unknown>>(() =>
+      Promise.resolve({}),
+    ),
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
     awaitLoginReset: vi.fn(),
+    cancelLoginMutate: vi.fn<(vars: CancelLoginVariables) => void>(),
     // Modelled for the same reason `startLogin`'s are: the component derives
     // its "did not authenticate" row message from the mutation RESULT rather
     // than from local state, so a mock that carried only `mutate` would leave
@@ -144,6 +181,11 @@ const fixtures = vi.hoisted(() => {
     // matrix cannot be written at all.
     isLocalMachine: true,
     toastError: vi.fn(),
+    // One spy for every `useOpenLink()` call, so a test can see which link a
+    // button sent the user to.
+    openLink: vi.fn<(url: string, kind: string, event: unknown) => unknown>(
+      () => Promise.resolve(),
+    ),
   };
 });
 
@@ -166,12 +208,29 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   }),
 }));
 
+// The button now drives the login through `startProviderLoginUntilSettled`,
+// which calls `mutateAsync` (its promise settles once the recorded fake's
+// `onSuccess`/`onError` is invoked); this adapts that onto the same
+// `(variables, { onSuccess, onError })` fake every test below still drives.
 vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => ({
   useProvidersStartLogin: () => ({
-    mutate: fixtures.startLoginMutate,
+    mutateAsync: (variables: StartLoginVariables) =>
+      new Promise<StartLoginData>((resolve, reject) => {
+        fixtures.startLoginMutate(variables, {
+          onSuccess: resolve,
+          onError: reject,
+        });
+      }),
     isPending: fixtures.startLoginPending,
     isSuccess: fixtures.startLoginSuccess,
     data: fixtures.startLoginData,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({
+    mutateAsync: fixtures.ensurePackMutateAsync,
+    isPending: false,
   }),
 }));
 
@@ -210,8 +269,24 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
+  useProvidersCancelLogin: () => ({
+    mutate: fixtures.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      fixtures.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
+}));
+
 vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => vi.fn(() => Promise.resolve()),
+  useOpenLink: () => fixtures.openLink,
 }));
 
 vi.mock("@/components/onboarding/onboarding-provider-discovery", () => ({
@@ -238,6 +313,10 @@ import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
 } from "@/lib/providers/provider-ambient-auth";
+import {
+  PROVIDER_LOGIN_PACK_POLL_MS,
+  PROVIDER_LOGIN_STILL_STARTING_CAP,
+} from "@/components/providers/provider-login-start";
 
 function latestStartLoginCall(): readonly [
   StartLoginVariables,
@@ -274,10 +353,12 @@ function resetFixtures(): void {
   fixtures.startLoginPending = false;
   fixtures.startLoginSuccess = false;
   fixtures.startLoginData = undefined;
+  fixtures.ensurePackMutateAsync.mockClear();
   fixtures.awaitLoginMutate.mockReset();
   fixtures.awaitLoginReset.mockReset();
   fixtures.awaitLoginSuccess = false;
   fixtures.awaitLoginData = undefined;
+  fixtures.cancelLoginMutate.mockReset();
   fixtures.setEnabledMutate.mockReset();
   fixtures.setEnabledPending = false;
   fixtures.setEnabledVariables = undefined;
@@ -291,15 +372,22 @@ function resetFixtures(): void {
  * `strict` renders under `<StrictMode>`, which is how the desktop and mobile
  * dev builds actually mount this act - and the one place an effect runs
  * setup -> cleanup -> setup.
+ *
+ * Async because the button now drives the login through `mutateAsync`
+ * (`startProviderLoginUntilSettled`): the fake's `onSuccess` resolves a
+ * promise rather than calling the component's continuation directly, so the
+ * caller has to let that microtask turn run before reading the result -
+ * `act`'s async overload, given a returned promise, does exactly that.
  */
-function startSignInAttempt(strict: boolean): RenderResult {
+async function startSignInAttempt(strict: boolean): Promise<RenderResult> {
   fixtures.providers = [fixtures.signInProvider];
   const tree = <OnboardingDetectedAgents />;
   const view = render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   fireEvent.click(signInButton());
   const [, startOptions] = latestStartLoginCall();
-  act(() => {
+  await act(() => {
     startOptions.onSuccess({ started: true });
+    return Promise.resolve();
   });
   return view;
 }
@@ -332,6 +420,7 @@ describe("OnboardingDetectedAgents", () => {
       "Hermes Agent",
       "Oh My Pi",
       "Reasonix",
+      "Command Code",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
     // Longest match, not first match: display names overlap ("Pi" is a
@@ -351,6 +440,55 @@ describe("OnboardingDetectedAgents", () => {
         return longestMatch(text);
       }),
     ).toEqual(expectedNames);
+  });
+
+  it("matches the Command Code row exactly and never as another agent, nor another row as Command Code", () => {
+    render(<OnboardingDetectedAgents />);
+
+    const otherNames = [
+      "Codex",
+      "Claude Code",
+      "OpenCode",
+      "Traycer Inference",
+      "OpenRouter",
+      "Hugging Face",
+      "Droid",
+      "Cursor",
+      "Copilot",
+      "Grok",
+      "Kiro",
+      "Kilo Code",
+      "Kimi",
+      "Qwen Code",
+      "Antigravity",
+      "Amp",
+      "Devin",
+      "Pi",
+      "Hermes Agent",
+      "Oh My Pi",
+      "Reasonix",
+    ];
+    const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
+    const commandCodeRows = rows.filter((text) =>
+      text.includes("Command Code"),
+    );
+    // Exactly one row is the Command Code row ...
+    expect(commandCodeRows).toHaveLength(1);
+    // ... it carries none of the other display names ("Code" is shared with
+    // Claude Code, Qwen Code and Kilo Code, but no full name is) ...
+    const [commandCodeRow = ""] = commandCodeRows;
+    expect(otherNames.filter((name) => commandCodeRow.includes(name))).toEqual(
+      [],
+    );
+    // ... and no other row mentions it. Positive control: every other name
+    // still has a row of its own.
+    expect(rows).toHaveLength(otherNames.length + 1);
+    for (const name of otherNames) {
+      expect(
+        rows.some((text) => text.includes(name)),
+        name,
+      ).toBe(true);
+    }
   });
 
   it("puts enabled providers before disabled providers", () => {
@@ -598,17 +736,18 @@ describe("OnboardingDetectedAgents", () => {
 describe("SignInToEnableButton declined sign-in", () => {
   afterEach(resetFixtures);
 
-  it("renders the inline alert and does not await login when the CLI declines to start", () => {
+  it("renders the inline alert and does not await login when the CLI declines to start", async () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
     fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, options] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       fixtures.startLoginPending = false;
       fixtures.startLoginSuccess = true;
       fixtures.startLoginData = { started: false };
       options.onSuccess({ started: false });
+      return Promise.resolve();
     });
     view.rerender(<OnboardingDetectedAgents />);
 
@@ -618,17 +757,18 @@ describe("SignInToEnableButton declined sign-in", () => {
     expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
   });
 
-  it("renders no alert and awaits login when the CLI starts", () => {
+  it("renders no alert and awaits login when the CLI starts", async () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
     fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, options] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       fixtures.startLoginPending = false;
       fixtures.startLoginSuccess = true;
       fixtures.startLoginData = { started: true };
       options.onSuccess({ started: true });
+      return Promise.resolve();
     });
     view.rerender(<OnboardingDetectedAgents />);
 
@@ -637,20 +777,24 @@ describe("SignInToEnableButton declined sign-in", () => {
     if (awaitCall === undefined) {
       throw new Error("Expected an awaitLogin call.");
     }
-    expect(awaitCall[0]).toEqual({ providerId: "codex", profileId: null });
+    expect(awaitCall[0]).toStrictEqual({
+      request: { providerId: "codex", profileId: null },
+      signal: undefined,
+    });
     // The options object carries the enable-on-authenticated chain; its
     // behaviour is pinned by the next test.
     expect(typeof awaitCall[1].onSuccess).toBe("function");
   });
 
-  it("enables the provider only on an authenticated completion", () => {
+  it("enables the provider only on an authenticated completion", async () => {
     fixtures.providers = [fixtures.signInProvider];
     render(<OnboardingDetectedAgents />);
 
     fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, startOptions] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({ started: true });
+      return Promise.resolve();
     });
     const awaitCall = fixtures.awaitLoginMutate.mock.calls.at(-1);
     if (awaitCall === undefined) {
@@ -689,17 +833,18 @@ describe("SignInToEnableButton declined sign-in", () => {
     });
   });
 
-  it("clears the message once a subsequent attempt is in flight, and stays clear on success", () => {
+  it("clears the message once a subsequent attempt is in flight, and stays clear on success", async () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
     fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, firstOptions] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       fixtures.startLoginPending = false;
       fixtures.startLoginSuccess = true;
       fixtures.startLoginData = { started: false };
       firstOptions.onSuccess({ started: false });
+      return Promise.resolve();
     });
     view.rerender(<OnboardingDetectedAgents />);
     expect(screen.getByRole("alert")).toBeTruthy();
@@ -717,32 +862,120 @@ describe("SignInToEnableButton declined sign-in", () => {
     expect(screen.queryByRole("alert")).toBeNull();
 
     const [, secondOptions] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       fixtures.startLoginPending = false;
       fixtures.startLoginSuccess = true;
       fixtures.startLoginData = { started: true };
       secondOptions.onSuccess({ started: true });
+      return Promise.resolve();
     });
     view.rerender(<OnboardingDetectedAgents />);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("never raises a sonner toast on the declined path", () => {
+  it("never raises a sonner toast on the declined path", async () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
     fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, options] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       fixtures.startLoginPending = false;
       fixtures.startLoginSuccess = true;
       fixtures.startLoginData = { started: false };
       options.onSuccess({ started: false });
+      return Promise.resolve();
     });
     view.rerender(<OnboardingDetectedAgents />);
 
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(fixtures.toastError).not.toHaveBeenCalled();
+  });
+
+  // New behaviour: a start that outlasts "a moment" answers `pending` and the
+  // same question is asked again to attach to the still-running child. Until
+  // that final answer lands, this is not a refusal - the previous test class
+  // covers the FINAL not-started answer; this one covers what happens before
+  // it arrives.
+  it("does not show the declined message while attaching to a launching child, and ends waiting once it starts", async () => {
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
+    const [, firstOptions] = latestStartLoginCall();
+    await act(() => {
+      fixtures.startLoginPending = true;
+      fixtures.startLoginSuccess = true;
+      fixtures.startLoginData = { started: false, pending: "starting" };
+      firstOptions.onSuccess({ started: false, pending: "starting" });
+      return Promise.resolve();
+    });
+    view.rerender(<OnboardingDetectedAgents />);
+
+    // Still attaching: no refusal message, and the button stays pending on
+    // account of `startProgress` alone.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(signInButton()).toHaveProperty("disabled", true);
+
+    const [, secondOptions] = latestStartLoginCall();
+    expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(2);
+    await act(() => {
+      fixtures.startLoginPending = false;
+      fixtures.startLoginSuccess = true;
+      fixtures.startLoginData = {
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      };
+      secondOptions.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+    view.rerender(<OnboardingDetectedAgents />);
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    const awaitCall = fixtures.awaitLoginMutate.mock.calls.at(-1);
+    if (awaitCall === undefined) {
+      throw new Error("Expected an awaitLogin call.");
+    }
+    expect(awaitCall[0]).toStrictEqual({
+      request: { providerId: "codex", profileId: null },
+      signal: undefined,
+    });
+  });
+
+  // The pack failure travels on the answer itself, not on `failure` - see
+  // `providerLoginNotStartedMessage` - so a final answer whose only news is a
+  // failed pack install must render THAT sentence, not the generic one.
+  it("shows the pack's setup-failed message when the final answer carries a failed pack install", async () => {
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
+    const [, options] = latestStartLoginCall();
+    const failedPackAnswer: StartLoginData = {
+      started: false,
+      pending: null,
+      pack: { percent: null, reason: "network", retryAtMs: null },
+    };
+    await act(() => {
+      fixtures.startLoginPending = false;
+      fixtures.startLoginSuccess = true;
+      fixtures.startLoginData = failedPackAnswer;
+      options.onSuccess(failedPackAnswer);
+      return Promise.resolve();
+    });
+    view.rerender(<OnboardingDetectedAgents />);
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Codex setup failed - the download could not be reached. Retry when you're back online.",
+    );
+    expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
   });
 });
 
@@ -752,7 +985,7 @@ describe("SignInToEnableButton declined sign-in", () => {
 describe("SignInToEnableButton unsettled auth verdict", () => {
   afterEach(resetFixtures);
 
-  it("re-polls an unsettled ambient verdict instead of reading it as a failed sign-in", () => {
+  it("re-polls an unsettled ambient verdict instead of reading it as a failed sign-in", async () => {
     // The host's `providers.awaitLogin` can settle before its auth probe does
     // (the login runner evicts the ambient cache when the child closes; older
     // hosts always assemble the response from a non-blocking probe). Reading
@@ -760,7 +993,7 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     // to enable" complete a successful sign-in and then silently not enable.
     vi.useFakeTimers();
     try {
-      startSignInAttempt(false);
+      await startSignInAttempt(false);
       expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(1);
 
       act(() => {
@@ -802,10 +1035,10 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     }
   });
 
-  it("spends the shared re-poll budget and then stops, without enabling", () => {
+  it("spends the shared re-poll budget and then stops, without enabling", async () => {
     vi.useFakeTimers();
     try {
-      startSignInAttempt(false);
+      await startSignInAttempt(false);
       // One completion per await: the initial one plus each re-poll. The last
       // iteration is the one whose completion finds the budget spent.
       for (
@@ -839,13 +1072,13 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     }
   });
 
-  it("treats a DEFINITIVE unauthenticated verdict as final, pending flag or not", () => {
+  it("treats a DEFINITIVE unauthenticated verdict as final, pending flag or not", async () => {
     // `authPending` alone does not buy time - only an unsettled STATUS does.
     // A host that reports a settled `unauthenticated` while some other probe
     // is still running has already answered this question.
     vi.useFakeTimers();
     try {
-      startSignInAttempt(false);
+      await startSignInAttempt(false);
       act(() => {
         latestAwaitLoginOptions().onSuccess({
           state: {
@@ -920,8 +1153,8 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   }
 
   for (const { label, completion } of FAILED_OUTCOMES) {
-    it(`states the outcome in the row after ${label}`, () => {
-      settleWith(startSignInAttempt(false), completion);
+    it(`states the outcome in the row after ${label}`, async () => {
+      settleWith(await startSignInAttempt(false), completion);
 
       expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
       const alert = screen.getByRole("alert");
@@ -930,8 +1163,8 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     });
   }
 
-  it("says nothing when the sign-in DID authenticate", () => {
-    settleWith(startSignInAttempt(false), {
+  it("says nothing when the sign-in DID authenticate", async () => {
+    settleWith(await startSignInAttempt(false), {
       state: {
         auth: { status: "authenticated" },
         authPending: false,
@@ -943,14 +1176,14 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("retries the ENABLE, not the login, after an authenticated sign-in whose enable failed", () => {
+  it("retries the ENABLE, not the login, after an authenticated sign-in whose enable failed", async () => {
     // Sign-in succeeded; the enable is what did not take, so the row is still
     // off and this button is still rendered. Pressing it again must resume at
     // the failed step. Restarting the login is not just wasted work: a CLI that
     // refuses to start one while already signed in answers `started: false`, so
     // the retry would report "sign-in did not start" and the button could never
     // do what it advertises.
-    const view = startSignInAttempt(false);
+    const view = await startSignInAttempt(false);
     settleWith(view, {
       state: {
         auth: { status: "authenticated" },
@@ -967,22 +1200,23 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
   });
 
-  it("does not carry a settled verdict into an attempt that never started", () => {
+  it("does not carry a settled verdict into an attempt that never started", async () => {
     // The two messages are only mutually exclusive because each attempt RESETS
     // the await mutation. Without that, attempt 1's completion outlives it: a
     // retry whose `startLogin` comes back `started: false` never calls
     // `awaitLogin`, ends pending, and the row renders "did not start" AND "did
     // not complete" together - the second describing an attempt the user has
     // already moved on from.
-    const view = startSignInAttempt(false);
+    const view = await startSignInAttempt(false);
     settleWith(view, { state: null });
     expect(screen.getByRole("alert").textContent).toContain("did not complete");
 
     // Retry, this time declined by the host.
     fireEvent.click(signInButton());
     const [, startOptions] = latestStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({ started: false });
+      return Promise.resolve();
     });
     fixtures.startLoginSuccess = true;
     fixtures.startLoginData = { started: false };
@@ -996,11 +1230,11 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(alerts[0].textContent).toContain("did not start");
   });
 
-  it("hides the previous verdict while a fresh attempt is running", () => {
+  it("hides the previous verdict while a fresh attempt is running", async () => {
     // `startLogin.mutate` does not touch `awaitLogin`, so its `data` survives
     // into the retry it is no longer about. Without the pending gate the row
     // would accuse the attempt that is currently spinning.
-    const view = startSignInAttempt(false);
+    const view = await startSignInAttempt(false);
     settleWith(view, { state: null });
     expect(screen.getByRole("alert").textContent).toContain("did not complete");
 
@@ -1016,12 +1250,12 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   // summary and the ambient profile ROW - and they converge at different
   // times. Deciding on the summary alone is wrong in both directions, so both
   // directions are pinned here.
-  it("enables on an ambient PROFILE row that authenticates before the summary does", () => {
+  it("enables on an ambient PROFILE row that authenticates before the summary does", async () => {
     // Summary still lagging at a non-definitive `unavailable`, and no probe in
     // flight (`authPending: false`), so nothing re-polls. Reading only the
     // top-level status calls a successful sign-in a failure and states "did not
     // complete" over an account that is in fact signed in.
-    settleWith(startSignInAttempt(false), {
+    settleWith(await startSignInAttempt(false), {
       state: {
         auth: { status: "unavailable" },
         authPending: false,
@@ -1035,13 +1269,13 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("refuses to enable when the ambient row definitively contradicts a stale top-level authenticated", () => {
+  it("refuses to enable when the ambient row definitively contradicts a stale top-level authenticated", async () => {
     // Signed-out wins. The auth poison and the probe-less `providers.list`
     // path stamp a definitive `unauthenticated` on the ambient ROW the instant
     // a credential fails, while the summary can still be carrying the previous
     // `authenticated`. Enabling on the stale half hands the user a provider
     // whose next turn cannot run.
-    settleWith(startSignInAttempt(false), {
+    settleWith(await startSignInAttempt(false), {
       state: {
         auth: { status: "authenticated" },
         authPending: false,
@@ -1053,12 +1287,12 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(screen.getByRole("alert").textContent).toContain("did not complete");
   });
 
-  it("reads the AMBIENT row only - a managed profile is not the terminal account", () => {
+  it("reads the AMBIENT row only - a managed profile is not the terminal account", async () => {
     // This button always signs in ambiently (`profileId: null`), so a healthy
     // MANAGED profile says nothing about whether the terminal account got an
     // account. A verdict that scanned every row would enable here on the
     // strength of a login this attempt never performed.
-    settleWith(startSignInAttempt(false), {
+    settleWith(await startSignInAttempt(false), {
       state: {
         auth: { status: "unauthenticated" },
         authPending: false,
@@ -1077,13 +1311,13 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
 describe("SignInToEnableButton pending lifecycle", () => {
   afterEach(resetFixtures);
 
-  it("still enables under StrictMode, whose effects run setup - cleanup - setup", () => {
+  it("still enables under StrictMode, whose effects run setup - cleanup - setup", async () => {
     // The dev builds mount this act inside `<StrictMode>`, so the unmount
     // latch is set by that first throwaway cleanup. A latch that is only ever
     // SET would then make every completion return early for the life of the
     // button - the sign-in completes and the provider silently stays off,
     // exactly where a developer would be looking at it.
-    startSignInAttempt(true);
+    await startSignInAttempt(true);
 
     act(() => {
       latestAwaitLoginOptions().onSuccess({
@@ -1102,12 +1336,12 @@ describe("SignInToEnableButton pending lifecycle", () => {
     });
   });
 
-  it("stays pending through the enable, not just through the authentication", () => {
+  it("stays pending through the enable, not just through the authentication", async () => {
     // `providers.setEnabled` is the parent's mutation and the row only flips
     // once its refresh lands, so between those two moments the button would
     // otherwise re-arm - long enough for a second press to spawn a redundant
     // login child for a provider already being turned on.
-    const view = startSignInAttempt(false);
+    const view = await startSignInAttempt(false);
 
     act(() => {
       latestAwaitLoginOptions().onSuccess({
@@ -1141,7 +1375,7 @@ describe("SignInToEnableButton pending lifecycle", () => {
 describe("SignInToEnableButton mount survival", () => {
   afterEach(resetFixtures);
 
-  it("stays mounted when the authenticated echo lands before the completion callback", () => {
+  it("stays mounted when the authenticated echo lands before the completion callback", async () => {
     // `awaitLogin`'s own `onSuccess` overlays the authenticated echo into
     // `providers.list` and AWAITS that invalidation before TanStack runs the
     // per-`mutate` `onSuccess` this button enables from - and TanStack drops
@@ -1150,7 +1384,7 @@ describe("SignInToEnableButton mount survival", () => {
     // auth verdict deletes this row in exactly that window: the account
     // authenticates and the provider stays OFF, which is the single outcome
     // this button exists to prevent.
-    const view = startSignInAttempt(false);
+    const view = await startSignInAttempt(false);
 
     // The overlay: authenticated now, still disabled.
     fixtures.providers = [
@@ -1432,5 +1666,300 @@ describe("OnboardingDetectedAgents terminal-login rows", () => {
     // makes negatively - the line a terminal-login row does NOT get.
     expect(screen.getByText("Not signed in")).toBeTruthy();
     expect(screen.queryByText(TERMINAL_SETUP_SUBTEXT)).toBeNull();
+  });
+});
+
+// A login the host is still holding for a press this button has stopped
+// asking about: the host keeps a "still starting" child alive for the next
+// call to attach to, and this button is the only one asking, so once it
+// stops nothing else ever will. `providers.cancelLogin` is how it lets that
+// child go, ambiently (`profileId: null` - onboarding has no profile picker).
+describe("SignInToEnableButton releasing a login nobody is coming back for", () => {
+  afterEach(resetFixtures);
+
+  it("cancels once the host answers 'still starting' PROVIDER_LOGIN_STILL_STARTING_CAP times, and states it did not start", async () => {
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    for (
+      let attempt = 0;
+      attempt < PROVIDER_LOGIN_STILL_STARTING_CAP;
+      attempt += 1
+    ) {
+      const [, options] = latestStartLoginCall();
+      const stillStarting: StartLoginData = {
+        started: false,
+        pending: "starting",
+      };
+      await act(() => {
+        fixtures.startLoginPending = true;
+        fixtures.startLoginSuccess = true;
+        fixtures.startLoginData = stillStarting;
+        options.onSuccess(stillStarting);
+        return Promise.resolve();
+      });
+    }
+    fixtures.startLoginPending = false;
+    view.rerender(<OnboardingDetectedAgents />);
+
+    expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(
+      PROVIDER_LOGIN_STILL_STARTING_CAP,
+    );
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: null,
+      holderId: null,
+    });
+    expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Sign-in did not start. Try again.",
+    );
+  });
+
+  it("cancels a login that was still starting when the row unmounted, with no further call dispatched", async () => {
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    view.unmount();
+
+    await act(() => {
+      options.onSuccess({ started: false, pending: "starting" });
+      return Promise.resolve();
+    });
+
+    // Nobody is left to ask again, so the loop must have stopped at this one
+    // answer rather than dispatching a second call into a dead row.
+    expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: null,
+      holderId: null,
+    });
+  });
+
+  it("cancels a login that had already started by the time the row unmounted, when only the GUI would have opened its page", async () => {
+    // A started answer this time, not a still-starting one - `signInProvider`
+    // carries `selfOpensBrowser: null`, so this provider never opens its own
+    // browser and a login nobody asks for again is a login nobody ever opens.
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    view.unmount();
+
+    await act(() => {
+      options.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: null,
+      holderId: null,
+    });
+  });
+
+  it("leaves alone a login that had already started by the time the row unmounted, when the provider opens its own browser", async () => {
+    // The complement of the case above, proving the positive path would have
+    // been observable here too: same press, same unmount, same answer -
+    // only the capability differs.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: {},
+        },
+      },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    view.unmount();
+
+    await act(() => {
+      options.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+
+    expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel a login that started while the row stayed mounted, whatever the capability", async () => {
+    // The mounted branch keys off `providerLoginAnswerStillStarting` alone -
+    // a started login while still mounted is the ordinary path (it goes on
+    // to `awaitLogin`), and adding the capability check to the unmount branch
+    // must not have widened this one too.
+    fixtures.providers = [fixtures.signInProvider];
+    render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    await act(() => {
+      options.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+
+    expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+    expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel while the pack is only downloading, and stops asking once the row unmounts", async () => {
+    // `pack_preparing` means nothing has been spawned yet - there is no login
+    // child for a cancel to release, and no second poll should go out once
+    // nobody is left to read the answer.
+    vi.useFakeTimers();
+    try {
+      fixtures.providers = [fixtures.signInProvider];
+      const view = render(<OnboardingDetectedAgents />);
+
+      fireEvent.click(signInButton());
+      const [, options] = latestStartLoginCall();
+      const downloading: StartLoginData = {
+        started: false,
+        pending: "pack_preparing",
+        pack: { percent: 10, reason: null, retryAtMs: null },
+      };
+      act(() => {
+        fixtures.startLoginPending = true;
+        fixtures.startLoginSuccess = true;
+        fixtures.startLoginData = downloading;
+        options.onSuccess(downloading);
+      });
+      expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+
+      view.unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PROVIDER_LOGIN_PACK_POLL_MS);
+      });
+
+      expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+      expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// A provider that accepts the browser consent and then refuses the account
+// (`providers.awaitLogin@2.2` `refusal`) is not the generic "did not complete":
+// the row says which provider refused, why, and where to resolve it.
+describe("SignInToEnableButton when the provider refuses the sign-in", () => {
+  afterEach(resetFixtures);
+
+  const REFUSAL = {
+    reason:
+      "Your current account is not eligible for Antigravity. Verify your account to continue.",
+    actionUrl: "https://accounts.google.com/signin/continue?sarp=1&scc=1",
+  };
+
+  async function refuseSignIn(
+    completion: AwaitLoginCompletion,
+  ): Promise<RenderResult> {
+    fixtures.providers = [
+      { ...fixtures.signInProvider, providerId: "antigravity" },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    await act(() => {
+      startOptions.onSuccess({ started: true });
+      return Promise.resolve();
+    });
+    act(() => {
+      latestAwaitLoginOptions().onSuccess(completion);
+    });
+    fixtures.awaitLoginSuccess = true;
+    fixtures.awaitLoginData = completion;
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+    return view;
+  }
+
+  it("says which provider refused and why, offers Verify account, and never enables the provider", async () => {
+    await refuseSignIn({ state: null, refusal: REFUSAL });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(
+      "Antigravity turned down this sign-in.",
+    );
+    expect(alert.textContent).toContain(REFUSAL.reason);
+    // The generic line is replaced, not stacked with the provider's.
+    expect(screen.queryByText(/did not complete/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Verify account" }),
+    ).toBeDefined();
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("opens the provider's verification link through the auth link opener", async () => {
+    await refuseSignIn({ state: null, refusal: REFUSAL });
+    fixtures.openLink.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Verify account" }));
+
+    expect(fixtures.openLink).toHaveBeenCalledTimes(1);
+    expect(fixtures.openLink).toHaveBeenCalledWith(
+      REFUSAL.actionUrl,
+      "auth",
+      expect.anything(),
+    );
+  });
+
+  it("offers no Verify account button when the provider offered no link", async () => {
+    await refuseSignIn({
+      state: null,
+      refusal: { reason: "This account cannot be used.", actionUrl: null },
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "This account cannot be used.",
+    );
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+  });
+
+  it("keeps the generic outcome line when the sign-in did not complete without a refusal", async () => {
+    await refuseSignIn({ state: null, refusal: null });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("did not complete");
+    expect(alert.textContent).toContain("still off");
+    expect(screen.queryByText(/turned down this sign-in/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+  });
+
+  it("keeps the generic outcome line for an answer from a host before 2.2, which carries no refusal", async () => {
+    await refuseSignIn({ state: null });
+
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
   });
 });

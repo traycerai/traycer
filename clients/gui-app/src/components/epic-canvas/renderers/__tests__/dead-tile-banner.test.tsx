@@ -5,7 +5,6 @@ import {
   ChatDeadTileBanner,
   TerminalDeadTileBanner,
 } from "../dead-tile-banner";
-import { setMobileApp } from "@/lib/mobile-app";
 
 // Surfaced rather than stubbed to null: the report context is what a support
 // ticket carries, and it is the one part of this banner a reader never sees on
@@ -28,7 +27,6 @@ vi.mock("@/components/report-issue/report-issue-action", () => ({
 
 afterEach(() => {
   cleanup();
-  setMobileApp(false);
 });
 
 /**
@@ -48,7 +46,6 @@ describe("<TerminalDeadTileBanner />", () => {
         reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="terminal"
-        unavailability="offline"
         onClose={() => undefined}
         testId="terminal-tile-1"
       />,
@@ -65,7 +62,6 @@ describe("<TerminalDeadTileBanner />", () => {
         reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="agent"
-        unavailability="offline"
         onClose={() => undefined}
         testId="terminal-agent-tile-1"
       />,
@@ -80,55 +76,12 @@ describe("<TerminalDeadTileBanner />", () => {
     expect(text).not.toContain("permanently closed");
   });
 
-  // App Store review guideline 3.1.1: the installed app may not tell a reader
-  // to buy a subscription it cannot sell. The FACT about the host, and the
-  // local alternative, are the same on every shell - only the remedy moves.
-  it("swaps the upgrade remedy for the desktop pointer in the installed mobile app", () => {
-    for (const ownerKind of ["agent", "terminal"] as const) {
-      const { unmount } = render(
-        <TerminalDeadTileBanner
-          reason="host-unreachable"
-          hostLabel="mac-mini"
-          ownerKind={ownerKind}
-          unavailability="plan-restricted"
-          onClose={() => undefined}
-          testId={`desktop-${ownerKind}`}
-        />,
-      );
-      expect(screen.getByTestId(`desktop-${ownerKind}`).textContent).toContain(
-        "Upgrade to use that host remotely",
-      );
-      unmount();
-    }
-
-    setMobileApp(true);
-    for (const ownerKind of ["agent", "terminal"] as const) {
-      const { unmount } = render(
-        <TerminalDeadTileBanner
-          reason="host-unreachable"
-          hostLabel="mac-mini"
-          ownerKind={ownerKind}
-          unavailability="plan-restricted"
-          onClose={() => undefined}
-          testId={`mobile-${ownerKind}`}
-        />,
-      );
-      const text = screen.getByTestId(`mobile-${ownerKind}`).textContent;
-      expect(text).not.toContain("Upgrade");
-      expect(text).toContain("Manage this from the Traycer desktop app.");
-      // Still says why, and still says the work is safe.
-      expect(text).toContain("is local only on your current plan");
-      unmount();
-    }
-  });
-
   it("keeps the close action available on both variants", () => {
     render(
       <TerminalDeadTileBanner
         reason="host-unreachable"
         hostLabel="h"
         ownerKind="agent"
-        unavailability="offline"
         onClose={() => undefined}
         testId="t-agent"
       />,
@@ -459,7 +412,6 @@ describe("<ChatDeadTileBanner />", () => {
   it("never promises cloning in the same breath as refusing it", () => {
     for (const reason of [
       "host-offline",
-      "host-plan-restricted",
       "chat-not-visible",
       "chat-not-on-this-host",
     ] as const) {

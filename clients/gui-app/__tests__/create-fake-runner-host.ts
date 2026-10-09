@@ -113,6 +113,7 @@ export function createFakeRunnerHost(
       onClick: () => ({ dispose: () => undefined }),
     },
     tray: {
+      showsEpics: true,
       setEpics: () => Promise.resolve(),
       setIndicator: () => Promise.resolve(),
       onEpicSelected: () => ({ dispose: () => undefined }),
@@ -152,6 +153,7 @@ export function createFakeRunnerHost(
     migration: null,
     hostManagement: null,
     hostTray: null,
+    hostLifecycle: null,
     // A real, attach-able in-window authority by default (D16) - the same
     // topology `MockRunnerHost` mounts - seeded with one usable local host,
     // so a suite that boots through `HostRuntimeProvider`/the selection

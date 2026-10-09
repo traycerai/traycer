@@ -160,6 +160,7 @@ vi.mock("../../service/install-lifecycle", () => ({
       stoppedBeforeSwap: false,
       postSwapAction: "none" as const,
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: async () => {},
@@ -305,6 +306,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: false,
           force: false,
           attemptAdoption: null,
+          lifecycleOrigin: "terminal",
           acceptStoreFormatLoss: false,
         });
         const pending = command(fakeCtx());
@@ -360,6 +362,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: true,
           force: false,
           attemptAdoption: null,
+          lifecycleOrigin: "terminal",
           acceptStoreFormatLoss: false,
         });
         const pending = command(fakeCtx());

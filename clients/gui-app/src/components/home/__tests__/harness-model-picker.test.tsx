@@ -188,7 +188,7 @@ const queryMock = vi.hoisted(() => ({
         | "unreachable"
         | "host-starting";
       readonly hostLabel: string;
-      readonly unavailability: "offline" | "plan-restricted" | null;
+      readonly unavailability: "offline" | null;
     }
   >(),
   concreteDefaultHostId: null as string | null,
@@ -693,9 +693,9 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
@@ -863,7 +863,18 @@ function providerCliStateWithProfiles(input: {
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    // Capable by default: a runnable candidate, so `providerHostBlock`
+    // reports null unless a test explicitly narrows `candidates` to exercise
+    // the CLI-missing/checking gate.
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/resources/providers/claude/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "authenticated",
       badgeText: null,
@@ -1193,7 +1204,7 @@ describe("<HarnessModelPicker />", () => {
     // seeded record can't leak between tests.
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
-    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   afterEach(() => {
@@ -1307,7 +1318,7 @@ describe("<HarnessModelPicker />", () => {
   // that mount this picker follow, so the setting is proven where it is read
   // rather than only on the trigger in isolation.
   it("draws the effort as bars, and spells the position out in the tooltip, when the layout setting asks for bars", async () => {
-    useLayoutStore.getState().setComposerReasoningIndicator("bars");
+    useLayoutStore.getState().setRegionValues("model", { style: "bars" });
     renderPicker({
       selection: {
         harnessId: "codex",
@@ -2052,31 +2063,6 @@ describe("<HarnessModelPicker />", () => {
     screen.getByRole("option", { name: "Remote Mac is offline" });
     const refreshButton = screen.getByRole("button", {
       name: "Refresh providers & models — Remote Mac is offline",
-    });
-    expect(refreshButton.hasAttribute("disabled")).toBe(true);
-    expect(
-      screen.queryByRole("option", { name: "Couldn't load providers" }),
-    ).toBeNull();
-  });
-
-  it("surfaces a remote plan restriction before a provider-catalog error", async () => {
-    queryMock.harnesses = [];
-    queryMock.catalogHarnesses = [];
-    queryMock.selectedModelsByHarness = new Map();
-    queryMock.reachabilityByHost.set("remote-plan-restricted", {
-      status: "unreachable",
-      hostLabel: "Remote Mac",
-      unavailability: "plan-restricted",
-    });
-    renderPicker({ createProfileHostId: "remote-plan-restricted" });
-
-    await openPickerByTriggerName(/^Select model/);
-
-    screen.getByRole("option", {
-      name: "Remote Mac isn't available on your plan",
-    });
-    const refreshButton = screen.getByRole("button", {
-      name: "Refresh providers & models — Remote Mac isn't available on your plan",
     });
     expect(refreshButton.hasAttribute("disabled")).toBe(true);
     expect(
@@ -4229,7 +4215,9 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("renders thinking effort buttons in the picker footer under the list setting", async () => {
-    useLayoutStore.getState().setComposerReasoningFooterControl("list");
+    useLayoutStore
+      .getState()
+      .setRegionValues("model", { reasoningControl: "list" });
     const { reasoningChanges } = renderPicker({
       reasoning: "high",
       storeModels: [
@@ -4256,6 +4244,68 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Low" }));
 
     expect(reasoningChanges).toEqual(["low"]);
+  });
+
+  it("lights the slider's max treatment when the sub-leader digit lands on the last stop", async () => {
+    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
+    // never touching the slider - so this is the route that proves the max
+    // treatment is a reading of the VALUE inside a presented picker, not of
+    // a gesture some handler in the strip happened to see. The sparkle field
+    // is gated on the picker's own `visibleOpen`, which only the real picker
+    // threads through.
+    renderPicker({
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(2, "alt", false);
+    });
+
+    const slider = screen.getByTestId("model-reasoning-slider");
+    expect(slider.getAttribute("data-max")).toBe("true");
+    expect(screen.getByTestId("model-reasoning-max-sparkles")).not.toBeNull();
+    expect(screen.getByTestId("model-reasoning-range").className).toContain(
+      "reasoning-effort-max-range",
+    );
+  });
+
+  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
+    renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(1, "alt", false);
+    });
+
+    expect(
+      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
+    ).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
   });
 
   it("renders fast mode controls in the picker footer", async () => {
@@ -4411,68 +4461,6 @@ describe("<HarnessModelPicker />", () => {
     });
 
     expect(reasoningChanges).toEqual(["high"]);
-  });
-
-  it("lights the slider's max treatment when the sub-leader digit lands on the last stop", async () => {
-    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
-    // never touching the slider - so this is the route that proves the max
-    // treatment is a reading of the VALUE inside a presented picker, not of
-    // a gesture some handler in the strip happened to see. The sparkle field
-    // is gated on the picker's own `visibleOpen`, which only the real picker
-    // threads through.
-    renderPicker({
-      reasoning: "low",
-      storeModels: [
-        model({
-          slug: "gpt-5.5",
-          label: "GPT-5.5",
-          supportedReasoningEfforts: [
-            { id: "low", label: "Low", description: null },
-            { id: "high", label: "High", description: null },
-          ],
-        }),
-      ],
-    });
-
-    await openPicker();
-    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
-
-    act(() => {
-      fireLeaderDigit(2, "alt", false);
-    });
-
-    const slider = screen.getByTestId("model-reasoning-slider");
-    expect(slider.getAttribute("data-max")).toBe("true");
-    expect(screen.getByTestId("model-reasoning-max-sparkles")).not.toBeNull();
-    expect(screen.getByTestId("model-reasoning-range").className).toContain(
-      "reasoning-effort-max-range",
-    );
-  });
-
-  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
-    renderPicker({
-      reasoning: "high",
-      storeModels: [
-        model({
-          slug: "gpt-5.5",
-          label: "GPT-5.5",
-          supportedReasoningEfforts: [
-            { id: "low", label: "Low", description: null },
-            { id: "high", label: "High", description: null },
-          ],
-        }),
-      ],
-    });
-
-    await openPicker();
-    act(() => {
-      fireLeaderDigit(1, "alt", false);
-    });
-
-    expect(
-      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
-    ).toBeNull();
-    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
   });
 
   it("sets the thinking level on the now-committed model after a rail switch", async () => {

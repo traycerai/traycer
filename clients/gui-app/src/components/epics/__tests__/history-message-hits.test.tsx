@@ -7,7 +7,14 @@
  * suite carries the mount, the selection gate and the arrow traversal, which
  * are the parts that need the real list around them.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
@@ -16,6 +23,7 @@ import type {
   ChatSearchResponse,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { HistoryMessageHits } from "@/components/epics/history-message-hits";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 import type {
   ChatSearchMessageHitsStatus,
   ChatSearchSurfaceScope,
@@ -24,6 +32,13 @@ import type { ChatSearchBaseRequest } from "@/hooks/chats/use-chat-search-query"
 import type { ChatSearchResultTarget } from "@/lib/chat-search/open-chat-search-result";
 import type { NotificationNavigate } from "@/lib/notifications";
 import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
+
+// The section asks the mutation cache whether a hit's task is being deleted
+// (`useEpicDeleteInFlightReader`), so it mounts inside a client like any other
+// History surface.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
 
 const testState = vi.hoisted(() => ({
   hostPresent: true,
@@ -204,16 +219,18 @@ function renderSection(overrides: {
   // re-rendering the same object would do nothing at all and every assertion
   // after it would pass vacuously.
   const element = () => (
-    <HistoryMessageHits
-      query={overrides.query ?? "browser"}
-      filtersActive={overrides.filtersActive ?? false}
-      taskListSettled={overrides.taskListSettled ?? true}
-      onRowKeyDown={onRowKeyDown}
-      display={overrides.display ?? "list"}
-      standalone={overrides.standalone ?? false}
-      onCountChange={onCountChange}
-      onShowTasks={onShowTasks}
-    />
+    <QueryClientProvider client={queryClient}>
+      <HistoryMessageHits
+        query={overrides.query ?? "browser"}
+        filtersActive={overrides.filtersActive ?? false}
+        taskListSettled={overrides.taskListSettled ?? true}
+        onRowKeyDown={onRowKeyDown}
+        display={overrides.display ?? "list"}
+        standalone={overrides.standalone ?? false}
+        onCountChange={onCountChange}
+        onShowTasks={onShowTasks}
+      />
+    </QueryClientProvider>
   );
   const view = render(element());
   return {
@@ -239,6 +256,7 @@ beforeEach(() => {
   testState.close.mockReset();
   testState.openResult.mockReset();
   useChatSearchStore.getState().resetForTests();
+  queryClient.clear();
 });
 
 afterEach(() => {
@@ -895,6 +913,40 @@ describe("HistoryMessageHits: the two ways out", () => {
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
 
     expect(testState.close).not.toHaveBeenCalled();
+  });
+
+  // A hit in a task being deleted from History opens that task's chat, which
+  // opens the task - and every History row refuses a task whose delete is in
+  // flight. The refusal is asked when the hit is CLICKED, not when it rendered.
+  it("refuses to open a hit in a task whose deletion is in flight, and opens it again once that settles", async () => {
+    testState.historyOverlayActive = true;
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    const held = holdEpicBatchDelete(queryClient, ["epic-1"]);
+
+    renderSection({});
+    fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
+
+    expect(testState.openResult).not.toHaveBeenCalled();
+    // Nothing opened, so the overlay a successful open would dismiss stays.
+    expect(testState.close).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await held.settle();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
+
+    expect(testState.openResult).toHaveBeenCalledTimes(1);
+    expect(testState.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a hit whose task is not the one being deleted", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    void holdEpicBatchDelete(queryClient, ["epic-other"]);
+
+    renderSection({});
+    fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
+
+    expect(testState.openResult).toHaveBeenCalledTimes(1);
   });
 
   it("hands the trimmed query to the dialog, scoped to every task", () => {

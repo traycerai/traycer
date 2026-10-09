@@ -420,7 +420,7 @@ function DioramaWindow(props: {
           <ArrowRight className="size-4 text-muted-foreground" />
           <House className="ml-4 size-4 text-muted-foreground" />
           <div
-            className="diorama-task-tabs ml-1 flex h-full min-w-0 flex-1 items-end rounded-md px-0.75 pb-0.75"
+            className="diorama-task-tabs ml-1 flex h-full min-w-0 flex-1 items-center rounded-md px-0.75"
             data-region="tabs"
             data-dim={dimOf(beat, "tabs")}
             data-ring={ringOf(beat, "tabs")}
@@ -432,15 +432,15 @@ function DioramaWindow(props: {
                   className={cn(
                     "relative flex h-9 min-w-0 flex-1 items-center gap-2 px-6 text-ui-sm",
                     index === 0
-                      ? "diorama-active-tab -mb-px z-10"
+                      ? "diorama-active-tab z-10"
                       : "text-muted-foreground",
                   )}
                 >
                   {index === 0 ? (
                     <TabChromeBackground
                       fill="var(--background)"
-                      borderColor="var(--border)"
-                      coversBaseline
+                      borderColor="var(--canvas-border)"
+                      joined={null}
                       className={undefined}
                     />
                   ) : null}

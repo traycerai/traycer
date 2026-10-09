@@ -14,6 +14,7 @@ import type {
   InterviewDeliveryRetryIdentity,
   SendChatSessionMessageInput,
   SentChatMessageAction,
+  SubmitQueueEditInput,
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -66,6 +67,10 @@ export interface ChatActions {
     queueItemId: string,
     settings: ChatRunSettings,
   ) => string | null;
+  /** See `ChatSessionState.submitQueueEdit`. */
+  readonly submitQueueEdit: (input: SubmitQueueEditInput) => string | null;
+  /** See `ChatSessionState.checkSendDelivery`. */
+  readonly checkSendDelivery: () => void;
   readonly restampQueuedItemSettings: (
     settings: ChatRunSettings,
     excludeQueueItemId: string | null,
@@ -212,6 +217,21 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
         }),
       queueSettingsUpdate: (queueItemId, settings) =>
         handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+      submitQueueEdit: (input) =>
+        tracked(handle.store.getState().submitQueueEdit(input), () => {
+          Analytics.getInstance().track(
+            AnalyticsEvent.ChatQueueItemEdited,
+            null,
+          );
+          // The same event a row's own steer arrow records: save-and-steer is
+          // that steer with the edit in front of it.
+          if (input.intent === "steer") {
+            Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
+              settings_changed: true,
+            });
+          }
+        }),
+      checkSendDelivery: () => handle.store.getState().checkSendDelivery(),
       restampQueuedItemSettings: (settings, excludeQueueItemId) =>
         handle.store
           .getState()

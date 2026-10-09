@@ -1,8 +1,10 @@
 import { lazy, Suspense, type RefObject } from "react";
+import { useLayoutLitMoment } from "@/components/layout-editor/lit-moment";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { setupGuide } from "@/stores/onboarding/setup-guides";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { useActiveSetupGuideStep } from "@/components/settings/use-active-setup-guide-step";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
 
 const Coachmark = lazy(() =>
@@ -15,32 +17,46 @@ export function SettingsSetupGuide(props: {
   readonly section: SettingsSectionId;
   readonly rootRef: RefObject<HTMLElement | null>;
 }) {
-  const active = useOnboardingStore((state) => state.activeSetup);
+  const guide = useActiveSetupGuideStep();
   const complete = useOnboardingStore((state) => state.completeSetup);
+  // No guide step runs inside a layout-editor session: the editor owns the
+  // screen and its Escape, and a coachmark pointing into Settings would float
+  // over it. The guide resumes at the same step when the session ends.
+  const customizing = useLayoutEditorStore((state) => state.session !== null);
+  // Resolved above the early returns, because it is a hook: the lit moment
+  // belongs to the step that asked for it and ends when that step does,
+  // however it ends - Continue, Escape, or the surface closing (L-50).
+  useLayoutLitMoment(
+    !customizing &&
+      guide !== null &&
+      guide.step.litChrome === true &&
+      guide.step.section === props.section,
+  );
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed
   // Settings simply resumes the same step when it reopens - and closing the
   // surface is not a user skip, so it must not finish the card either.
-  if (active === null) return null;
-  const guide = setupGuide(active.id);
-  const step = guide.steps[active.step];
+  if (guide === null) return null;
+  if (customizing) return null;
+  const { steps, step } = guide;
+  const displayStep = guide.index;
   if (step.section !== props.section) return null;
-  const last = active.step + 1 === guide.steps.length;
+  const last = displayStep + 1 === steps.length;
   const go = (index: number): void => {
-    const target = guide.steps[index];
+    const target = steps[index];
     if (target.section !== step.section)
       navigateToSettingsSection(target.section);
   };
   return (
     <Suspense fallback={null}>
       <Coachmark
-        id={`${active.id}-${active.step}`}
+        id={`${guide.id}-${displayStep}`}
         title={step.title}
         content={step.content}
         progress={{
-          step: active.step + 1,
-          total: guide.steps.length,
+          step: displayStep + 1,
+          total: steps.length,
         }}
         rootRef={props.rootRef}
         selector={step.selector}
@@ -48,13 +64,13 @@ export function SettingsSetupGuide(props: {
         // the person has been shown the guide and declined it, so leaving it
         // half-finished on the checklist would nag them for a decision they
         // have already made.
-        onClose={() => complete(active.id)}
+        onClose={() => complete(guide.id)}
         onTarget={revealSetting}
         back={
-          active.step > 0
+          displayStep > 0
             ? () => {
-                useOnboardingStore.getState().retreatSetup();
-                go(active.step - 1);
+                useOnboardingStore.getState().retreatSetup(steps.length);
+                go(displayStep - 1);
               }
             : null
         }
@@ -66,9 +82,15 @@ export function SettingsSetupGuide(props: {
             : {
                 label: last ? "Done" : "Continue",
                 onClick: () => {
-                  useOnboardingStore.getState().advanceSetup();
-                  if (last) navigateToSettingsSection("getting-started");
-                  else go(active.step + 1);
+                  // Completing rather than advancing: the last step SHOWN
+                  // is not the stored last one where a step was left out.
+                  if (last) {
+                    complete(guide.id);
+                    navigateToSettingsSection("getting-started");
+                  } else {
+                    useOnboardingStore.getState().advanceSetup();
+                    go(displayStep + 1);
+                  }
                 },
               }
         }

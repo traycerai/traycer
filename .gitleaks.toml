@@ -103,3 +103,10 @@ paths = [
   '''^clients/gui-app/src/providers/__tests__/auth-lifecycle-bridge-r6f1-cross-account-handoff\.test\.tsx$''',
 ]
 regexes = ['''scopeKey: "[A-Za-z0-9_-]+"''']
+
+[[allowlists]]
+description = "Vendored minified xterm canvas addon inside its bun dependency patch (`patches/@xterm%2Faddon-canvas@<version>.patch`). The addon's export prelude reads `t.FourKeyMap=t.TwoKeyMap=void 0`, and the generic-api-key rule takes `FourKeyMap=` as a key assignment and `t.TwoKeyMap=void` as its value. It is the published npm build of a public package, never a credential. Scoped to the exact matched text and the patch path so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^patches/@xterm%2Faddon-canvas@[0-9.]+\.patch$''']
+regexes = ['''^t\.TwoKeyMap=void$''']

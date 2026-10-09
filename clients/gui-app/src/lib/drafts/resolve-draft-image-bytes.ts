@@ -21,8 +21,8 @@
  * and answers `null` rather than throwing when none of them has the bytes. A
  * miss is an ordinary outcome here, not a fault: the caller's contract in every
  * case is to leave the node hash-only and let the HOST's dangling-hash guard be
- * the authority on whether that send may proceed. The client never refuses a
- * send because its own replica came up empty.
+ * the authority on whether that send may proceed. An unresolved hash is never
+ * reported as successfully inlined.
  *
  * This is deliberately NOT a reader for a SENT image. A sent image's bytes are
  * in the epic attachment store, which `useChatImageFetcher` /
@@ -99,8 +99,8 @@ async function readLocalDraftImageBytes(
  * Leg 2. Through `readDraftBlobsIntoLocalStore` rather than a bare
  * `drafts.readBlob` so this leg inherits the two behaviours that already make
  * that path safe: the host-withholds-blob-methods memo (an old host is never
- * re-probed per image), and the write-back into this window's partition, which
- * turns the next resolution of the same hash into a leg-1 hit.
+ * re-probed per image), and budget-admitted write-back into this window's
+ * partition. When it is full, verified bytes go only to the waiting caller.
  *
  * That helper already swallows its own transport failures and answers an empty
  * map, so there is nothing left here to catch.
@@ -130,7 +130,7 @@ async function readHostDraftImageBytes(
 
 // Leg 3 is `readCloudDraftImageBytes` from `cloud-draft-image-recovery.ts`: the
 // published `image-attachment` blob, read through whatever host this DEVICE
-// runs, digest-verified on the way into this window's partition. It is last
+// runs, digest-verified before use. It is last
 // because it is the only leg that leaves the device, and it answers `null` for
 // a hash no cloud draft has named - which keeps this module's contract
 // unchanged for every surface that never sees a replica.

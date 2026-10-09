@@ -1217,9 +1217,8 @@ function openSession(options: SessionOptions): Session {
     }
     // A close before the socket ever opened IS host-plane evidence: the
     // connection was refused, or something answered and hung up before the
-    // handshake. `refusalDetail` is null - `plan-restricted` is a remote
-    // entitlement verdict with a single provenance and cannot arise here.
-    evidence.reportDialRefusal(hostId, requestId, "local-ws", null);
+    // handshake.
+    evidence.reportDialRefusal(hostId, requestId, "local-ws");
   };
   // Flipped the instant the `request` frame is handed to `send`. Before this
   // point every transient failure is provably pre-send (the host never saw the

@@ -74,7 +74,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
@@ -114,6 +114,21 @@ const ALL_OVERVIEW_METHODS = [
   "host.update.install",
   "diagnostics.logs.tail",
 ] as const;
+
+/**
+ * The header's health line, which is the page's ONE statement of the running
+ * version (`version` in `HostIdentityCard`). Anchoring on it proves a render
+ * derived from the `host.status` reply is on screen, on every tab: the
+ * registry copy this suite's fixtures carry is `1.4.2`, so a `v1.5.0` here
+ * can only have come from the RPC.
+ */
+function healthLineText(): string {
+  const line = screen.getByTestId("host-identity-health").closest("div");
+  if (line === null) {
+    throw new Error("expected the health word inside the health line");
+  }
+  return line.textContent;
+}
 
 function scopeFrom(
   hostId: string,
@@ -198,8 +213,8 @@ function renderPanelPersistent(): { rerender: () => void } {
 }
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -221,7 +236,7 @@ function attemptOperation(
 }
 
 function statusWith(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -244,7 +259,7 @@ function statusWith(
 // carrying the whole signal, and that is exactly the shape this suite's
 // coarse-progress tests below exercise.
 function statusWithCoarseProgress(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   updateProgress: ResponseOfMethod<
     HostRpcRegistry,
     "host.status"
@@ -287,7 +302,7 @@ function floorCapableMinorFor(method: string): number {
 
 function statusWithBusy(
   hostVersion: string,
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   busy: boolean,
   busySessionCount: number,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
@@ -611,16 +626,10 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     // the absence is asserted only after a render derived from the status
     // reply is on screen. (The fixture's own call counter is bypassed by an
     // overridden handler, and a counted call proves the request, not the
-    // render.) T2's version card now ALSO states the running version, so the
-    // header's health line is no longer the only element carrying it -
-    // anchor on the version card's own testid instead of the ambiguous text.
-    // The version card leads Updates now, not the page's default (Installation)
-    // tab, so this reads there.
-    await selectHostOverviewTab("updates");
+    // render.) The header's health line is the page's one statement of the
+    // running version, and it shows on every tab, so it is read there.
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-version").textContent).toBe(
-        "v1.5.0-live",
-      );
+      expect(healthLineText()).toContain("v1.5.0-live");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();
@@ -698,7 +707,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
    * what holds it to that.
    */
   function statusRunning(
-    operation: HostStatusUpdateOperation,
+    operation: HostStatusUpdateOperationV2,
     hostVersion: string,
   ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
     return {
@@ -1133,7 +1142,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // The remedy sentence is the version card's own answer, on Updates; the
+    // The remedy sentence is the answer card's own answer, on Updates; the
     // operation card itself lives in the notices strip and is on screen on
     // every tab regardless.
     await selectHostOverviewTab("updates");
@@ -1201,10 +1210,10 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     const queryClient = renderPanel();
 
     await screen.findByTestId("host-overview-operation-card");
-    // T2's version card withholds its own answer sentence while an update is
-    // in flight (this park has neither a CLI-floor remedy nor activation
-    // debt to except it), so "This host is running the latest version." does
-    // not render here any more. The settled-render anchor is the check's
+    // The answer card withholds its own answer while an update is in flight
+    // (this park has neither a CLI-floor remedy nor activation debt to
+    // except it), and a current host's answer is quiet anyway, so no answer
+    // card renders here. The settled-render anchor is the check's
     // OWN answer landing in the cache — not merely REQUESTED
     // (`checkCalls > 0` can pass during the still-loading frame, before the
     // negative assertions below have anything to be negative ABOUT).
@@ -1271,7 +1280,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
-    // The failure line lands on the version card's own answer, on Updates;
+    // The failure line lands on the answer card's own answer, on Updates;
     // the force control that triggers it is the notices strip's operation
     // card, which is on screen on every tab regardless.
     await selectHostOverviewTab("updates");
@@ -1333,7 +1342,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
-    // The failure line lands on the version card's own answer, on Updates.
+    // The failure line lands on the answer card's own answer, on Updates.
     await selectHostOverviewTab("updates");
 
     fireEvent.click(
@@ -1378,12 +1387,11 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // Wait for a render derived from the status/installation reply before
     // asserting absence, exactly as the sibling "no coarse marker" test above
     // does - otherwise the assertion would pass vacuously during the loading
-    // frame. T2's version card now ALSO carries the running version, so
-    // "1.5.0" is no longer unique on screen - anchor on the version card's
-    // own testid instead. The version card leads Updates, not the page's
-    // default (Installation) tab.
-    await selectHostOverviewTab("updates");
-    await screen.findByTestId("host-overview-version");
+    // frame. The header's health line carries the running version the status
+    // reply reported (the registry copy is `1.4.2`), on every tab.
+    await waitFor(() => {
+      expect(healthLineText()).toContain("v1.5.0");
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
 
@@ -1458,8 +1466,8 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // this unusable-scope scenario — see the retained-bytes test above
     // (a genuine live-to-demoted transition on a scope that stays USABLE,
     // where the card is still on screen to show it) and the
-    // `deriveHostOverviewVersionTag`/`inFlightUpdateKind` retained-view cases
-    // in `host-overview-notices.test.tsx`.
+    // `inFlightUpdateKind` retained-view cases in
+    // `host-overview-notices.test.tsx`.
   });
 
   it("staged wait: an UNUSABLE scope keeps the sentence (qualified as retained) but withdraws Force update…", async () => {
@@ -1665,26 +1673,20 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
-    await selectHostOverviewTab("updates");
 
-    // Baseline: install matches the running rc.2 - no debt. T2's version
-    // card also carries the running version now, so anchor on its own
-    // testid rather than the no-longer-unique text.
+    // Baseline: install matches the running rc.2 - no debt. The header's
+    // health line states the running version.
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-version").textContent).toBe(
-        "v1.3.0-rc.2",
-      );
+      expect(healthLineText()).toContain("v1.3.0-rc.2");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // Advance past the 10s `host.status` poll: the host reports rc.3, and the
     // installation query re-keys onto a fresh, still-pending read. Anchor on
-    // the version card's own testid - the text is no longer unique on screen.
+    // the header's health line, which moves with the status reply.
     await vi.advanceTimersByTimeAsync(11_000);
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-version").textContent).toBe(
-        "v1.3.0-rc.3",
-      );
+      expect(healthLineText()).toContain("v1.3.0-rc.3");
     });
     // AT LEAST two, not exactly two: the installation query's own 10 s poll
     // and the status poll that re-keys it fire from the same tick, and their
@@ -2295,7 +2297,7 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
     // the remedy row is the observable that says the summary walk finished and
     // `updates.cliFloor` is populated, and until it is the card is legitimately
     // still showing the count. The remedy row and its "Show installation
-    // help" button are the version card's, on Updates.
+    // help" button are the answer card's, on Updates.
     await selectHostOverviewTab("updates");
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
@@ -2687,16 +2689,15 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
 // a completed/finalizing-record update is SETTINGS-ONLY. The landing banner
 // never renders that kind at all and never calls this hook (G9,
 // `host-update-banner-bound.test.tsx`), so there is no cross-surface contract
-// to pin here — this card owns the manual dismiss, the auto-collapse timer,
-// and its own write into `landingDismissedAttemptIds` for a success. That
-// store field stays failure-writable from landing too, but this card only
-// ever resolves an attempt id out of it for `complete`/`finalizing-record`,
-// never `failed`, which is what keeps a landing failure dismissal from
-// hiding a failure here.
-describe("HostOverviewOperationCard — success acknowledgement (Settings-only)", () => {
+// to pin for a success — this card owns the manual dismiss, the auto-collapse
+// timer, and its own write into `landingDismissedAttemptIds`. A FAILURE is
+// dismissible here as well, by hand only, through the same per-attempt list
+// the landing banner writes: one dismissal hides the failure on both
+// surfaces, and a newer attempt id arrives undismissed.
+describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", () => {
   const HOST_ID = "host-a";
 
-  function completeOperation(attemptId: string): HostStatusUpdateOperation {
+  function completeOperation(attemptId: string): HostStatusUpdateOperationV2 {
     return attemptOperation({
       attemptId,
       phase: "complete",
@@ -2825,12 +2826,11 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
     bindComplete("attempt-old-settings");
     renderPanel();
     // Wait for a render derived from the status reply before asserting
-    // absence, same as the sibling "no coarse marker" test above. T2's
-    // version card also carries the running version, so anchor on its own
-    // testid rather than the no-longer-unique text. The version card now
-    // leads the Updates tab, so visit it first.
-    await selectHostOverviewTab("updates");
-    await screen.findByTestId("host-overview-version");
+    // absence, same as the sibling "no coarse marker" test above: the
+    // header's health line carries the running version the reply reported.
+    await waitFor(() => {
+      expect(healthLineText()).toContain("v1.5.0");
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // A NEWER attempt id on the same host is not pre-dismissed.
@@ -2841,15 +2841,7 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
     await screen.findByTestId("host-overview-operation-card");
   });
 
-  it("a FAILED attempt already dismissed (by id) on the landing banner still renders on Settings, with no dismiss control offered there", async () => {
-    // Simulates a prior landing dismissal writing this attempt id into the
-    // SAME store field this card's success dismissal uses.
-    // `useHostUpdateCompletion` resolves an attempt id only for
-    // `complete`/`finalizing-record`, so a `failed` view is never suppressed
-    // by it regardless of what the store holds under this id.
-    useHostUpdateBannerStore
-      .getState()
-      .dismissLandingAttempt("attempt-failed-shared");
+  function bindFailed(attemptId: string): void {
     const fixture = buildOverviewHostFixture({
       hostId: HOST_ID,
       isLocalMachine: true,
@@ -2857,9 +2849,15 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
         "host.status": () =>
           statusWith(
             attemptOperation({
-              attemptId: "attempt-failed-shared",
-              phase: "downloading",
-              liveness: "interrupted",
+              attemptId,
+              phase: "failed",
+              execution: "terminal",
+              liveness: "terminal",
+              error: {
+                code: "verify-timeout",
+                message: "the host did not become healthy at that version",
+                phase: "verifying",
+              },
             }),
           ),
       },
@@ -2867,16 +2865,78 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
     recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+  }
+
+  it("a FAILED attempt offers a manual Dismiss, clicking it hides the card, and the dismissal is remembered by attempt id", async () => {
+    bindFailed("attempt-failed-dismiss");
     renderPanel();
 
     const card = await screen.findByTestId("host-overview-operation-card");
     expect(card.textContent).toMatch(/Update failed/);
-    expect(screen.queryByTestId("host-overview-operation-dismiss")).toBeNull();
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-failed-dismiss");
+  });
+
+  it("a FAILED attempt is never auto-collapsed — only the person dismisses it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bindFailed("attempt-failed-no-timer");
+      renderPanel();
+      await screen.findByTestId("host-overview-operation-card");
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS * 2,
+      );
+      expect(
+        screen.queryByTestId("host-overview-operation-card"),
+      ).not.toBeNull();
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).not.toContain("attempt-failed-no-timer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a FAILED attempt already dismissed (by id) on the landing banner is dismissed on Settings too, and a NEWER failed attempt id is not", async () => {
+    // A prior landing dismissal writes this attempt id into the SAME
+    // per-attempt list the Settings card consults, so the failure is hidden
+    // on both surfaces at once.
+    useHostUpdateBannerStore
+      .getState()
+      .dismissLandingAttempt("attempt-failed-shared");
+    bindFailed("attempt-failed-shared");
+    const queryClient = renderPanel();
+    await waitFor(() => {
+      expect(healthLineText()).toContain("v1.5.0");
+    });
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+
+    // Tear the first tree down for real (`QueryClient.unmount` would only
+    // detach the cache, leaving the panel mounted beside the next one).
+    cleanup();
+    hostBindingMock.current = null;
+    bindFailed("attempt-failed-newer");
+    renderPanel();
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Update failed/);
+    expect(
+      screen.queryByTestId("host-overview-operation-dismiss"),
+    ).not.toBeNull();
   });
 
   const NON_TERMINAL_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation;
+    readonly operation: HostStatusUpdateOperationV2;
   }> = [
     {
       name: "active (downloading)",
@@ -2920,7 +2980,7 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
   // lost its dismiss/timer, and a fresh dismissal stopped matching once the
   // kind changed and the card reappeared.
   describe("retained (stale) success — PR2069 regression", () => {
-    function bindDisconnectable(operation: HostStatusUpdateOperation): {
+    function bindDisconnectable(operation: HostStatusUpdateOperationV2): {
       readonly disconnect: () => void;
     } {
       const fixture = buildOverviewHostFixture({
@@ -3001,14 +3061,16 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
 
-    it("a FAILED attempt shows with no dismiss offered while reachable; once the scope goes unusable the offline notice replaces the card", async () => {
+    it("a FAILED attempt is dismissible while reachable; once the scope goes unusable the offline notice replaces the card and the dismissal holds", async () => {
       // A terminal `failed` phase: staleness retains the raw phase, so only
       // a phase that already IS "failed" retains as failed. T2's Status tab
       // withholds the update card entirely once the host can't be reached —
       // the offline notice is the tab's only unreachable wording then — so
       // the retained "Last seen: Update failed" sentence this pin used to
       // read off the card now lives there instead (with no phase clause:
-      // `LAST_SEEN_CLAUSE.failed === null`).
+      // `LAST_SEEN_CLAUSE.failed === null`). The dismiss is offered for the
+      // failure exactly as for a success, and a dismissal taken while
+      // reachable is not resurrected by the demotion to `unknown`.
       const { disconnect } = bindDisconnectable(
         attemptOperation({
           attemptId: "attempt-retained-failed",
@@ -3025,9 +3087,15 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
           screen.getByTestId("host-overview-operation-phase").textContent,
         ).toBe("Update failed");
       });
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
       expect(
-        screen.queryByTestId("host-overview-operation-dismiss"),
-      ).toBeNull();
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).toContain("attempt-retained-failed");
 
       disconnect();
       panel.rerender();

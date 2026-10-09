@@ -15,7 +15,7 @@ import { WorkspaceModeIcon } from "./workspace-mode-icon";
  * The path is where the chat actually runs — the adopted worktree for worktree
  * mode, the folder for local — not the source folder.
  *
- * Renders on the shared hover-preview card surface (`HoverPreviewCard`), so its
+ * Renders on the shared hover-preview card surface (`HoverCard`), so its
  * tones are the card's own foreground/muted pair, matching the composer's
  * @mention preview panel. A HoverCard (not a Tooltip) holds this content, so
  * the per-folder copy-path button is safe here — there is no visually-hidden

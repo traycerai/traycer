@@ -107,6 +107,37 @@ async function isRegularFile(path: string): Promise<boolean> {
 export async function resolveServiceCliInvocation(
   opts: ResolveCliInvocationOptions,
 ): Promise<CliInvocation> {
+  return resolveInvocation(opts, stagedSlotInvocation);
+}
+
+/**
+ * What {@link resolveServiceCliInvocation} would register, WITHOUT staging:
+ * wherever it would copy a binary into the well-known slot and register the
+ * slot, this answers the slot and copies nothing, probes nothing and spawns
+ * nothing. For a READ that plans against the registration a refresh would
+ * write - `host doctor`'s definition check, and a refresh deciding whether it
+ * has anything to write at all. Staging belongs to the write itself.
+ *
+ * It can differ from the resolution only where staging would fail or demote
+ * (a slot that cannot be written, or cannot execute): the read then sees a
+ * change the write turns out not to make, and the write resolves for real.
+ */
+export async function predictServiceCliInvocation(
+  opts: ResolveCliInvocationOptions,
+): Promise<CliInvocation> {
+  return resolveInvocation(opts, async (environment) => ({
+    command: wellKnownCliBinaryPath(environment),
+    args: [],
+  }));
+}
+
+async function resolveInvocation(
+  opts: ResolveCliInvocationOptions,
+  slotInvocation: (
+    environment: Environment,
+    binaryPath: string,
+  ) => Promise<CliInvocation>,
+): Promise<CliInvocation> {
   if (opts.override !== null) {
     if (!(await isRegularFile(opts.override))) {
       throw cliError({
@@ -185,7 +216,7 @@ export async function resolveServiceCliInvocation(
         exitCode: 1,
       });
     }
-    return stagedSlotInvocation(opts.environment, manifest.binaryPath);
+    return slotInvocation(opts.environment, manifest.binaryPath);
   }
 
   const conventionalBinary = wellKnownCliBinaryPath(opts.environment);
@@ -206,7 +237,7 @@ export async function resolveServiceCliInvocation(
   // is a no-op (`already-well-known`) when this process IS the slot, which
   // is the Desktop and host-daemon case.
   if (packaged) {
-    return stagedSlotInvocation(opts.environment, process.execPath);
+    return slotInvocation(opts.environment, process.execPath);
   }
 
   // Interpreter run with a slot already staged - the dev orchestrator's

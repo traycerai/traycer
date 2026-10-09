@@ -17,7 +17,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
   usePanelHeaderMenuOpen,
   usePanelHeaderMenuStore,
@@ -96,17 +95,11 @@ function GitDiffPanelMenuItems(props: { readonly epicId: string }): ReactNode {
 export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
   const menuOpen = usePanelHeaderMenuOpen(props.tabId, "git-diff", "more");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
-  const setPanelSectionCollapsed = useEpicLeftPanelStore(
-    (state) => state.setPanelSectionCollapsed,
-  );
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
-      if (open && props.collapsed) {
-        setPanelSectionCollapsed("git-diff", false);
-      }
       setMenuOpen(props.tabId, "git-diff", "more", open);
     },
-    [props.collapsed, props.tabId, setMenuOpen, setPanelSectionCollapsed],
+    [props.tabId, setMenuOpen],
   );
 
   return (

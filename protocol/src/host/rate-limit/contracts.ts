@@ -10,6 +10,7 @@ import {
   providersRefreshProfileStatusRequestSchema,
   providersRefreshProfileStatusResponseSchema,
   providersRefreshProfileStatusResponseSchemaV10,
+  providersRefreshProfileStatusResponseSchemaV20,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -135,6 +136,16 @@ export const providersRefreshProfileStatusV20 = defineRpcContract({
   method: "providers.refreshProfileStatus",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersRefreshProfileStatusRequestSchema,
+  // Frozen: the 1.5.0 tags shipped this line.
+  responseSchema: providersRefreshProfileStatusResponseSchemaV20,
+});
+
+// The LIVE line. The moment a tag ships `3`, freeze it against a snapshot
+// union and open `4`.
+export const providersRefreshProfileStatusV30 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
   responseSchema: providersRefreshProfileStatusResponseSchema,
 });
 
@@ -155,6 +166,71 @@ export const providersRefreshProfileStatusDowngradeV20ToV10 =
     typeof providersRefreshProfileStatusV10
   >({
     from: { major: 2, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // One provider per response: pass through or refuse. The message names
+      // no provider so it stays honest as the enum grows.
+      const parsed =
+        providersRefreshProfileStatusResponseSchemaV10.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED" as const,
+            message:
+              "Refreshing this provider's profile status requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersRefreshProfileStatusUpgradeV20ToV30 = defineUpgradePath<
+  typeof providersRefreshProfileStatusV20,
+  typeof providersRefreshProfileStatusV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  // Request shape identical; only the response's provider enum grows.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersRefreshProfileStatusDowngradeV30ToV20 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV30,
+    typeof providersRefreshProfileStatusV20
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // One provider per response: pass through or refuse. The message names
+      // no provider so it stays honest as the enum grows.
+      const parsed =
+        providersRefreshProfileStatusResponseSchemaV20.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED" as const,
+            message:
+              "Refreshing this provider's profile status requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV30ToV10 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV30,
+    typeof providersRefreshProfileStatusV10
+  >({
+    from: { major: 3, minor: 0 },
     to: { major: 1, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {

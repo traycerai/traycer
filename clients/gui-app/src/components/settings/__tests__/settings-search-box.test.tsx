@@ -213,13 +213,13 @@ describe("<SettingsSearch /> selection", () => {
 
   it("arms an anchored reveal for a row result", () => {
     render(<Harness />);
-    type("minimap side");
+    type("panel animations");
 
     fireEvent.keyDown(combobox(), { key: "Enter" });
 
     expect(useSettingsSearchStore.getState().pendingReveal).toMatchObject({
-      section: "layout",
-      anchor: "layout-minimap-side",
+      section: "appearance",
+      anchor: "appearance-panel-animations",
     });
   });
 });

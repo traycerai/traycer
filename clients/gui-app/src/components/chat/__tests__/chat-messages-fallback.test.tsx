@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement, ReactNode } from "react";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentSender,
@@ -60,6 +60,7 @@ import {
   type FallbackTraversalAnnouncement,
 } from "@/stores/chats/chat-announcements";
 import { ChatMessages } from "@/components/chat/chat-messages";
+import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import type {
   ChatMessage as ChatMessageModel,
   ProviderNoticeSegment,
@@ -80,6 +81,10 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import {
   installLegendListViewportMetrics,
   setLegendListScrollContainerScrollHeightOverride,
@@ -1038,6 +1043,18 @@ function createTestQueryClient(): QueryClient {
   });
 }
 
+/**
+ * `ChatMessages` takes the open-as-chat state from its owner (the chat tile).
+ * Real state here, not a stub: the tests that click a card's open-as-chat
+ * control need the view to actually open.
+ */
+function ChatMessagesWithDrillIn(
+  props: Omit<ComponentProps<typeof ChatMessages>, "subagentDrillIn">,
+): ReactElement {
+  const subagentDrillIn = useSubagentDrillIn(true);
+  return <ChatMessages {...props} subagentDrillIn={subagentDrillIn} />;
+}
+
 function chatScene(
   state: ChatRenderState,
   queryClient: QueryClient,
@@ -1050,7 +1067,7 @@ function chatScene(
         data-group-id="pane-int"
         style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
       >
-        <ChatMessages
+        <ChatMessagesWithDrillIn
           taskTitle="Fallback integration chat"
           taskId={CHAT_ID}
           epicId={EPIC_ID}
@@ -1353,10 +1370,10 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   beforeEach(() => {
     installLegendListViewportMetrics();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
-    useSettingsStore.setState({
-      chatTurnMinimapSide: "right",
-      quoteReplyEnabled: false,
-    });
+    // The minimap's side/shown live on the layout store now; the shipped
+    // default (right, shown) is what this file always wanted here.
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useSettingsStore.setState({ quoteReplyEnabled: false });
     runManualRungState.handler = () =>
       Promise.resolve({ outcome: "applied", detail: null });
     runManualRungState.callCount.current = 0;

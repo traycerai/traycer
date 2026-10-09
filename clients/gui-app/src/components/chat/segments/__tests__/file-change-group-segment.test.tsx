@@ -10,6 +10,8 @@ import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import type { FileChangeSegment as FileChangeSegmentModel } from "@/stores/composer/chat-store";
 import type { ChatRestoreSlot } from "@/stores/chats/chat-session-store";
 import { FileChangeGroupSegment } from "@/components/chat/segments/file-change-group-segment";
+import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 vi.mock("@/components/diff/diff-content-primitive", () => ({
   DiffContentFrame: (props: {
@@ -21,12 +23,14 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
     </div>
   ),
   DiffContentPrimitive: (props: {
+    readonly mode: string;
     readonly backgrounds: boolean;
     readonly lineNumbers: boolean;
     readonly indicatorStyle: string;
   }) => (
     <div
       data-testid="inline-diff"
+      data-mode={props.mode}
       data-backgrounds={String(props.backgrounds)}
       data-line-numbers={String(props.lineNumbers)}
       data-indicator-style={props.indicatorStyle}
@@ -226,6 +230,9 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    useSettingsStore.setState({
+      diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
+    });
   });
 
   it("enables Undo for the owner on the capturing host", async () => {
@@ -435,11 +442,38 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
     expect(stickyHeader.className).toContain("bg-background");
     expect(stickyHeader.className).not.toContain("backdrop-blur");
     const diff = screen.getByTestId("inline-diff");
+    // Backgrounds, line numbers and gutter marks follow the shared diff
+    // viewer preferences (default values here, since this test does not
+    // override the store); mode stays unified regardless.
     expect(diff.getAttribute("data-backgrounds")).toBe("true");
-    expect(diff.getAttribute("data-line-numbers")).toBe("false");
+    expect(diff.getAttribute("data-line-numbers")).toBe("true");
     expect(diff.getAttribute("data-indicator-style")).toBe("bars");
+    expect(diff.getAttribute("data-mode")).toBe("unified");
     expect(screen.getByTestId("inline-diff-frame").dataset.sizing).toBe(
       "content",
     );
+  });
+
+  it("threads custom diff viewer preferences into the expanded diff", () => {
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        lineNumbers: true,
+        backgrounds: false,
+        indicatorStyle: "classic",
+      },
+    });
+    renderGroup(baseInput(vi.fn(() => "action-1")));
+
+    fireEvent.click(screen.getByText("Changes"));
+    const fileHeader = screen.getByText("/repo/src/app.ts").closest("button");
+    if (fileHeader === null) throw new Error("Missing file-change row header");
+    fireEvent.click(fileHeader);
+
+    const diff = screen.getByTestId("inline-diff");
+    expect(diff.getAttribute("data-line-numbers")).toBe("true");
+    expect(diff.getAttribute("data-backgrounds")).toBe("false");
+    expect(diff.getAttribute("data-indicator-style")).toBe("classic");
+    expect(diff.getAttribute("data-mode")).toBe("unified");
   });
 });

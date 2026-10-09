@@ -10,11 +10,13 @@ import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 
 const TITLE = "Original title";
 
-function InlineRenameHarness() {
+function InlineRenameHarness(props: {
+  readonly onCommit: (next: string) => void;
+}) {
   const rename = useInlineRename({
     value: TITLE,
     canEdit: true,
-    onCommit: () => undefined,
+    onCommit: props.onCommit,
   });
 
   return (
@@ -73,7 +75,7 @@ describe("useInlineRename", () => {
     const focusSpy = vi.spyOn(HTMLInputElement.prototype, "focus");
     const selectSpy = vi.spyOn(HTMLInputElement.prototype, "select");
 
-    render(<InlineRenameHarness />);
+    render(<InlineRenameHarness onCommit={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
     const input = getRenameInput();
@@ -93,5 +95,23 @@ describe("useInlineRename", () => {
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe(TITLE.length);
+  });
+
+  it("leaves an IME's confirming Enter to the composition, then commits on a plain Enter", () => {
+    installAnimationFrameMock();
+    const onCommit = vi.fn();
+    render(<InlineRenameHarness onCommit={onCommit} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    const input = getRenameInput();
+    fireEvent.change(input, { target: { value: "日本" } });
+
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(getRenameInput()).toBe(input);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("日本");
   });
 });

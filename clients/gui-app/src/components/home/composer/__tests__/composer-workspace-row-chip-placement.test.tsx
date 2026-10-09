@@ -7,15 +7,20 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * The chat's bottom strip, rendered through the component the tile actually
- * mounts: `ChatDockWorkspaceControls` composes the picker and the chips, and
- * `ComposerWorkspaceRow` lays the two cells out.
+ * mounts.
  *
- * The order of those two children is the whole of the user-facing fix - chips
- * at the tail so the pickers keep their left edge whether or not a chip is
- * there - so it is asserted against the production component. Swapping them
- * there fails this suite.
+ * The chips are NOT here any more (A12, L-97). They stand above the composer
+ * at its left edge, inside `ChatLowerDock`, where the artifact draws them and
+ * where a chip is adjacent to the row it opens. What this suite pins is the
+ * negative half of that move: the workspace row is back to the two leaves it
+ * names, so a strip mounted beside the picker - the state the move corrects -
+ * fails it.
+ *
+ * The row's `overflow-hidden` is why the move matters beyond looks: it clipped
+ * anything a child overhung with, which is what sliced the per-region mark off
+ * the chips (C-04) before L-94 deleted that mark outright.
  */
-function renderRow(working: boolean) {
+function renderRow() {
   return render(
     <TooltipProvider delayDuration={0}>
       <ChatDockCompactStripProvider
@@ -24,14 +29,17 @@ function renderRow(working: boolean) {
             {
               section: "activeAgents",
               glyph: "activeAgents",
-              working,
+              hotspotRef: () => undefined,
+              working: false,
               text: "2",
               lineDeltas: null,
               label: "Active agents. 2 running.",
+              detail: "2 running",
               pulseToken: null,
             },
           ],
-          expanded: new Set(),
+          openSection: null,
+          panelId: "dock-panel-1",
           onToggle: vi.fn(),
         }}
       >
@@ -55,78 +63,21 @@ describe("composer workspace row chip placement", () => {
     cleanup();
   });
 
-  it("puts the compact strip last in the left cell, after the picker", () => {
-    renderRow(false);
+  it("keeps the picker alone in its cell, ahead of the context-usage cluster", () => {
+    renderRow();
 
     const picker = screen.getByTestId("picker-stub");
-    const strip = screen.getByTestId("chat-dock-compact-strip");
-    const cell = picker.parentElement;
-
-    expect(cell).not.toBeNull();
-    expect(strip.parentElement).toBe(cell);
-    expect(cell?.lastElementChild).toBe(strip);
-    expect(strip.previousElementSibling).toBe(picker);
-  });
-
-  it("keeps the left cell ahead of the context-usage cluster", () => {
-    renderRow(false);
-
-    const strip = screen.getByTestId("chat-dock-compact-strip");
     const usage = screen.getByTestId("usage-chip-stub");
 
+    // No compact strip anywhere in the row, and nothing shares the picker's
+    // cell, even with chips in context.
+    expect(screen.queryByTestId("chat-dock-compact-strip")).toBeNull();
+    expect(picker.parentElement?.childElementCount).toBe(1);
     expect(
-      strip.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING,
+      picker.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     // The usage cluster is a direct child of the grid row, not of the cell the
-    // chips live in - the pinned breakdown spans the row, so it has to be.
-    expect(usage.parentElement).toBe(strip.parentElement?.parentElement);
-  });
-
-  // A running chip is `[icon] N` at EVERY width. It used to print the word for
-  // its state too, folded away on a container query against this row, and the
-  // width that query measured was the whole of whether the word ever appeared.
-  // Nothing in the strip is width-conditional now, so the row's own width can
-  // no longer change what a chip says - which is the property worth pinning
-  // here, in the ancestor chain the two components form.
-  it("draws the running chip the same at every composer width", () => {
-    renderRow(true);
-
-    const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    expect(chip.textContent).toBe("2");
-    expect(chip.querySelector("[data-chip-working-word]")).toBeNull();
-    expect(chip.querySelector("[data-chip-glyph-shimmer]")).not.toBeNull();
-
-    const strip = screen.getByTestId("chat-dock-compact-strip");
-    for (const element of [strip, ...strip.querySelectorAll("*")]) {
-      expect(element.getAttribute("class") ?? "").not.toMatch(/@(min|max)-/);
-    }
-  });
-
-  // The chips exist only while the chat has something to say, so their cell
-  // must cost nothing when it has nothing: a null strip creates no flex item
-  // and therefore no phantom gap ahead of the picker.
-  it("renders no strip node at all with no chips", () => {
-    render(
-      <TooltipProvider delayDuration={0}>
-        <ChatDockCompactStripProvider
-          value={{ chips: [], expanded: new Set(), onToggle: vi.fn() }}
-        >
-          <ComposerWorkspaceRow
-            workspaceControls={
-              <ChatDockWorkspaceControls
-                hostWorkspaceSelector={
-                  <div data-testid="picker-stub">picker</div>
-                }
-                usageChip={<div data-testid="usage-chip-stub">usage</div>}
-              />
-            }
-          />
-        </ChatDockCompactStripProvider>
-      </TooltipProvider>,
-    );
-
-    expect(screen.queryByTestId("chat-dock-compact-strip")).toBeNull();
-    const picker = screen.getByTestId("picker-stub");
-    expect(picker.parentElement?.childElementCount).toBe(1);
+    // picker lives in - the pinned breakdown spans the row, so it has to be.
+    expect(usage.parentElement).toBe(picker.parentElement?.parentElement);
   });
 });

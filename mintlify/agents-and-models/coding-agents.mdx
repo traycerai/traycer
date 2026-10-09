@@ -1,78 +1,111 @@
 ---
 title: "Agents & Models"
-description: "Compare Traycer's supported coding-agent paths and where to configure them."
+description: "Compare Traycer's coding agents: interfaces, fast mode, profiles, steering, permission modes, and how each one connects."
 ---
 
-This page is the compatibility reference for Traycer's coding-agent paths and model selection.
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+This page is the compatibility reference for Traycer's coding agents and model selection.
 
 For the agent surface itself, including composer controls, permissions, attachments, voice input, and per-turn behavior, see [Agents](/panels/agents).
 
 ## Supported Coding Agents
 
-| Coding agent    | Chat interface | Terminal interface | Fast mode       | Setup                                |
-| --------------- | ---- | -------------- | --------------- | ------------------------------------ |
-| **Claude Code** | Yes  | Yes            | Model-dependent | Claude Code CLI/account              |
-| **Codex**       | Yes  | Yes            | Model-dependent | Codex CLI/account                    |
-| **OpenCode**    | Yes  | Yes            | Not supported   | OpenCode CLI/provider                |
-| **Traycer**     | Yes  | Not supported  | Not supported   | Traycer sign-in and credits          |
-| **Cursor**      | Yes  | Not supported  | Not supported   | Cursor API key                       |
-| **Grok**        | Yes  | Not supported  | Not supported   | Grok CLI/account or xAI API key      |
-| **Qwen Code**   | Yes  | Not supported  | Not supported   | Qwen Code CLI/provider               |
-| **Kiro**        | Yes  | Not supported  | Not supported   | Kiro CLI/account or API key          |
-| **Droid**       | Yes  | Not supported  | Not supported   | Factory Droid CLI/account or API key |
-| **Kimi**        | Yes  | Not supported  | Not supported   | Kimi CLI/account                     |
-| **Copilot**     | Yes  | Not supported  | Not supported   | GitHub Copilot CLI/account           |
-| **Kilo Code**   | Yes  | Not supported  | Not supported   | Kilo Code CLI/account or API key     |
-| **OpenRouter**  | Yes  | Not supported  | Not supported   | OpenRouter API key                   |
-| **Amp**         | Yes  | Not supported  | Not supported   | Amp CLI/account or API key           |
-| **Devin**       | Yes  | Not supported  | Not supported   | Devin CLI/account                    |
-| **Pi**          | Yes  | Not supported  | Not supported   | Pi CLI/provider credentials          |
-| **Hermes Agent** | Yes  | Not supported  | Not supported   | Hermes CLI/provider credentials      |
-| **Hugging Face** | Yes  | Not supported  | Not supported   | Hugging Face access token            |
-| **Oh My Pi**    | Yes  | Not supported  | Not supported   | Oh My Pi CLI/provider credentials    |
-| **Reasonix**    | Yes  | Not supported  | Not supported   | Reasonix CLI/provider API key        |
-| **Antigravity** | Yes  | Not supported  | Not supported   | Google sign-in or Gemini API key     |
+Traycer supports 22 coding agents. The first table shows what each one can do; the second shows how each one connects.
+
+| Coding agent          | Chat | Terminal | Fast mode       | Profiles | Steer mid-turn | Permission modes      |
+| --------------------- | ---- | -------- | --------------- | -------- | -------------- | --------------------- |
+| **Claude Code**       | Yes  | Yes      | Model-dependent | Yes      | Yes            | All                   |
+| **Codex**             | Yes  | Yes      | Model-dependent | Yes      | Yes            | All                   |
+| **OpenCode**          | Yes  | Yes      | No              | No       | Yes            | All                   |
+| **Traycer Inference** | Yes  | No       | No              | No       | Yes            | All                   |
+| **Cursor**            | Yes  | No       | Model-dependent | No       | No             | Full access only      |
+| **Grok**              | Yes  | No       | No              | Yes      | Yes            | All                   |
+| **Qwen Code**         | Yes  | No       | No              | No       | Yes            | All                   |
+| **Kiro**              | Yes  | No       | No              | No       | Yes            | All                   |
+| **Droid**             | Yes  | No       | No              | No       | No             | All                   |
+| **Kimi**              | Yes  | No       | No              | No       | No             | All                   |
+| **Copilot**           | Yes  | No       | No              | No       | Yes            | All                   |
+| **Kilo Code**         | Yes  | No       | No              | No       | No             | All                   |
+| **OpenRouter**        | Yes  | No       | No              | No       | Yes            | All                   |
+| **Amp**               | Yes  | No       | No              | No       | No             | Full access only      |
+| **Devin**             | Yes  | No       | No              | No       | No             | All except Supervised |
+| **Pi**                | Yes  | No       | No              | No       | Yes            | All                   |
+| **Hermes Agent**      | Yes  | No       | No              | No       | Yes            | All except Supervised |
+| **Oh My Pi**          | Yes  | No       | No              | No       | Yes            | All                   |
+| **Hugging Face**      | Yes  | No       | No              | No       | Yes            | All                   |
+| **Reasonix**          | Yes  | No       | No              | No       | Yes            | All                   |
+| **Antigravity**       | Yes  | No       | No              | Yes      | No             | All                   |
+| **Command Code**      | Yes  | No       | No              | No       | No             | All                   |
 
 <Info>
-  **Chat interface** means the coding agent can back an agent on the Chat
-  interface. **Terminal interface** means it can also back one on the Terminal
-  interface.
-  A provider using a CLI behind its Chat integration does not automatically
-  make it available on the Terminal interface.
+  - **Chat** and **Terminal** say which [interface](/concepts/terminal-agents-vs-terminals) the coding agent can back. A coding agent that uses a CLI behind its Chat integration is not automatically available on the Terminal interface.
+  - **Fast mode** appears only when the selected model offers a fast tier.
+  - **Profiles** means you can add more than one account for that coding agent. See [Managed Profiles](/settings/providers#managed-profiles).
+  - **Steer mid-turn** means a message can go into the running turn. For the others, a steered message waits for the next turn. See [Message queue](/panels/agents/message-queue).
+  - **Permission modes** lists which of the four [permission modes](/panels/agents#permissions) the coding agent accepts. The ones it can't honor are disabled in the composer's permission picker.
 </Info>
+
+| Coding agent          | Turned on             | CLI                                      | How you connect                                                      | Settings tabs beyond the common ones                |
+| --------------------- | --------------------- | ---------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
+| **Claude Code**       | By default            | Managed by Traycer                       | Browser sign-in; paste the code if the browser can't finish          | Profiles & Limits, MCP, Plugins, Skills             |
+| **Codex**             | By default            | Managed by Traycer                       | Sign-in code                                                         | Profiles & Limits, MCP, Plugins, Skills             |
+| **OpenCode**          | After credential check | Managed by Traycer                       | Sign in from a terminal, or connect providers in **Model Providers** | Usage limits, Model Providers, MCP, Plugins, Skills |
+| **Traycer Inference** | By you only           | Managed by Traycer                       | Your Traycer account; uses Traycer credits                           | Usage limits, MCP, Plugins, Skills                  |
+| **Cursor**            | After credential check | Not needed for chat                      | Cursor API key                                                       | Account, Usage limits, MCP, Plugins, Skills         |
+| **Grok**              | After credential check | Managed by Traycer                       | Sign-in code, or `XAI_API_KEY`                                       | Profiles & Limits, MCP, Plugins, Skills             |
+| **Qwen Code**         | After credential check | Managed by Traycer                       | Sign in from a terminal (type `/auth`)                               | MCP, Plugins, Skills                                |
+| **Kiro**              | After credential check | Managed by Traycer                       | Sign in from a terminal, or an API key                               | Account, MCP, Skills                                |
+| **Droid**             | After credential check | Managed by Traycer                       | Sign in from a terminal, or a Factory API key                        | Account, MCP, Plugins, Skills                       |
+| **Kimi**              | After credential check | Managed by Traycer                       | Sign-in link                                                         | MCP, Plugins, Skills                                |
+| **Copilot**           | After credential check | Managed by Traycer                       | Sign in from a terminal, or `GH_TOKEN`                               | MCP, Plugins, Skills                                |
+| **Kilo Code**         | After credential check | Managed by Traycer                       | Sign in from a terminal, or `KILO_API_KEY`                           | Usage limits, MCP, Plugins, Skills                  |
+| **OpenRouter**        | After credential check | Managed by Traycer                       | OpenRouter API key                                                   | Account, Usage limits, MCP, Plugins, Skills         |
+| **Amp**               | After credential check | You install it                           | Sign in from a terminal, or an Amp API key                           | Account, MCP, Plugins, Skills                       |
+| **Devin**             | After credential check | Managed by Traycer                       | Browser sign-in, or `WINDSURF_API_KEY`                               | None                                                |
+| **Pi**                | After credential check | Managed by Traycer                       | Your model provider's API key, set in **Env**                        | None                                                |
+| **Hermes Agent**      | After credential check | You install it                           | **Set up in terminal** (runs `hermes setup model`)                   | MCP (view only)                                     |
+| **Oh My Pi**          | After credential check | Managed by Traycer                       | Sign in from a terminal (type `login <provider>`)                    | MCP                                                 |
+| **Hugging Face**      | After credential check | Managed by Traycer                       | Hugging Face token                                                   | Account, Usage limits, MCP, Plugins, Skills         |
+| **Reasonix**          | After credential check | Managed by Traycer                       | **Set up in terminal** (runs `reasonix setup`)                       | None                                                |
+| **Antigravity**       | After credential check | Managed by Traycer, except on Intel Macs | Google account sign-in, or a Gemini API key                          | Profiles & Limits                                   |
+| **Command Code**      | After credential check | You install it                           | Sign in from a terminal (runs `cmd login`)                           | None                                                |
+
+- **Turned on.** Claude Code and Codex start enabled; Traycer Inference is opt-in. Other providers can turn on at host startup after credential verification, unless you have already chosen their setting. See [Turn A Provider On Or Off](/settings/providers#turn-a-provider-on-or-off).
+- **CLI.** Traycer downloads and updates the CLIs it manages; see [CLI Binary And Arguments](/settings/providers#cli-binary-and-arguments). Install the Amp, Hermes Agent, and Command Code CLIs yourself. Command Code installs with `npm i -g command-code`; its command is `cmd`, or `cmdc` on Windows. Antigravity has no Intel Mac build, so on an Intel Mac install the Antigravity IDE to get its agent server.
+- **Settings tabs.** Every provider also has **CLI & Args**, **Env**, and **Permissions**. What each tab holds is in [Provider Tabs](/settings/providers#provider-tabs).
 
 ## Models
 
-Traycer loads models from the selected coding agent and provider profile at runtime. The available list can vary with your installed CLI version, account, provider configuration, and model access, so Traycer does not maintain a fixed model list in these docs.
+Traycer loads models from the selected coding agent and provider profile at runtime. The list can vary with your installed CLI version, account, provider configuration, and model access, so these docs don't keep a fixed model list.
 
-In the composer:
+In the composer's model picker:
 
-- Select a coding agent and provider profile first.
-- The model picker shows the models currently available for that selection.
-- Thinking effort appears only when the selected model exposes supported reasoning levels.
-- Fast mode appears only when the selected Claude Code or Codex model exposes a fast tier.
+- Choose a coding agent in the rail, then a model. ⌘1–9 / Ctrl+1–9 switches the coding agent while the picker is open. ↑/↓, Home/End, Enter, and Esc also work.
+- A coding agent with two or more profiles shows a profile dropdown. ⌘⇧1–9 / Ctrl+Shift+1–9 switches profile.
+- Thinking effort appears only when the selected model supports reasoning levels. ⌥1–9 / Alt+1–9 sets it.
+- Fast mode appears only when the selected Claude Code, Codex, or Cursor model has a fast tier. ⌥0 / Alt+0 toggles it.
+- Models that are being retired carry a **Deprecated** badge.
+- **Refresh providers & models** reloads the list, and **Provider CLI settings** opens [Providers](/settings/providers).
+- ⌃⌥M / Alt+Shift+M opens and closes the picker.
 
-Using the **Traycer** provider consumes Traycer credits. Other coding agents use their own account, API, or provider billing; see [Pricing](/account/pricing).
+Only coding agents that are turned on appear in the picker.
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Choose a coding agent and model">
-  <source src="https://assets.traycer.ai/docs/videos/composer-model-picker.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+- **Needs sign-in.** A coding agent that is signed out or missing its API key stays in the rail, dimmed. Select it to see **Not authenticated** and the fix: **Sign in from a terminal**, **Set up in terminal**, or **Add API key**, depending on the agent.
+- **Still downloading.** While Traycer downloads a coding agent's CLI, its rail entry shows the progress, for example "Preparing Grok… 40%". If Traycer has no other copy of that CLI to run, you can pick it once the download finishes.
+
+**Traycer Inference** uses Traycer credits. Other coding agents use their own account, API, or provider billing; see [Pricing](/account/pricing).
+
+When a coding agent hits a usage limit, Traycer can offer another profile or switch models for you. See [Usage limits and model routing](/agents-and-models/usage-limits-and-routing) and [Model routing](/settings/model-routing).
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/composer-model-picker.mp4" label="Choose a coding agent and model" />
 
 ## Provider Setup
 
-Configure provider credentials, environment variables, CLI paths, profiles, and default Terminal interface CLI arguments in [Settings > Providers](/settings/providers). Disabled or unavailable providers do not appear as runnable options until their setup is complete.
+Configure credentials, environment variables, CLI binaries, profiles, and default Terminal interface CLI arguments in [Settings > Providers](/settings/providers).
 
-Claude Code, Codex, Grok, and Antigravity support multiple managed profiles.
-Grok profiles use separate `GROK_HOME` directories, so each profile keeps its
-OAuth account, configuration, and sessions isolated. New profiles start with an empty private
-store: ambient configuration, MCP credentials, plugins, skills, memory, and
-sessions are not copied automatically. Ambient xAI API keys and external-auth
-commands are not inherited by managed Grok profiles.
+Claude Code, Codex, Grok, and Antigravity support multiple managed profiles. What a profile shares with your default login, and how Grok keeps its profiles separate, is in [Managed Profiles](/settings/providers#managed-profiles).
 
-Open the coding-agent picker in the composer, then choose the profile row to switch accounts for the next turn.
+To switch accounts for the next turn, open the model picker and choose a profile from the profile dropdown.
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Switch provider profiles">
-  <source src="https://assets.traycer.ai/docs/videos/profile-switch.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/profile-switch.mp4" label="Switch provider profiles" />

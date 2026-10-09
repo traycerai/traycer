@@ -114,6 +114,24 @@ function terminalLoginCapableState(
   };
 }
 
+// A runnable candidate, so `providerHostBlock` reads null and the CTA's
+// button/placement is decided by the SURFACE/capability facts these tests
+// are actually about, not by whether the CLI is even on this host.
+function withRunnableCandidate(state: ProviderCliState): ProviderCliState {
+  return {
+    ...state,
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/resources/providers/" + state.providerId,
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+  };
+}
+
 function catalogErrorFor(message: string): HostRpcError {
   return new HostRpcError({
     code: "RPC_ERROR",
@@ -355,7 +373,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
           modelsError: catalogErrorFor(providerSignedOutMessage("droid")),
         }),
         activeProviderState: {
-          ...terminalLoginCapableState("droid", []),
+          ...withRunnableCandidate(terminalLoginCapableState("droid", [])),
           apiKey: { supported: true, configured: false, source: null },
           loginCapability: {
             oauthArgs: null,
@@ -402,7 +420,9 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
-        activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
+        activeProviderState: withRunnableCandidate(
+          terminalLoginCapableState("reasonix", ["setup"]),
+        ),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
         terminalLoginSurface: null,
@@ -567,7 +587,9 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
-        activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
+        activeProviderState: withRunnableCandidate(
+          terminalLoginCapableState("reasonix", ["setup"]),
+        ),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
         terminalLoginSurface: {
@@ -615,7 +637,9 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
-        activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
+        activeProviderState: withRunnableCandidate(
+          terminalLoginCapableState("reasonix", ["setup"]),
+        ),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
         terminalLoginSurface: { kind: "landing", resolveLandingPageId },
@@ -658,7 +682,9 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
-        activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
+        activeProviderState: withRunnableCandidate(
+          terminalLoginCapableState("reasonix", ["setup"]),
+        ),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
         terminalLoginSurface: null,
@@ -690,7 +716,9 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
-        activeProviderState: terminalLoginCapableState("copilot", ["login"]),
+        activeProviderState: withRunnableCandidate(
+          terminalLoginCapableState("copilot", ["login"]),
+        ),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
         terminalLoginSurface: {

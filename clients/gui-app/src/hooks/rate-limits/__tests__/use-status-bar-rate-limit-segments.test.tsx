@@ -18,9 +18,9 @@ import type {
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 
 interface MockQueryResult {
   readonly data: ProviderRateLimitEnvelope | undefined;
@@ -112,6 +112,7 @@ import {
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-workspace-scene";
 
 const PROFILE_SELECTION: RateLimitProfileSelection = {
   shownProfiles: {},
@@ -119,12 +120,13 @@ const PROFILE_SELECTION: RateLimitProfileSelection = {
 };
 
 function renderSegments(providers: ReadonlyArray<ConfiguredRateLimitProvider>) {
-  return renderSegmentsFor(providers, PROFILE_SELECTION);
+  return renderSegmentsFor(providers, PROFILE_SELECTION, false);
 }
 
 function renderSegmentsFor(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
   profileSelection: RateLimitProfileSelection,
+  sample: boolean,
 ) {
   return renderHook(() => {
     // The batches describe ONE render. The hook samples the clock through
@@ -136,8 +138,17 @@ function renderSegmentsFor(
       providers,
       profileSelection,
       mode: "live",
+      editing: false,
+      sample,
     });
   });
+}
+
+function renderSampleSegments(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+  profileSelection: RateLimitProfileSelection,
+) {
+  return renderSegmentsFor(providers, profileSelection, true);
 }
 
 function profileFixture(
@@ -375,29 +386,23 @@ beforeEach(() => {
   mocks.results = new Map();
   mocks.batches = [];
   mocks.windowedProviders = [];
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 describe("useStatusBarRateLimitSegments", () => {
   describe("per-provider limit selection", () => {
     function codexSelection(selection: {
-      readonly automatic: boolean;
       readonly limitKeys: ReadonlyArray<string>;
     }): void {
-      useLayoutStore.setState({
-        statusBar: {
-          ...DEFAULT_STATUS_BAR_LAYOUT,
-          rateLimits: {
-            ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-            providers: { codex: selection },
-          },
-        },
+      useLayoutStore.getState().setArrangement({
+        ...useLayoutStore.getState().arrangement,
+        providerLimits: { codex: selection },
       });
     }
 
@@ -441,8 +446,8 @@ describe("useStatusBarRateLimitSegments", () => {
       expect(segment.tightest?.windowKey).toBe("codex:primary");
     });
 
-    it("shows the explicit picks alone when automatic is off, judged by the tightest of THOSE", () => {
-      codexSelection({ automatic: false, limitKeys: ["codex:secondary"] });
+    it("shows the explicit picks alone when there are any, judged by the tightest of THOSE", () => {
+      codexSelection({ limitKeys: ["codex:secondary"] });
 
       const { result } = renderSegments([
         configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
@@ -453,8 +458,14 @@ describe("useStatusBarRateLimitSegments", () => {
       expect(segment.tightest?.windowKey).toBe("codex:secondary");
     });
 
-    it("unions automatic with an explicit pick, in catalog order rather than pick order", () => {
-      codexSelection({ automatic: true, limitKeys: ["codex:secondary"] });
+    // The two cases this used to cover - a union of the automatic entry with a
+    // pick, and the tightest being drawn once when it is also picked - were
+    // both about a selection that said `automatic: true` AND named a window.
+    // That selection no longer exists: an empty pick list IS Automatic
+    // (R1-15), so there is one list to draw and no union to de-duplicate. What
+    // survives of the pair is the ORDER claim, which is the filter's own.
+    it("draws explicit picks in catalog order rather than pick order", () => {
+      codexSelection({ limitKeys: ["codex:secondary", "codex:primary"] });
 
       const { result } = renderSegments([
         configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
@@ -466,21 +477,8 @@ describe("useStatusBarRateLimitSegments", () => {
       ]);
     });
 
-    // The automatic entry and an explicit pick can name the same window; the
-    // strip draws it once.
-    it("draws the tightest once when it is also picked explicitly", () => {
-      codexSelection({ automatic: true, limitKeys: ["codex:primary"] });
-
-      const { result } = renderSegments([
-        configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
-      ]);
-
-      expect(windowKeys(codexSegment(result).shown)).toEqual(["codex:primary"]);
-    });
-
     it("ignores a pick the provider is not reporting while another pick is live", () => {
       codexSelection({
-        automatic: false,
         limitKeys: ["codex:extra:gone:primary", "codex:secondary"],
       });
 
@@ -495,9 +493,8 @@ describe("useStatusBarRateLimitSegments", () => {
 
     // A provider whose every pick has gone stale is still judged rather than
     // vanishing from the strip with nothing in Settings saying why.
-    it("falls back to the tightest when no pick is live and automatic is off", () => {
+    it("falls back to the tightest when no pick is live", () => {
       codexSelection({
-        automatic: false,
         limitKeys: ["codex:extra:gone:primary"],
       });
 
@@ -541,14 +538,9 @@ describe("useStatusBarRateLimitSegments", () => {
       ),
       isError: false,
     });
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-          hiddenProviders: ["codex"],
-        },
-      },
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      hiddenProviders: ["codex"],
     });
 
     const { result } = renderSegments([
@@ -815,10 +807,14 @@ describe("useStatusBarRateLimitSegments", () => {
       mocks.results.set("codex:", codexReading(10));
       mocks.results.set("codex:personal", codexReading(40));
 
-      const { result } = renderSegmentsFor([codexWithAccounts()], {
-        shownProfiles: { codex: [null, "work"] },
-        lastProfileByHarness: {},
-      });
+      const { result } = renderSegmentsFor(
+        [codexWithAccounts()],
+        {
+          shownProfiles: { codex: [null, "work"] },
+          lastProfileByHarness: {},
+        },
+        false,
+      );
 
       expect(segmentIdentities(result.current.cluster)).toEqual([
         ["codex", "work"],
@@ -854,19 +850,27 @@ describe("useStatusBarRateLimitSegments", () => {
     it("draws one last-used segment when nothing is checked, and skips a checked id that no longer exists", () => {
       mocks.results.set("codex:personal", codexReading(40));
 
-      const nothingChecked = renderSegmentsFor([codexWithAccounts()], {
-        shownProfiles: {},
-        lastProfileByHarness: { codex: "personal" },
-      });
+      const nothingChecked = renderSegmentsFor(
+        [codexWithAccounts()],
+        {
+          shownProfiles: {},
+          lastProfileByHarness: { codex: "personal" },
+        },
+        false,
+      );
       expect(segmentIdentities(nothingChecked.result.current.cluster)).toEqual([
         ["codex", "personal"],
       ]);
       nothingChecked.unmount();
 
-      const stale = renderSegmentsFor([codexWithAccounts()], {
-        shownProfiles: { codex: ["removed", "personal"] },
-        lastProfileByHarness: {},
-      });
+      const stale = renderSegmentsFor(
+        [codexWithAccounts()],
+        {
+          shownProfiles: { codex: ["removed", "personal"] },
+          lastProfileByHarness: {},
+        },
+        false,
+      );
       expect(segmentIdentities(stale.result.current.cluster)).toEqual([
         ["codex", "personal"],
       ]);
@@ -883,6 +887,7 @@ describe("useStatusBarRateLimitSegments", () => {
           }),
         ],
         { shownProfiles: { codex: ["work"] }, lastProfileByHarness: {} },
+        false,
       );
       const segments =
         result.current.cluster.kind === "segments"
@@ -923,10 +928,14 @@ describe("useStatusBarRateLimitSegments", () => {
       mocks.results.set("opencode:first", reading);
       mocks.results.set("opencode:second", reading);
 
-      const { result } = renderSegmentsFor([provider], {
-        shownProfiles: { opencode: ["first", "second"] },
-        lastProfileByHarness: {},
-      });
+      const { result } = renderSegmentsFor(
+        [provider],
+        {
+          shownProfiles: { opencode: ["first", "second"] },
+          lastProfileByHarness: {},
+        },
+        false,
+      );
 
       // The split happened: one target per http batch.
       expect(
@@ -958,6 +967,8 @@ describe("useStatusBarRateLimitSegments", () => {
             providers: [codexWithAccounts()],
             profileSelection: props.selection,
             mode: "live",
+            editing: false,
+            sample: false,
           }),
         { initialProps: { selection: hostA } },
       );
@@ -1327,14 +1338,9 @@ describe("useStatusBarRateLimitSegments", () => {
         ),
         isError: false,
       });
-      useLayoutStore.setState({
-        statusBar: {
-          ...DEFAULT_STATUS_BAR_LAYOUT,
-          rateLimits: {
-            ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-            hiddenProviders: ["codex"],
-          },
-        },
+      useLayoutStore.getState().setArrangement({
+        ...useLayoutStore.getState().arrangement,
+        hiddenProviders: ["codex"],
       });
 
       const { result } = renderSegments([
@@ -1412,5 +1418,172 @@ describe("useStatusBarWindowedProviders", () => {
       "codex",
       "claude-code",
     ]);
+  });
+});
+
+describe("useStatusBarRateLimitSegments - sample scene", () => {
+  function claudeSegment(result: {
+    readonly current: { readonly cluster: StatusBarRateLimitCluster };
+  }) {
+    const cluster = result.current.cluster;
+    if (cluster.kind !== "segments") throw new Error(cluster.kind);
+    return cluster.segments[0];
+  }
+
+  function windowKeys(
+    windows: ReadonlyArray<{ readonly windowKey: string }>,
+  ): ReadonlyArray<string> {
+    return windows.map((window) => window.windowKey);
+  }
+
+  function claudeSelection(limitKeys: ReadonlyArray<string>): void {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      providerLimits: { "claude-code": { limitKeys } },
+    });
+  }
+
+  it.each<{ readonly name: string; readonly picks: ReadonlyArray<string> }>([
+    {
+      name: "a weekly key",
+      picks: ["claude-code:sevenDay"],
+    },
+    {
+      name: "two windows",
+      picks: ["claude-code:fiveHour", "claude-code:sevenDayOpus"],
+    },
+  ])(
+    "shows exactly the picked windows, under the keys it picked, when the selection names $name",
+    ({ picks }) => {
+      claudeSelection(picks);
+
+      const { result } = renderSampleSegments(
+        [
+          configuredProvider({
+            providerId: "claude-code",
+            lane: "ephemeralProcess",
+          }),
+        ],
+        PROFILE_SELECTION,
+      );
+
+      expect(windowKeys(claudeSegment(result).shown)).toEqual(picks);
+    },
+  );
+
+  it("falls back to the tightest sample window when the selection is Automatic", () => {
+    const { result } = renderSampleSegments(
+      [
+        configuredProvider({
+          providerId: "claude-code",
+          lane: "ephemeralProcess",
+        }),
+      ],
+      PROFILE_SELECTION,
+    );
+
+    // The first segment reads sample slots 0-3 (35%, 78%, 84%, 35%), so the
+    // Opus window at 84% is the one the sample scene makes tightest.
+    expect(windowKeys(claudeSegment(result).shown)).toEqual([
+      "claude-code:sevenDayOpus",
+    ]);
+  });
+
+  it("relabels a real account to the sample label", () => {
+    const selection: RateLimitProfileSelection = {
+      shownProfiles: { codex: ["personal"] },
+      lastProfileByHarness: {},
+    };
+
+    const { result } = renderSampleSegments([codexWithAccounts()], selection);
+
+    const cluster = result.current.cluster;
+    if (cluster.kind !== "segments") throw new Error(cluster.kind);
+    expect(cluster.segments[0]?.profileId).toBe("personal");
+    expect(cluster.segments[0]?.account).toMatchObject({
+      profileId: "personal",
+      label: SAMPLE_ACCOUNT_LABEL,
+    });
+  });
+
+  it("draws no segment for a provider with no sample windows, never its real reading or account", () => {
+    setResult("antigravity", {
+      data: freshEnvelope({
+        provider: "antigravity",
+        available: true,
+        planName: "Google AI Pro",
+        groups: [
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              {
+                usedPercent: 91,
+                resetsAt: Date.now() + 3_600_000,
+                durationMinutes: 300,
+                bucketId: "gemini-5h",
+                windowKind: "5h",
+              },
+            ],
+          },
+        ],
+      }),
+      isError: false,
+    });
+    const selection: RateLimitProfileSelection = {
+      shownProfiles: { antigravity: ["real-account"] },
+      lastProfileByHarness: {},
+    };
+
+    const { result } = renderSampleSegments(
+      [
+        configuredProvider({
+          providerId: "claude-code",
+          lane: "ephemeralProcess",
+        }),
+        configuredProvider({
+          providerId: "antigravity",
+          lane: "httpFetch",
+          profiles: [
+            profileFixture("ambient", "ambient"),
+            profileFixture("real-account", "managed"),
+          ],
+        }),
+      ],
+      selection,
+    );
+
+    expect(segmentIdentities(result.current.cluster)).toEqual([
+      ["claude-code", null],
+    ]);
+  });
+
+  it("reports live even when the query behind it is cold", () => {
+    const { result } = renderSampleSegments(
+      [
+        configuredProvider({
+          providerId: "claude-code",
+          lane: "ephemeralProcess",
+        }),
+      ],
+      PROFILE_SELECTION,
+    );
+
+    const segment = claudeSegment(result);
+    expect(segment.state).toBe("live");
+    expect(segment.reason).toBeNull();
+  });
+
+  it("leaves a cold provider cold when the sample scene is off", () => {
+    const { result } = renderSegments([
+      configuredProvider({
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+      }),
+    ]);
+
+    const segment = claudeSegment(result);
+    expect(segment.state).toBe("cold");
+    expect(segment.windows).toEqual([]);
   });
 });

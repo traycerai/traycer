@@ -9,6 +9,7 @@ import {
   guiHarnessIdSchemaV60,
   guiHarnessIdSchemaV70,
   guiHarnessIdSchemaV80,
+  guiHarnessIdSchemaV90,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -571,14 +572,16 @@ export type ListGuiHarnessesResponseV80 = z.infer<
 // `responseGrowthProjectionGated` in the registry and the host filters the mode
 // out of what it serves a 9.0 peer. Nothing here degrades that automatically.
 //
-// The id enum stays LIVE here, unlike 8.0's pin: 9.0 is the line Antigravity
-// rides, so narrowing it would undo the very addition that opened this major.
+// The id enum was LIVE here until `1.5.0` shipped major 9: 9.0 is the line
+// Antigravity rides, so it tracked the enum that carried it. It is pinned to
+// `guiHarnessIdSchemaV90` now - the twenty-one ids that release shipped - and
+// major 10 carries the ids added since.
 //
-// Do NOT add fields or modes here; add them to `guiHarnessOptionSchema` above,
-// which only the head line (9.2 today) binds.
+// Do NOT add fields, modes or ids here; add them to `guiHarnessOptionSchema`
+// above, which only the head line (10.0 today) binds.
 export const guiHarnessOptionSchemaV90 = lazySchema(() =>
   z.object({
-    id: guiHarnessIdSchema,
+    id: guiHarnessIdSchemaV90,
     ...guiHarnessOptionBaseShapeV71,
   }),
 );
@@ -603,13 +606,14 @@ export type ListGuiHarnessesResponseV90 = z.infer<
 // a derived row keeps reading every live leaf, which is the half-freeze the V70
 // note describes. The enums it reaches (the id, the permission modes, the
 // unavailable reason, the auth status) are the same objects 9.1 bound before
-// the freeze, which is exactly what 9.1 shipped.
+// the freeze, which is exactly what 9.1 shipped - except the id, which is
+// pinned to `guiHarnessIdSchemaV90` since `1.5.0` shipped major 9.
 //
-// Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
-// only 9.2 (the head line) binds.
+// Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
+// which only the head line (10.0 today) binds.
 export const guiHarnessOptionSchemaV91 = lazySchema(() =>
   z.object({
-    id: guiHarnessIdSchema,
+    id: guiHarnessIdSchemaV90,
     label: z.string(),
     enabled: z.boolean().default(true),
     available: z.boolean(),
@@ -636,6 +640,50 @@ export const listGuiHarnessesResponseSchemaV91 = lazySchema(() =>
 );
 export type ListGuiHarnessesResponseV91 = z.infer<
   typeof listGuiHarnessesResponseSchemaV91
+>;
+
+// ── Frozen protocol-v9.2 catalog row + response (pre-Command Code) ─────────
+// 9.2 is the `judgeDefaultModel` line and the last minor of major 9. `1.5.0`
+// shipped it, so it stops binding the live row here and major 10 opens above
+// it for the harness ids added since.
+//
+// A field-for-field hand copy of the live row at the cut, in the live key
+// order, for the reason 9.1's copy is one: a derived row keeps reading every
+// live leaf. The id is `guiHarnessIdSchemaV90`, shared by all three minors -
+// no minor of a major may grow a response enum over its predecessor.
+//
+// Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
+// which only 10.0 (the head line) binds.
+export const guiHarnessOptionSchemaV92 = lazySchema(() =>
+  z.object({
+    id: guiHarnessIdSchemaV90,
+    label: z.string(),
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    unavailableReason: guiHarnessUnavailableReasonSchema
+      .nullable()
+      .optional()
+      .catch("other"),
+    modes: z.array(harnessSurfaceSchema),
+    requiresApiKey: z.boolean(),
+    supportedPermissionModes: z
+      .array(permissionModeSchema)
+      .default([...ALL_PERMISSION_MODES]),
+    nativeAutoJudge: z.boolean().default(false),
+    judgeDefaultModel: z.string().nullable().optional(),
+    availabilityPending: z.boolean().catch(false),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+  }),
+);
+export type GuiHarnessOptionV92 = z.infer<typeof guiHarnessOptionSchemaV92>;
+export const listGuiHarnessesResponseSchemaV92 = lazySchema(() =>
+  z.object({
+    harnesses: z.array(guiHarnessOptionSchemaV92),
+  }),
+);
+export type ListGuiHarnessesResponseV92 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV92
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

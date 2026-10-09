@@ -28,8 +28,8 @@ import { cn } from "@/lib/utils";
  * length of one confirmation; it does not rebind the window, and it writes no
  * pin of its own - the next Sweep opens on the surface's host again, because
  * "which host did I sweep last time" is not a preference worth remembering
- * over a destructive action. The intent also carries the plan gate for free: a
- * remote host this plan does not include is non-connectable, so its row is
+ * over a destructive action. The intent also carries reachability for free: a
+ * remote host with no route is non-connectable, so its row is
  * inert exactly as it is in the terminal and workspace pickers, and Sweep
  * cannot become a side door to one.
  *
@@ -216,6 +216,7 @@ function SweepHostOption(props: {
           intent="pin"
           surfaceState={surfaceState}
           updateView={null}
+          nameRef={null}
         />
         {row.isDefault ? (
           <span className="sr-only">Currently showing this host</span>

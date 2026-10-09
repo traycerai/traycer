@@ -1,0 +1,42 @@
+---
+title: "Diagnostics (Host)"
+sidebarTitle: "Diagnostics"
+description: "Set how much the Traycer CLI and host log, and read a host's recent log output."
+---
+
+Host **Diagnostics** shows log verbosity and recent log output for a host. The page is in the Host group of Settings, so it applies to the host selected in the [host picker](/settings#host-picker), remote hosts included.
+
+The app's own log level, recent app logs and memory tools are under Application › [Diagnostics](/settings/diagnostics).
+
+## Log Detail
+
+| Row | What it sets |
+|---|---|
+| **CLI log level** | How much the Traycer CLI logs. |
+| **Host log level** | How much the background host process logs. |
+
+Each level can be **Trace**, **Debug**, **Info** (the default), **Warn**, or **Error**. Both levels apply machine-wide, to every Traycer host environment on that machine.
+
+While either level differs from Info, the group shows a reminder with **Reset all to Info**.
+
+<Tip>
+  When you're capturing a problem for support, raise the level to **Debug**, reproduce the problem, copy the logs, then set the level back to **Info**.
+</Tip>
+
+## Recent Logs
+
+**Recent logs** lists the host's own log files: **Host Log**, and **CLI Log** when that machine has one. Expand a log to see its last 100 lines.
+
+| Control | What it does |
+|---|---|
+| **Copy** | Copies the lines shown. Appears while the log is expanded. |
+| **Copy path** | Copies the log file's full path on the host. |
+
+For the standard install, the host log is `~/.traycer/host/host.log` and the CLI log is `~/.traycer/cli/cli.log`.
+
+## When The Host Can't Answer
+
+- If the selected host is the one on this computer and it isn't running, or runs a version that predates remote configuration, the page reads the log levels and log files from this computer directly, and a note says so.
+- If a remote host runs an older version, the page says its logs and log levels can't be read from here. Update that host and the page fills in.
+
+For what to do next with the logs, see [Troubleshooting](/reference/troubleshooting).

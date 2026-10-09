@@ -24,7 +24,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRef } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
-import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
+import {
+  ChatLowerDock,
+  type DockRowHotspot,
+} from "@/components/chat/chat-lower-dock";
+import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -199,6 +203,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               selfAgent={null}
               activeAgents={[]}
               folded={new Set()}
+              dockOrder={DEFAULT_DOCK_ORDER}
+              hotspots={ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -270,6 +276,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               selfAgent={null}
               activeAgents={[]}
               folded={new Set()}
+              dockOrder={DEFAULT_DOCK_ORDER}
+              hotspots={ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -371,9 +379,14 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
     it("keeps full-width wrappers as edge lanes; centered children own bg-canvas, spacing, and the main 1px seal", () => {
       const source = sourceOf("components/chat/composer/chat-composer.tsx");
 
-      // Rate-limit banner: outer edge-lane only; centered owns paint + pt-4.
+      // Rate-limit banner: outer edge-lane only; centered owns paint + pt-4,
+      // width from the reading-width style token rather than a hardcoded
+      // max-w (both the static class AND the wide-mode inline style).
       expect(source).toMatch(
-        /topBannerKind === "rate-limit"[\s\S]*?className="pointer-events-none px-4"[\s\S]*?className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-4"/,
+        /topBannerKind === "rate-limit"[\s\S]*?className="pointer-events-none px-4"[\s\S]*?"pointer-events-auto mx-auto w-full bg-canvas pt-4",\s*\n\s*readingWidth\.className,/,
+      );
+      expect(source).toMatch(
+        /topBannerKind === "rate-limit"[\s\S]*?style=\{\{ maxWidth: readingWidth\.maxWidth \}\}/,
       );
       // Main composer: outer edge-lane only (no vertical padding / bg-canvas).
       expect(source).toMatch(
@@ -382,7 +395,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       // Centered backplate: relative, paint, pb-4, pointer-free 1px seal with
       // after:content-[''] so the pseudo-element actually renders.
       expect(source).toContain(
-        `pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 ${BOTTOM_SEAL_CLASSES}`,
+        `pointer-events-auto relative mx-auto w-full bg-canvas pb-4 ${BOTTOM_SEAL_CLASSES}`,
       );
       // Vertical top spacing stays on the centered child, not the outer.
       expect(source).toMatch(
@@ -460,7 +473,13 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
 
       expect(shellSource).toContain('className="pointer-events-none px-4"');
       expect(shellSource).toContain(
-        '"pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas"',
+        '"pointer-events-auto relative mx-auto w-full bg-canvas"',
+      );
+      // Both the static class (comfortable) and the inline viewport-clamped
+      // style (wide) - `useReadingWidthStyle`'s two-part return.
+      expect(shellSource).toMatch(/\breadingWidth\.className,/);
+      expect(shellSource).toMatch(
+        /style=\{\{ maxWidth: readingWidth\.maxWidth \}\}/,
       );
       expect(shellSource).toMatch(
         /props\.topSpacing === "normal" \? "pt-4" : "pt-0"/,
@@ -479,7 +498,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       );
       // Seal must not be unconditional on the base class string.
       expect(shellSource).not.toMatch(
-        /"pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas[^"]*after:h-px/,
+        /"pointer-events-auto relative mx-auto w-full bg-canvas[^"]*after:h-px/,
       );
     });
   });
@@ -505,6 +524,37 @@ function emptyRestore(): ChatRestoreContextValue {
 function emptyQueue(): ChatSessionState["queue"] {
   return { status: "idle", items: [] };
 }
+
+const DEFAULT_DOCK_ORDER: ReadonlyArray<ChatDockSection> = [
+  "todo",
+  "filesChanged",
+  "activeAgents",
+  "background",
+];
+
+function dockHotspot(hasContent: boolean): DockRowHotspot {
+  return {
+    hotspotRef: () => undefined,
+    // Every dock region in this suite is shown and none is materialising;
+    // only whether the row has live content is under test.
+    shown: true,
+    hasContent,
+    ghost: false,
+    editing: false,
+  };
+}
+
+/** Fixture for a dock rendered with an empty restore/agents/queue/todo and one
+ *  background item present - matches every `<ChatLowerDock>` call in this
+ *  file. */
+const ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS: Readonly<
+  Record<ChatDockSection, DockRowHotspot>
+> = {
+  todo: dockHotspot(false),
+  filesChanged: dockHotspot(false),
+  activeAgents: dockHotspot(false),
+  background: dockHotspot(true),
+};
 
 function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
   const runtime: ChatLowerRuntimeState = { snapshotLoaded: true };
@@ -579,6 +629,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onSettingsChange: null,
     workspaceControls: null,
     workspaceAvailability: WORKSPACE_COMPOSER_READY,
+    suggestedPrompt: undefined,
   };
 
   return {
@@ -601,5 +652,6 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     backgroundStopAllPending: false,
     backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
+    subagentView: null,
   };
 }

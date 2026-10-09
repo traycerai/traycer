@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { chatRunSettingsStrictSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsStrictSchema,
+  chatRunSettingsStrictSchemaPreCommandCode,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
@@ -73,6 +76,30 @@ export const draftComposerPortableSchema = lazySchema(() =>
   }),
 );
 export type DraftComposerPortable = z.infer<typeof draftComposerPortableSchema>;
+
+/**
+ * Wire-freeze copy of the composer payload as the 1.5.0 tags shipped it on the
+ * `drafts.*` READ lines: `runSettings` pinned to the strict tuple those peers
+ * decode (`chatRunSettingsStrictSchemaPreCommandCode`, harness ids through
+ * Antigravity). Hand-copied, so a field added to the live payload cannot leak
+ * onto a released line.
+ *
+ * A WIRE freeze only. The `draft/v1` head and every write path keep the live
+ * payload above; nothing stored binds this.
+ */
+export const draftComposerPortableSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    content: jsonContentSchema,
+    selection: draftSelectionSchema.nullable(),
+    runSettings: chatRunSettingsStrictSchemaPreCommandCode.nullable(),
+    composerMode: draftComposerModeSchema,
+    blobHashes: z.array(sha256HexSchema),
+    closed: z.boolean().default(false),
+  }),
+);
+export type DraftComposerPortablePreCommandCode = z.infer<
+  typeof draftComposerPortableSchemaPreCommandCode
+>;
 
 /**
  * The same payload where a WRITER supplies it. The default above is a

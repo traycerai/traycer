@@ -159,6 +159,7 @@ function props(
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      suggestedPrompt: undefined,
     },
     todo: null,
     restoreContext: RESTORE_CONTEXT,
@@ -168,6 +169,7 @@ function props(
     backgroundStopAllPending: false,
     backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
+    subagentView: null,
   };
 }
 

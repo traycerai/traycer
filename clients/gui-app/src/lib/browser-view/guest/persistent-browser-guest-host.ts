@@ -48,6 +48,10 @@ export interface BrowserGuestTilePlacement {
   } | null;
 }
 
+export function browserGuestCssSheetAnchorName(viewTabId: string): string {
+  return `--traycer-sheet-${viewTabId}`;
+}
+
 export function browserGuestCssAnchorName(registrationId: string): string {
   return `--traycer-bv-${registrationId}`;
 }
@@ -63,16 +67,23 @@ export function browserGuestCssClipSizeAnchorName(
 }
 
 const BLANK_GUEST_SRC = "about:blank";
-const OFFSCREEN_VIEWPORT_WIDTH_PX = 1280;
-const OFFSCREEN_VIEWPORT_HEIGHT_PX = 800;
-const OFFSCREEN_OFFSET_PX = 10_000;
-const OFFSCREEN_CSS_TEXT = [
+const PARKED_VIEWPORT_WIDTH_PX = 1280;
+const PARKED_VIEWPORT_HEIGHT_PX = 800;
+// Keeps the largest guest the protocol permits (BROWSER_VIEWPORT_MAX_EDGE,
+// 8192) inside the smallest viewport the app can have: a 960 x 600 window at
+// 300 % zoom is 320 x 200 CSS px, and 8192 x 0.02 = 164. A guest that extends
+// well past the window is captured cropped. A transform changes neither the
+// captured resolution nor the layout sizes `retainedSize` reads.
+const PARKED_SCALE = 0.02;
+const PARKED_CSS_TEXT = [
   "position: fixed",
-  `inset-inline-start: -${OFFSCREEN_OFFSET_PX}px`,
+  "inset-inline-start: 0",
   "inset-block-start: 0",
-  `width: ${OFFSCREEN_VIEWPORT_WIDTH_PX}px`,
-  `height: ${OFFSCREEN_VIEWPORT_HEIGHT_PX}px`,
-  "opacity: 0",
+  `width: ${PARKED_VIEWPORT_WIDTH_PX}px`,
+  `height: ${PARKED_VIEWPORT_HEIGHT_PX}px`,
+  "transform-origin: top left",
+  `transform: scale(${PARKED_SCALE})`,
+  "filter: opacity(0)",
   "pointer-events: none",
   "display: block",
 ].join(";");
@@ -88,6 +99,7 @@ export interface BrowserGuestViewportPresentation extends BrowserViewGuestViewpo
 
 interface GuestRecord {
   readonly registrationId: string;
+  readonly sheetClipper: HTMLElement;
   readonly clipper: HTMLElement;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
@@ -264,9 +276,12 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
   wrapper.appendChild(webview);
   const clipper = createGuestClipper(request.registrationId);
   clipper.appendChild(wrapper);
-  running.hostElement.appendChild(clipper);
+  const sheetClipper = document.createElement("div");
+  sheetClipper.appendChild(clipper);
+  running.hostElement.appendChild(sheetClipper);
   const guest: GuestRecord = {
     registrationId: request.registrationId,
+    sheetClipper,
     clipper,
     wrapper,
     webview,
@@ -354,7 +369,7 @@ function removeGuest(registrationId: string): void {
   finishViewportLayout(guest, false);
   notifyViewportListeners();
   relinquishGuestFocus(guest);
-  guest.clipper.remove();
+  guest.sheetClipper.remove();
 }
 
 function handleGuestPointerDown(guest: GuestRecord, event: Event): void {
@@ -429,7 +444,25 @@ function applyGuestPresentation(
   placement: BrowserGuestTilePlacement | null,
 ): void {
   const nextPresented = placement !== null && placement.presented;
-  // Retained guests remain paintable for capture even outside the stage.
+  // The sheet and stage clips intersect. Both follow CSS anchors, including
+  // moves without a resize, while the fixed guest keeps its containing block.
+  if (nextPresented) {
+    const anchorName = browserGuestCssSheetAnchorName(placement.viewTabId);
+    guest.sheetClipper.dataset.browserGuestSheet = placement.viewTabId;
+    guest.sheetClipper.style.cssText = [
+      "position: fixed",
+      `position-anchor: ${anchorName}`,
+      `top: anchor(${anchorName} top, 0px)`,
+      `left: anchor(${anchorName} left, 0px)`,
+      `width: anchor-size(${anchorName} width, 100%)`,
+      `height: anchor-size(${anchorName} height, 100%)`,
+      "pointer-events: none",
+    ].join(";");
+  } else {
+    delete guest.sheetClipper.dataset.browserGuestSheet;
+  }
+  // A parked guest sits at the window's origin, outside any stage, and is
+  // captured only while the compositor draws it: no stage clip applies.
   guest.clipper.style.clipPath = nextPresented ? "inset(0)" : "none";
   if (
     guest.wrapper.getAttribute(BROWSER_GUEST_STATE_ATTRIBUTE) === "presented" &&
@@ -451,15 +484,17 @@ function applyGuestPresentation(
     applyGuestViewport(guest, placement);
     return;
   }
+  // A guest is captured (CDP and PiP) only while the compositor draws it.
   // Independently composited <webview> can leak under visibility:hidden, and
-  // display:none stops it compositing altogether (CDP/PiP frames go blank).
-  // Opacity makes one compositor group; the offscreen inset keeps it out of
-  // the window even if that group still produces pixels. Retained and unbound
-  // share that posture - only the state attribute differs.
+  // display:none stops it compositing altogether. opacity:0 and a box outside
+  // the viewport each stop the draw too, so a capture of such a guest never
+  // completes. filter:opacity(0) is drawn and shows nothing, and the scale
+  // keeps the whole guest inside the window. Retained and unbound share that
+  // posture - only the state attribute differs.
   applyGuestPosture(
     guest.wrapper,
     placement === null ? "unbound" : "retained",
-    OFFSCREEN_CSS_TEXT,
+    PARKED_CSS_TEXT,
     null,
   );
   applyGuestViewport(guest, null);

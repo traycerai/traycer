@@ -68,24 +68,15 @@ export type HostRegistryKind = "personal" | "sandbox";
  *    Offline: blind is not the same as absent, and the durable `lastSeenAt` is
  *    the only honest thing left to show.
  *
- * The server's current values are PURE LIVENESS — one fact about one host —
- * and deliberately say nothing about the account's plan. `local-only` remains
- * accepted temporarily as a rollout-compatibility input from older servers;
- * it meant "the owner's plan has no remote hosts". That legacy value
- * collapsed two independent facts (is this host alive? does this account's plan
- * include remote hosts?) into one word, with the plan word outranking liveness:
- * on a free plan every remote host read `local-only` whether it was alive,
- * asleep, or gone for good, so the client could not tell those apart and the
- * host-death gates could never fire. The plan is an ACCOUNT fact the client
- * already owns from sign-in, and it combines the two axes at projection time
- * (`hostListItemToDirectoryEntry` stamps `planAllowsRemote`;
- * `hostUnavailability` returns `plan-restricted` for a plan-gated host that is
- * alive or unreadable, and a plain `offline` for a plan-gated host that is
- * genuinely dead).
+ * These three values are PURE LIVENESS — one fact about one host. Remote hosts
+ * are available on every plan, so nothing about the account enters this word.
  *
- * ⚠️ ROLLOUT: ship this tolerant client before authn-v3 stops emitting
- * `local-only`. Remove the compatibility value only after that server change
- * is verified live and the supported client floor has advanced.
+ * `local-only` is a RETIRED value that no server emits. It once meant "the
+ * owner's plan has no remote hosts" and carried no liveness evidence at all.
+ * It stays in the type and the schema only because this enum is part of a
+ * released wire surface (`host.hostInventory.subscribe@1.0` frames carry these
+ * rows), which may not be narrowed. A client that ever receives it reads it
+ * exactly as `unknown`: the absence of an answer, never a death claim.
  *
  * Detach latency is asymmetric and the UI copy should not over-promise: a clean
  * teardown is pushed in seconds, while a dirty death (lid close, cable pull)

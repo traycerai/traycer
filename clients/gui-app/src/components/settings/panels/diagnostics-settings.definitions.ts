@@ -5,6 +5,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // RPC, so it and its rows fold into the page.
 export const HOST_DIAGNOSTICS = defineSettingsSection("diagnostics", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Diagnostics",
     description:
       "Log verbosity and recent log output for the host selected above.",

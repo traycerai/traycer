@@ -1,4 +1,10 @@
-import type { ClipboardEventHandler, DragEventHandler, Ref } from "react";
+import {
+  useCallback,
+  type ClipboardEventHandler,
+  type DragEventHandler,
+  type KeyboardEvent,
+  type Ref,
+} from "react";
 import { PHONE_COMPOSER_EDITOR_CAP_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { cn } from "@/lib/utils";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -18,6 +24,11 @@ import type {
   PastedComposerImageOutcome,
 } from "./editor/extensions/chat-paste-handler";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
+import { isPromptSuggestionAcceptKey } from "./prompt-suggestion";
+import {
+  PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
+  usePromptSuggestionSwipe,
+} from "./use-prompt-suggestion-swipe";
 
 const PLACEHOLDER =
   "Ask anything, @tag files/folder, or use / to show available commands";
@@ -51,6 +62,19 @@ interface ChatComposerEditorSlotProps {
   readonly onSubmit: (source: ChatComposerSubmitSource) => void;
   /** True while a Cmd+Enter here would steer the running turn (decision 8 hint). */
   readonly steerHintActive: boolean;
+  /**
+   * The provider's predicted next prompt, already gated by
+   * `promptSuggestionAllowed` (so the draft is empty); `null` offers nothing.
+   * Shown as the placeholder; → or a rightward swipe on a touch device accepts
+   * it.
+   */
+  readonly suggestedPrompt: string | null;
+  /**
+   * Fills and focuses the composer with the suggestion. Must never send.
+   * Returns whether it filled: the live draft can stop being empty before this
+   * prop re-renders, and a declined fill must leave → its ordinary job.
+   */
+  readonly onAcceptSuggestion: (suggestion: string) => boolean;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
@@ -79,6 +103,8 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     onSelectionChange,
     onSubmit,
     steerHintActive,
+    suggestedPrompt,
+    onAcceptSuggestion,
     onPaste,
     onDragOver,
     onDrop,
@@ -96,35 +122,80 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       ? NARROW_STEER_HINT_PLACEHOLDER
       : STEER_HINT_PLACEHOLDER;
   }
+  // A suggestion only stands between turns (the provider predicts it at a
+  // turn's end), so it outranks the steer hint, which only stands mid-turn.
+  if (suggestedPrompt !== null) {
+    placeholder = suggestedPrompt;
+  }
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (suggestedPrompt === null) return;
+      if (
+        !isPromptSuggestionAcceptKey({
+          key: event.key,
+          altKey: event.altKey,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          isComposing: event.nativeEvent.isComposing,
+        })
+      ) {
+        return;
+      }
+      if (onAcceptSuggestion(suggestedPrompt)) event.preventDefault();
+    },
+    [suggestedPrompt, onAcceptSuggestion],
+  );
+
+  // Touch has no → key, so a rightward swipe over the composer accepts
+  // instead. A tap is left alone: it is how the user starts typing.
+  const swipeHandlers = usePromptSuggestionSwipe(
+    suggestedPrompt,
+    onAcceptSuggestion,
+  );
+
   return (
-    <ComposerPromptEditor
-      ref={ref}
-      pickerStore={pickerStore}
-      initialContent={initialContent}
-      initialSelection={initialSelection}
-      slashProviderId={slashProviderId}
-      hasPastedImageBytes={hasPastedImageBytes}
-      ingestPastedComposerImages={ingestPastedComposerImages}
-      isActive={isActive}
-      disabled={disabled}
-      placeholder={placeholder}
-      // Desktop keeps the chat editor compact; a phone lets it grow to the
-      // same cap as the landing composer.
-      editorClassName={cn(
-        "max-h-[3.5lh] min-h-9",
-        PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
-      )}
-      stabilizeImageAttachmentCaret
-      onDocumentChange={onDocumentChange}
-      onSelectionChange={onSelectionChange}
-      onSubmit={onSubmit}
-      onPaste={onPaste}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onKeyDown={undefined}
-      onFocus={onFocus}
-      onBlur={NOOP}
-      onEditorReady={onEditorReady}
-    />
+    // `contents` keeps the wrapper out of layout; it only observes the swipe.
+    <div
+      className="contents"
+      onPointerDown={swipeHandlers.onPointerDown}
+      onPointerMove={swipeHandlers.onPointerMove}
+      onPointerUp={swipeHandlers.onPointerUp}
+      onPointerCancel={swipeHandlers.onPointerCancel}
+    >
+      <ComposerPromptEditor
+        ref={ref}
+        pickerStore={pickerStore}
+        initialContent={initialContent}
+        initialSelection={initialSelection}
+        slashProviderId={slashProviderId}
+        hasPastedImageBytes={hasPastedImageBytes}
+        ingestPastedComposerImages={ingestPastedComposerImages}
+        isActive={isActive}
+        disabled={disabled}
+        placeholder={placeholder}
+        // Desktop keeps the chat editor compact; a phone lets it grow to the
+        // same cap as the landing composer.
+        editorClassName={cn(
+          "max-h-[3.5lh] min-h-9",
+          PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
+          // Only while there is a suggestion to swipe: a draft keeps the
+          // browser's own handling of a sideways drag through its text.
+          suggestedPrompt !== null && PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
+        )}
+        stabilizeImageAttachmentCaret
+        onDocumentChange={onDocumentChange}
+        onSelectionChange={onSelectionChange}
+        onSubmit={onSubmit}
+        onPaste={onPaste}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onKeyDown={handleKeyDown}
+        onFocus={onFocus}
+        onBlur={NOOP}
+        onEditorReady={onEditorReady}
+      />
+    </div>
   );
 }

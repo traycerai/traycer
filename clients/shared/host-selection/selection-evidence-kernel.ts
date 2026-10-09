@@ -17,21 +17,18 @@
  *
  * `confirmed-refusal` means THIS ATTEMPT was terminally refused by the
  * transport itself - connection refused, a Noise/relay handshake rejection, a
- * relay attach refusal, an attach-grant mint that came back
- * `plan-restricted`. It is deliberately NOT
+ * relay attach refusal. It is deliberately NOT
  * `isConfirmedTransportRefusal(entry, hasReadyLiveSession)` from
  * `host-client/remote-fetcher.ts`: that helper is a PRE-DIAL directory gate
- * that folds cloud-DTO verdicts (`offline`, `plan-restricted`) into its
+ * that folds the cloud-DTO verdict (`offline`) into its
  * answer, so feeding it here would let a DTO flip advance the death counter -
  * exactly what invariant 5 forbids, and exactly the false-Offline window the
  * audit measured (≤4 h relay fuse).
  *
  * That rule is enforced STRUCTURALLY rather than by review: this kernel has
  * no "classify this error" entry point at all. A caller states the outcome it
- * observed through one of the four `reportDial*` methods, and the only one
- * that can produce death evidence with a `plan-restricted` reason takes that
- * detail from the transport error it just handled. There is no argument you
- * can pass that turns a directory verdict into a refusal.
+ * observed through one of the four `reportDial*` methods. There is no argument
+ * you can pass that turns a directory verdict into a refusal.
  *
  * ## Producers
  *
@@ -316,24 +313,17 @@ export class SelectionEvidenceKernel implements TransportEvidenceReporter {
     this.reportDial(hostId, attemptId, transportKind, "success");
   }
 
-  /**
-   * A dial the TRANSPORT terminally refused. `refusalDetail` is
-   * `"plan-restricted"` only when the attempt's own error carried the plan
-   * restriction (an attach-grant mint refused with `plan_restricted`); it is
-   * the sole provenance of `dead("plan-restricted")`.
-   */
+  /** A dial the TRANSPORT terminally refused. */
   reportDialRefusal(
     hostId: string,
     attemptId: string,
     transportKind: SelectionTransportKind,
-    refusalDetail: "plan-restricted" | null,
   ): void {
     void this.options.client.reportEvidence({
       kind: "dial",
       hostId,
       attemptId,
       outcome: "confirmed-refusal",
-      refusalDetail,
       transportKind,
       at: this.options.now(),
     });

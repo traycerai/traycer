@@ -2,7 +2,10 @@ import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { HostDoctorIssueCard } from "@/components/settings/panels/host-doctor-issue-card";
-import { describeFreePortPrompt } from "@/components/settings/panels/host-doctor-actions";
+import {
+  describeFreePortPrompt,
+  doctorFixForegroundReason,
+} from "@/components/settings/panels/host-doctor-actions";
 import { RECURRENCE_THRESHOLD } from "@/components/settings/panels/host-doctor-model";
 import type { RecurrenceState } from "@/components/settings/panels/host-doctor-recurrence";
 import type {
@@ -16,6 +19,8 @@ interface HostDoctorReportContentProps {
   readonly recurrence: RecurrenceState;
   readonly reportFetching: boolean;
   readonly fixPendingCode: string | null;
+  /** THIS machine's host was started in a terminal. */
+  readonly foregroundRun: boolean;
   readonly logTail: string | null;
   readonly freePortPrompt: FreePortAndRestartInput | null;
   readonly freePortPending: boolean;
@@ -54,6 +59,7 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
             expanded={expandedCodes.has(issue.code)}
             recurrenceLocked={recurrence.locked}
             fixPendingCode={fixPendingCode}
+            foregroundRun={props.foregroundRun}
             onFix={onFix}
             onToggle={onToggleIssue}
           />
@@ -99,7 +105,13 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
       </div>
 
       <ConfirmDestructiveDialog
-        blockedReason={null}
+        // A host started in a terminal began under the open prompt: the fix
+        // that opened it is withheld now (`doctorFixForegroundReason`), so its
+        // Confirm is too, with the same reason.
+        blockedReason={doctorFixForegroundReason(
+          "host-free-port-and-restart",
+          props.foregroundRun,
+        )}
         open={freePortPrompt !== null}
         onOpenChange={onFreePortOpenChange}
         title="Free port and restart?"

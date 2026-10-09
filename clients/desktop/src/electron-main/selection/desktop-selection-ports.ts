@@ -30,6 +30,7 @@ import type { RegisteredHostsPush } from "../../ipc-contracts/host-types";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 import type { HostControllerStatus } from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
+import { appliedLocalHostCapability } from "../host/local-host-capability";
 import type {
   IpcDesktopAuthSession,
   IpcHostController,
@@ -750,6 +751,10 @@ export class DesktopHostFleetSource implements HostFleetSource {
   }
 
   private readLocalHostId(): Promise<string | null> {
+    // A desktop booted in the lifecycle policy's `none` mode runs no local
+    // host, so it names none: no `kind: "local"` entry is injected and a
+    // registry row for this machine's host reads as the remote it now is.
+    if (appliedLocalHostCapability() === "none") return Promise.resolve(null);
     return readLastKnownLocalHostId({
       identityEnrollmentFile: this.options.host.identityEnrollmentFile,
       pidMetadataFile: this.options.host.pidMetadataFile,
@@ -973,6 +978,18 @@ export function createDesktopLocalHostEnsurePort(
 ): LocalHostEnsurePort {
   return {
     ensureReady: async () => {
+      // `none` mode: this desktop provisions nothing, for the life of the
+      // process. The same refusal as a shell that cannot provision at all
+      // (`unavailableLocalHostEnsurePort`), and for the same reason not a
+      // deferral: nothing will ever run here, so pacing a retry would only
+      // delay the honest answer. Nothing reaches the CLI.
+      if (appliedLocalHostCapability() === "none") {
+        return {
+          ok: false,
+          reason: "local-provisioning-unavailable",
+          deferred: false,
+        };
+      }
       const outcome = await hostController.convergeReady(
         false,
         { kind: "background" },

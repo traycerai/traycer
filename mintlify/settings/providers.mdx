@@ -1,49 +1,192 @@
 ---
 title: "Providers"
-description: "Configure coding agents, provider credentials, CLI binaries, and provider environment variables."
+description: "Turn coding agents on and off, and configure their credentials, profiles, CLI binaries, environment variables, MCP servers, plugins, and skills."
 ---
 
-Providers settings control the coding agents and providers Traycer can launch.
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-For supported coding agents and capability differences, see [Agents & Models](/agents-and-models/coding-agents).
+**Providers** settings control the coding agents Traycer can run on a host. They apply to the host selected with the host switcher at the top of the Settings sidebar; see [Host Picker](/settings#host-picker).
 
-## Common Controls
+For which coding agents Traycer supports and what each one can do, see [Agents & Models](/agents-and-models/coding-agents).
 
-| Control | What it changes |
-|---|---|
-| **Profiles & Limits** | Creates and selects managed account profiles where supported, and shows their usage limits. |
-| **Enable provider** | Makes a coding agent available or unavailable. |
-| **API key** | Adds or clears credentials for providers that need a key. |
-| **CLI binary** | Chooses bundled, detected, or custom CLI paths where supported. |
-| **Provider environment variables** | Adds variables scoped to the provider Traycer launches. |
-| **Terminal interface CLI arguments** | Sets default CLI arguments used when starting an agent on the Terminal interface. |
-| **Host selector** | Chooses which host's provider settings you are editing. |
+## Provider List
 
-Provider environment variables live here. Shell-wide host environment variables live in [Shell](/settings/shell).
+The list on the left shows every provider, with the enabled ones first.
 
-Terminal interface CLI arguments are passed to the underlying CLI. Use bypass or full-auto flags deliberately.
+- **Search providers** narrows the list by name.
+- **Filter providers** shows **All**, **Enabled**, or **Disabled** providers.
+- **Refresh all providers** checks sign-in and CLI status again.
 
-## Managed Profiles
+Select a provider to open its tabs.
 
-Use **Profiles & Limits** to add a managed profile and sign in with its account.
+## Model List Timeout
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Add a managed provider profile">
-  <source src="https://assets.traycer.ai/docs/videos/provider-profile-add.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+**Model list timeout**, beside **Refresh all providers**, sets how long Traycer waits for a provider to list its models: when you open the model picker, and when an agent creates another agent. The default is **60 s**. Choose **90 s**, **120 s**, or **180 s** on a slow or heavily loaded machine, where a provider can take longer than a minute to answer.
+
+The setting applies to every provider on the selected host, from the next model list it reads. A model list that arrives after the wait is still kept for the next request. The control is hidden on a host that is running a version without it.
+
+## Turn A Provider On Or Off
+
+The switch in the provider's header reads **Enabled** or **Disabled**. Only enabled providers appear in the composer's model picker.
+
+- Claude Code and Codex are enabled in a new install.
+- Other providers, except Traycer Inference, can turn on automatically when the host starts and verifies their credentials. If verification fails, a later host start can try again. Signing in during a session does not turn a provider on by itself.
+- Once a provider has an enabled or disabled setting, host startup preserves it. You can change it with the switch.
+- **Traycer Inference** is opt-in. It uses Traycer credits, so only you can turn it on.
+
+At least one provider must stay enabled. A provider with managed profiles needs at least one enabled profile before you can turn it on.
 
 ## Provider Tabs
 
-Tabs depend on the selected provider. Claude Code and Codex show **Profiles & Limits**, **CLI & Args**, **Env**, **MCP**, **Plugins**, and **Skills**. They do not show an **Account** or **Model Providers** tab. Other providers expose account or model-provider controls when their integration supports them.
+Tabs depend on the provider. A provider opens on its first tab.
 
-Providers that support Auto mode also show a **Permissions** tab, which chooses who reviews that provider's commands. See [Permissions](/settings/permissions#providers-with-a-built-in-reviewer).
+| Tab                   | What it holds                                                                                          | Shown for                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| **Account**           | The provider's [API key](#account).                                                                    | Cursor, Kiro, Droid, OpenRouter, Hugging Face, Amp                            |
+| **Profiles & Limits** | [Managed profiles](#managed-profiles) and their usage limits.                                          | Claude Code, Codex, Grok, Antigravity                                         |
+| **Usage limits**      | The provider's usage limits, or your Traycer subscription for Traycer Inference.                       | OpenCode, Traycer Inference, Cursor, OpenRouter, Kilo Code, Hugging Face      |
+| **CLI & Args**        | The [CLI binary and its versions](#cli-binary-and-arguments), and Terminal interface CLI arguments.    | Every provider                                                                |
+| **Env**               | [Environment variables](#environment-variables) for that provider.                                     | Every provider                                                                |
+| **Permissions**       | Who reviews that provider's commands in Auto mode.                                                     | Every provider                                                                |
+| **Model Providers**   | The [upstream model providers](#model-providers) OpenCode can reach.                                   | OpenCode                                                                      |
+| **MCP**               | [MCP servers](/settings/providers/mcp-servers).                                                        | Every provider except Devin, Pi, Reasonix, Antigravity, and Command Code      |
+| **Plugins**           | [Plugins](#plugins) installed from a source.                                                           | Every provider except Kiro, Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, Antigravity, and Command Code |
+| **Skills**            | [Skills](/settings/providers/skills).                                                                  | Every provider except Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, Antigravity, and Command Code |
 
-**Skills** and **Plugins** are separate tabs. Use **Skills** to create a named skill with a description and Markdown instructions. **Plugins** installs a plugin from a source string.
+Usage limits and the banners that appear when a limit is reached are covered in [Usage limits and model routing](/agents-and-models/usage-limits-and-routing).
+
+## Account
+
+The **Account** tab holds the API key for providers that authenticate with one.
+
+| Status               | Meaning                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| **Not set**          | No key is stored, and none was found in your shell environment.                    |
+| **Key set**          | A key is stored in Traycer.                                                        |
+| **From environment** | Traycer is using the key's environment variable from your shell.                   |
+
+Paste a key and click **Save**. A stored key is encrypted on the host and overrides the one in your shell. When a key is stored, the field reads **Replace stored key…**, and **Clear** removes it. Some providers show a **Create an API key** link to their dashboard.
+
+| Provider     | Environment variable |
+| ------------ | -------------------- |
+| Cursor       | `CURSOR_API_KEY`     |
+| Kiro         | `KIRO_API_KEY`       |
+| Droid        | `FACTORY_API_KEY`    |
+| OpenRouter   | `OPENROUTER_API_KEY` |
+| Hugging Face | `HF_TOKEN`           |
+| Amp          | `AMP_API_KEY`        |
+
+## Managed Profiles
+
+Claude Code, Codex, Grok, and Antigravity can hold more than one account. The provider's own CLI login, the one you would use in a terminal, is the **Terminal account**. Managed profiles are extra accounts next to it.
+
+<Steps>
+  <Step title="Add the profile">
+    On **Profiles & Limits**, click **Add profile**.
+  </Step>
+  <Step title="Name it">
+    Give the profile a name and a color.
+  </Step>
+  <Step title="Link the account">
+    Click **Link account** and sign in to the account this profile should use.
+  </Step>
+</Steps>
+
+Each profile has its own switch, so you can turn one off without removing it. A profile's menu lets you rename it, change its color, sign in again, or remove it.
+
+What a new profile shares with the Terminal account depends on the provider:
+
+| Provider    | Shared with the Terminal account                                                                                                                                              | Kept separate                                           |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Claude Code | Session history, `settings.json`, `CLAUDE.md`, agents, commands, and hooks. Skills and plugins too, if you check **Use terminal skills and plugins** when you add the profile. | The account sign-in                                     |
+| Codex       | Sessions, history, and skills                                                                                                                                                 | `auth.json`, and the profile's own copy of `config.toml` |
+| Grok        | Nothing                                                                                                                                                                       | Everything                                              |
+
+Grok profiles use separate `GROK_HOME` directories, so each profile keeps its OAuth account, configuration, and sessions isolated. New profiles start with an empty private store: ambient configuration, MCP credentials, plugins, skills, memory, and sessions are not copied. Ambient xAI API keys and external-auth commands are not inherited by managed Grok profiles.
+
+Antigravity’s Terminal account can use Google sign-in or inherit `GEMINI_API_KEY` from your shell. A managed profile uses its own Google sign-in or stored Gemini API key; it does not inherit the shell’s key. Signing a profile out never touches the Terminal account.
+
+To pick a profile for the next turn, use the profile dropdown in the composer's model picker. It appears once a provider has two or more profiles.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/provider-profile-add.mp4" label="Add a managed provider profile" />
+
+### Sync Profiles Across Devices
+
+Use **Sync profiles…** on **Profiles & Limits** to copy the profiles on the host selected in Settings to your other devices. Sync covers Claude Code, Codex, Grok, and Antigravity profiles. It copies the sign-in itself, so a synced profile is ready to use on the other device without signing in again.
+
+The dialog lists your other devices. For each one:
+
+- **Sync now** copies every supported profile to that device once.
+- **Keep in sync** also sends profiles you add later, and name and color changes, as they happen. Turning it off keeps the profiles already on the device. An offline device catches up when it connects.
+
+Closing the dialog doesn't stop a sync. A Terminal account arrives as a regular profile, and the other device's own Terminal account is never changed. Once a profile is synced, a sign-in that refreshes on one device is passed to the other, so neither is signed out.
+
+Under each device, every profile has one status: **Synced**, **Syncing**, **Sign in needed**, **Device offline**, **Update needed**, or **Can't sync** with the reason. Profiles that need attention are listed first, and **Show all** lists the rest. After you fix a **Can't sync** reason, click **Sync now** to try again.
+
+- **Sign in needed**: the profile is signed out on the device you are syncing from. The button on that row opens its sign-in there.
+- **Is now signed in to a different account**: you switched the account on the device the profile was synced from. The other device keeps the old account until you click **Sync the new account**.
+- **Are signed in to different accounts**: the account was switched on the device that received the profile. Sync never replaces either account. Sign in to the same account on both devices to resume.
+
+## Signing In Again
+
+When a provider is signed out, the composer shows a banner above the input.
+
+- **Authenticate** (for example **Authenticate Claude Code**) opens your browser to sign in. If the browser doesn't return on its own and shows a code, paste the code into the banner.
+- Providers that sign in from a terminal offer a terminal sign-in instead.
+- "Or paste an API key or token" takes a key or token directly, for providers that accept one.
+- **Check sign-in status** checks again after you sign in somewhere else.
+
+If the agent's profile is signed out, the banner offers **Continue on Terminal account** and **Sign in**. If the profile no longer exists, it offers **Manage in Settings**.
+
+Browser sign-in runs on the machine the host is on. For a host on another machine, sign in with that provider's CLI there.
+
+## CLI Binary And Arguments
+
+The **CLI & Args** tab chooses which binary Traycer runs for the provider:
+
+- the copy Traycer manages for you,
+- a copy found on your `PATH`, or
+- a binary you point to with **Add custom path**.
+
+For CLIs that Traycer manages, open the version menu on the managed row to see the available versions.
+
+- **Download**, **Use**, and **Delete** act on one version.
+- **Use** pins that version. A pinned provider shows "Pinned to" its version; **Use latest automatically** removes the pin.
+- **Check for updates** looks for a newer version, and **Auto-download updates** downloads new versions as they come out.
+
+Traycer does not manage the Amp, Hermes Agent, or Command Code CLIs; install them yourself, then pick the detected copy or add its path.
+
+For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps its own permissions, so Traycer leaves those flags out.
+
+## Environment Variables
+
+The **Env** tab sets environment variables for one provider. Each row has a name and either **Set** with a value, or **Unset** to drop a variable inherited from your shell. They apply when Traycer starts that provider.
+
+For Cursor, these variables reach only its configuration commands, such as MCP setup, and not chat turns.
+
+Shell-wide host environment variables live in [Shell](/settings/shell).
+
+## Permissions
+
+The **Permissions** tab shows who reviews this provider's commands in Auto mode. Where the provider has a reviewer of its own, a switch chooses between it and Traycer's judge; otherwise the tab shows which one applies. **All permission settings** opens [Permissions](/settings/permissions#providers-with-a-built-in-reviewer).
+
+## Model Providers
+
+OpenCode reaches models through upstream providers, which you manage on its **Model Providers** tab.
+
+- **Connect** a provider by signing in or with an API key. The dialog lists the sign-in methods that provider offers.
+- **Disconnect** removes a provider's credential.
+- **Add custom provider** adds an OpenAI-compatible endpoint: a **Provider ID**, **Display name**, **Base URL**, optional **API key**, its **Models**, and optional **Headers**.
+- **Manage Go** opens your OpenCode Go account.
 
 ## MCP Servers
 
 Add and check provider-specific tool servers in the **MCP** tab. See [MCP servers](/settings/providers/mcp-servers).
 
+## Plugins
+
+Click **Add from source**, enter a **Source** (an npm package, a path, a git URL, or `plugin@marketplace`), and click **Install**. The location picker at the top chooses whether a plugin applies to every workspace on the host or to one workspace. Restart the provider's running agents for plugin changes to reach active sessions.
+
 ## Skills
 
-Create reusable Markdown instructions in the **Skills** tab. See [Skills](/settings/providers/skills).
+Import or write reusable instructions in the **Skills** tab. See [Skills](/settings/providers/skills).

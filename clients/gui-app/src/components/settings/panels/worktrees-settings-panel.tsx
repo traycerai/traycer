@@ -122,6 +122,7 @@ import {
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-auto-cleanup-chip";
+import { WorktreeAgentCreateChip } from "@/components/settings/panels/worktree-agent-create-chip";
 import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
@@ -136,9 +137,6 @@ import {
 } from "@/lib/tab-navigation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
@@ -306,20 +304,21 @@ function WorktreesToolbar(props: {
   readonly canRefresh: boolean;
   readonly lastUpdatedAt: number | null;
   /**
-   * The leading slot. A SLOT rather than the scope itself, so the toolbar
-   * stays a layout with no opinion on the automatic-cleanup policy - exactly
-   * like `selectionControls` and `filterControls` beside it.
+   * The leading slot: the host's worktree policy chips (automatic cleanup and
+   * agent-created worktrees). A SLOT rather than the scope itself, so the
+   * toolbar stays a layout with no opinion on either policy - exactly like
+   * `selectionControls` and `filterControls` beside it.
    */
-  readonly cleanup: ReactNode;
+  readonly policies: ReactNode;
   readonly selectionControls: ReactNode | null;
   readonly filterControls: ReactNode | null;
 }): ReactNode {
   const {
     canRefresh,
-    cleanup,
     filterControls,
     lastUpdatedAt,
     onRefresh,
+    policies,
     refreshing,
     selectionControls,
   } = props;
@@ -336,10 +335,10 @@ function WorktreesToolbar(props: {
     <div className="@container/worktrees-toolbar flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       {/* The slot on the left held first a host `<Select>`, then a readout of
           the scoped host. Both are gone - the sidebar names that host one row
-          away and never scrolls - and it now carries the automatic-cleanup
-          chip, which wraps onto its own line with the row at narrow widths. */}
+          away and never scrolls - and it now carries the host's policy chips,
+          which wrap onto their own line with the row at narrow widths. */}
       <div className="flex flex-wrap items-center gap-2">
-        {cleanup}
+        {policies}
         <div
           className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
           data-testid="worktrees-toolbar-actions"
@@ -593,28 +592,6 @@ function WorktreeSortMenu(props: {
   );
 }
 
-/**
- * Why this panel has nothing to show, in the hook's own terms. A
- * `plan-restricted` host is running and its worktrees are intact, so the
- * offline sentence would send someone to fix a machine that is fine.
- *
- * The remedy is the only half that moves per shell: the installed mobile app
- * may not tell the reader to upgrade (App Store review guideline 3.1.1), so it
- * points at the shell that may.
- */
-function unreachableHostMessage(
-  hostLabel: string,
-  unavailability: HostUnavailability | null,
-): string {
-  if (unavailability !== "plan-restricted") {
-    return `${hostLabel} is offline. Worktrees can only be managed on a reachable host.`;
-  }
-  const local = `${hostLabel} is local only on your current plan.`;
-  return isMobileApp()
-    ? `${local} ${PLAN_RESTRICTED_MOBILE_REMEDY}`
-    : `${local} Upgrade to manage its worktrees from here.`;
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -676,8 +653,11 @@ function WorktreesBody(props: {
     // Built HERE, not inside the toolbar, because the toolbar renders in two
     // places (standalone above the gate, and inside the list) and the chip
     // must be the same element in both.
-    cleanup: (
-      <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
+    policies: (
+      <>
+        <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
+        <WorktreeAgentCreateChip scope={scope} />
+      </>
     ),
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
@@ -704,16 +684,9 @@ function WorktreesBody(props: {
       </WorktreesStateMessage>
     );
   } else if (!reachable) {
-    // The hook's REASON, not one sentence for every non-reachable result. A
-    // `plan-restricted` host is running and its worktrees are intact; saying it
-    // is offline sends someone to fix a machine that is fine and hides the only
-    // thing that would actually restore this panel.
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>
-        {unreachableHostMessage(
-          reachability.hostLabel,
-          reachability.unavailability,
-        )}
+        {`${reachability.hostLabel} is offline. Worktrees can only be managed on a reachable host.`}
       </WorktreesStateMessage>
     );
   } else if (client === null) {
@@ -957,7 +930,7 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
-    readonly cleanup: ReactNode;
+    readonly policies: ReactNode;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;

@@ -13,7 +13,7 @@ import { useManagedCommandPresence } from "@/stores/managed-commands/managed-com
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { formatSingleLine } from "@/lib/utils";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentRow } from "./segment-row";
@@ -32,10 +32,20 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
  * - Other command / wakeup triggers: lazy-fetch captured output on expand.
  * - Subagent triggers with a result summary: rendered as expandable cards
  *   showing the full markdown result.
+ *
+ * Three densities. `card` heads a turn the delivery woke. `row` is the line
+ * inside an activity group. `note` is the whole of a finished turn that holds
+ * nothing else - an outcome that arrived after its own turn had ended and drew
+ * no reply: the same line as `row`, so a late failure does not stand at the
+ * transcript's tail at the weight of the agent's current state, but with the
+ * card's disclosure and summary kept, since the note is then the only place
+ * either can be read.
  */
+type AutonomousResumeVariant = "card" | "row" | "note";
+
 interface AutonomousResumeSegmentProps {
   triggers: ReadonlyArray<AutonomousResumeTrigger>;
-  variant?: "card" | "row";
+  variant?: AutonomousResumeVariant;
 }
 
 const RESUME_OUTPUT_FILE_MAX_BYTES = 500_000;
@@ -67,14 +77,16 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
  */
 function ResumeCompletionCard(props: {
   readonly trigger: AutonomousResumeTrigger;
-  readonly variant: "card" | "row";
+  readonly variant: AutonomousResumeVariant;
 }) {
   const { trigger } = props;
   const [open, setOpen] = useState(false);
   const compact = isShellDelivery(trigger);
-  const deliverySummary = formatSingleLine(
+  // Every line in this header is uncapped: each span below `truncate`s itself
+  // at the row's width (the full text stays in its tooltip), so a character
+  // cap in front could only end it early on a wide reading column.
+  const deliverySummary = collapseToSingleLine(
     trigger.summary.replace(/^still running\s*(?:[-–—·:]\s*)?/i, ""),
-    { maxLength: 180, ellipsis: "…" },
   );
 
   // An auto-backgrounded MCP call rides a "command" trigger (the kind enum is
@@ -84,10 +96,21 @@ function ResumeCompletionCard(props: {
     trigger.mcp === null
       ? trigger.title
       : `${trigger.mcp.serverName} · ${trigger.mcp.toolName}`;
-  const title = formatSingleLine(rawTitle, {
-    maxLength: 60,
-    ellipsis: "…",
-  });
+  const title = collapseToSingleLine(rawTitle);
+  // Non-subagent triggers only have something to reveal when there's a captured
+  // output file - without one the body is just "Output file unavailable." every
+  // time, so collapse to a static single-row card. Shell and wakeup triggers
+  // do not normally have capturable output files; subagents always have a
+  // markdown result to show.
+  const expandable =
+    !compact && (trigger.kind === "subagent" || trigger.outputFile !== null);
+  // The card shows a trigger's summary as its two-line preview. A note has no
+  // preview, so it carries the summary on its one line instead, the way a
+  // shell delivery already does - an output-backed one included, whose
+  // disclosure opens the output file and not the summary. A subagent's summary
+  // is its whole result, which its disclosure does show.
+  const inlineSummary =
+    compact || (props.variant === "note" && trigger.kind !== "subagent");
   const header = (
     <>
       {resumeStatusIcon(trigger)}
@@ -109,7 +132,7 @@ function ResumeCompletionCard(props: {
           {title}
         </span>
       </TooltipWrapper>
-      {compact && deliverySummary.length > 0 ? (
+      {inlineSummary && deliverySummary.length > 0 ? (
         <TooltipWrapper
           label={trigger.summary}
           side="top"
@@ -127,7 +150,8 @@ function ResumeCompletionCard(props: {
   const preview =
     !compact && trigger.summary.trim().length > 0 ? (
       <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
-        {formatSingleLine(trigger.summary, { maxLength: 180, ellipsis: "…" })}
+        {/* Uncapped: `line-clamp-2` cuts it at two lines of the row's width. */}
+        {collapseToSingleLine(trigger.summary)}
       </p>
     ) : null;
 
@@ -137,31 +161,15 @@ function ResumeCompletionCard(props: {
     </div>
   ) : null;
 
-  // Non-subagent triggers only have something to reveal when there's a captured
-  // output file - without one the body is just "Output file unavailable." every
-  // time, so collapse to a static single-row card. Shell and wakeup triggers
-  // do not normally have capturable output files; subagents always have a
-  // markdown result to show.
-  const expandable =
-    !compact && (trigger.kind === "subagent" || trigger.outputFile !== null);
-
-  if (props.variant === "row") {
+  if (props.variant !== "card") {
     return (
-      <SegmentRow
+      <ResumeCompletionLine
+        trigger={trigger}
         header={header}
-        headerAction={
-          <ResumeManagedCommandDoor trigger={trigger} variant="row" />
-        }
-        open={false}
+        // Only a note discloses: inside an activity group the line is static.
+        body={props.variant === "note" && expandable ? body : undefined}
+        open={open}
         onOpenChange={setOpen}
-        body={null}
-        tone="default"
-        stickyHeader={false}
-        expandable={false}
-        headerFindUnitId={null}
-        bodyFindUnitId={null}
-        className="w-fit max-w-full"
-        footer={null}
       />
     );
   }
@@ -185,6 +193,39 @@ function ResumeCompletionCard(props: {
         className={undefined}
       />
     </div>
+  );
+}
+
+/**
+ * The one-line form: static (`body` undefined), or a disclosure over the same
+ * body the card opens. `body` is `null` for a disclosure that is closed.
+ */
+function ResumeCompletionLine(props: {
+  readonly trigger: AutonomousResumeTrigger;
+  readonly header: ReactNode;
+  readonly body: ReactNode | undefined;
+  readonly open: boolean;
+  readonly onOpenChange: (next: boolean) => void;
+}) {
+  const discloses = props.body !== undefined;
+  return (
+    <SegmentRow
+      header={props.header}
+      headerAction={
+        <ResumeManagedCommandDoor trigger={props.trigger} variant="row" />
+      }
+      // A static line never opens: nothing sets `open` without a trigger.
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      body={discloses ? props.body : null}
+      tone="default"
+      stickyHeader={false}
+      expandable={discloses}
+      headerFindUnitId={null}
+      bodyFindUnitId={null}
+      className={discloses ? "w-full" : "w-fit max-w-full"}
+      footer={null}
+    />
   );
 }
 
@@ -274,13 +315,21 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.live) {
     return `${noun} running`;
   }
+  // A settled MCP trigger is always a call the CLI moved to the background
+  // (a foreground call settles on its own card and raises no trigger). Saying
+  // so keeps "MCP tool failed" from reading as the agent's present state when
+  // the outcome lands long after the turn that made the call.
+  const settledNoun =
+    trigger.mcp !== null && trigger.managedCommand === null
+      ? `Background ${noun}`
+      : noun;
   switch (trigger.status) {
     case "completed":
-      return `${noun} completed`;
+      return `${settledNoun} completed`;
     case "failed":
-      return `${noun} failed`;
+      return `${settledNoun} failed`;
     case "stopped":
-      return `${noun} stopped`;
+      return `${settledNoun} stopped`;
   }
 }
 

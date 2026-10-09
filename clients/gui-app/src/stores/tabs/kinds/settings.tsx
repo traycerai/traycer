@@ -3,11 +3,11 @@ import { Settings } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { settingsTabIntent } from "@/lib/tab-navigation/intents";
 import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
-import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { TAB_KIND_SPLIT_ELIGIBILITY } from "@/stores/tabs/tab-kind-policy";
 
 const SETTINGS_TAB_LABEL = "Settings";
 const SETTINGS_PATH_PREFIX = "/settings";
@@ -65,7 +65,7 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
       render: (tab) =>
         createElement(settingsSurface, { lastPath: tab.lastPath }),
       canonicalRoute: (tab) => tab.route,
-      splitEligibility: "eligible",
+      splitEligibility: TAB_KIND_SPLIT_ELIGIBILITY.settings,
       duplication: "forbidden",
       singleton: "per-window",
       newWindow: "copy",
@@ -81,11 +81,8 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
     activate: () => {
       useLandingDraftStore.getState().clearActiveDraft();
     },
-    requestClose: () => {
-      tabCommandCoordinator.closeRefAfterConfirmed({
-        kind: "settings",
-        id: "settings",
-      });
+    requestClose: (_tab, close) => {
+      close({ kind: "settings", id: "settings" });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

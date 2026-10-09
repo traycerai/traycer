@@ -16,9 +16,9 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
  * takes over when this fallback unmounts; dialog state survives that handoff.
  */
 export function BootDesktopMenus(props: {
-  readonly onOpenSettings: () => void;
+  readonly onMenuOpenSettings: () => void;
 }): ReactNode {
-  const { onOpenSettings } = props;
+  const { onMenuOpenSettings } = props;
   const runnerHost = useRunnerHostOrNull();
   const active = useDesktopMenuBarActive();
   const menu =
@@ -32,14 +32,14 @@ export function BootDesktopMenus(props: {
     if (!active || menu === null) return;
     const subscription = menu.onCommand(({ command }) => {
       const dialogs = useDesktopDialogStore.getState();
-      if (command === "app.openSettings") onOpenSettings();
+      if (command === "app.openSettings") onMenuOpenSettings();
       else if (command === "app.openLogs") dialogs.openLogs();
       else if (command === "app.aboutDetails") dialogs.openAboutDetails();
       else if (command === "app.reportIssue" && dialogs.reportIssueAvailable)
         dialogs.openReportIssue();
     });
     return () => subscription.dispose();
-  }, [active, menu, onOpenSettings]);
+  }, [active, menu, onMenuOpenSettings]);
 
   if (!active) return null;
   return (

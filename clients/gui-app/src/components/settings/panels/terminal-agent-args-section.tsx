@@ -13,7 +13,7 @@ type ProviderId = ProviderCliState["providerId"];
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   "claude-code": "--dangerously-skip-permissions",
-  codex: "--full-auto",
+  codex: "--approve-for-me",
   opencode: "--model anthropic/claude-opus-4-8",
   cursor: "CLI arguments (optional)",
   traycer: "CLI arguments (optional)",
@@ -33,6 +33,7 @@ const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   omp: "CLI arguments (optional)",
   reasonix: "CLI arguments (optional)",
   antigravity: "CLI arguments (optional)",
+  commandcode: "CLI arguments (optional)",
 };
 
 function terminalAgentArgsPlaceholder(providerId: ProviderId): string {

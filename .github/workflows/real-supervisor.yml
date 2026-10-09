@@ -37,17 +37,30 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Run the launchd rows on a branch before merging it:
+  # `gh workflow run real-supervisor.yml --ref <branch>`.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: real-supervisor-${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run.
+  group: real-supervisor-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   macos:
     name: CLI real-launchd rows (macOS)
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: macos-latest
     # These rows drive real launchd and wait on readiness. Without a bound, a
     # wedged `launchctl` sits until the 6-hour default on a 10x-billed macOS
@@ -61,8 +74,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          package-manager-cache: false
           node-version: "24.20.0"
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

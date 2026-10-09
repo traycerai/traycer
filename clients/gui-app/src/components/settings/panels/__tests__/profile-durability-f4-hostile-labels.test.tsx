@@ -16,6 +16,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * injected elements, and the panel doesn't crash.
  */
 
+// The provider's Limits pick reads the watched host's usage through the layout
+// editor's own scope, which this suite does not stand up, and no label is
+// rendered through it. Where the page mounts it is held by
+// `providers-settings-panel.test.tsx`.
+vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
+  ProviderUsageLimitsSection: () => null,
+}));
+
 // Render the profile dropdown inline + always-open so the test can select
 // the hostile-labeled row without fighting Radix's pointerdown-based open
 // gesture in jsdom (mirrors the established mock in
@@ -101,7 +109,11 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
   };
 });
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
-  const useProvidersCancelLogin = () => ({ mutate: vi.fn(), isPending: false });
+  const useProvidersCancelLogin = () => ({
+    mutate: vi.fn(),
+    mutateAsync: () => Promise.resolve({ cancelled: true }),
+    isPending: false,
+  });
   return {
     useProvidersCancelLogin,
     useProvidersCancelLoginForClient: useProvidersCancelLogin,

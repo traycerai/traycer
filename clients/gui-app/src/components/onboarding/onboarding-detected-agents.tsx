@@ -1,6 +1,8 @@
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   type ProviderCliState,
   type ProviderId,
+  type ProviderLoginRefusal,
   type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import { ExternalLink, Info } from "lucide-react";
@@ -11,10 +13,24 @@ import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
+  providerLoginAnswerHeldForNobody,
+  providerLoginAnswerStillStarting,
+  providerLoginAnswerWantsPackRetry,
+  providerLoginNotStartedMessage,
+  providerLoginStartCopy,
+  startProviderLoginUntilSettled,
+  waitForProviderLoginStart,
+  type ProviderLoginStartProgress,
+  type ProviderStartLoginAnswer,
+} from "@/components/providers/provider-login-start";
+import {
   providerSignInUnavailableHint,
-  providerStartLoginFailureMessage,
   providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
 import { CodePasteField } from "@/components/settings/panels/code-paste-field";
 import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
@@ -24,6 +40,8 @@ import {
 } from "@/components/settings/panels/use-auto-open-login-url";
 import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
@@ -460,6 +478,7 @@ function resolveAttemptAuthPhase(input: {
 }
 
 const ONBOARDING_CODE_PASTE_KEEPALIVE_MS = 60_000;
+const NOT_STARTED_MESSAGE = "Sign-in did not start. Try again.";
 
 function useOnboardingWaitingCodePaste(args: {
   readonly providerId: ProviderId;
@@ -542,6 +561,7 @@ function OnboardingLoginWaiting(props: {
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending: false,
+    startingCopy: null,
     cancelRequested: false,
     deviceCode: userCode !== null,
   });
@@ -636,10 +656,60 @@ function showOnboardingWaitingAffordance(
   return (loginCapability?.codePaste ?? null) !== null;
 }
 
+/**
+ * What the host is doing while a press is still being answered, once that
+ * takes longer than a moment: the provider's pack is downloading, or its
+ * login child is still coming up. The button's spinner alone would sit there
+ * for a minute saying nothing.
+ */
+function SignInToEnableProgress(props: {
+  readonly progress: ProviderLoginStartProgress | null;
+  readonly providerId: ProviderId;
+}): ReactNode {
+  if (props.progress === null) return null;
+  const copy = providerLoginStartCopy(props.progress, props.providerId);
+  if (copy === null) return null;
+  return (
+    <div
+      className="text-ui-xs leading-relaxed text-muted-foreground"
+      aria-live="polite"
+    >
+      <div className="font-medium text-foreground">{copy.title}</div>
+      <p className="mt-0.5">{copy.guidance}</p>
+    </div>
+  );
+}
+
+/**
+ * Whether the last press ended with the host not starting the sign-in, and
+ * what to say about it. `answer` is the latest `providers.startLogin` answer
+ * of that press, which is only its LAST one once `progress` is null.
+ */
+function resolveStartRefusal(
+  progress: ProviderLoginStartProgress | null,
+  answer: ProviderStartLoginAnswer | null,
+  providerId: ProviderId,
+): { readonly declined: boolean; readonly declinedMessage: string } {
+  if (progress !== null || answer === null || answer.started) {
+    return { declined: false, declinedMessage: NOT_STARTED_MESSAGE };
+  }
+  return {
+    declined: true,
+    declinedMessage: providerLoginNotStartedMessage(
+      answer,
+      providerId,
+      NOT_STARTED_MESSAGE,
+    ),
+  };
+}
+
 function SignInToEnableAlerts(props: {
+  readonly providerId: ProviderId;
   readonly declined: boolean;
   readonly declinedMessage: string;
   readonly notAuthenticated: boolean;
+  /** Why the provider turned the completed sign-in away, when it said. */
+  readonly refusal: ProviderLoginRefusal | null;
 }): ReactNode {
   return (
     <>
@@ -648,7 +718,19 @@ function SignInToEnableAlerts(props: {
           {props.declinedMessage}
         </span>
       ) : null}
-      {props.notAuthenticated ? (
+      {props.notAuthenticated && props.refusal !== null ? (
+        <span
+          className="flex flex-col items-start gap-1.5 text-ui-xs text-destructive"
+          role="alert"
+        >
+          <ProviderLoginRefusalMessage
+            providerId={props.providerId}
+            refusal={props.refusal}
+          />
+          <ProviderLoginRefusalAction refusal={props.refusal} />
+        </span>
+      ) : null}
+      {props.notAuthenticated && props.refusal === null ? (
         <span className="text-ui-xs text-destructive" role="alert">
           Sign-in did not complete. This provider is still off.
         </span>
@@ -671,8 +753,20 @@ function SignInToEnableButton(props: {
   readonly onEnable: (providerId: ProviderId) => void;
 }) {
   const { state, enablementPending, isLocalHost, onEnable } = props;
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
+  const ensurePack = useProvidersEnsurePack();
+  const cancelLogin = useProvidersCancelLogin();
+  // One press can be several `providers.startLogin` calls: the host answers
+  // `pending` while the provider's pack downloads or its login child is
+  // still coming up, and the same question asked again attaches to that work
+  // (`startProviderLoginUntilSettled`). Non-null from the press until the
+  // answer that ends it, which is what keeps the button pending in the gaps
+  // between calls and keeps an answer that is not final from being read as a
+  // refusal.
+  const [startProgress, setStartProgress] =
+    useState<ProviderLoginStartProgress | null>(null);
   // The gap between two re-polls is still this button working, so it counts as
   // pending: neither mutation is in flight during the timeout, and without
   // this the button would re-arm mid-settle and invite a second login child
@@ -712,6 +806,7 @@ function SignInToEnableButton(props: {
   // spawn a redundant login child for a provider that is already being turned
   // on. Only this provider's enable request drives its loading state.
   const isPending =
+    startProgress !== null ||
     startLogin.isPending ||
     awaitLogin.isPending ||
     settling ||
@@ -728,10 +823,14 @@ function SignInToEnableButton(props: {
   // held in `useState`: the result already is this state, and `mutate` resets
   // it at the next attempt, so the message clears itself on retry instead of
   // needing an effect to.
-  const declined = startLogin.isSuccess && !startLogin.data.started;
-  const declinedMessage = providerStartLoginFailureMessage(
-    startLogin.data?.failure,
-    "Sign-in did not start. Try again.",
+  //
+  // Only the answer that ENDED the press counts. While the host is still
+  // getting there the latest answer is `started: false` as well, and it is
+  // the opposite claim.
+  const { declined, declinedMessage } = resolveStartRefusal(
+    startProgress,
+    startLogin.data ?? null,
+    state.providerId,
   );
   // The counterpart to `declined`, for a login that STARTED and then did not
   // produce an authenticated account: a cancelled browser login, a settled
@@ -780,94 +879,127 @@ function SignInToEnableButton(props: {
     // the two gestures genuinely coincide - the button says "sign in TO
     // ENABLE" - so this screen states the enablement explicitly rather than
     // relying on the host to infer it from a credential appearing.
-    startLogin.mutate(
+    // A press that follows a failed install asks for the pack again first;
+    // read before the mutation below resets the answer it is read from.
+    const retryPackFirst = providerLoginAnswerWantsPackRetry(
+      startLogin.data ?? null,
+    );
+    setStartProgress({ kind: "opening" });
+    const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
+    void startProviderLoginUntilSettled({
       // Ambient login, not a managed profile: onboarding has no profile
       // management surface, and the account a first sign-in creates is the
       // provider's own CLI login.
-      { providerId, profileId: null, createProfile: null },
-      {
-        onSuccess: (result) => {
-          if (!result.started) return;
-          setWaitingLogin({
-            url: result.url ?? null,
-            userCode: result.userCode ?? null,
-          });
-          // Per-attempt budget, scoped to this closure so a later press starts
-          // over with a full one - the same shape Settings' login flow gives
-          // each attempt.
-          let repolls = 0;
-          const scheduleRepoll = (): boolean => {
-            if (repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return false;
-            repolls += 1;
-            setSettling(true);
-            repollTimerRef.current = window.setTimeout(() => {
-              repollTimerRef.current = null;
-              if (unmountedRef.current) return;
-              awaitOnce();
-            }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
-            return true;
-          };
-          // Only a COMPLETED, authenticated login enables: `state` is null when
-          // the host has no settled outcome to report, and a cancelled or
-          // failed sign-in must not leave the user with a provider they never
-          // got to use.
-          //
-          // An unsettled ambient verdict is not a failure, though - it is the
-          // host's auth probe still running behind a login that may well have
-          // succeeded (see `isAmbientAuthVerdictPending`). Deciding on it would
-          // make the button's advertised action silently not happen, which is
-          // the one outcome a screen called "Sign in & enable" cannot have. So
-          // the same bounded re-poll Settings runs applies here, and only a
-          // settled - or budget-exhausted - "not authenticated" stops the
-          // chain.
-          const handleCompletion = (
-            completion: ProvidersAwaitLoginResponse,
-          ): void => {
+      request: { providerId, profileId: null, createProfile: null, holderId },
+      startLogin: (request) => startLogin.mutateAsync(request),
+      ensurePack: () => ensurePack.mutateAsync({ providerId }),
+      retryPackFirst,
+      onProgress: (progress) => {
+        if (unmountedRef.current) return;
+        setStartProgress(progress);
+      },
+      shouldStop: () => unmountedRef.current,
+      wait: waitForProviderLoginStart,
+    }).then(
+      (result: ProviderStartLoginAnswer) => {
+        // A login nothing here will open or wait for is released. Mounted,
+        // that is one the host is still bringing up after it said "still
+        // starting" too often. After the user moved on from this step
+        // (Continue is always enabled) it is also one that started and whose
+        // page only this row would have opened.
+        const heldForNobody = unmountedRef.current
+          ? providerLoginAnswerHeldForNobody(result, state.loginCapability)
+          : providerLoginAnswerStillStarting(result);
+        if (heldForNobody) {
+          cancelLogin.mutate({ providerId, profileId: null, holderId });
+        }
+        if (unmountedRef.current) return;
+        setStartProgress(null);
+        if (!result.started) return;
+        setWaitingLogin({
+          url: result.url ?? null,
+          userCode: result.userCode ?? null,
+        });
+        // Per-attempt budget, scoped to this closure so a later press starts
+        // over with a full one - the same shape Settings' login flow gives
+        // each attempt.
+        let repolls = 0;
+        const scheduleRepoll = (): boolean => {
+          if (repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return false;
+          repolls += 1;
+          setSettling(true);
+          repollTimerRef.current = window.setTimeout(() => {
+            repollTimerRef.current = null;
             if (unmountedRef.current) return;
-            // The verdict is the SHARED ambient one, not the top-level status
-            // alone. Those two signals reflect the same login and converge at
-            // different times, so reading only the summary is wrong in both
-            // directions: an ambient row that authenticates first would burn
-            // the whole re-poll budget and leave the provider off, and a stale
-            // top-level `authenticated` would enable a provider whose ambient
-            // row definitively says `unauthenticated`.
-            if (
-              completion.state !== null &&
-              isProviderAmbientAuthenticated(completion.state)
-            ) {
-              setWaitingLogin(null);
-              setSettling(false);
-              onEnable(providerId);
-              return;
-            }
-            if (
-              completion.state !== null &&
-              isAmbientAuthVerdictPending(completion.state) &&
-              scheduleRepoll()
-            ) {
-              return;
-            }
+            awaitOnce();
+          }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+          return true;
+        };
+        // Only a COMPLETED, authenticated login enables: `state` is null when
+        // the host has no settled outcome to report, and a cancelled or
+        // failed sign-in must not leave the user with a provider they never
+        // got to use.
+        //
+        // An unsettled ambient verdict is not a failure, though - it is the
+        // host's auth probe still running behind a login that may well have
+        // succeeded (see `isAmbientAuthVerdictPending`). Deciding on it would
+        // make the button's advertised action silently not happen, which is
+        // the one outcome a screen called "Sign in & enable" cannot have. So
+        // the same bounded re-poll Settings runs applies here, and only a
+        // settled - or budget-exhausted - "not authenticated" stops the
+        // chain.
+        const handleCompletion = (
+          completion: ProvidersAwaitLoginResponse,
+        ): void => {
+          if (unmountedRef.current) return;
+          // The verdict is the SHARED ambient one, not the top-level status
+          // alone. Those two signals reflect the same login and converge at
+          // different times, so reading only the summary is wrong in both
+          // directions: an ambient row that authenticates first would burn
+          // the whole re-poll budget and leave the provider off, and a stale
+          // top-level `authenticated` would enable a provider whose ambient
+          // row definitively says `unauthenticated`.
+          if (
+            completion.state !== null &&
+            isProviderAmbientAuthenticated(completion.state)
+          ) {
             setWaitingLogin(null);
             setSettling(false);
-          };
-          const awaitOnce = (): void => {
-            awaitLogin.mutate(
-              { providerId, profileId: null },
-              {
-                onSuccess: handleCompletion,
-                // A failed await ends the attempt: the mutation's own
-                // `onError` has already toasted, and re-polling a transport
-                // failure would only stretch the spinner over it.
-                onError: () => {
-                  if (unmountedRef.current) return;
-                  setWaitingLogin(null);
-                  setSettling(false);
-                },
+            onEnable(providerId);
+            return;
+          }
+          if (
+            completion.state !== null &&
+            isAmbientAuthVerdictPending(completion.state) &&
+            scheduleRepoll()
+          ) {
+            return;
+          }
+          setWaitingLogin(null);
+          setSettling(false);
+        };
+        const awaitOnce = (): void => {
+          awaitLogin.mutate(
+            { request: { providerId, profileId: null }, signal: undefined },
+            {
+              onSuccess: handleCompletion,
+              // A failed await ends the attempt: the mutation's own
+              // `onError` has already toasted, and re-polling a transport
+              // failure would only stretch the spinner over it.
+              onError: () => {
+                if (unmountedRef.current) return;
+                setWaitingLogin(null);
+                setSettling(false);
               },
-            );
-          };
-          awaitOnce();
-        },
+            },
+          );
+        };
+        awaitOnce();
+      },
+      // The mutation's own `onError` has already toasted the failed call.
+      () => {
+        if (unmountedRef.current) return;
+        setStartProgress(null);
       },
     );
   };
@@ -891,7 +1023,7 @@ function SignInToEnableButton(props: {
   // renders unconditionally.
   const unavailableHint = authenticatedAwaitingEnable
     ? null
-    : providerSignInUnavailableHint(state, isLocalHost);
+    : providerSignInUnavailableHint(state, isLocalHost, "sign-in-and-enable");
   if (hideAction) return null;
   // Nothing in the footer. The refusal used to be a grey caption on every card
   // whose provider has no headless sign-in - most of them - which made a third
@@ -917,10 +1049,16 @@ function SignInToEnableButton(props: {
         />
       ) : null}
       <span className="flex min-w-0 flex-col items-stretch gap-1.5">
+        <SignInToEnableProgress
+          progress={startProgress}
+          providerId={state.providerId}
+        />
         <SignInToEnableAlerts
+          providerId={state.providerId}
           declined={declined}
           declinedMessage={declinedMessage}
           notAuthenticated={notAuthenticated}
+          refusal={awaitLogin.data?.refusal ?? null}
         />
         <Button
           type="button"
@@ -1063,7 +1201,11 @@ export function OnboardingDetectedAgents() {
       state !== undefined &&
       providerNeedsSignInToEnable(state, installDetected) &&
       !isProviderAmbientAuthenticated(state)
-        ? providerSignInUnavailableHint(state, isLocalHost)
+        ? providerSignInUnavailableHint(
+            state,
+            isLocalHost,
+            "sign-in-and-enable",
+          )
         : null;
     return {
       providerId,

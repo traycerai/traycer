@@ -7,6 +7,10 @@ import {
   configBrowserResponseSchema,
   configBrowserSetRequestSchema,
   configBrowserSetResponseSchema,
+  configCatalogGetRequestSchema,
+  configCatalogResponseSchema,
+  configCatalogSetRequestSchema,
+  configCatalogSetResponseSchema,
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
   configEnvListRequestSchema,
@@ -18,6 +22,10 @@ import {
   configLogLevelsSetRequestSchema,
   configLogLevelsSetResponseSchema,
   configShellAddRequestSchema,
+  configWorktreesGetRequestSchema,
+  configWorktreesResponseSchema,
+  configWorktreesSetRequestSchema,
+  configWorktreesSetResponseSchema,
   configShellAddResponseSchema,
   configShellGetRequestSchema,
   configShellGetResponseSchema,
@@ -176,4 +184,36 @@ export const configBrowserSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configBrowserSetRequestSchema,
   responseSchema: configBrowserSetResponseSchema,
+});
+
+/** Reads the machine-user-global policy for worktrees agents create. */
+export const configWorktreesGetV10 = defineRpcContract({
+  method: "config.worktrees.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configWorktreesGetRequestSchema,
+  responseSchema: configWorktreesResponseSchema,
+});
+
+/** Writes the machine-user-global policy for worktrees agents create. */
+export const configWorktreesSetV10 = defineRpcContract({
+  method: "config.worktrees.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configWorktreesSetRequestSchema,
+  responseSchema: configWorktreesSetResponseSchema,
+});
+
+/** Reads the machine-wide catalog probe timeout and its bounds. */
+export const configCatalogGetV10 = defineRpcContract({
+  method: "config.catalog.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configCatalogGetRequestSchema,
+  responseSchema: configCatalogResponseSchema,
+});
+
+/** Writes the machine-wide catalog probe timeout. */
+export const configCatalogSetV10 = defineRpcContract({
+  method: "config.catalog.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configCatalogSetRequestSchema,
+  responseSchema: configCatalogSetResponseSchema,
 });

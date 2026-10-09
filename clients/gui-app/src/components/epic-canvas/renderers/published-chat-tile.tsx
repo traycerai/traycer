@@ -6,7 +6,6 @@ import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -39,7 +38,6 @@ import {
   type PublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
-import { unreachableHostBannerReason } from "./unreachable-host-banner-reason";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
@@ -299,7 +297,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       epicId={props.epicId}
       tabId={props.viewTabId}
       ownerStatus={ownerReachability.status}
-      ownerUnavailability={ownerReachability.unavailability}
       ownerLabel={ownerLabel}
       showsPublishedCopy={showsPublishedCopy}
     />
@@ -692,7 +689,6 @@ function PublishedChatDeadTileBanner(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly ownerStatus: HostReachabilityStatus;
-  readonly ownerUnavailability: HostUnavailability | null;
   readonly ownerLabel: string;
   /** See `ChatDeadTileBannerProps.showsPublishedCopy`. */
   readonly showsPublishedCopy: boolean;
@@ -707,7 +703,7 @@ function PublishedChatDeadTileBanner(props: {
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
       hostLabel={props.ownerLabel}
-      reason={unreachableHostBannerReason(props.ownerUnavailability)}
+      reason="host-offline"
       showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}

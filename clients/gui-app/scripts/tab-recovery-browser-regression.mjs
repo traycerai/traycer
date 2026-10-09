@@ -154,10 +154,6 @@ function headerEntry(snapshot) {
   return snapshot.entries.find((entry) => entry.kind === "header");
 }
 
-function canvasEntry(snapshot) {
-  return snapshot.entries.find((entry) => entry.kind === "canvas");
-}
-
 function splitItem(snapshot, splitId) {
   return snapshot.tabLayout.items.find(
     (item) => item.kind === "split" && item.id === splitId,
@@ -469,84 +465,6 @@ try {
     "bulk group recovery changed the surviving header focus",
   );
 
-  const splitTask = await callBridge(client, "createTask", ["Split recovery"]);
-  await callBridge(client, "seedInnerSplit", [splitTask]);
-  state = await callBridge(client, "snapshot", []);
-  const splitBeforeClose = state.canvases[splitTask];
-  assert(
-    splitBeforeClose?.panes.length === 2,
-    "inner split fixture did not create two panes",
-  );
-  const closedPane = splitBeforeClose.panes.find((pane) =>
-    pane.tabInstanceIds.includes("inst-a"),
-  );
-  assert(closedPane !== undefined, "closed inner pane was not found");
-  await callBridge(client, "closeInnerTile", [
-    splitTask,
-    closedPane.id,
-    "inst-a",
-  ]);
-  state = await callBridge(client, "snapshot", []);
-  assert(canvasEntry(state) !== undefined, "inner close was not journaled");
-  await clickSelector(client, '[data-testid="recovery-reopen"]');
-  await waitForRecoveryConsumed(client, "inner split recovery");
-  state = await callBridge(client, "snapshot", []);
-  assert(canvasEntry(state) === undefined, "inner recovery entry remained");
-  assert(
-    state.canvases[splitTask]?.panes.some((pane) =>
-      pane.tabInstanceIds.includes("inst-a"),
-    ),
-    "closed inner tile was not restored",
-  );
-
-  const emptySplitTask = await callBridge(client, "createTask", [
-    "Empty split recovery",
-  ]);
-  const emptyPaneId = await callBridge(client, "seedEmptySplit", [
-    emptySplitTask,
-  ]);
-  state = await callBridge(client, "snapshot", []);
-  assert(
-    state.canvases[emptySplitTask]?.panes.some(
-      (pane) => pane.id === emptyPaneId && pane.tabInstanceIds.length === 0,
-    ),
-    "empty split fixture did not preserve its empty pane",
-  );
-  await callBridge(client, "closeEmptyPane", [emptySplitTask, emptyPaneId]);
-  await callBridge(client, "flush", []);
-  state = await callBridge(client, "snapshot", []);
-  const emptyPaneEntry = canvasEntry(state);
-  assert(emptyPaneEntry !== undefined, "empty pane close was not journaled");
-  assert(
-    emptyPaneEntry.items?.paneIds?.includes(emptyPaneId),
-    "empty pane recovery did not record the closed pane",
-  );
-  await client.send("Page.reload", { ignoreCache: false });
-  await waitFor(
-    client,
-    "the tab recovery fixture to remount after empty pane reload",
-    `Boolean(document.querySelector('[data-testid="tab-recovery-browser-fixture"]')) && typeof window.__traycerTabRecovery === "object"`,
-  );
-  await waitForRecoveryReady(client, "empty pane recovery history");
-  state = await callBridge(client, "snapshot", []);
-  assert(
-    canvasEntry(state)?.items?.paneIds?.includes(emptyPaneId),
-    "empty pane recovery was not persisted",
-  );
-  await clickSelector(client, '[data-testid="recovery-reopen"]');
-  await waitForRecoveryConsumed(client, "empty pane recovery");
-  state = await callBridge(client, "snapshot", []);
-  assert(
-    canvasEntry(state) === undefined,
-    "empty pane recovery entry remained",
-  );
-  assert(
-    state.canvases[emptySplitTask]?.panes.some(
-      (pane) => pane.id === emptyPaneId && pane.tabInstanceIds.length === 0,
-    ),
-    "closed empty pane was not restored",
-  );
-
   const persistedDraft = await callBridge(client, "createDraft", []);
   await clickSelector(client, '[data-testid="recovery-close-active"]');
   await callBridge(client, "flush", []);
@@ -669,8 +587,6 @@ try {
           "single-and-bulk-task-recovery",
           "top-level-split-recovery-and-persistence",
           "named-group-bulk-recovery",
-          "inner-split-recovery",
-          "empty-pane-recovery-and-persistence",
           "reload-persisted-history",
           "duplicate-reopen-no-op",
           "cross-window-database-deletion-and-reload",

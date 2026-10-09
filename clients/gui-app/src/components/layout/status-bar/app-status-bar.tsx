@@ -1,4 +1,7 @@
-import { use, useEffect, useState, type ReactNode } from "react";
+import { Fragment, use, useEffect, useState, type ReactNode } from "react";
+import { GhostRegion } from "@/components/layout-editor/ghost-region";
+import { LayoutRegionContextMenu } from "@/components/layout-editor/region-quick-verbs";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
@@ -26,15 +29,31 @@ import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useBarPlacements, useRegionShown } from "@/lib/layout-overrides";
+import {
+  barClusterRegionsAt,
+  type BarPlacement,
+  type BarRegionId,
+  type EdgeSide,
+} from "@/lib/layout/layout-arrangement";
 
 /** Stable identity, so a strip with no list to offer never re-renders on one. */
 const NO_MENU_PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [];
 
 /**
- * The app's bottom strip: provider usage on the left, the watched host's
- * resource readout on the right.
+ * The phone footer's fixed ends (L-162): usage at the start, resources at the
+ * end, whatever bar or end either reading names for a desktop window.
+ */
+const PHONE_FOOTER_PLACEMENTS: Readonly<Record<BarRegionId, BarPlacement>> = {
+  usageLimits: { host: "status-bar", side: "left" },
+  resourceMonitor: { host: "status-bar", side: "right" },
+};
+
+/**
+ * The app's bottom strip: two clusters, one at each end, holding whichever of
+ * the usage cluster and the resource readout named this bar and that side
+ * (L-156). It ships with usage on the left and the readout on the right, and
+ * it is on screen for as long as either of the two is still here.
  *
  * It carries no host control of its own. Both panels it opens already end their
  * list in a `HostSwitcher` over this same watch pick, so a third one in the
@@ -78,17 +97,32 @@ function ScopedAppStatusBar(props: {
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
 }): ReactNode {
-  // Read for the chord ownership below, not for how the strip is drawn: a
-  // phone's footer draws the same readings as a desktop strip and scrolls
-  // them under a finger, so the viewport decides who holds a shortcut and
-  // nothing about what is on screen.
+  // Decides where the two readings draw (below): a phone's footer draws the
+  // same readings as a desktop strip and scrolls them under a finger.
   const narrowViewport = useIsMobileViewport();
-  const rateLimitsEnabled = useLayoutStore(
-    (state) => state.statusBar.rateLimits.enabled,
-  );
-  const resourcesEnabled = useLayoutStore(
-    (state) => state.statusBar.resources.enabled,
-  );
+  const rateLimitsEnabled = useRegionShown("usageLimits");
+  const resourcesEnabled = useRegionShown("resourceMonitor");
+  const editing = useLayoutEditorStore((state) => state.session !== null);
+  // Where both readings say they are: this strip draws the ones that named IT,
+  // which is why moving usage limits up no longer takes the monitor with it
+  // (L-156).
+  const placements = useBarPlacements();
+  // Except on a narrow viewport, where the footer draws BOTH whatever they
+  // name, at fixed ends: usage left, resources right (L-51, L-162). There is
+  // one bar on a phone and the mobile header gives its copies up while the
+  // footer is on, so a footer that honoured a header pick would drop a
+  // readout with nowhere to put it, and an end picked for a desktop bar says
+  // nothing about this one. The picks
+  // themselves are untouched, so the desktop window they were made in still
+  // honours them.
+  const drawn: Readonly<Record<BarRegionId, BarPlacement>> = narrowViewport
+    ? PHONE_FOOTER_PLACEMENTS
+    : placements;
+  const usageInStrip = drawn.usageLimits.host === "status-bar";
+  const stripRegions: ReadonlyArray<BarRegionId> = [
+    ...barClusterRegionsAt(drawn, "status-bar", "left"),
+    ...barClusterRegionsAt(drawn, "status-bar", "right"),
+  ];
   // Resolved here rather than in the cluster because it has two readers on
   // opposite sides of the gate below: the segments, and the right-click menu
   // that wraps the whole strip. One resolution is what keeps the menu's list
@@ -107,43 +141,47 @@ function ScopedAppStatusBar(props: {
   // keyed by the WATCHED host, since the accounts it names are that host's.
   const profileSelection = useRateLimitProfileSelection(props.scope.hostId);
   // `app.rate-limits.open` has one handler slot and two possible owners, and
-  // on desktop they are mutually exclusive by placement: `RateLimitIconButton`
+  // they are mutually exclusive: on desktop by placement - `RateLimitIconButton`
   // owns it in the header and is not mounted while the usage controls live
-  // down here.
+  // down here - and on a phone by the footer switch, since the mobile header
+  // draws no gauge while this footer is on (and this footer only mounts
+  // there while it is on).
   //
-  // A mobile viewport is the one shell where BOTH are on screen - the mobile
-  // header keeps its gauge whatever the footer does - so the strip stands
-  // down and leaves the slot to the header. It is not a coin toss: the slot
-  // holds ONE handler and an unregister only clears its own, so the later
-  // registrant would silently displace the header's and then, on unmounting
-  // for the keyboard or the drawer, take the chord away entirely - the header
-  // button still on screen would have no handler and no way to get one back,
-  // since its effect does not re-run. Nothing is lost by standing down: the
-  // cluster's own `PopoverTrigger` is a tap away, and the two panels are the
-  // same panel.
+  // It stands down while the usage cluster is drawing in the HEADER (L-156):
+  // the strip can be on screen for the resource monitor alone, and the panel
+  // this slot would open has no anchor here at all.
   useEffect(() => {
-    if (narrowViewport) return;
+    if (!usageInStrip) return;
     return registerDynamicActionHandler("app.rate-limits.open", () => {
       setUsageOpen(true);
     });
-  }, [narrowViewport]);
-  // The resource panel's half of the same question, and it needs one more fact
-  // because the popover is mounted by the HEADER too rather than only beside
-  // the button it replaces. On desktop `placement` keeps the two mounts
-  // mutually exclusive, so the strip always owns the action. On a mobile
-  // viewport both can be on screen, and the header's monitor is the survivor -
-  // it is still there with the keyboard up - so the strip owns the action only
-  // when the header is drawing no monitor to own it. With both off nobody
-  // registers, which is correct: there is no panel to open.
-  const headerResourceMonitor = useSettingsStore(
-    (state) => state.showGlobalResourceMonitor,
-  );
-  const claimsResourcesAction = !narrowViewport || !headerResourceMonitor;
+  }, [usageInStrip]);
+  // `app.resources.open` has one handler slot and the same two exclusive
+  // owners: the monitor draws HERE or in the header (L-156), never both - on
+  // a phone because the header gives its glyph up while the footer is on.
+  // With the monitor hidden nothing below mounts, so nobody registers, which
+  // is correct: there is no panel to open.
   // While the panel is open, let the header drop its title-bar drag regions so
   // a click on the (otherwise event-swallowing) drag area dismisses it. The id
   // is the header trigger's own: the two are mutually exclusive by placement
   // wherever a title bar exists at all, so they can never both be claiming it.
-  useTitleBarDragSuppression("rate-limits", usageOpen);
+  //
+  // The panel's open state reconciled with the cluster's placement, in the
+  // render AND in the state.
+  //
+  // The anchor and the content both unmount with the cluster, so Radix never
+  // fires `onOpenChange` on the way out: without this, `usageOpen` stays true
+  // for the life of the strip, `useTitleBarDragSuppression` below holds the
+  // header's own slot under a value nothing can clear, and a reading that
+  // comes back down reopens a panel nobody asked for. The derived value is
+  // what the render reads, so there is never a frame with an open panel and
+  // no anchor; the reset below is what forgets the request, because a request
+  // for a panel in this bar does not survive the cluster leaving it. Adjusted
+  // during render rather than from an effect: the condition is already false
+  // by the time this render commits, so there is no cascading second pass.
+  const usagePanelOpen = usageOpen && usageInStrip;
+  if (usageOpen && !usageInStrip) setUsageOpen(false);
+  useTitleBarDragSuppression("rate-limits", usagePanelOpen);
   const scope = props.scope;
   // A PICK that has not resolved to its own client leaves this subtree on the
   // AMBIENT binding, so mounting the live segments would draw one host's
@@ -159,22 +197,104 @@ function ScopedAppStatusBar(props: {
   const scopedToOwnHost =
     !props.hasExplicitPick || isHostScopeUsable(scope.status);
 
+  // Hidden and pointed at: the passive depiction in place, never the live
+  // segment - which opens a stream (L-14, L-62).
+  const resources = !resourcesEnabled ? (
+    <GhostRegion regionId="resourceMonitor" />
+  ) : (
+    // The segment's own quick verbs (L-144). It is the resource popover's
+    // trigger, so it carries the exemption that makes the strip's own menu
+    // stand down over it - and that menu names `usageLimits`, which is the
+    // segment BESIDE this one. Without a menu of its own the readout was the
+    // one piece of the strip that answered no right-click.
+    //
+    // Around the popover rather than inside its `triggerNode`: the popover
+    // hands that node straight to `PopoverTrigger asChild`, and a Radix root
+    // in that slot would swallow the trigger's props instead of forwarding
+    // them to the button, taking the left click with it. Wrapping out here
+    // leaves the trigger seam untouched and gives the context menu the
+    // `display: contents` span it hangs its own handlers on.
+    <LayoutRegionContextMenu regionId="resourceMonitor">
+      <ResourceMonitorPopover
+        trigger="custom"
+        contentSide="top"
+        claimsOpenAction
+        triggerNode={
+          <StatusBarResourceSegment
+            {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+            hostId={scope.hostId}
+            hostLabel={scope.hostLabel}
+            hasExplicitPick={props.hasExplicitPick}
+            interactive
+          />
+        }
+      />
+    </LayoutRegionContextMenu>
+  );
+
+  // The usage cluster, anchored where it draws. The anchor is the SLOT rather
+  // than a trigger for the same reason it always was - there is not always a
+  // trigger - and it travels with the cluster, so the panel opens at the end
+  // of the strip the cluster is actually on (L-156).
+  const usage = (
+    <PopoverAnchor asChild>
+      {/* Reserved even when it holds nothing, so nothing beside it shifts
+        into place when the segments land - or when the preference that hides
+        them is flipped. The notice for an unresolved pick takes the same
+        slot. */}
+      <span
+        data-testid="status-bar-rate-limit-slot"
+        className="flex min-w-0 items-center gap-1"
+      >
+        <StatusBarUsageSlot
+          scopedToOwnHost={scopedToOwnHost}
+          rateLimitsEnabled={rateLimitsEnabled}
+          providers={windowedProviders}
+          profileSelection={profileSelection}
+          scope={scope}
+          editing={editing}
+        />
+        {/* Hidden and pointed at: the passive depiction takes the slot the
+          segments left empty (L-14, L-62). */}
+        {rateLimitsEnabled ? null : <GhostRegion regionId="usageLimits" />}
+      </span>
+    </PopoverAnchor>
+  );
+
+  /**
+   * One end of the strip: the readings that named this bar and this side, in
+   * the order `barClusterRegionsAt` puts them in - usage limits first where
+   * both sit together (L-156).
+   */
+  const cluster = (side: EdgeSide): ReactNode =>
+    barClusterRegionsAt(drawn, "status-bar", side).map((region) => (
+      <Fragment key={region}>
+        {region === "usageLimits" ? usage : resources}
+      </Fragment>
+    ));
+
   return (
     // The menu wraps the strip's ROOT, so a right-click anywhere on it lands -
     // including the padding under the row. The controls that own their own
     // pointer behaviour opt out of it individually rather than the menu
     // guessing at their bounds.
     <StatusBarVisibilityMenu
+      // What this strip is actually holding, in the order it draws them: the
+      // menu names those and nothing else (L-159). It used to name the usage
+      // region by literal and offer the monitor's switch unconditionally,
+      // which since L-156 could govern a reading drawn in the top bar.
+      regions={stripRegions}
       providers={
         // Only what this strip can actually show, on both counts. An unresolved
         // pick leaves the subtree on the ambient binding, whose providers belong
         // to a host the strip is not watching - so the menu offers nothing
         // rather than a list borrowed from the wrong machine. And with usage
-        // switched off entirely there is no segment for a per-provider checkbox
-        // to govern: it would toggle a preference with no visible effect and no
+        // switched off entirely - or drawn in the header, where its own menu
+        // serves it - there is no segment here for a per-provider checkbox to
+        // govern: it would toggle a preference with no visible effect and no
         // item beside it explaining why. Settings, one item down, is where that
         // switch lives.
-        scopedToOwnHost && rateLimitsEnabled
+        scopedToOwnHost && rateLimitsEnabled && usageInStrip
           ? menuProviders(windowedProviders)
           : NO_MENU_PROVIDERS
       }
@@ -190,87 +310,43 @@ function ScopedAppStatusBar(props: {
         data-testid="app-status-bar"
         className="shrink-0 border-t border-border/90 bg-canvas pb-safe-bottom text-canvas-foreground"
       >
-        <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
-          {/*
-            The panel and its chord live HERE, above everything that can hide
-            the segments, because the panel stays meaningful in every state the
-            segments do not survive: it carries its own host notice and its own
-            way back. A handler owned by the cluster would go missing exactly
-            when a user reaches for it - with usage switched off in Settings, or
-            with a pick that cannot be reached - which is the argument the
-            placement toggle's own bridge already makes for itself.
-
-            The anchor is the slot rather than the trigger for the same reason:
-            there is not always a trigger, and the panel still has to open at
-            the left end of the strip.
-          */}
-          <Popover open={usageOpen} onOpenChange={setUsageOpen}>
-            <PopoverAnchor asChild>
-              {/*
-                Reserved even when it holds nothing, so the right-hand cluster
-                does not shift into place when the segments land - or when the
-                preference that hides them is flipped. The notice for an
-                unresolved pick takes the same slot.
-
-                The slot is also the row's GROWER: the spare room has to be
-                absorbed by exactly one box, and it is this one, so the usage
-                cluster's scroller inside it has exactly the room the resource
-                readout leaves - never more, which is what would push that
-                readout off the right edge. The right-hand cluster is pinned
-                to the far edge either way.
-              */}
-              <span
-                data-testid="status-bar-rate-limit-slot"
-                className="flex min-w-0 flex-1 items-center gap-1"
-              >
-                <StatusBarUsageSlot
-                  scopedToOwnHost={scopedToOwnHost}
-                  rateLimitsEnabled={rateLimitsEnabled}
-                  providers={windowedProviders}
-                  profileSelection={profileSelection}
-                  scope={scope}
-                />
-              </span>
-            </PopoverAnchor>
+        {/*
+          The panel and its chord live HERE, above everything that can hide the
+          segments, because the panel stays meaningful in every state the
+          segments do not survive: it carries its own host notice and its own
+          way back. A handler owned by the cluster would go missing exactly
+          when a user reaches for it - with usage switched off in Settings, or
+          with a pick that cannot be reached.
+        */}
+        <Popover open={usagePanelOpen} onOpenChange={setUsageOpen}>
+          <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
+            {cluster("left")}
+            {/*
+              The row's one GROWER: the spare room has to be absorbed by
+              exactly one box, and a box of its own is the one answer that
+              works for all four placements - it holds each cluster against
+              its own edge, and it is the first thing to give when the
+              readings need the room, so the usage scroller inside gets
+              exactly what the readout beside it leaves and never pushes it
+              off the edge.
+            */}
+            <span className="flex-1" />
+            {cluster("right")}
+          </div>
+          {/* Not while the cluster is in the header: the panel is the same
+            panel, and the button up there mounts its own. Two of them is two
+            subscriptions and two owners for one chord. */}
+          {usageInStrip ? (
             <RateLimitPopover
               side="top"
-              align="start"
+              align={drawn.usageLimits.side === "left" ? "start" : "end"}
               onClose={() => setUsageOpen(false)}
               profileSelection={profileSelection}
               scope={scope}
               hasExplicitPick={props.hasExplicitPick}
             />
-          </Popover>
-          {/*
-            Gated on the PREFERENCE only, never on the pick - the mirror of the
-            usage panel above, and for the same reason. Wherever this is the
-            registrant of `app.resources.open` it is also the only thing that
-            renders the resource panel's own "can't reach this host" notice, so
-            unmounting it under an unresolved pick would take the chord and the
-            explanation away exactly when they are wanted, and would lose a
-            behaviour the header placement keeps.
-            Nothing leaks by staying mounted: the panel opens its stream only
-            when the binding is genuinely the picked host's, and the segment
-            runs the window's projection through the same attribution check
-            before printing a number, so an unresolved pick reads as dashes
-            rather than as the ambient host's figures.
-          */}
-          {resourcesEnabled ? (
-            <ResourceMonitorPopover
-              trigger="custom"
-              contentSide="top"
-              claimsOpenAction={claimsResourcesAction}
-              triggerNode={
-                <StatusBarResourceSegment
-                  {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
-                  hostId={scope.hostId}
-                  hostLabel={scope.hostLabel}
-                  hasExplicitPick={props.hasExplicitPick}
-                />
-              }
-            />
           ) : null}
-        </div>
+        </Popover>
       </div>
     </StatusBarVisibilityMenu>
   );
@@ -289,16 +365,22 @@ function StatusBarUsageSlot(props: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
+  readonly editing: boolean;
 }): ReactNode {
-  if (!props.scopedToOwnHost)
-    return <StatusBarHostNotice scope={props.scope} />;
-  if (!props.rateLimitsEnabled) return null;
   return (
-    <StatusBarRateLimitCluster
-      hostId={props.scope.hostId}
-      providers={props.providers}
-      profileSelection={props.profileSelection}
-    />
+    <>
+      {!props.scopedToOwnHost ? (
+        <StatusBarHostNotice scope={props.scope} />
+      ) : null}
+      {props.scopedToOwnHost && props.rateLimitsEnabled ? (
+        <StatusBarRateLimitCluster
+          hostId={props.scope.hostId}
+          providers={props.providers}
+          profileSelection={props.profileSelection}
+          editing={props.editing}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -322,14 +404,18 @@ function menuProviders(
  * Same three states and same remedies as the popovers' notice, at one line:
  * `vanished` needs the pick dropped, `unreachable` needs the machine back, and
  * `connecting` needs a moment — which is why it alone offers no button. A
- * strip is not the place to explain a plan restriction or a host version, so
- * those keep landing in the popover, where there is room for the sentence.
+ * strip is not the place to explain a host version, so
+ * that keeps landing in the popover, where there is room for the sentence.
+ *
+ * It is passive chrome for the layout editor (4.2): it takes the slot the
+ * usage segments would occupy and is not a region of its own.
  */
 function StatusBarHostNotice(props: { readonly scope: HostScope }): ReactNode {
   const scope = props.scope;
   if (scope.status === "connecting") {
     return (
       <span
+        data-layout-passive
         className="truncate text-muted-foreground"
         data-testid="status-bar-host-connecting"
       >
@@ -340,6 +426,7 @@ function StatusBarHostNotice(props: { readonly scope: HostScope }): ReactNode {
   return (
     <span
       role="status"
+      data-layout-passive
       className="flex min-w-0 items-center gap-2"
       data-testid="status-bar-host-unavailable"
     >

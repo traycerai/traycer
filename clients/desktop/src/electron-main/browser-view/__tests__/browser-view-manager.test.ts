@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { log } from "../../app/logger";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
+import type { MainConfirmation } from "../../app/confirm-destructive";
+import {
+  BrowserViewDownloads,
+  type BrowserDownloadItem,
+} from "../browser-download";
 import { BrowserViewManager } from "../browser-view-manager";
 import { BrowserSessionsRegistry } from "../../browser-sessions/browser-sessions-owner";
 import { createRegistryHarness } from "../../browser-sessions/__tests__/browser-sessions-stream-fixture";
@@ -601,6 +606,8 @@ class FakePopupWebContents extends EventEmitter {
 class FakePopupWindow extends EventEmitter {
   readonly webContents: FakePopupWebContents;
   destroyed = false;
+  visible = true;
+  minimized = false;
   closeCalls = 0;
 
   constructor(webContentsId: number) {
@@ -612,6 +619,14 @@ class FakePopupWindow extends EventEmitter {
     return this.destroyed;
   }
 
+  isVisible(): boolean {
+    return this.visible;
+  }
+
+  isMinimized(): boolean {
+    return this.minimized;
+  }
+
   close(): void {
     this.closeCalls += 1;
     this.destroyed = true;
@@ -621,6 +636,50 @@ class FakePopupWindow extends EventEmitter {
 interface CreatedPopupWindow {
   readonly window: FakePopupWindow;
   readonly adopted: WebContents | undefined;
+}
+
+class FakeDownloadItem implements BrowserDownloadItem {
+  savePath = "";
+  cancelCalls = 0;
+
+  constructor(readonly filename: string) {}
+
+  getURL(): string {
+    return `https://opener.example/${this.filename}`;
+  }
+
+  getFilename(): string {
+    return this.filename;
+  }
+
+  getMimeType(): string {
+    return "application/octet-stream";
+  }
+
+  getTotalBytes(): number {
+    return 10;
+  }
+
+  getReceivedBytes(): number {
+    return 0;
+  }
+
+  getSavePath(): string {
+    return this.savePath;
+  }
+
+  setSavePath(path: string): void {
+    this.savePath = path;
+  }
+
+  cancel(): void {
+    this.cancelCalls += 1;
+  }
+
+  on(
+    _event: "updated" | "done",
+    _listener: (downloadEvent: unknown, state: string) => void,
+  ): void {}
 }
 
 class FakeDevToolsWindow {
@@ -659,6 +718,8 @@ interface Harness {
   readonly focusedTiles: BrowserViewTileKey[];
   readonly finds: BrowserViewFindChange[];
   readonly downloads: BrowserViewDownloadChange[];
+  /** The window each entry of `downloads` was sent to, in order. */
+  readonly downloadWindowIds: string[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
   readonly openTileRequests: BrowserViewOpenTileRequest[];
   readonly annotationEvents: BrowserAnnotationSessionIpcEvent[];
@@ -671,6 +732,8 @@ interface Harness {
   emitDownload(change: BrowserSessionDownloadChange): void;
   emitCertificateError(change: BrowserSessionCertificateErrorChange): void;
   emitWindowChange(): void;
+  /** Shows or hides a host window and fires the shown-change listeners. */
+  setWindowShown(windowId: string, shown: boolean): void;
   /** Hold `onAttached` until the test resolves the latch. */
   holdNextGuestAttach(): PromiseWithResolvers<void>;
   /** Hold `seedStorageState` until the test resolves the latch. */
@@ -745,6 +808,7 @@ function createHarnessWithOptions(
   const focusedTiles: BrowserViewTileKey[] = [];
   const finds: BrowserViewFindChange[] = [];
   const downloads: BrowserViewDownloadChange[] = [];
+  const downloadWindowIds: string[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
   const openTileRequests: BrowserViewOpenTileRequest[] = [];
   const annotationEvents: BrowserAnnotationSessionIpcEvent[] = [];
@@ -755,6 +819,8 @@ function createHarnessWithOptions(
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const createdPopupWindows: CreatedPopupWindow[] = [];
   const windowListeners = new Set<() => void>();
+  const hiddenWindowIds = new Set<string>();
+  const windowShownListeners = new Set<() => void>();
   const downloadListeners = new Set<
     (change: BrowserSessionDownloadChange) => void
   >();
@@ -836,6 +902,13 @@ function createHarnessWithOptions(
     attachRendererGuest,
     releaseRendererGuest,
     getWindow: (windowId) => windows.get(windowId) ?? null,
+    isWindowShown: (windowId) => !hiddenWindowIds.has(windowId),
+    onWindowShownChange: (listener) => {
+      windowShownListeners.add(listener);
+      return () => {
+        windowShownListeners.delete(listener);
+      };
+    },
     localHostId: () =>
       harnessOptions?.localHostId === undefined
         ? "host-1"
@@ -890,6 +963,7 @@ function createHarnessWithOptions(
           record(finds, payload);
           return true;
         case RunnerHostEvent.browserViewDownloadChange:
+          downloadWindowIds.push(windowId);
           record(downloads, payload);
           return true;
         case RunnerHostEvent.browserViewCertificateError:
@@ -943,6 +1017,7 @@ function createHarnessWithOptions(
     focusedTiles,
     finds,
     downloads,
+    downloadWindowIds,
     certificateErrors,
     openTileRequests,
     annotationEvents,
@@ -960,6 +1035,11 @@ function createHarnessWithOptions(
     },
     emitWindowChange: () => {
       for (const listener of windowListeners) listener();
+    },
+    setWindowShown: (windowId, shown) => {
+      if (shown) hiddenWindowIds.delete(windowId);
+      else hiddenWindowIds.add(windowId);
+      for (const listener of windowShownListeners) listener();
     },
     holdNextGuestAttach: () => {
       const latch = Promise.withResolvers<void>();
@@ -1214,6 +1294,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
     ]);
 
@@ -1230,6 +1311,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",
@@ -1303,6 +1385,429 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(view.debugger.attached).toBe(true);
     expect(view.debugger.detached).toBe(false);
     expect(enableCount()).toBe(1);
+  });
+
+  it("intercepts the file chooser on a leased tab only while no tile shows it", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    const interceptions = () =>
+      view.debugger.commands
+        .filter(({ method }) => method === "Page.setInterceptFileChooserDialog")
+        .map(({ params }) => params);
+
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+    expect(interceptions()).toEqual([{ enabled: true }]);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile" },
+      }),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(interceptions()).toEqual([{ enabled: true }, { enabled: false }]);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(true);
+
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+      }),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(interceptions()).toEqual([
+      { enabled: true },
+      { enabled: false },
+      { enabled: true },
+    ]);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+    expect(harness.manager.isWebContentsOnScreen(view.id + 9999)).toBe(false);
+  });
+
+  it("treats a viewed tile in a window that is not shown as off screen", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    const interceptions = () =>
+      view.debugger.commands
+        .filter(({ method }) => method === "Page.setInterceptFileChooserDialog")
+        .map(({ params }) => params);
+
+    harness.setWindowShown("window-1", false);
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile" },
+      }),
+    ).toBe(true);
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+
+    // The tile holds the tab, so the host-facing report says viewed; the
+    // window around it is hidden, so nobody can see it.
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+    expect(interceptions()).toEqual([{ enabled: true }]);
+
+    harness.setWindowShown("window-1", true);
+    await Promise.resolve();
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(true);
+    expect(interceptions()).toEqual([{ enabled: true }, { enabled: false }]);
+
+    harness.setWindowShown("window-1", false);
+    await Promise.resolve();
+    expect(harness.manager.isWebContentsOnScreen(view.id)).toBe(false);
+    expect(interceptions()).toEqual([
+      { enabled: true },
+      { enabled: false },
+      { enabled: true },
+    ]);
+    expect(harness.nativeTabStatuses.at(-1)?.viewed).toBe(true);
+  });
+
+  async function openOnePopup(harness: Harness): Promise<FakePopupWindow> {
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    return openPopupThroughHandler(harness, handler, view, {
+      url: "https://opener.example/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+  }
+
+  it("reads a visible, restored popup as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      true,
+    );
+  });
+
+  it("does not read a minimized popup as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    popup.minimized = true;
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      false,
+    );
+  });
+
+  it("does not read a hidden popup as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    popup.visible = false;
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      false,
+    );
+  });
+
+  it("reads a popup as on screen again once it is restored", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    popup.minimized = true;
+    popup.visible = false;
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      false,
+    );
+
+    popup.minimized = false;
+    popup.visible = true;
+
+    expect(harness.manager.isWebContentsOnScreen(popup.webContents.id)).toBe(
+      true,
+    );
+  });
+
+  it("does not read a destroyed popup or an unknown WebContents as on screen", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const popupId = popup.webContents.id;
+    expect(harness.manager.isWebContentsOnScreen(popupId)).toBe(true);
+
+    popup.destroyed = true;
+
+    expect(harness.manager.isWebContentsOnScreen(popupId)).toBe(false);
+    expect(harness.manager.isWebContentsOnScreen(987654)).toBe(false);
+  });
+
+  it("refuses a dangerous download from a minimized popup and holds it once restored", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const confirmCalls: MainConfirmation[] = [];
+    const changes: BrowserSessionDownloadChange[] = [];
+    const downloads = new BrowserViewDownloads({
+      downloadsDirectory: () => "downloads-root",
+      files: {
+        publish: async () => "published",
+        remove: async () => undefined,
+        removeSync: () => undefined,
+      },
+      confirm: (confirmation) => {
+        confirmCalls.push(confirmation);
+        return new Promise<boolean>(() => undefined);
+      },
+      isOnScreen: (webContentsId) =>
+        harness.manager.isWebContentsOnScreen(webContentsId),
+      emit: (change) => {
+        changes.push(change);
+      },
+    });
+    const downloadContents = {
+      id: popup.webContents.id,
+      getURL: () => "https://opener.example/popup",
+      once: (event: "destroyed", listener: () => void) => {
+        popup.webContents.once(event, listener);
+      },
+      removeListener: (event: "destroyed", listener: () => void) => {
+        popup.webContents.removeListener(event, listener);
+      },
+    };
+    const startSetup = (): FakeDownloadItem => {
+      const item = new FakeDownloadItem("setup.exe");
+      downloads.handle(item, downloadContents);
+      return item;
+    };
+
+    popup.minimized = true;
+    const refused = startSetup();
+    expect(refused.cancelCalls).toBe(1);
+    expect(refused.savePath).toBe("");
+    expect(confirmCalls).toHaveLength(0);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      state: "cancelled",
+      dangerType: ".exe",
+    });
+
+    popup.minimized = false;
+    const held = startSetup();
+    expect(held.cancelCalls).toBe(0);
+    expect(held.savePath).not.toBe("");
+    expect(confirmCalls).toHaveLength(1);
+    expect(changes.at(-1)).toMatchObject({
+      state: "prompting",
+      dangerType: ".exe",
+    });
+  });
+
+  function downloadChangeFor(
+    webContentsId: number,
+  ): BrowserSessionDownloadChange {
+    return {
+      webContentsId,
+      downloadId: `download-${webContentsId}`,
+      url: "https://opener.example/file.txt",
+      filename: "file.txt",
+      mimeType: "text/plain",
+      totalBytes: 100,
+      receivedBytes: 40,
+      state: "progressing",
+      savePath: null,
+      dangerType: null,
+      canCancel: true,
+    };
+  }
+
+  it("sends a normal guest's download change to its own tile", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+
+    harness.emitDownload(downloadChangeFor(view.id));
+
+    expect(harness.downloadWindowIds).toEqual(["window-1"]);
+    expect(harness.downloads).toEqual([
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: `download-${view.id}`,
+        state: "progressing",
+        receivedBytes: 40,
+        canCancel: true,
+      }),
+    ]);
+  });
+
+  it("routes a popup's download change to the tile it was opened from", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+
+    harness.emitDownload(downloadChangeFor(popup.webContents.id));
+
+    expect(harness.downloadWindowIds).toEqual(["window-1"]);
+    expect(harness.downloads).toEqual([
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: `download-${popup.webContents.id}`,
+        url: "https://opener.example/file.txt",
+        filename: "file.txt",
+        state: "progressing",
+        totalBytes: 100,
+        receivedBytes: 40,
+        canCancel: true,
+      }),
+    ]);
+  });
+
+  it("drops a download change for a popup that has closed", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const popupId = popup.webContents.id;
+    harness.emitDownload(downloadChangeFor(popupId));
+    expect(harness.downloads).toHaveLength(1);
+
+    popup.emit("closed");
+    // A download that never reported while the popup was open has no tile.
+    harness.emitDownload({
+      ...downloadChangeFor(popupId),
+      downloadId: "download-started-after-close",
+    });
+
+    expect(harness.downloads).toHaveLength(1);
+  });
+
+  it("keeps routing a popup download to its opener's tile after the popup closes, until the download settles", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const popupId = popup.webContents.id;
+    const base = downloadChangeFor(popupId);
+
+    harness.emitDownload(base);
+    popup.emit("closed");
+    harness.emitDownload({ ...base, receivedBytes: 70 });
+    harness.emitDownload({
+      ...base,
+      state: "completed",
+      receivedBytes: 100,
+      canCancel: false,
+    });
+
+    expect(harness.downloadWindowIds).toEqual([
+      "window-1",
+      "window-1",
+      "window-1",
+    ]);
+    expect(harness.downloads).toEqual([
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: base.downloadId,
+        state: "progressing",
+        canCancel: true,
+      }),
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: base.downloadId,
+        state: "progressing",
+        receivedBytes: 70,
+      }),
+      expect.objectContaining({
+        ...BASE_TILE_KEY,
+        downloadId: base.downloadId,
+        state: "completed",
+        receivedBytes: 100,
+        canCancel: false,
+      }),
+    ]);
+
+    // Settled: the association is gone.
+    harness.emitDownload({ ...base, receivedBytes: 90 });
+    expect(harness.downloads).toHaveLength(3);
+  });
+
+  it("keeps routing an interrupted popup download until its final report", async () => {
+    const harness = createHarness();
+    const popup = await openOnePopup(harness);
+    const base = downloadChangeFor(popup.webContents.id);
+
+    harness.emitDownload(base);
+    popup.emit("closed");
+    // Interrupted but still cancellable (it can resume): not the last report.
+    harness.emitDownload({ ...base, state: "interrupted", canCancel: true });
+    harness.emitDownload({ ...base, state: "interrupted", canCancel: false });
+
+    expect(harness.downloads.map((change) => change.state)).toEqual([
+      "progressing",
+      "interrupted",
+      "interrupted",
+    ]);
+    expect(harness.downloads.map((change) => change.canCancel)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(harness.downloadWindowIds).toEqual([
+      "window-1",
+      "window-1",
+      "window-1",
+    ]);
+
+    harness.emitDownload({ ...base, receivedBytes: 90 });
+    expect(harness.downloads).toHaveLength(3);
+  });
+
+  it("drops a download change for an unknown WebContents", () => {
+    const harness = createHarness();
+
+    harness.emitDownload(downloadChangeFor(987654));
+
+    expect(harness.downloads).toEqual([]);
   });
 
   it("sends nothing on an unleased tab's navigation, and recovers a leased one", async () => {
@@ -4054,6 +4559,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
     ]);
 
@@ -4070,6 +4576,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       "Runtime.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.setInterceptFileChooserDialog",
       "Page.addScriptToEvaluateOnNewDocument",
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",

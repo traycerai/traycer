@@ -18,6 +18,7 @@ import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
 import HermesAgentMono from "@lobehub/icons/es/HermesAgent/components/Mono";
 import HuggingFaceColor from "@lobehub/icons/es/HuggingFace/components/Color";
 import AntigravityMono from "@lobehub/icons/es/Antigravity/components/Mono";
+import CommandCodeMono from "@lobehub/icons/es/CommandCode/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -147,6 +148,13 @@ export const ReasonixIcon: HarnessIcon = (props) => (
 // survive at the 16px the picker rows draw these at.
 export const AntigravityIcon: HarnessIcon = (props) => (
   <AntigravityMono {...props} />
+);
+
+// Command Code — lobehub monochrome brand mark (`currentColor` theming), same
+// pattern as Devin and Hermes. The brand itself is black on white, so the
+// mono variant is the mark rather than a reduction of it.
+export const CommandCodeIcon: HarnessIcon = (props) => (
+  <CommandCodeMono {...props} />
 );
 
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.

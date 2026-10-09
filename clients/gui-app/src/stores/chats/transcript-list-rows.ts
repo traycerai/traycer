@@ -1,4 +1,3 @@
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -18,6 +17,8 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 const EMPTY_ROW_IDS: ReadonlySet<string> = new Set<string>();
 
@@ -457,7 +458,7 @@ function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
       if (message.role === "assistant") turnKeys.add(assistantTurnKey(message));
     }
   }
-  const alsoCurrent = (message: Message): void => {
+  const alsoCurrent = (message: OpenMessage): void => {
     if (message.role === "assistant")
       turnKeys.delete(assistantTurnKey(message));
   };

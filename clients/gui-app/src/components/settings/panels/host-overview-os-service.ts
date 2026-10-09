@@ -14,6 +14,7 @@ import {
   useHostServiceDeregister,
   useHostServiceRegister,
 } from "@/components/settings/panels/host-overview-rpc";
+import { serviceRegisterForegroundReason } from "@/components/settings/panels/host-doctor-actions";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   hostServiceWriteLatches,
@@ -46,6 +47,12 @@ export function useOverviewOsService(input: {
   readonly registerDegrade: OverviewDegradeReason | null;
   readonly deregisterDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
+  /**
+   * The scoped host is this machine's, and it was started in a terminal:
+   * registering is withheld (`serviceRegisterForegroundReason`) and the
+   * deregister confirm says the host keeps running.
+   */
+  readonly foregroundRun: boolean;
   /** The scoped host's id - the latch store's key. `null` disables latching. */
   readonly hostId: string | null;
   /** Whether the scope still has a live route; releases the accepted latch. */
@@ -90,6 +97,8 @@ export function useOverviewOsService(input: {
       !externallyManaged &&
       !cliUnavailable &&
       !externallyManagedRefusal,
+    registerBlockedReason: serviceRegisterForegroundReason(input.foregroundRun),
+    foregroundRun: input.foregroundRun,
     canDeregister:
       input.deregisterDegrade === null &&
       !externallyManaged &&

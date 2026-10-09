@@ -104,17 +104,39 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => stableOpenTransport,
 }));
 
+const skeletonResumeCacheHooks = vi.hoisted(() => ({
+  shouldLoad: null as (() => boolean) | null,
+  hydrate: null as (() => Promise<void>) | null,
+  prewarmUsers: [] as string[],
+}));
+vi.mock("@/stores/chats/skeleton-resume-cache", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/stores/chats/skeleton-resume-cache")
+    >();
+  return {
+    ...actual,
+    shouldLoadDurableSkeletonForResume: (
+      key: Parameters<typeof actual.shouldLoadDurableSkeletonForResume>[0],
+    ) =>
+      skeletonResumeCacheHooks.shouldLoad?.() ??
+      actual.shouldLoadDurableSkeletonForResume(key),
+    hydrateSkeletonForResume: (
+      key: Parameters<typeof actual.hydrateSkeletonForResume>[0],
+    ) =>
+      skeletonResumeCacheHooks.hydrate?.() ??
+      actual.hydrateSkeletonForResume(key),
+    primeDurableSkeletonsForResume: (userId: string) => {
+      skeletonResumeCacheHooks.prewarmUsers.push(userId);
+      actual.primeDurableSkeletonsForResume(userId);
+    },
+  };
+});
+
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
-const PLAN_ALLOWS_REMOTE = true;
 
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
@@ -134,8 +156,6 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -181,9 +201,9 @@ function fakeStreamSession(): IStreamSession {
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => fakeStreamSession(),
-    subscribeWithParamsProvider: () => {
-      throw new Error("not exercised by this test");
-    },
+    // The path a chat session opens through: `ChatStreamClient` re-reads its
+    // skeleton-resume claim on every wire subscribe.
+    subscribeWithParamsProvider: () => fakeStreamSession(),
     close: () => undefined,
     isClosed: () => false,
     notifyBearerRotated: () => undefined,
@@ -297,6 +317,9 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     globalClientRef.value = null;
     openTransportRef.fn = null;
     readySessionHosts.value = new Set();
+    skeletonResumeCacheHooks.shouldLoad = null;
+    skeletonResumeCacheHooks.hydrate = null;
+    skeletonResumeCacheHooks.prewarmUsers.length = 0;
     useAuthStore.setState({ profile: null, status: "signed-out" });
   });
 
@@ -346,6 +369,41 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     expect(tracked.records()).toHaveLength(2);
     expect(tracked.records()[0].closeCount).toBe(1);
     expect(tracked.records()[1].closeCount).toBe(0);
+  });
+
+  it("acquires while a hinted durable skeleton load is still pending", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    skeletonResumeCacheHooks.shouldLoad = () => true;
+    let hydrationStarted = false;
+    skeletonResumeCacheHooks.hydrate = () => {
+      hydrationStarted = true;
+      return new Promise<void>(() => {});
+    };
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("resume-prewarm-key");
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-resume-pending", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect(hydrationStarted).toBe(true);
+    expect(tracked.records()).toHaveLength(1);
+    expect(skeletonResumeCacheHooks.prewarmUsers).toContain(
+      CHAT_PROFILE_USER_ID,
+    );
   });
 
   // G1's control: the scope dropped the websocket URL, but only for a LOCAL
@@ -427,7 +485,7 @@ describe("a live chat session survives a degraded liveness read", () => {
         lastSeenAt: "2026-08-01T00:00:00.000Z",
       },
     };
-    return hostListItemToDirectoryEntry(item, RELAY_URL, PLAN_ALLOWS_REMOTE);
+    return hostListItemToDirectoryEntry(item, RELAY_URL);
   }
 
   it("keeps the same handle and never closes the transport when connectivity goes `unknown`", async () => {

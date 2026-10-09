@@ -175,9 +175,9 @@ describe("the released epic.subscribe@1 line and epic.listChatRecords@1.0 did no
   it("stream['epic.subscribe']'s released minors are byte-for-byte the baseline; only @1.4-@1.6 were added", () => {
     const baseline: unknown = JSON.parse(readFileSync(fixturePath, "utf8"));
     const mine = buildProtocolSurface({
-      unary: hostRpcRegistry,
+      unary: {},
       unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
-      stream: hostStreamRpcRegistry,
+      stream: { "epic.subscribe": hostStreamRpcRegistry["epic.subscribe"] },
     });
 
     // Not byte-for-byte over the WHOLE entry: this branch adds the unreleased
@@ -211,9 +211,11 @@ describe("the released epic.subscribe@1 line and epic.listChatRecords@1.0 did no
   it("optionalUnary['epic.listChatRecords'].schemas['1.0'] is unchanged; only 1.1 was added", () => {
     const baseline: unknown = JSON.parse(readFileSync(fixturePath, "utf8"));
     const mine = buildProtocolSurface({
-      unary: hostRpcRegistry,
+      unary: {
+        "epic.listChatRecords": hostRpcRegistry["epic.listChatRecords"],
+      },
       unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
-      stream: hostStreamRpcRegistry,
+      stream: {},
     });
 
     const baselineSchemas = (

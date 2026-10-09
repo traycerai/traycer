@@ -251,7 +251,7 @@ function sleep(ms: number): Promise<void> {
 // Best-effort open of a URL in the platform browser. Errors (e.g. a headless
 // box with no `xdg-open`) are swallowed: the device-flow prompt always prints
 // the code + URL, so opening the browser is purely a convenience.
-function openInBrowser(url: string): void {
+export function openInBrowser(url: string): void {
   const plat = osPlatform();
   // None of these openers route the URL through a shell: `open` / `xdg-open`
   // receive it as a plain argv entry, and on Windows `rundll32

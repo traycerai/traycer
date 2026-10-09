@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  AgentSender,
-  ContentBlock,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
 import { projectTranscriptRows } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import {
@@ -23,6 +18,12 @@ import {
   contentBlocksById,
   foldPinnedTodo,
 } from "@traycer/protocol/persistence/chat-transcript/pinned-todo-fold";
+
+import type {
+  OpenAgentSender,
+  OpenContentBlock,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * # Pinned-todo fold: renderer/host equivalence
@@ -62,7 +63,7 @@ const CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "Hello" }] }],
 };
 
-const ASSISTANT_SENDER: AgentSender = {
+const ASSISTANT_SENDER: OpenAgentSender = {
   type: "agent",
   harnessId: "claude",
   agentId: "claude-sonnet-4",
@@ -81,7 +82,7 @@ const BINDING = {
 function userMessage(
   messageId: string,
   timestamp: number,
-): Extract<Message, { role: "user" }> {
+): Extract<OpenMessage, { role: "user" }> {
   return {
     role: "user",
     messageId,
@@ -96,7 +97,7 @@ function taskCreateBlock(
   blockId: string,
   timestamp: number,
   text: string,
-): ContentBlock {
+): OpenContentBlock {
   return {
     blockId,
     type: "tool_call",
@@ -133,7 +134,7 @@ function steerBlock(
   blockId: string,
   timestamp: number,
   queueItemId: string,
-): ContentBlock {
+): OpenContentBlock {
   return {
     blockId,
     type: "steer",
@@ -151,8 +152,8 @@ function assistantMessage(input: {
   messageId: string;
   timestamp: number;
   turnId: string;
-  blocks: readonly ContentBlock[];
-}): Extract<Message, { role: "assistant" }> {
+  blocks: readonly OpenContentBlock[];
+}): Extract<OpenMessage, { role: "assistant" }> {
   return {
     role: "assistant",
     messageId: input.messageId,

@@ -6,15 +6,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * `clients/gui-app/scripts/*-browser*.mjs` are real-browser regression
- * drivers (vite + headless Chrome over CDP, `run-tests.ts` spawns each with
- * no timeout of its own). Every driver used to carry its own copy of a
- * `connectCdp` WebSocket client, and most copies had no path to settle a
- * command once Chrome died mid-command: no `close` handler, no per-command
- * deadline. A Chrome crash or a dropped DevTools socket then left `send()`
- * pending forever, the driver never reached its `finally` to terminate
- * Chrome and Vite, and the CI job hung until ITS OWN limit, hiding the real
- * failure behind a timeout rather than a red test.
+ * `clients/gui-app/scripts/*-browser*.mjs` are the manual real-browser
+ * drivers (vite + headless Chrome over CDP, run by hand with no timeout of
+ * their own; the CI-run regressions are Playwright specs in `browser-tests/`
+ * now). Every driver used to carry its own copy of a `connectCdp` WebSocket
+ * client, and most copies had no path to settle a command once Chrome died
+ * mid-command: no `close` handler, no per-command deadline. A Chrome crash or
+ * a dropped DevTools socket then left `send()` pending forever, the driver
+ * never reached its `finally` to terminate Chrome and Vite, and the run hung
+ * instead of failing, hiding the real failure behind a timeout.
  *
  * They now all import ONE hardened client, `scripts/cdp-client.mjs`
  * (`export function connectCdp`), whose `send()` rejects - never hangs - on
@@ -45,28 +45,26 @@ const CDP_CLIENT_FILE = "cdp-client.mjs";
 
 /**
  * Files allowed to construct their own `WebSocket`, each with the reason
- * written beside it. Both predate the shared client, drive a fundamentally
- * different event surface than `send`/`close` models, and already fail their
- * own pending requests on socket close/error - so neither is the hang this
- * guard exists to prevent; they are just not migrated, on purpose.
+ * written beside it. Both predate the shared client's `on` and already fail
+ * their own pending requests on socket close/error - so neither is the hang
+ * this guard exists to prevent; they are just not migrated, on purpose.
  */
 const WEBSOCKET_ALLOWLIST: readonly string[] = [
-  // A manual driver - not run by CI or `run-tests.ts` - whose client also
-  // captures `Runtime.exceptionThrown` events, which the shared send/close
-  // client does not model.
+  // A manual driver whose client also captures `Runtime.exceptionThrown`
+  // events.
   "tab-recovery-browser-regression.mjs",
   // A development tool that attaches to the LIVE desktop app over CDP (not a
-  // test); same event-capturing mismatch as the driver above.
+  // test), with its own event capture like the driver above.
   "seed-canvas-fixture-browser.mjs",
 ];
 
 /**
- * A little below the real count (17 importers as of writing) so ordinary
- * churn - one driver renamed or retired - doesn't redden this, while a glob
- * that silently stopped matching anything (an empty or near-empty result)
- * still would.
+ * A little below the real count (6 importers as of writing, the CI-run
+ * drivers having moved to Playwright) so one driver renamed or retired
+ * doesn't redden this, while a glob that silently stopped matching anything
+ * (an empty or near-empty result) still would.
  */
-const MIN_CDP_CLIENT_IMPORTERS = 12;
+const MIN_CDP_CLIENT_IMPORTERS = 5;
 
 /** `function connectCdp(`, `async function connectCdp(`, or `const connectCdp =`. */
 const OWN_CONNECT_CDP_DECLARATION =

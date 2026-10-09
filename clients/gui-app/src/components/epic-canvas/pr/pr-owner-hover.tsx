@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
-import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import { PrOwnerTreeList } from "@/components/epic-canvas/pr/pr-owner-label";
 import { prOwnerCollectionNouns } from "@/components/epic-canvas/pr/pr-owner-tree";
 import { PrRowHoverCardContext } from "@/components/epic-canvas/pr/pr-owner-hover-context";
@@ -40,7 +40,7 @@ export function PrRowOwnerHover(props: {
    * is where the whole string is legible; see `PrRowHoverCardContext`.
    */
   readonly title: string | null;
-  readonly children: ReactNode;
+  readonly children: ReactElement;
 }): ReactNode {
   if (props.owners.length === 0) return props.children;
   // Everything below reads the epic projection and throws without an
@@ -69,7 +69,7 @@ function ResolvedPrRowOwnerHover(props: {
   readonly epicId: string;
   readonly fallbackHostId: string | null;
   readonly title: string | null;
-  readonly children: ReactNode;
+  readonly children: ReactElement;
 }): ReactNode {
   const owners = usePresentPrOwners(props.owners);
   // Controlled purely so opening an owner dismisses the card. Left uncontrolled
@@ -87,7 +87,7 @@ function ResolvedPrRowOwnerHover(props: {
   const nouns = prOwnerCollectionNouns(owners);
   const label = `${nouns.capitalized} this PR came from`;
   return (
-    // OUTSIDE the card, not around `children`: `HoverCardTrigger asChild`
+    // OUTSIDE the card, not around `children`: the card's trigger slot
     // clones its immediate child to attach the trigger's handlers and ref, and
     // a context provider is not a slottable element - put one there and the
     // trigger silently stops opening. Context reads by tree position, so the
@@ -98,12 +98,18 @@ function ResolvedPrRowOwnerHover(props: {
     // its `false` default, which is what keeps the title tooltip wired on a row
     // that has no card.
     <PrRowHoverCardContext value={props.title !== null}>
-      <HoverPreviewCard
+      <HoverCard
+        trigger={props.children}
+        appearance="preview"
+        semantics={{ role: "dialog", label }}
+        enabled
         open={open}
         onOpenChange={setOpen}
+        testId={null}
+        className={null}
         // The panel this row lives in is docked left, so the card flies out over
         // the canvas instead of over the sibling rows the reader is scanning.
-        // Radix flips it on collision.
+        // It flips on collision.
         side="right"
         align="start"
         sideOffset={8}
@@ -115,7 +121,7 @@ function ResolvedPrRowOwnerHover(props: {
             // whose indent eats the title column should get the room a wide
             // display already has. The var carries a fallback because an
             // unmeasured one invalidates the whole `min()`.
-            className="flex w-max max-w-[min(80vw,var(--radix-hover-card-content-available-width,100vw),28rem)] flex-col"
+            className="flex w-max max-w-[min(80vw,var(--hover-card-available-width,100vw),28rem)] flex-col"
             data-testid="pr-row-owner-hover"
           >
             {props.title === null ? null : (
@@ -139,16 +145,14 @@ function ResolvedPrRowOwnerHover(props: {
               fallbackHostId={props.fallbackHostId}
               onOpened={close}
               testId="pr-row-owner-hover-list"
-              // Floored against the space Radix measured rather than a rem, so a
+              // Floored against the space the card measured rather than a rem, so a
               // tall display shows more of a long list instead of the same few
               // rows.
-              className="max-h-[min(var(--radix-hover-card-content-available-height,100vh),60vh)]"
+              className="max-h-[min(var(--hover-card-available-height,100vh),60vh)]"
             />
           </div>
         }
-      >
-        {props.children}
-      </HoverPreviewCard>
+      />
     </PrRowHoverCardContext>
   );
 }

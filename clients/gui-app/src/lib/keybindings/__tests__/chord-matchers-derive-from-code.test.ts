@@ -108,12 +108,22 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
+  // Bare ArrowRight accepts an offered suggestion: a named platform
+  // navigation/acceptance key, not a registered physical chord.
+  "gui-app/src/components/chat/composer/chat-composer-editor-slot.tsx": 1,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
+  "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
+  // Enter and Space activate a folded agent row's `role="button"` text (#2441):
+  // a button's own activation keys, named, not a registered chord.
+  "gui-app/src/components/chat/queued-message-surface.tsx": 2,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
+  // Escape steps the open-as-chat view back one breadcrumb level; a named
+  // non-printable key, not a registered shortcut.
+  "gui-app/src/components/chat/subagent-chat-view.tsx": 1,
   "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 8,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
@@ -129,17 +139,37 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-search.tsx": 9,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx": 3,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
+  // First-use dropdown mounting: Enter/Space/ArrowDown open a row dropdown on
+  // its first press, and that key is replayed once the menu root mounts.
+  // These are platform navigation keys, not registered shortcut identity.
+  "gui-app/src/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
   // Enter/Space on a row's overlay link, plus the search box's Escape (clears a
   // non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 3,
+  // The layout editor's sortable list: Space grabs a row (or activates it in
+  // an unordered list), Enter activates, arrows move a grabbed row or, with
+  // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of
+  // them a registered chord.
+  "gui-app/src/components/layout-editor/inspector/sortable-list.tsx": 5,
+  // The editor's own Mod+Z / Mod+Shift+Z, matched by the letter the user
+  // reads - see PRINTABLE_CHARACTER_MATCHES - plus the session's Escape, which
+  // pops one inspector level or closes the editor. Escape is a named key.
+  "gui-app/src/components/layout-editor/layout-editor.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
-  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,
+  // Every group surface (the chip, the side-strip header, the Activity view's
+  // label and rail column) opens the group editor through this one anchor: F2,
+  // ContextMenu and Shift+F10, plus Enter and Space on a surface that opts in
+  // (the Activity label). Named keys, none of them a registered chord.
+  "gui-app/src/components/layout/tabs/group-editor-anchor.tsx": 5,
   // The guided tour's card answers arrows, Enter and Escape by name; none is
   // a registered chord.
+  // Arrows, Home and End walking the minimap's own list - named keys inside an
+  // open card, not chords.
+  "gui-app/src/components/minimap/minimap-list-card.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-coachmark.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
@@ -207,6 +237,10 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
   "gui-app/src/components/providers/profile-dropdown.tsx": {
     chars: ["r"],
     why: "single-letter accelerator on a visible label inside an open menu",
+  },
+  "gui-app/src/components/layout-editor/layout-editor.tsx": {
+    chars: ["z"],
+    why: "platform mod+Z undo convention, scoped to an open Customize session and matched where the letter is",
   },
   "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": {
     chars: ["c", "d"],

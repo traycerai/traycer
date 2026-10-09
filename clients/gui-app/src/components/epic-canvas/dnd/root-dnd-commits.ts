@@ -18,6 +18,7 @@ import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  railDragCarry,
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   PANEL_NODE_FAMILY,
   SIDEBAR_NODE_DND_TYPE,
@@ -25,11 +26,10 @@ import {
   WORKSPACE_FILE_DND_TYPE,
   getArtifactTabDropIndexFromPoint,
   getEpicCanvasDropPreview,
-  getLeftPanelGroupDropPreview,
+  getLeftPanelSectionDropPreview,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasDropTargetData,
-  type LeftPanelSectionRect,
   type PointLike,
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -51,19 +51,22 @@ import {
   type ManagedCommandOutputTileRef,
 } from "@/stores/epics/canvas/types";
 import {
-  areLeftPanelGroupsEqual,
-  moveLeftPanelGroup,
-  moveLeftPanelGroupToEnd,
-  moveLeftPanelGroupToPanelPosition,
-  moveLeftPanelToEnd,
-  moveLeftPanelToGroup,
-  moveLeftPanelToGroupPosition,
-  moveLeftPanelToPanelPosition,
-  useLeftPanelStore,
-  type LeftPanelGroup,
-  type LeftPanelId,
+  expandJoinedPanelSections,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import { isLeftPanelId } from "@/lib/left-panel-ids";
+import {
+  areRailsEqual,
+  normalizeRail,
+  type RailEntry,
+} from "@/lib/layout/rail";
+import {
+  moveRailPanelBeside,
+  moveRailPanelToEnd,
+  stackRailPanels,
+  type LayoutArrangement,
+} from "@/lib/layout/layout-arrangement";
+import { applyRail, currentLayoutArrangement } from "@/lib/layout/rail-view";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -108,7 +111,7 @@ export function isCanvasDropCompatible(
     return (
       (target.kind === "left-panel-rail-item" ||
         target.kind === "left-panel-rail-list" ||
-        target.kind === "left-panel-group") &&
+        target.kind === "left-panel-body") &&
       target.viewTabId === source.viewTabId
     );
   }
@@ -217,39 +220,15 @@ export function resolveOverlayTileForSource(
 
 // ── Preview resolution ──────────────────────────────────────────────────────
 
-function getElementRect(element: Element): RectLike {
-  const rect = element.getBoundingClientRect();
-  return {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height,
-  };
-}
-
-function getLeftPanelSectionRect(
-  groupElement: Element,
-  panelId: LeftPanelId,
-): LeftPanelSectionRect | null {
-  const sectionElement = groupElement.querySelector(
-    `[data-left-panel-section-id="${panelId}"]`,
-  );
-  if (sectionElement === null) return null;
-  return {
-    panelId,
-    rect: getElementRect(sectionElement),
-  };
-}
-
 export interface ResolveCanvasDropPreviewInput {
   readonly source: EpicCanvasDragSourceData;
   readonly target: EpicCanvasDropTargetData;
   readonly point: PointLike;
   readonly targetRect: RectLike | null;
   /**
-   * The droppable's DOM element - only required for `left-panel-group`
-   * targets (section-rect scanning); every other target resolves from
-   * `targetRect` alone.
+   * The droppable's DOM element - read only for a `left-panel-body` target,
+   * whose sections a reorder inside the stack measures; every other target
+   * resolves from `targetRect` alone.
    */
   readonly targetElement: Element | null;
   /** Translated rect of the dragged chip (tab-over-tab center math). */
@@ -261,18 +240,34 @@ export function resolveCanvasDropPreview(
 ): EpicCanvasDropPreview {
   const { source, target, point, targetRect, targetElement, activeRect } =
     input;
-  if (target.kind === "left-panel-group") {
-    if (source.kind !== LEFT_PANEL_RAIL_ITEM_DND_TYPE) return null;
-    if (targetElement === null) return null;
-    const sectionRects: ReadonlyArray<LeftPanelSectionRect> =
-      target.panelIds.flatMap((panelId) => {
-        if (source.origin === "panel-section" && source.panelId === panelId) {
-          return [];
-        }
-        const sectionRect = getLeftPanelSectionRect(targetElement, panelId);
-        return sectionRect === null ? [] : [sectionRect];
-      });
-    return getLeftPanelGroupDropPreview(target, sectionRects, point);
+  if (
+    target.kind === "left-panel-body" &&
+    source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE &&
+    source.origin === "panel-section" &&
+    targetElement !== null
+  ) {
+    // A section header dragged inside the body of its OWN stack reorders it
+    // (L-181): joining is meaningless there, since the panel is already a
+    // member. Anything else on the body joins its stack (L-182), below.
+    const sections = [
+      ...targetElement.querySelectorAll("[data-left-panel-section-id]"),
+    ];
+    const isMember = sections.some(
+      (section) =>
+        section.getAttribute("data-left-panel-section-id") === source.panelId,
+    );
+    if (isMember) {
+      return getLeftPanelSectionDropPreview(
+        target.viewTabId,
+        sections.flatMap((section) => {
+          const panelId = section.getAttribute("data-left-panel-section-id");
+          if (!isLeftPanelId(panelId) || panelId === source.panelId) return [];
+          const { left, top, width, height } = section.getBoundingClientRect();
+          return [{ panelId, rect: { left, top, width, height } }];
+        }),
+        point,
+      );
+    }
   }
   if (
     target.kind === "artifact-tab" &&
@@ -319,58 +314,72 @@ type LeftPanelRailDragSource = Extract<
 >;
 
 /**
- * Single source of truth for "left-panel drop → next rail groups". Both the
+ * Single source of truth for "left-panel drop → next rail". Both the
  * preview-time noop check and the drag-end commit resolve through this pure
  * function, so they can never disagree on what a drop does. Returns the next
- * groups (structurally equal to `groups` for a no-op position, e.g. combining
- * a section into its own group) or null when the preview is not a left-panel
- * preview.
+ * rail (equal to `rail` for a no-op position) or null when the preview is not
+ * a left-panel preview.
+ *
+ * A drop on a rail icon says one of three things (L-168): before it, after it,
+ * or INTO it, which stacks the two panels into one body (L-166). A drop on the
+ * sidebar body has the outer two only. It says the same thing whether the icon
+ * came off the rail or off the panel body's own section header, which is why
+ * `source.origin` does not part the branches.
+ *
+ * It resolves through the arrangement's own movers rather than a second copy
+ * of them (R5R-06), so the app's rail drag and the editor's canvas drop place
+ * a member by exactly the same rule.
  */
-export function resolveLeftPanelGroupsForDrop(
+export function resolveRailForDrop(
   source: LeftPanelRailDragSource,
   preview: NonNullable<EpicCanvasDropPreview>,
-  groups: ReadonlyArray<LeftPanelGroup>,
-): ReadonlyArray<LeftPanelGroup> | null {
-  if (preview.kind === "left-panel-rail") {
-    if (source.origin === "rail") {
-      return moveLeftPanelGroup(
-        groups,
-        source.panelId,
-        preview.panelId,
-        preview.position,
-      );
-    }
-    if (preview.position === "combine") {
-      return moveLeftPanelToGroup(groups, source.panelId, preview.panelId);
-    }
-    return moveLeftPanelToGroupPosition(
-      groups,
-      source.panelId,
-      preview.panelId,
-      preview.position,
+  arrangement: LayoutArrangement,
+): ReadonlyArray<RailEntry> | null {
+  const carry = railDragCarry(source);
+  if (preview.kind === "left-panel-rail" && preview.position === "combine") {
+    // The middle band adds the carried panels to the target's stack (L-168,
+    // L-181). `stackRailPanels` returns the arrangement it was given when
+    // `railStackJoin` answers `same` - the two already stacked together - so
+    // that drop reaches the "did anything change" guard and spends no undo
+    // step.
+    return normalizedRail(
+      stackRailPanels(arrangement, source.panelId, preview.panelId, carry),
     );
   }
-  if (preview.kind === "left-panel-section") {
-    return source.origin === "rail"
-      ? moveLeftPanelGroupToPanelPosition(
-          groups,
-          source.panelId,
-          preview.panelId,
-          preview.position,
-        )
-      : moveLeftPanelToPanelPosition(
-          groups,
-          source.panelId,
-          preview.panelId,
-          preview.position,
-        );
+  if (
+    preview.kind === "left-panel-rail" ||
+    preview.kind === "left-panel-section"
+  ) {
+    return normalizedRail(
+      moveRailPanelBeside(arrangement, {
+        sourcePanelId: source.panelId,
+        targetPanelId: preview.panelId,
+        placeAfter: preview.position === "after",
+        carry,
+      }),
+    );
   }
   if (preview.kind === "left-panel-rail-list") {
-    return source.origin === "rail"
-      ? moveLeftPanelGroupToEnd(groups, source.panelId)
-      : moveLeftPanelToEnd(groups, source.panelId);
+    return normalizedRail(
+      moveRailPanelToEnd(arrangement, source.panelId, carry),
+    );
   }
   return null;
+}
+
+/**
+ * The rail a drop produces, held to the rail's own invariants.
+ *
+ * Normalised HERE rather than only in the store, because this function's other
+ * caller is the no-op guard: a panel dropped back where it already is takes a
+ * stack link out and puts it back in the same place, so comparing the raw
+ * mover output against the stored rail called an identical layout a change and
+ * spent an undo step on it (L-166).
+ */
+function normalizedRail(
+  arrangement: LayoutArrangement,
+): ReadonlyArray<RailEntry> {
+  return normalizeRail(arrangement.rail);
 }
 
 export function isLeftPanelDropNoop(
@@ -379,15 +388,9 @@ export function isLeftPanelDropNoop(
 ): boolean {
   if (source.kind !== LEFT_PANEL_RAIL_ITEM_DND_TYPE) return false;
   if (preview === null) return false;
-  const currentGroups = useLeftPanelStore.getState().getPanelGroups();
-  const nextGroups = resolveLeftPanelGroupsForDrop(
-    source,
-    preview,
-    currentGroups,
-  );
-  return (
-    nextGroups !== null && areLeftPanelGroupsEqual(currentGroups, nextGroups)
-  );
+  const arrangement = currentLayoutArrangement();
+  const nextRail = resolveRailForDrop(source, preview, arrangement);
+  return nextRail !== null && areRailsEqual(arrangement.rail, nextRail);
 }
 
 // ── Commits ─────────────────────────────────────────────────────────────────
@@ -537,7 +540,7 @@ function placeResolvedCanvasTile(
   if (
     target.kind === "left-panel-rail-item" ||
     target.kind === "left-panel-rail-list" ||
-    target.kind === "left-panel-group"
+    target.kind === "left-panel-body"
   ) {
     return false;
   }
@@ -577,14 +580,20 @@ export function commitResolvedCanvasDrop(
     );
   }
   if (drop.source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
-    const leftPanelStore = useLeftPanelStore.getState();
-    const nextGroups = resolveLeftPanelGroupsForDrop(
-      drop.source,
-      drop.preview,
-      leftPanelStore.getPanelGroups(),
-    );
-    if (nextGroups !== null) {
-      leftPanelStore.applyPanelGroups(nextGroups);
+    const arrangement = currentLayoutArrangement();
+    const nextRail = resolveRailForDrop(drop.source, drop.preview, arrangement);
+    if (nextRail !== null && !areRailsEqual(arrangement.rail, nextRail)) {
+      applyRail(nextRail);
+      // A joining member opens with its section showing (L-170). Said at the
+      // COMMIT rather than inside the resolver, which is pure: the resolver
+      // answers what the rail becomes, and this is a fact about the two
+      // panels' own drawing state.
+      if (
+        drop.preview.kind === "left-panel-rail" &&
+        drop.preview.position === "combine"
+      ) {
+        expandJoinedPanelSections(drop.source.panelId, drop.preview.panelId);
+      }
       return true;
     }
     return false;

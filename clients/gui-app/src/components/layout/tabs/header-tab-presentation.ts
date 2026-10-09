@@ -10,16 +10,17 @@ import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import type { SplitSide } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
+import type { HeaderStripMember } from "@/stores/tabs/use-header-tabs";
 
 interface HeaderTabTitle {
   readonly resolvedTabName: string;
   readonly displayName: string;
 }
 
-export function useHeaderTabTitle(tab: HeaderTab): HeaderTabTitle {
-  const liveEpicTitle = useRegisteredEpicTitle(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
+function tabTitleOf(
+  tab: HeaderTab,
+  liveEpicTitle: string | null,
+): HeaderTabTitle {
   const resolvedTabName = liveEpicTitle ?? tab.name;
   return {
     resolvedTabName,
@@ -30,7 +31,24 @@ export function useHeaderTabTitle(tab: HeaderTab): HeaderTabTitle {
   };
 }
 
-interface HeaderTabIndicators {
+export function useHeaderTabTitle(tab: HeaderTab): HeaderTabTitle {
+  return tabTitleOf(
+    tab,
+    useRegisteredEpicTitle(tab.kind === "epic" ? tab.epicId : null),
+  );
+}
+
+/** What a split's half is called: its tab's title, or what an empty half offers. */
+export function useSplitMemberLabel(member: HeaderStripMember): string {
+  const tab = member.kind === "tab" ? member.tab : null;
+  const liveEpicTitle = useRegisteredEpicTitle(
+    tab?.kind === "epic" ? tab.epicId : null,
+  );
+  if (member.kind === "fillable") return splitSlotLabel(member.slot);
+  return tabTitleOf(member.tab, liveEpicTitle).displayName;
+}
+
+export interface HeaderTabIndicators {
   readonly epicIds: ReadonlyArray<string>;
   readonly indicators: SurfaceNotificationIndicators;
   readonly chatEpicIds: Readonly<Record<string, string>>;

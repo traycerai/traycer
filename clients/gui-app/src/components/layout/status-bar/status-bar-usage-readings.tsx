@@ -2,17 +2,17 @@ import type { ReactNode } from "react";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
 import {
   statusBarSegmentKey,
-  statusBarUsageParts,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import type { StatusBarRateLimitCluster } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 
 /**
- * The readings themselves: every segment the cluster holds, each in full.
+ * The Detailed readings: every segment the cluster holds, each in the form its
+ * severity earns.
  *
  * Every one, because the box this renders into scrolls: a segment past the
- * strip's edge is a swipe away. What a segment prints is the preferences'
- * business alone (`statusBarUsageParts`), and it is the same at every width.
+ * strip's edge is a swipe away. What a segment prints is its severity's and the
+ * preferences' business alone, and it is the same at every width.
  *
  * Separate from the strip's trigger because the trigger is the part that is not
  * shared - it is a `PopoverTrigger`, and Radix throws for one outside a
@@ -25,7 +25,6 @@ export function StatusBarUsageReadings(props: {
   readonly display: StatusBarUsageDisplay;
 }): ReactNode {
   const { cluster, display } = props;
-  const parts = statusBarUsageParts(display);
   return (
     <>
       {cluster.kind === "segments" ? (
@@ -33,8 +32,7 @@ export function StatusBarUsageReadings(props: {
           <StatusBarProviderSegment
             key={statusBarSegmentKey(segment)}
             segment={segment}
-            parts={parts}
-            percentMode={display.percentMode}
+            display={display}
           />
         ))
       ) : (

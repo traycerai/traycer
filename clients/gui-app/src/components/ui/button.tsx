@@ -115,6 +115,10 @@ const buttonVariants = cva(
           "text-info-foreground hover:bg-info/15 active:press-scrim",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 active:press-scrim focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+        // A control ON a solid status fill (the layout editor's Customizing
+        // tab): the fill's own label colour, quieter at rest.
+        "on-fill":
+          "text-current opacity-70 hover:bg-current/15 hover:opacity-100 active:press-scrim",
         // A place on a routing card's route line that is ALSO the control
         // that changes it: the destination a countdown is heading for, or the
         // "Choose another model…" chip beside a wait. Outlined like the static
@@ -137,6 +141,10 @@ const buttonVariants = cva(
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-sm px-2 text-ui-xs in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        // One option of a segmented control: `xs` with the side padding
+        // trimmed, so a three-option control and its row's label share one
+        // line in the layout inspector.
+        segment: "h-6 gap-1 rounded-sm px-1.5 text-ui-xs",
         sm: "h-7 gap-1 rounded-sm px-2.5 text-ui-sm in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         // No box at all: a control that sits INSIDE a line of text (a `link`
@@ -163,6 +171,13 @@ const buttonVariants = cva(
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
+        // The vertical strip's nav controls (Notifications, All tasks, Home), as a
+        // Button: `nav-tile` is the collapsed rail's 32px tile, `nav-row` the
+        // expanded strip's 32px row. The row's padding is 1px short of the
+        // nav row's 8px because the base's transparent border sits inside the
+        // box, so the icon and label land where a nav row's do.
+        "nav-tile": "size-8 rounded-lg",
+        "nav-row": "h-8 justify-start gap-2 rounded-lg px-1.75",
         "section-label":
           "h-8 min-w-0 max-w-full shrink justify-start gap-1.5 px-1",
         // A full-width clickable ROW instead of a centered control: content

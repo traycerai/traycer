@@ -24,6 +24,11 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
+  chatSubscribeV119,
+  chatSubscribeV120,
+  chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -100,25 +105,68 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 //
 // 1.16 is captured ON TIME, from main's own bytes at OSS commit 0014b742d,
 // before the sender-host key (`sentFromHostId` on the queued prompt item)
-// took 1.17 above it, and re-verified after the freeze: identical. The first
+// took 1.17 above it, and re-verified after the freeze: identical - and again
+// after the Claude-parity freeze put its line above 1.17: identical. The first
 // draft of that key was added to the live prompt item in place, which every
 // line from 1.13 up reached by reference; this gate caught it on 1.13, and
 // the hand-frozen `chatQueuedPromptItemSchemaPreSentFromHost` copy is what
 // puts 1.13–1.16 back on their captured values.
 //
-// 1.17 is captured ON TIME, from the tree at OSS commit f82a08de0 before the
+// 1.17 is captured ON TIME, from main's own bytes at OSS commit da3d4f40d,
+// before the Claude-parity surfaces took the line above it. That line had been
+// built as 1.17 on a long-lived branch while main minted its own 1.17, so it
+// was renumbered rather than folded in: main's line was already on a release
+// train. It was re-verified from the tree at OSS commit f82a08de0 before the
 // model-routing keys (the settled notice's `receipt`, the queue's
-// `pausedReason`) took 1.18 above it, and re-verified after that freeze:
-// identical, as is every line above. Both keys first reached 1.13–1.17 by
-// reference, through the live message bodies and the live queue; the
-// hand-frozen `contentBlockSchemaPreReceipt` chain and
-// `chatQueueStateSchemaPrePausedReason` are what keep them off. A third
-// `1.18` key, the failed attempt's `waitResumesAt`, reached further: every
-// line from 1.10 up bound `lastFailedAttemptSchema` by reference (1.10-1.12
-// through its pre-`auto` `.extend`, 1.13-1.17 through the windowed snapshot
-// and the shared `turnStateChanged` frame), and all eight digests moved. The
-// hand-frozen `lastFailedAttemptSchemaPreWaitResume` puts them back,
-// identical.
+// `pausedReason`) took 1.18 above it, and after that freeze: identical, as is
+// every line above. Both keys first reached 1.13–1.17 by reference, through
+// the live message bodies and the live queue; the hand-frozen
+// `contentBlockSchemaPreReceipt` chain and `chatQueueStateSchemaPrePausedReason`
+// are what keep them off. A third `1.18` key, the failed attempt's
+// `waitResumesAt`, reached further: every line from 1.10 up bound
+// `lastFailedAttemptSchema` by reference (1.10-1.12 through its pre-`auto`
+// `.extend`, 1.13-1.17 through the windowed snapshot and the shared
+// `turnStateChanged` frame), and all eight digests moved. The hand-frozen
+// `lastFailedAttemptSchemaPreWaitResume` puts them back, identical.
+//
+// 1.18 is captured ON TIME, from main's own bytes at OSS commit 5226395c0,
+// where it was the live line (model routing, released on `release-v1.4.0`),
+// before the Claude-parity surfaces - renumbered a second time for it - took
+// the line above it. The merged tree's frozen 1.18 reproduces main's digests
+// exactly, server and client frames alike, and so does every line below it;
+// re-verified from main's bytes at OSS commit a525056d8, after skeleton resume
+// took 1.19 above it: identical.
+//
+// 1.19 is captured ON TIME, from main's own bytes at OSS commit a525056d8,
+// where it was the live line (skeleton resume), before the Claude-parity
+// surfaces - renumbered a third time for it - took 1.20 above it. The merged
+// tree's frozen 1.19 reproduces main's digests exactly.
+//
+// 1.7–1.19 were re-captured when the `commandcode` harness id joined the live
+// enum. Each line moved by exactly one enum member at every `harnessId` site
+// and by one arm in the message `sessionAnchor` and runtime-event `anchor`
+// unions, and by nothing else: with that member and that arm stripped, every
+// current digest equals the one pinned before. 1.0–1.6 bind the pre-Reasonix
+// copies and did not move. This is the class the four standing
+// `compat-exceptions.json` entries name (`**.harnessId.enum`,
+// `**.anchor.anyOf[*]`, `**.sessionAnchor.anyOf[*].anyOf[*]` and
+// `**.event.anyOf[*]` on `chat.subscribe` server frames). The new id is held
+// off released lines by the host's per-harness minimum-minor table
+// (`commandcode: 21`), not by these schemas. The one leaf that IS frozen on
+// 1.9–1.20 is `rowContext.sessionAnchor`, through
+// `transcriptRowContextSchemaPreCommandCode`.
+//
+// 1.20 is captured LATE, from our own render: on the harness axis it cannot
+// match the bytes main shipped, since main's 1.20 predates the id.
+//
+// 1.21 is captured ON TIME, from the tree before the open-harness-id line took
+// 1.22 above it: the last line whose heard-from leaves (agent senders, event
+// actors, provider notices, plan sources, session announcements) are still the
+// closed enum, and the first that may name `commandcode`. Its server-frame
+// union is the closed live `chatSubscribeWindowedServerFrameSchema`, which the
+// host builds; 1.22 binds its open twin. 1.22 is the live line: it reopens exactly those heard-from
+// leaves to a string (`open-harness-wire.ts`) and moves nothing else, so the
+// 1.0-1.21 digests above did not change when it opened.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -149,48 +197,68 @@ const SERVER_FRAME_DIGESTS = {
     "c145b4fff10cde51da38b4ae9a844647353e2f29a3ec901922e6ca692f535d52",
   ],
   7: [
-    "035b1bdd21da66e03d29dae9fe140c0ca15b3688c4b8b6937a2bbf97979c4539",
-    "672452c0457e22f05f13eab07f73661639027b5c4ab9b4e029bd7ccccf5b0557",
+    "2972058fc6f2bf8bb69597c5e1d0dfdab98cf59618a3c63498a326400b2cf265",
+    "a9cfec2289a5da3e3cf30e405b94a1251f74c25fb99852d1f24399530f7d27aa",
   ],
   8: [
-    "7572ac8bdca83e79f94d67cd0e3bd6ae4521f5fa204976b6ffda2307c0384d7d",
-    "7489cce3dd9e1c6dbe5709c5f3d3d9b3905e08cbd769de00aa8bfdbd0c63af91",
+    "88f63c0469306ed76c287a83617b7c384166f137eb8568ee15cb8d3de5ed8772",
+    "a1eb1f9df80b952a15412cb5beb25f50b93b3d6f7a55693e0e3a07c040598738",
   ],
   9: [
-    "a236937293d40c46f02c34fcf4c156ee44b8a0c5d3b4d10613817fd82be44a30",
-    "669c98b7f46cd3a4d5a20c037cbc4b8b9ef055ad0a08750e395bf746e3932d54",
+    "a45d5ebfe9b89eba5d983aecdca1b2e7c429efc568da42f8cf272d22dacaec67",
+    "322b2339d59ed6d917892f36b69b96ec43e758007f37c38a32d37d51ff8b0b50",
   ],
   10: [
-    "a50e4b67a7847bc2016ded46cc45ce0ae2ff6ff3166242fc1ba2421f76377a7f",
-    "49980dad9ffe9c9ff93146d285d5513745b5f231a70f7bc03911199bbb74fae8",
+    "21d0548f2b4968208594300aeff12317e9cff382bf69b51ba6005f547b9c7a45",
+    "35035b2e5d4b8825f18ad0d1fb34742d6421e86332614953fc2fa7994ee018c3",
   ],
   11: [
-    "ad656a7ced38c2e9194ef1633dff8d5c7f17047471751ba12deab114e1abb354",
-    "eb8902c993b15f4bdc9cf1bcf33b8d4d56ed6e074fc1b121e129371c218060fb",
+    "084bcfe7661f24efafbe36d9aea590f14772f7ecfbeab7c79022e4379c18c4a4",
+    "ce0f42c2622d848af1a2d003b65504376fe387aaaec8715b3b134114766446ea",
   ],
   12: [
-    "1de46aa26aebc0b902d91cf0b108e9b34cb0906bbd8a03dee5a60627c9e135d3",
-    "882f4af25ef15550956d59c48c622c0c592f3c313b15b44b337e4a5b398bb809",
+    "9780f12940560a78d77c3445e23be894d7ad4935f05c3193f0676e2cffe0a283",
+    "51806edbbf4a8cb2ab3a7b9e4cd464857001c3488ac97c0e6921efe80a61ca1d",
   ],
   13: [
-    "0b21bf15572d520c23bc7d78428b1b5abf4b78970f07bea3accae6295082c1e4",
-    "4b319e48d65e2493146748cb326a652cdb204d78f647cf8c41defbfef503de6b",
+    "a8bf9702a714b5585634fc4a31ac90c7e1867e8d696f78149f8ebff0e06d0696",
+    "29cb1baa74dff1262c102f425b260b8b7fe40c734140bf356502d140ed54a185",
   ],
   14: [
-    "728c4ca15b52ea128e6509f24f37ad44248d4f0056054db96ab832faf78cf3ab",
-    "05098db0e4bf4d54d8ef7503440b9b5f43aea1c1c744263f99802c687edd3e12",
+    "ac5f0f6f092b320b1f69687c3f0b994943603652fee4093de17f3d043998b39a",
+    "bf654ab31bcf052575c328acbd430791874328d5a6566a8f86ede62f184d531f",
   ],
   15: [
-    "9aca2d28d1d127a05921e532e779a43c929645bdf50a117b9953a64b3a3b35f0",
-    "1f5c285666d7c8a100624291edafaae223ee22220a8787a68cdb41df701016b3",
+    "cba84866e0cfba0a5e332c5d37d7d1693f611b27cec639a12ca9c3ab3f523f7c",
+    "fd9d5274d3e103c2f80ee6192a263dcc2c936b4b7d6c06644749a8168c766537",
   ],
   16: [
-    "183b34c92b34eb6837d89bad85cabc8a1bc2223bee85d43ff27f372c47f1a760",
-    "258a4753885b4195260a7a9b32e99d43fcc76543ff8eade2249f36a375c7bbae",
+    "f903b0516835c52a7577fc97f1dc2b4a9f5d55f81c36c0996566e3ee3b47b0ba",
+    "3aceaabf237e5e049a0b4f5e593fb692104db9dda16a0b846dacfcc5b4175214",
   ],
   17: [
-    "dbf3a7e702b1e2a00cf02943c4d8284850e6a0e58403149e3243600aeb4bf7fc",
-    "3cb2021ec06347cfdac037380776254b5f0677fba1ac6b2af23d42658024be33",
+    "64db3e02ed3e0268eb98c1b3a11a9d6989e0c680e7a53a15a939c3512e996951",
+    "fc8c87edb1549033c42d2b2034a781a7e15f04de94456a910e4b38ca2ef0677f",
+  ],
+  18: [
+    "7a4f2062af5aa44e4a6b5535653e6606ecd2c1352906a9ad10a26f69fe46909f",
+    "c4d342f3adf2eaacef9d36a2a7e1551f58bf1797b1766cbc72ca84210713f73f",
+  ],
+  19: [
+    "d450239c4feb1db24a49fa003ed6474137fab7015b5ede8a08dc2429a6adaeed",
+    "01e75b75c973a7d40e3bd2b3a23aa13f14e8d1dcdbd1a78969b0f97d9be5b8e5",
+  ],
+  20: [
+    "463161909221ea897690842b41ee10abae7214f1055d0ed16f56b17d9cbbb3cc",
+    "5c81ac906499c0383bcb6a21e3f148b0ac9f3d2214d24b3c6700a454814908a1",
+  ],
+  21: [
+    "95eb83c260fa3524bcf2a276bcc7b3e21f36da417803d484580aad803eab4c8d",
+    "df9bbe86f245826e18b231b0266dc27364e9cf82d825f3672f48633febd3825a",
+  ],
+  22: [
+    "c196eb5624840268d72b08b89b20fc50202d06d01f6999e506f48b02f2c7c46c",
+    "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
 } as const;
 
@@ -213,16 +281,227 @@ const contracts = [
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
+  chatSubscribeV119,
+  chatSubscribeV120,
+  chatSubscribeV121,
+  chatSubscribeV122,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.17 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.22 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([
         schemaDigest(contract.serverFrameSchema, "input"),
         schemaDigest(contract.serverFrameSchema, "output"),
       ]).toEqual(SERVER_FRAME_DIGESTS[minor]);
+    }
+  });
+
+  it("1.20 and 1.21 server frames differ only in the row-context session anchor", () => {
+    const anchor = {
+      harnessId: "commandcode",
+      hostId: "host-1",
+      sessionId: "session-1",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot",
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      createdAt: 1,
+      coveredUntilMessageId: null,
+    };
+    const rangeFrame = (rowContext: Record<string, unknown>) => ({
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "range-1",
+        epoch: 0,
+        fromOrdinal: 0,
+        rowIds: [],
+        messages: [],
+        events: [],
+        rowContext,
+        reachedStart: true,
+        reachedEnd: true,
+      },
+    });
+    // Positive control: with no anchor the same frame parses on both lines.
+    expect(
+      chatSubscribeV120.serverFrameSchema.safeParse(rangeFrame({})).success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(rangeFrame({})).success,
+    ).toBe(true);
+    const withAnchor = rangeFrame({ "row-1": { sessionAnchor: anchor } });
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(withAnchor).success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV120.serverFrameSchema.safeParse(withAnchor).success,
+    ).toBe(false);
+  });
+
+  it("1.21 and 1.22 differ only in the heard-from harness leaves", () => {
+    const agentSender = (harnessId: string) => ({
+      type: "agent",
+      harnessId,
+      agentId: "a",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    });
+    const userRow = (harnessId: string) => ({
+      role: "user",
+      messageId: "m-1",
+      sender: agentSender(harnessId),
+      message: {
+        kind: "agent",
+        content: { type: "doc", content: [] },
+        fromAgentId: "a",
+        senderTitle: null,
+        senderHarnessId: harnessId,
+        reply: { expectsReply: false },
+      },
+      timestamp: 1,
+      sessionAnchor: null,
+    });
+    const rangeFrame = (harnessId: string) => ({
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "range-1",
+        epoch: 0,
+        fromOrdinal: 0,
+        rowIds: ["m-1"],
+        messages: [userRow(harnessId)],
+        events: [],
+        rowContext: {},
+        reachedStart: true,
+        reachedEnd: true,
+      },
+    });
+    // Positive control: a roster id parses on both lines, so the frame itself
+    // is well formed and the only thing the unknown id can be rejected for is
+    // the harness leaf.
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(rangeFrame("claude"))
+        .success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(rangeFrame("claude"))
+        .success,
+    ).toBe(true);
+    // The heard-from leaf: open on 1.22, still the closed enum on 1.21.
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(rangeFrame("zzz-future"))
+        .success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(rangeFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+  });
+
+  it("keeps the harness a client DRIVES closed on 1.22: the snapshot's chat settings and the active turn", () => {
+    const settings = (harnessId: string) => ({
+      harnessId,
+      model: "model-1",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "epic",
+    });
+    const snapshotFrame = (harnessId: string) => ({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat: {
+          parentId: null,
+          id: "chat-1",
+          userId: "user-1",
+          hostId: "host-1",
+          title: "Chat",
+          createdAt: 1000,
+          updatedAt: 1000,
+          isTitleEditedByUser: false,
+          settings: settings(harnessId),
+        },
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        runStatus: "idle",
+        activeTurn: null,
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChangeCount: 0,
+        transcriptEpoch: 0,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+        derived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: null,
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+      },
+    });
+    // Positive control on both lines: the fixture is a valid snapshot.
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(snapshotFrame("claude"))
+        .success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(snapshotFrame("claude"))
+        .success,
+    ).toBe(true);
+    // The drive carrier stays closed on BOTH lines.
+    expect(
+      chatSubscribeV121.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV122.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+
+    // The same holds for the active turn on `turnStateChanged`.
+    const turnFrame = (harnessId: string) => ({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: {
+        turnId: "turn-1",
+        userMessageId: "m-1",
+        status: "running",
+        harnessId,
+        model: "model-1",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    for (const contract of [chatSubscribeV121, chatSubscribeV122]) {
+      expect(
+        contract.serverFrameSchema.safeParse(turnFrame("claude")).success,
+      ).toBe(true);
+      expect(
+        contract.serverFrameSchema.safeParse(turnFrame("zzz-future")).success,
+      ).toBe(false);
     }
   });
 

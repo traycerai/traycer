@@ -26,14 +26,12 @@ import type {
   ArtifactOperationAction,
   BackgroundTaskOutput,
   BrowserSessionReference,
-  ContentBlock,
   DiffSource,
   FileEditReason,
   PlanAction,
   PlanContentRef,
   AutonomousResumeTrigger,
   AutonomousResumeDeliveryPlacement,
-  PlanSource,
   PlanStatus,
   PlanStep,
   AgentFailure,
@@ -63,6 +61,11 @@ import type {
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 
+import type {
+  OpenContentBlock,
+  OpenPlanSource,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 export type ChatMessageRole = "user" | "assistant" | "system";
 
 // Terminal outcome for an action segment whose turn ended before its own
@@ -73,7 +76,7 @@ export type ChatMessageRole = "user" | "assistant" | "system";
 // Extract) so it stays in lockstep with it - a renamed/removed status fails to
 // compile here rather than silently dropping a badge.
 export type SegmentEndState = Extract<
-  ContentBlock["status"],
+  OpenContentBlock["status"],
   "interrupted" | "superseded"
 > | null;
 
@@ -184,17 +187,21 @@ export interface ToolSegment {
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
-// cards (any spawn depth), not just their tool/file_change/command activity.
-// Unlike tool/file_change/command (which only ride along for spawn-tool-call
-// suppression bookkeeping), a nested `ProviderNoticeSegment` DOES render as a
-// visible row inside the owning card - see `SubagentChildProviderNotices` in
-// `subagent-segment.tsx`.
+// cards (any spawn depth). Every entry renders, in order, inside the owning
+// card through the ordinary segment renderers (`SubagentConversation` in
+// `subagent-conversation.tsx`): the subagent's prose and reasoning, its tool /
+// command / file-change activity, notices, errors and nested agents. The same
+// list also feeds spawn-row suppression, the turn-level "Changes" group and
+// jump-to-block.
 export type SubagentChildSegment =
   | ToolSegment
   | FileChangeSegment
   | CommandSegment
   | SubagentSegment
-  | ProviderNoticeSegment;
+  | ProviderNoticeSegment
+  | TextSegment
+  | ReasoningSegment
+  | ErrorSegment;
 
 // A durable provider-generated notice (Codex model reroute / safety
 // verification / buffering, and future harness equivalents), projected from a
@@ -247,7 +254,18 @@ export interface ReasoningSegment {
   // Thinking duration once completed (`null` while streaming or for blocks
   // persisted before `startedAt` existed). Drives the "Thought for Xs" label.
   durationMs: number | null;
+  // Owning block id when a subagent did the thinking (nests under that card).
+  // Present only on a parented block, like `browserSession` on text.
+  parentId?: string;
 }
+
+// A subagent's prose nests under its card through `parentId`, exactly like its
+// reasoning; a top-level (main-agent) text segment carries none.
+export type TextSegment = Extract<MessageSegment, { kind: "text" }>;
+
+// An error on a subagent's own thread (an OpenCode import parents the child's
+// abort) nests under that card through `parentId`.
+export type ErrorSegment = Extract<MessageSegment, { kind: "error" }>;
 
 export interface CommandSegment {
   id: string;
@@ -315,11 +333,10 @@ export interface SubagentSegment {
   // fleet data (intent, activity timeline, fleet counts, tokens) an old reader
   // can't render. Null for an ordinary agent card.
   workflowMeta: WorkflowMeta | null;
-  // The subagent's own activity nested under this block, keyed off each child
-  // segment's `parentId === this.id` - tool calls, file changes, commands, AND
-  // nested agent cards (any depth). Only the `subagent`-kind entries render
-  // (the "Sub-agents" section); the rest ride along for spawn-tool-call
-  // suppression.
+  // The subagent's own conversation nested under this block, keyed off each
+  // child segment's `parentId === this.id` - prose, reasoning, tool calls,
+  // file changes, commands, notices, errors AND nested agent cards (any
+  // depth), in block order. All of it renders inside the card.
   children: ReadonlyArray<SubagentChildSegment>;
 }
 
@@ -340,7 +357,7 @@ export interface PlanSegmentModel {
   planId: string;
   planStatus: PlanStatus;
   harnessId: string;
-  source: PlanSource;
+  source: OpenPlanSource;
   title: string | null;
   summary: string | null;
   markdownPreview: string;
@@ -406,6 +423,9 @@ export type MessageSegment =
       browserSession?: BrowserSessionReference;
       isStreaming: boolean;
       assistantImageContext?: AssistantMarkdownImageContext;
+      // Owning subagent block id when this is a subagent's prose; absent for
+      // the main agent's own text. See `ReasoningSegment.parentId`.
+      parentId?: string;
     }
   | ReasoningSegment
   | ToolSegment
@@ -449,6 +469,9 @@ export type MessageSegment =
        * one the engine acted on.
        */
       failure: AgentFailure | null;
+      // Owning subagent block id when the error ended a subagent's own thread;
+      // absent for a turn-level error. See `ReasoningSegment.parentId`.
+      parentId?: string;
     }
   | {
       id: string;
@@ -612,8 +635,13 @@ export interface ChatMessageSteerBadge {
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
 export interface AssistantTurnMeta {
-  /** Raw harness id, used to pick the provider's mono icon for the footer. */
-  readonly provider: GuiHarnessId;
+  /**
+   * Raw harness id, used to pick the provider's mono icon for the footer. An
+   * open string: a transcript row's sender may name a harness this build does
+   * not know (`chat.subscribe@1.22`), and `HarnessIcon` draws a neutral square
+   * for one.
+   */
+  readonly provider: string;
   readonly providerLabel: string;
   /** Profile label snapshotted when the turn's provider session was minted. */
   readonly profileLabel: string | null;
@@ -723,6 +751,14 @@ export interface ChatMessage {
    * row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
+  /**
+   * Set on the transcript's last row when it is a background-outcome note no
+   * provider turn has adopted AND the host still reports the chat working:
+   * the outcome may yet be handed to the agent, so the row does not say how
+   * it ended. Absent everywhere else, including on the same row once the chat
+   * goes idle - at which point it reads "Agent not resumed".
+   */
+  autonomousResumeOwed?: boolean;
   /**
    * The host turn this assistant row belongs to. Absent on user rows, on
    * synthesized event rows, and on records persisted before `turnId` existed.

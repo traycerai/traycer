@@ -403,10 +403,12 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       const body = sliceFrom(controller, `async ${route}(`, end);
       if (route === "activateInstalledCliOwned") {
         // Was three inline CLI_LOCK_BUSY/HOST_UPDATE_ATTEMPT_ACTIVE/HOST_BUSY
-        // branches; now routes through the one shared classifier table like
-        // every other mutation route, so the pin follows the call site
-        // rather than the retired inline codes.
-        expect(body).toContain("classifyMutationSubprocessError");
+        // branches, then one inline call of the shared classifier table. It
+        // now runs the recovery routes' `runCliRecoveryServiceCycle` (for
+        // `--defer-if-parked`'s deferral), whose catch makes that same call,
+        // so the pin follows the call site into the helper.
+        expect(body).toContain("runCliRecoveryServiceCycle");
+        expect(recoveryHelper).toContain("classifyMutationSubprocessError");
       } else {
         const usesCentralRecoveryClassifier =
           (route === "respawn" ||

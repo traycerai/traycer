@@ -324,6 +324,21 @@ export function judgeUnavailableHumanLine(
 export const APPROVAL_PAUSED_LINE = "This turn is paused until you answer.";
 
 /**
+ * The marker on a row "Approve all" leaves out: the provider stamped the ask
+ * `cautious` (its own "no one-key approve", or a user's ask rule forced it).
+ * Shown only beside the bulk actions - a lone card has no "all" to leave it
+ * out of.
+ */
+export const INDIVIDUAL_APPROVAL_MARKER = "Needs individual approval";
+
+/** The header's count of the answerable rows "Approve all" leaves out. */
+export function individualApprovalCountLine(count: number): string {
+  return count === 1
+    ? "1 needs individual approval"
+    : `${count} need individual approval`;
+}
+
+/**
  * How long a card has to have been unanswered before it says so.
  *
  * The line exists for the human who walked away and came back; a card the user

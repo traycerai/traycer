@@ -3,6 +3,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 export const BROWSER = defineSettingsSection("browser", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Browser",
     description:
       "Search, agent access, tab placement, and saved website sessions.",
@@ -14,21 +15,28 @@ export const BROWSER = defineSettingsSection("browser", {
       "website sessions",
     ],
   },
-  // Gated on DATA and on the HOST: the card renders once a terminal has printed
-  // a local URL, or once the active host advertises `config.browser.get` —
-  // neither of which a shell can promise, so it folds into the page.
-  search: {
+  // Where a search goes and where a tab lands: the two choices about the
+  // person's own browsing. Each used to be a heading over one row.
+  browsing: {
     kind: "group",
-    search: { anchor: "browser-search" },
-    label: "Search",
+    search: { anchor: "browser-browsing" },
+    label: "Browsing",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: ["address bar", "query"],
+    keywords: [
+      "address bar",
+      "query",
+      "placement",
+      "canvas",
+      "pip",
+      "picture in picture",
+      "split",
+    ],
   },
   searchEngine: {
     kind: "row",
-    group: "search",
+    group: "browsing",
     search: { anchor: "browser-search-engine" },
     label: "Default search engine",
     description:
@@ -36,20 +44,35 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     keywords: ["Google", "DuckDuckGo", "Bing", "Kagi", "omnibox"],
   },
-  browser: {
+  tileBrowser: {
+    kind: "row",
+    group: "browsing",
+    search: { anchor: "browser-tile-placement" },
+    label: "Open browser tabs",
+    description:
+      "Choose where browser tabs appear. Changing this sets a browser-specific placement.",
+    availableWhen: alwaysAvailable,
+    keywords: ["canvas", "pip", "picture in picture", "split", "pane"],
+  },
+  // What agents may do with the browser. Agent-opened tabs is drawn in every
+  // shell, so the group is never empty; the two rows around it are gated on
+  // the HOST and on DATA (below), which no shell can promise.
+  agents: {
     kind: "group",
-    search: { contributesTo: "page" },
-    label: "Browser",
+    search: { anchor: "browser-agents" },
+    label: "Agents",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: [],
+    keywords: ["agent", "popup", "browser", "surface"],
   },
-  // The row's description names the active host, so the rendered sentence is a
+  // Gated on the HOST: the row renders once the active host advertises
+  // `config.browser.get` and `config.browser.set`, so it folds into the page.
+  // Its description names the active host, so the rendered sentence is a
   // `status` and this static copy is what search reads.
   agentBrowserAccess: {
     kind: "row",
-    group: "browser",
+    group: "agents",
     search: { contributesTo: "page" },
     label: "Let agents use the in-app browser",
     description:
@@ -57,9 +80,24 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     keywords: ["agent", "browser", "playwright", "mcp"],
   },
+  // Beside agent access, not beside "Open browser tabs": the answer is whether
+  // the tile appears at all, not where it lands, and next to the placement row
+  // it read as an override of it.
+  agentOpenedTabs: {
+    kind: "row",
+    group: "agents",
+    search: { anchor: "opening-tiles-agent-opened" },
+    label: "Agent-opened tabs",
+    description:
+      "Tabs an agent opens while driving a browser session. Tabs a page opens, including links you click in it, always land as browser tiles.",
+    availableWhen: alwaysAvailable,
+    keywords: ["agent", "popup", "automatic", "background", "browser"],
+  },
+  // Gated on DATA: the row renders once a terminal has printed a local URL,
+  // so it folds into the page.
   detectedDevOrigins: {
     kind: "row",
-    group: "browser",
+    group: "agents",
     search: { contributesTo: "page" },
     label: "Detected dev origins",
     description:
@@ -107,46 +145,5 @@ export const BROWSER = defineSettingsSection("browser", {
       "Choose a browser or cookie file, then review the sites before importing.",
     availableWhen: alwaysAvailable,
     keywords: [],
-  },
-  browserPlacement: {
-    kind: "group",
-    search: { anchor: "browser-placement" },
-    label: "Browser placement",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["canvas", "pip", "picture in picture", "split"],
-  },
-  tileBrowser: {
-    kind: "row",
-    group: "browserPlacement",
-    search: { anchor: "browser-tile-placement" },
-    label: "Open browser tabs",
-    description:
-      "Choose where browser tabs appear. Changing this sets a browser-specific placement.",
-    availableWhen: alwaysAvailable,
-    keywords: ["canvas", "pip", "picture in picture", "split", "pane"],
-  },
-  // Its own group, not a fifth per-type row: the answer is whether the tile
-  // appears at all, not where it lands, and a standalone row under "Open new
-  // tiles" read as an override with the wrong tint.
-  agentTabs: {
-    kind: "group",
-    search: { anchor: "opening-agent-tabs" },
-    label: "Agent-opened tabs",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "popup", "browser", "surface"],
-  },
-  agentOpenedTabs: {
-    kind: "row",
-    group: "agentTabs",
-    search: { anchor: "opening-tiles-agent-opened" },
-    label: "Agent-opened tabs",
-    description:
-      "Tabs an agent opens while driving a browser session. Tabs a page opens, including links you click in it, always land as browser tiles.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "popup", "automatic", "background", "browser"],
   },
 });

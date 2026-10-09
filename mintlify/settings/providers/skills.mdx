@@ -1,22 +1,69 @@
 ---
 title: "Skills"
-description: "Create named Markdown instructions and choose which providers can use them."
+description: "Import or write skills, choose which providers can use them, and invoke them from chat."
 ---
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Create a shared skill with Markdown instructions">
-  <source src="https://assets.traycer.ai/docs/videos/skills-setup.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-Open **Settings → Providers**, select a provider, and open **Skills**. Skills hold reusable instructions you can invoke from chat.
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/skills-setup.mp4" label="Create a shared skill with Markdown instructions" />
 
-## Create A Skill
+A skill is a folder with a `SKILL.md` inside it: a name, a description of when to use it, and Markdown instructions. The agent loads a skill on its own when the work matches, or you can invoke it by name in chat.
 
-1. Click **Add skill**.
-2. Enter its **Name**, **Description**, and Markdown **Instructions**.
-3. Choose who can use it under **Available to**. **Every provider** creates a shared skill.
-4. Click **Create skill**. Shared skills appear in the list with a **Shared** badge.
+Open **Settings → Providers**, select a provider, and open **Skills**. Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, Antigravity, and Command Code have no **Skills** tab.
 
-Invoke a skill by its slash command in chat, such as `/release-notes` for a skill named `release-notes`.
+The location picker at the top chooses whether you are managing skills for every workspace on the host (**Global**) or for one workspace.
 
-**Skills** and **Plugins** are separate tabs. Create named Markdown instructions in **Skills**; use **Plugins** to install from a plugin source string.
+## Import Skills
+
+Click **Add skill**. The dialog starts with an import step.
+
+<Steps>
+  <Step title="Paste a source">
+    In **Skill source**, paste an `npx skills` command, an `owner/repo`, a git or tree URL, or a folder path. Then click **Add skill**.
+  </Step>
+  <Step title="Pick the skills">
+    The host clones or copies the source and lists every `SKILL.md` it finds. Select the ones you want. Selecting a skill you already have replaces it with the version from this source.
+  </Step>
+  <Step title="Install">
+    Click **Install N skills**.
+  </Step>
+</Steps>
+
+## Write A Skill
+
+In the **Add skill** dialog, choose "or write one from scratch".
+
+1. Enter a **Name**. Use lowercase letters, digits, and hyphens, for example `review-pr`. The name becomes the folder name and the command you type in chat.
+2. Enter a **Description**. The agent reads it to decide when to use the skill.
+3. Write the Markdown **Instructions**.
+4. Choose who can use it under **Available to**:
+   - **Every provider** stores the skill once in the shared skills folder, where any agent that reads it picks it up.
+   - The provider's own option, for example **Claude Code only**, stores it in that provider's own skills folder.
+5. Click **Create skill**.
+
+The dialog shows where the skill will be saved. To switch back to importing, choose "or import an existing one".
+
+## Skill List
+
+Badges show where each skill comes from. Use the filter menu to show or hide each type.
+
+| Badge             | Meaning                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| **Shared**        | Stored in the shared skills folder, available to every provider.                     |
+| **Provider-only** | Stored in this provider's own skills folder.                                         |
+| **Plugin**        | Comes from an installed plugin. Remove the plugin to remove the skill.               |
+| **Built-in**      | Ships with the provider and can't be removed from here.                              |
+| **Conflict**      | A folder already sits where this provider would link the skill. Traycer leaves it alone. |
+
+Open a skill to see its **Name**, **When to use**, **Source**, and **Instructions**. From there you can **Edit** it and **Save changes**, **Remove** it, or, for an imported skill, **Update from source**. If you edited an imported skill, updating asks before it overwrites your edits.
+
+## Use A Skill In Chat
+
+Type `/` or `$` in the composer to open the same picker.
+
+- At the start of a message, the picker lists skills and the coding agent's own commands.
+- Later in a message, it lists skills only.
+
+You can use several skills in one message. For example, a skill named `release-notes` is `/release-notes`.
+
+**Skills** and **Plugins** are separate tabs. Plugins install from a source string; see [Plugins](/settings/providers#plugins).

@@ -38,6 +38,7 @@ export function resolveMobileHeaderRightActionsKey(
     // presents nothing of its own, which is the same answer either way.
     case "history":
     case "settings":
+    case "sample-workspace":
     case "home":
       return null;
   }

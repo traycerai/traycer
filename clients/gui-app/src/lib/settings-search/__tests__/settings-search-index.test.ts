@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SETTINGS_SEARCH_FIXTURES } from "@/components/settings/__tests__/settings-search-fixture-registry";
+import { LAYOUT_LAUNCH_ENTRIES } from "@/components/layout-editor/layout-search.definitions";
 import type {
   AnySettingsSectionCollection,
   SettingsDefinition,
@@ -62,7 +63,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   runnerHost: null,
   featureSettings: null,
   mobileApp: false,
-  mobileFooter: false,
+  phoneLayout: false,
 };
 
 describe("settings search index", () => {
@@ -178,10 +179,16 @@ describe("settings search assembly", () => {
     expect(unassembled).toEqual([]);
   });
 
-  it("is exactly the concatenation of its collections' entries", () => {
-    expect(SETTINGS_SEARCH_ENTRIES).toEqual(
-      SETTINGS_SEARCH_COLLECTIONS.flatMap((collection) => collection.entries),
-    );
+  it("is exactly its collections' entries, then the Layout launch results", () => {
+    // The launch results belong to no collection (there is no panel to render
+    // them from); they are generated from the region registry, appended after
+    // every section's.
+    expect(SETTINGS_SEARCH_ENTRIES).toEqual([
+      ...SETTINGS_SEARCH_COLLECTIONS.flatMap(
+        (collection) => collection.entries,
+      ),
+      ...LAYOUT_LAUNCH_ENTRIES,
+    ]);
   });
 });
 

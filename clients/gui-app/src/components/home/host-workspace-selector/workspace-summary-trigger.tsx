@@ -7,7 +7,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import { cn } from "@/lib/utils";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
 import { WorkspaceFolderPreviewSheet } from "./workspace-folder-preview-sheet";
@@ -58,7 +58,6 @@ export function WorkspaceSummaryTrigger(
   const extraCount = Math.max(0, items.length - 1);
   const anyMissing = items.some((item) => item.missing);
   const [readOnlyPopoverOpen, setReadOnlyPopoverOpen] = useState(false);
-  const [readOnlyHoverOpen, setReadOnlyHoverOpen] = useState(false);
   const preview = useWorkspaceFolderPreviewReveal();
 
   const triggerButton = (
@@ -118,10 +117,9 @@ export function WorkspaceSummaryTrigger(
       <ChevronDown className="size-3.5 shrink-0 text-current" />
     </button>
   );
-  // The interactive (non-read-only) summary is wrapped by the parent's
-  // controlled hover card (`WorkspaceFolderSummaryControl`), which gates the
-  // preview on the click-open picker; the read-only branch below owns its own
-  // coordinated hover+popover pair.
+  // The interactive (non-read-only) summary is wrapped by the parent's hover
+  // card (`WorkspaceFolderSummaryControl`), which is shut while the click-open
+  // picker is; the read-only branch below owns its own hover+popover pair.
   const trigger = triggerButton;
 
   // Read-only (terminal-agent): hover keeps the compact preview; click expands
@@ -132,29 +130,29 @@ export function WorkspaceSummaryTrigger(
       <>
         <Popover
           open={readOnlyPopoverOpen}
-          onOpenChange={(nextOpen) => {
-            setReadOnlyPopoverOpen(nextOpen);
-            if (nextOpen) setReadOnlyHoverOpen(false);
-          }}
+          onOpenChange={setReadOnlyPopoverOpen}
         >
-          <HoverPreviewCard
+          <HoverCard
+            trigger={
+              <PopoverTrigger asChild>
+                {/* Innermost, so the press guard runs BEFORE the popover's own
+                    open handler and can prevent it - `Slot` composes a child's
+                    handler ahead of the slot's. */}
+                <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
+              </PopoverTrigger>
+            }
             content={<WorkspaceFolderHoverList items={items} />}
+            appearance="preview"
+            semantics={{ role: "dialog", label: "Workspace folders" }}
             side="bottom"
             sideOffset={4}
             align="start"
-            open={!readOnlyPopoverOpen && readOnlyHoverOpen}
-            onOpenChange={(nextOpen) => {
-              if (readOnlyPopoverOpen) return;
-              setReadOnlyHoverOpen(nextOpen);
-            }}
-          >
-            <PopoverTrigger asChild>
-              {/* Innermost, so the press guard runs BEFORE the popover's own
-                  open handler and can prevent it - `Slot` composes a child's
-                  handler ahead of the slot's. */}
-              <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
-            </PopoverTrigger>
-          </HoverPreviewCard>
+            enabled={!readOnlyPopoverOpen}
+            open={null}
+            onOpenChange={null}
+            testId={null}
+            className={null}
+          />
           <PopoverContent
             side="bottom"
             align="start"

@@ -57,6 +57,7 @@ traycer host status
 | `traycer cli upgrade`          | Upgrade the installed CLI binary when supported by the install source. |
 | `traycer config shell get`     | Show the shell used for host bootstrap and terminal tabs.              |
 | `traycer config env list`      | Show environment overrides used by Traycer.                            |
+| `traycer profile list`         | List provider profiles (accounts) and their sign-in state.             |
 
 `traycer host start` is the **foreground** supervisor - it runs the host in this
 terminal and blocks until the host exits. It is also the entrypoint launchd /
@@ -81,6 +82,22 @@ traycer host status --json
 
 Most commands support `--json`, which emits structured NDJSON events suitable for automation. The CLI also supports `--quiet` and `--no-progress` for logs, and honors non-interactive environments such as CI.
 
+## Provider Profiles
+
+A profile is an account a provider can run under: the provider's own CLI login (`ambient`), or a managed profile Traycer keeps separately so you can use more than one account. These commands manage the same profiles as the app's provider settings, so a change made in either shows in the other.
+
+```sh
+traycer profile list                          # every provider that has profiles
+traycer profile add claude --label Work       # create a profile and sign it in
+traycer profile login codex ambient           # sign an existing profile in again
+traycer profile rename claude <profile-id> "Personal"
+traycer profile disable claude <profile-id>   # keep it, but stop using it
+traycer profile enable claude <profile-id>
+traycer profile remove claude <profile-id>    # asks first; --yes to skip
+```
+
+`add` and `login` print a sign-in link (and a code, where the provider uses one) and wait for the sign-in to finish, so they need a terminal: they are refused under `--json` and in CI, and for Claude Code also when input is piped or redirected (you may need to paste a code). Press Ctrl+C to cancel. Managed profiles exist for Claude Code, Codex, Grok and Antigravity.
+
 ## Agent and Workspace Commands
 
 Traycer-launched agent sessions receive environment variables such as `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID`. In that context, the CLI can inspect the current Task, communicate with other agents, and create worktrees:
@@ -94,6 +111,15 @@ traycer worktree create --workspace /path/to/repo --branch my-feature
 ```
 
 These commands are mainly intended for Traycer-managed automation, but they are regular CLI commands and can be scripted when the host is running and the required IDs are supplied.
+
+`traycer agent list` takes two flags that shorten its output:
+
+| Flag        | Effect                                                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--live`    | Leave archived agents out. Against a host too old to report which agents are archived, the command exits 1 and says so. |
+| `--compact` | One short line per agent, without folders, model, or session detail.                                                    |
+
+With `--json`, each agent carries an `archived` field: `true`, `false`, or `null` when the host is too old to report it.
 
 ## Host Security
 

@@ -84,6 +84,7 @@ export const guiHarnessIdSchema = lazySchema(() =>
     "huggingface",
     "reasonix",
     "antigravity",
+    "commandcode",
   ]),
 );
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
@@ -166,6 +167,51 @@ export const guiHarnessIdSchemaPreAntigravity = lazySchema(() =>
 );
 export type GuiHarnessIdPreAntigravity = z.infer<
   typeof guiHarnessIdSchemaPreAntigravity
+>;
+
+/**
+ * Frozen copy of the persisted harness enum as the 1.5.0 tags shipped it -
+ * everything through Antigravity, before Command Code, which first rides
+ * `chat.subscribe@1.21`, `sessionImport.scan@1.3`, `sessionImport.run@1.3`
+ * and `drafts.subscribe@1.1`.
+ *
+ * Bound by every released line that embeds the persisted enum and is not held
+ * by a host floor gate: the released `sessionImport` minors, and through
+ * `chatRunSettingsSchemaPreCommandCode` /
+ * `chatRunSettingsStrictSchemaPreCommandCode` below the released run-settings
+ * reads, fallback target listing and draft lines.
+ *
+ * Do NOT add new harnesses here - extend `guiHarnessIdSchema` above, freeze
+ * the lines a tag has shipped, and gate stream emission on the negotiated
+ * minor (streams have no downgrade bridge).
+ */
+export const guiHarnessIdSchemaPreCommandCode = lazySchema(() =>
+  z.enum([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+  ]),
+);
+export type GuiHarnessIdPreCommandCode = z.infer<
+  typeof guiHarnessIdSchemaPreCommandCode
 >;
 
 // Cursor remains a reserved compatibility value: it shipped in this persisted
@@ -392,6 +438,62 @@ export const chatRunSettingsSchemaPreAuto = lazySchema(() =>
 );
 export type ChatRunSettingsPreAuto = z.infer<
   typeof chatRunSettingsSchemaPreAuto
+>;
+
+/**
+ * Wire-freeze copy of the persisted settings tuple as the 1.5.0 tags shipped
+ * it: `harnessId` pinned to `guiHarnessIdSchemaPreCommandCode`, every other
+ * field as it stood, the `.default(...)` backstops included.
+ *
+ * Bound by the released unary READS of a stored tuple:
+ * `epic.getChatRunSettings@3.0`, `epic.getChatRunSettingsBatch@1.0` and
+ * `chat.fallback.listTargets@1.0`. Each of them bound the live tuple until the
+ * first harness id after 1.5.0, and each now has a newer major that carries
+ * it.
+ *
+ * Hand-frozen field-for-field rather than `.extend()`ed: a later required
+ * field on the live tuple must not leak onto a released line. The permission
+ * mode is the live enum on purpose - these lines shipped able to spell
+ * `auto`. A mode added after 1.5.0 needs its own freeze here.
+ *
+ * NOT bound by `chat.subscribe`: those lines share one frame bundle across
+ * minors that disagree about the roster, and are held by the host's floor gate
+ * instead (see `chatRunSettingsSchemaPreAuto`).
+ */
+export const chatRunSettingsSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreCommandCode,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
+export type ChatRunSettingsPreCommandCode = z.infer<
+  typeof chatRunSettingsSchemaPreCommandCode
+>;
+
+/**
+ * The STRICT counterpart of `chatRunSettingsSchemaPreCommandCode`: every key
+ * required, as `chatRunSettingsStrictSchema` below. Bound by the released
+ * draft lines (`drafts.list@1.0`, `drafts.upsert@1.0`,
+ * `drafts.subscribe@1.0`), whose composer payload carries the strict tuple.
+ */
+export const chatRunSettingsStrictSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreCommandCode,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+  }),
+);
+export type ChatRunSettingsStrictPreCommandCode = z.infer<
+  typeof chatRunSettingsStrictSchemaPreCommandCode
 >;
 
 export const chatRunSettingsStrictSchema = lazySchema(() =>

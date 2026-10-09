@@ -50,13 +50,26 @@ export interface HostBusyForceDeferDialogProps {
   readonly forceDestructive: boolean;
   readonly onForce: () => void;
   readonly onDefer: () => void;
+  /**
+   * A third answer between Defer and Force: do what Force does once the work
+   * has finished ("Restart when idle"). `null` wherever nothing can wait for
+   * that, which is every caller but the update surfaces on an installed
+   * update that only needs its restart. Required rather than defaulted, as
+   * the other per-caller choices here are.
+   */
+  readonly idleAction: {
+    readonly label: string;
+    readonly isPending: boolean;
+    readonly onClick: () => void;
+  } | null;
 }
 
 /**
  * Shown when a host update/activation intent settles `"busy"`: another
  * Traycer surface (or the host's own boot) already holds the mutation lane.
  * Defer just dismisses - the next launch's boot converge reconciles it, so
- * there is nothing to abandon. Force's target intent is the caller's choice
+ * there is nothing to abandon. `idleAction`, where a caller has one, is the
+ * answer in between. Force's target intent is the caller's choice
  * (see each call site): a `continuation: "retry-with-force"` outcome
  * re-submits the same pre-commit intent with `force`; a `continuation:
  * "activate"` outcome (post-commit, packaged macOS) submits
@@ -64,11 +77,13 @@ export interface HostBusyForceDeferDialogProps {
  * apply/pin.
  */
 export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
+  const idleAction = props.idleAction;
+  const acting = props.isForcing || idleAction?.isPending === true;
   return (
     <Dialog
       open={props.open}
       onOpenChange={
-        props.isForcing
+        acting
           ? undefined
           : (open) => {
               if (!open) props.onDefer();
@@ -100,17 +115,36 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
             type="button"
             variant="ghost"
             size="sm"
-            disabled={props.isForcing}
+            disabled={acting}
             onClick={props.onDefer}
             data-testid="host-busy-defer"
           >
             Defer
           </Button>
+          {idleAction === null ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={acting}
+              onClick={idleAction.onClick}
+              data-testid="host-busy-when-idle"
+            >
+              {idleAction.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              {idleAction.label}
+            </Button>
+          )}
           <Button
             type="button"
             variant={props.forceDestructive ? "destructive" : "default"}
             size="sm"
-            disabled={props.isForcing}
+            disabled={acting}
             onClick={props.onForce}
             data-testid="host-busy-force"
           >

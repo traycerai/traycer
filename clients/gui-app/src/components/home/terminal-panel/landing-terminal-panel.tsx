@@ -22,6 +22,10 @@ import { Button } from "@/components/ui/button";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { useLandingTerminalSurfaceActive } from "./landing-terminal-surface-binding";
 import {
+  landingPanelCoverage,
+  usePublishLandingPanelCoverage,
+} from "./landing-pane-anchor-store";
+import {
   LEADER_SCOPE_LANDING_TERMINAL,
   registerLeaderScope,
 } from "@/lib/keybindings/leader-scope";
@@ -142,6 +146,9 @@ const LANDING_PANEL_CONNECTING_MESSAGE = "Connecting to the selected host…";
 
 /** The strip "+" tooltip. The chord is spelled out because "+" is not. */
 const LANDING_NEW_TAB_TOOLTIP = "New tab (\u2318T)";
+
+/** The one property the open/collapse slide animates (`landingTerminalPanelStyle`). */
+const PANEL_SLIDE_PROPERTY = "margin-right";
 
 /**
  * The panel's own surface. Desktop is a docked split, so it reads as chrome
@@ -1846,6 +1853,12 @@ function LandingTerminalPanelContents(
   const isMobile = useIsMobileViewport();
   const fullOverlay = props.maximized || isMobile;
   const overlayActive = fullOverlay && props.panelOpen;
+  // The tab that joins this page takes the panel's ground where the panel
+  // covers the page, so it reads what is rendered here, never the layout.
+  usePublishLandingPanelCoverage(
+    props.landingPageId,
+    landingPanelCoverage({ panelOpen: props.panelOpen, fullOverlay }),
+  );
   // Same touch-key treatment as the epic terminal tiles: at phone width the
   // open panel is a full overlay, so the key bar mounts under the body and
   // the keyboard inset pads the covered strip (0 wherever the platform
@@ -1881,6 +1894,7 @@ function LandingTerminalPanelContents(
   });
   const panelStyle = landingTerminalPanelStyle({
     overlayActive,
+    fullOverlay,
     panelOpen: props.panelOpen,
     panelWidthFraction: props.panelWidthFraction,
     // Browser-only, like the epic tile view's padding: the installed app's
@@ -1891,7 +1905,7 @@ function LandingTerminalPanelContents(
   const handlePanelTransitionEnd = useCallback(
     (event: ReactTransitionEvent<HTMLElement>): void => {
       if (event.target !== event.currentTarget) return;
-      if (event.propertyName !== "width") return;
+      if (event.propertyName !== PANEL_SLIDE_PROPERTY) return;
       if (!props.panelOpen) return;
       scheduleTerminalLayoutReconcile();
     },
@@ -1900,7 +1914,7 @@ function LandingTerminalPanelContents(
   const handlePanelTransitionCancel = useCallback(
     (event: TransitionEvent): void => {
       if (event.target !== panelRef.current) return;
-      if (event.propertyName !== "width") return;
+      if (event.propertyName !== PANEL_SLIDE_PROPERTY) return;
       if (!props.panelOpen || isDragging()) return;
       scheduleTerminalLayoutReconcile();
     },
@@ -1960,15 +1974,16 @@ function LandingTerminalPanelContents(
         className={cn(
           "flex h-full min-h-0 shrink-0 flex-col overflow-hidden",
           landingTerminalPanelSurfaceClass(isMobile),
-          // The width transition exists for open/collapse only. During a
-          // resize drag the global freeze class suspends it - otherwise every
-          // per-frame `style.width` write eases over the default duration and
-          // the panel rubber-bands behind the pointer.
+          // The margin slide exists for open/collapse only (see
+          // `landingTerminalPanelStyle`); the global freeze class keeps a
+          // resize drag from easing anything behind the pointer.
           "[.traycer-panel-resizing_&]:transition-none",
           props.panelOpen
-            ? "transition-[width]"
-            : "invisible pointer-events-none transition-[width,visibility]",
-          overlayActive && "absolute inset-0 z-20 w-full",
+            ? "transition-[margin-right]"
+            : "invisible pointer-events-none transition-[margin-right,visibility]",
+          // Anchored by its right edge (not `inset-0`, which over-constrains
+          // the box and ignores the margin) so the overlay reveal slides too.
+          overlayActive && "absolute inset-y-0 right-0 z-20 w-full",
         )}
         style={panelStyle}
         onTransitionEnd={handlePanelTransitionEnd}
@@ -2032,24 +2047,41 @@ function LandingTerminalPanelContents(
 }
 
 /**
- * In-flow width for the docked split; in overlay mode (maximized / mobile)
+ * In-flow geometry for the docked split; in overlay mode (maximized / mobile)
  * the panel is absolutely positioned instead, and at phone width the measured
  * keyboard inset pads the covered strip so the key bar rides above the soft
  * keyboard (0 wherever the platform resizes the layout itself).
+ *
+ * Open and collapse slide the panel by its right margin, never its width: a
+ * collapsed panel keeps its open width and a negative margin parks it past the
+ * row's clipped edge. That edge must be `overflow: clip` (`LandingDraftSurface`):
+ * a scrollable one lets a scroll-into-view inside the parked panel shift the
+ * whole page sideways. Animating the width instead walked the terminal inside
+ * through every intermediate size, each one reached the shell as a PTY resize,
+ * and a quick open/close burst of them left half-redrawn prompts stacked in
+ * the scrollback. Holding the width means the shell sees no resize at all.
  */
 function landingTerminalPanelStyle(args: {
   readonly overlayActive: boolean;
+  readonly fullOverlay: boolean;
   readonly panelOpen: boolean;
   readonly panelWidthFraction: number;
   readonly keyboardInsetPx: number;
 }): CSSProperties | undefined {
-  if (!args.overlayActive) {
-    return {
-      width: args.panelOpen ? `${args.panelWidthFraction * 100}%` : "0%",
-    };
+  if (args.overlayActive) {
+    if (args.keyboardInsetPx > 0) {
+      return { paddingBottom: args.keyboardInsetPx };
+    }
+    return undefined;
   }
-  if (args.keyboardInsetPx > 0) return { paddingBottom: args.keyboardInsetPx };
-  return undefined;
+  // A collapsed overlay panel parks at the full width it reopens to.
+  const openWidth = args.fullOverlay
+    ? "100%"
+    : `${args.panelWidthFraction * 100}%`;
+  return {
+    width: openWidth,
+    marginRight: args.panelOpen ? "0%" : `-${openWidth}`,
+  };
 }
 
 interface LandingTerminalMobileKeyBarProps {
@@ -2667,6 +2699,7 @@ function LandingTerminalPanelBody(props: {
                   landingPageId={props.landingPageId}
                   tab={tab}
                   active={tab.instanceId === visibleInstanceId}
+                  panelOpen={props.panelOpen}
                   createEnabled={Boolean(
                     props.availability === "supported" &&
                     props.panelOpen &&
@@ -2854,9 +2887,9 @@ function useLandingTerminalLayoutReconcile(args: {
   useEffect(() => {
     const reopened = args.panelOpen && !previousPanelOpenRef.current;
     previousPanelOpenRef.current = args.panelOpen;
-    // A normal reveal reconciles on its final width transition. When a resize
+    // A normal reveal reconciles when its slide transition ends. When a resize
     // or motion preference suppresses transitions, the panel jumps straight to
-    // its target width and needs the next-frame fallback instead. An active-tab
+    // its open position and needs the next-frame fallback instead. An active-tab
     // change while already open also lands here, including a delayed
     // reconciliation that selects a different terminal after reveal.
     if (

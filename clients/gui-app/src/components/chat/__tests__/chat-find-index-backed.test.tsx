@@ -541,6 +541,8 @@ function renderFind(input: {
       getNavigationGeneration: () => navigationGeneration,
       setScrolledActiveUserMessageIdIfChanged:
         callbacks.setScrolledActiveUserMessageIdIfChanged,
+      openSubagentId: null,
+      getSubagentViewRoot: () => null,
     });
     useChatFindIndexFeed({
       client: input.client,
@@ -595,12 +597,10 @@ function renderFind(input: {
 
 /** Mounts `message` the way the list renders it: a row with its find units. */
 function mountRow(scroller: HTMLElement, message: ChatMessageModel): string {
-  const [row] = buildChatFindRows(
-    [message],
-    TILE_INSTANCE_ID,
-    EMPTY_PROMOTED,
-    null,
-  );
+  const [row] = buildChatFindRows([message], TILE_INSTANCE_ID, EMPTY_PROMOTED, {
+    hideReasoning: false,
+    queuePauseReasonProtocolSupported: null,
+  });
   const element = document.createElement("div");
   element.dataset.messageId = message.id;
   for (const unit of row.units) {

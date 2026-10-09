@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
 import { LivePulse } from "@/components/ui/live-pulse";
@@ -49,6 +51,7 @@ export function FallbackRetryRow({
   // enabled only while a retry is actually on screen, so a chat with no
   // traversal issues no query.
   const retrying = pending !== undefined && pending.state === "retrying";
+  const readingWidth = useReadingWidthStyle();
   const labelFor = useFallbackProfileLabels(client, retrying);
   // One tuple: a transient retry is the same tuple again by definition, so
   // `targetTuple` is null here and there is no destination to name.
@@ -75,7 +78,13 @@ export function FallbackRetryRow({
       </span>
       {text === null ? null : (
         <div className="pointer-events-none px-4">
-          <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-2">
+          <div
+            className={cn(
+              "pointer-events-auto mx-auto w-full bg-canvas pt-2",
+              readingWidth.className,
+            )}
+            style={{ maxWidth: readingWidth.maxWidth }}
+          >
             <div
               aria-hidden
               data-testid="fallback-retry-row"

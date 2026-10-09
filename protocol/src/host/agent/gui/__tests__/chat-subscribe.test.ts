@@ -25,6 +25,10 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
+  chatSubscribeV120,
+  chatSubscribeV121,
+  chatSubscribeV122,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2283,7 +2287,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 18 as chatSubscribeV118", () => {
+  it("registers chat.subscribe major 1 latestMinor 22 as chatSubscribeV122", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2327,7 +2331,18 @@ describe("chat.subscribe registry membership", () => {
     // `18` adds the model-routing line: `receipt` on a provider notice and
     // `pausedReason` on the queue state - optional server-side keys a
     // `<=1.17` peer's non-strict decoder drops.
-    expect(entry[1].latestMinor).toBe(18);
+    //
+    // `19` adds skeleton resume: a nullable claim on open and `retainedRows`
+    // on the first resumed chunk.
+    //
+    // `20` adds the Claude-parity line: live-only host-authored surfaces the
+    // host projects away for every `<=1.19` peer.
+    // `21` is the Command Code line: no new key, only the harness ids the
+    // shapes may name (the released minors froze the row context without it).
+    // `22` is the open-harness-id line: no new key either, only the heard-from
+    // harness leaves reopened to a string; `21` stays the frozen union the
+    // head has since moved off.
+    expect(entry[1].latestMinor).toBe(22);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2341,6 +2356,10 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[16].contract).toBe(chatSubscribeV116);
     expect(entry[1].versions[17].contract).toBe(chatSubscribeV117);
     expect(entry[1].versions[18].contract).toBe(chatSubscribeV118);
+    expect(entry[1].versions[19].contract).toBe(chatSubscribeV119);
+    expect(entry[1].versions[20].contract).toBe(chatSubscribeV120);
+    expect(entry[1].versions[21].contract).toBe(chatSubscribeV121);
+    expect(entry[1].versions[22].contract).toBe(chatSubscribeV122);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2379,6 +2398,22 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV118.schemaVersion).toEqual({
       major: 1,
       minor: 18,
+    });
+    expect(chatSubscribeV119.schemaVersion).toEqual({
+      major: 1,
+      minor: 19,
+    });
+    expect(chatSubscribeV120.schemaVersion).toEqual({
+      major: 1,
+      minor: 20,
+    });
+    expect(chatSubscribeV121.schemaVersion).toEqual({
+      major: 1,
+      minor: 21,
+    });
+    expect(chatSubscribeV122.schemaVersion).toEqual({
+      major: 1,
+      minor: 22,
     });
   });
 

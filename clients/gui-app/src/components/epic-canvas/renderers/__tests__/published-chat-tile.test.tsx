@@ -73,7 +73,7 @@ interface MockHostReachability {
   readonly status: "reachable" | "unreachable";
   readonly hostLabel: string;
   /** Absent on most fixtures, like the real hook's `null`. */
-  readonly unavailability?: "offline" | "plan-restricted";
+  readonly unavailability?: "offline";
   /** Absent on most fixtures, which never arms the owner recovery read. */
   readonly hostKind?: "local" | "remote" | "unknown";
 }
@@ -792,31 +792,6 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
     expect(deadTileBannerContainerProps).toHaveLength(1);
     expect(deadTileBannerContainerProps[0]?.showsPublishedCopy).toBe(false);
   });
-
-  it("names the plan restriction, not an outage, when that is why the owner is unreachable", () => {
-    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
-    mockUseChatReplicaRead.mockReturnValue(replicaOk());
-    mockUseHostReachability.mockReturnValue({
-      status: "unreachable",
-      hostLabel: "Ada's Mac",
-      unavailability: "plan-restricted",
-    });
-
-    render(
-      <PublishedChatTile
-        node={NODE}
-        viewTabId="tab-1"
-        tileId="pane-1"
-        isActive
-        epicId="epic-1"
-      />,
-    );
-
-    expect(deadTileBannerContainerProps).toHaveLength(1);
-    expect(deadTileBannerContainerProps[0]?.reason).toBe(
-      "host-plan-restricted",
-    );
-  });
 });
 
 /**
@@ -1064,10 +1039,6 @@ describe("PublishedChatTile - offline owner recovery", () => {
 
   it.each<[string, MockHostReachability]>([
     ["reachable", { status: "reachable", hostLabel: "Ada's Mac" }],
-    [
-      "plan-restricted",
-      { ...OFFLINE_REMOTE_OWNER, unavailability: "plan-restricted" },
-    ],
     ["a local host", { ...OFFLINE_REMOTE_OWNER, hostKind: "local" }],
     ["an unknown host", { ...OFFLINE_REMOTE_OWNER, hostKind: "unknown" }],
   ])("does not dial when the owner is %s", (_label, reachability) => {

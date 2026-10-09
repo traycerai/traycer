@@ -3,12 +3,14 @@ import {
   chatSubscribeServerFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchema,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
-  chatSubscribeWindowedServerFrameSchema,
+  openChatSubscribeWindowedServerFrameSchema,
   type ChatSubscribeClientFrame,
   type ChatSubscribeServerFrame,
-  type ChatSubscribeWindowedServerFrame,
+  type OpenChatSubscribeWindowedServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { ChatSkeletonResume } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
@@ -40,7 +42,7 @@ export interface ChatStreamCallbacks {
   ) => void;
   readonly onMessageAccepted: (
     frame: Extract<
-      ChatSubscribeServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "messageAccepted" }
     >,
   ) => void;
@@ -51,7 +53,10 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   readonly onQueueChanged: (
-    frame: Extract<ChatSubscribeServerFrame, { readonly kind: "queueChanged" }>,
+    frame: Extract<
+      OpenChatSubscribeWindowedServerFrame,
+      { readonly kind: "queueChanged" }
+    >,
   ) => void;
   readonly onTurnStateChanged: (
     frame: Extract<
@@ -60,7 +65,10 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   readonly onBlockDelta: (
-    frame: Extract<ChatSubscribeServerFrame, { readonly kind: "blockDelta" }>,
+    frame: Extract<
+      OpenChatSubscribeWindowedServerFrame,
+      { readonly kind: "blockDelta" }
+    >,
   ) => void;
   readonly onApprovalRequested: (
     frame: Extract<
@@ -106,7 +114,7 @@ export interface ChatStreamCallbacks {
   ) => void;
   readonly onEventAppended: (
     frame: Extract<
-      ChatSubscribeServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "eventAppended" }
     >,
   ) => void;
@@ -161,6 +169,18 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   /**
+   * The active turn's thinking-token estimate moved (`chat.subscribe@1.20`),
+   * coalesced host-side to at most one a second. Turn-scoped: apply it only
+   * while `turnId` is the active turn. A host below `1.20` never sends it, so
+   * against an older host this is simply never called.
+   */
+  readonly onThinkingTokens: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "thinkingTokens" }
+    >,
+  ) => void;
+  /**
    * `retryCause` is the host's reason for a retryable close, on the
    * `reconnecting` transition it causes, and `null` otherwise (see
    * `StatusChangeHandler`).
@@ -189,34 +209,49 @@ export interface ChatStreamCallbacks {
    */
   readonly onWindowedSnapshot: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "snapshot" }
     >,
   ) => void;
   readonly onSkeletonChunk: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "skeletonChunk" }
     >,
   ) => void;
   readonly onIndexChanged: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "indexChanged" }
     >,
   ) => void;
   readonly onRange: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "range" }
     >,
   ) => void;
   readonly onAccumulatedChanges: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "accumulatedChanges" }
     >,
   ) => void;
+
+  // ─── Skeleton resume (`chat.subscribe@1.19`) ──────────────────────────────
+
+  /**
+   * The skeleton this chat already holds, described for the host, or `null`
+   * to claim nothing. Read immediately before EVERY wire subscribe - the first
+   * one and each reconnect - and only when the subscribe is about to declare a
+   * line that carries the claim, so a reconnect always describes what the
+   * chat holds by then.
+   *
+   * A read, not an event: it must be synchronous and must not open anything.
+   * Remembering what it offered is allowed, because the answer - the first
+   * `skeletonChunk` of that connection - is where the offer is spent.
+   */
+  readonly readSkeletonResume: () => ChatSkeletonResume | null;
 }
 
 /**
@@ -224,6 +259,26 @@ export interface ChatStreamCallbacks {
  * annotations on user messages. Anything below it cannot author them.
  */
 const CHAT_SUBSCRIBE_BROWSER_PAYLOAD_MINOR = 7;
+
+/**
+ * The `chat.subscribe` minor that carries the skeleton-resume claim on its
+ * open request. A literal, not the registry's `latestMinor`: a floor written
+ * as the ceiling slides up with the next minor and stops offering the claim to
+ * every host still on this one.
+ */
+const CHAT_SUBSCRIBE_SKELETON_RESUME_MINOR = 19;
+
+/**
+ * `null` is a transport that cannot report the version (the worker proxy),
+ * which by that parameter's contract means the newest line - so the claim goes.
+ */
+function carriesSkeletonResume(version: SchemaVersion | null): boolean {
+  return (
+    version === null ||
+    (version.major === 1 &&
+      version.minor >= CHAT_SUBSCRIBE_SKELETON_RESUME_MINOR)
+  );
+}
 
 export interface ChatStreamClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
@@ -251,10 +306,21 @@ export class ChatStreamClient {
     this.epicId = options.epicId;
     this.chatId = options.chatId;
     this.closed = false;
-    this.session = options.wsStreamClient.subscribe("chat.subscribe", {
-      epicId: options.epicId,
-      chatId: options.chatId,
-    });
+    // Re-read on every wire subscribe, so a reconnect describes the skeleton
+    // the chat holds THEN rather than the empty one it opened with. Against a
+    // line below the claim nothing is read at all: the older line's open
+    // request would strip the claim anyway, and reading would record an offer
+    // no host will ever answer.
+    this.session = options.wsStreamClient.subscribeWithParamsProvider(
+      "chat.subscribe",
+      (onWireVersion) => ({
+        epicId: options.epicId,
+        chatId: options.chatId,
+        resume: carriesSkeletonResume(onWireVersion)
+          ? this.callbacks.readSkeletonResume()
+          : null,
+      }),
+    );
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -457,7 +523,8 @@ export class ChatStreamClient {
    * only the `snapshot` differs in shape between the lines.
    */
   private handleWindowedFrame(envelope: StreamFrameEnvelope): void {
-    const parsed = chatSubscribeWindowedServerFrameSchema.safeParse(envelope);
+    const parsed =
+      openChatSubscribeWindowedServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       // Every other parse failure in this file is announced, and this one is
       // the least self-evident of them: a dropped `snapshot` or `skeletonChunk`
@@ -472,7 +539,7 @@ export class ChatStreamClient {
       warnDroppedFrame("windowed frame", parsed.error.issues);
       return;
     }
-    const frame: ChatSubscribeWindowedServerFrame = parsed.data;
+    const frame: OpenChatSubscribeWindowedServerFrame = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onWindowedSnapshot(frame);
@@ -580,6 +647,10 @@ export class ChatStreamClient {
       }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      case "thinkingTokens": {
+        this.callbacks.onThinkingTokens(frame);
         return;
       }
       case "pong": {
@@ -836,6 +907,10 @@ export class ChatStreamClient {
       }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      case "thinkingTokens": {
+        this.callbacks.onThinkingTokens(frame);
         return;
       }
       case "pong": {

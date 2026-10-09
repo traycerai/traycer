@@ -20,7 +20,7 @@ import { useLandingProviderStartTerminalLogin } from "@/hooks/providers/use-land
 import {
   LandingTerminalTileLive,
   TerminalDeadState,
-  type LandingTerminalTileProps,
+  type LandingTerminalTileBodyProps,
 } from "./landing-terminal-tile";
 import { useRemoveExitedLandingTab } from "./use-remove-exited-landing-tab";
 
@@ -49,7 +49,7 @@ const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
  * capable, and the capable reconciliation leaves this tab out of migration.
  */
 export function LandingSignInTerminalTile(
-  props: LandingTerminalTileProps,
+  props: LandingTerminalTileBodyProps,
 ): ReactNode {
   const { tab, landingPageId } = props;
   const providerId = tab.originProviderId ?? null;
@@ -79,6 +79,7 @@ export function LandingSignInTerminalTile(
     instanceId: tab.instanceId,
     sessionKind: "terminal",
     preparePayload,
+    viewer: props.onScreen ? "presentation" : "cache",
     adoptOnly: true,
   });
   // The attached exit is read from the stream (immediate), not from
@@ -94,12 +95,7 @@ export function LandingSignInTerminalTile(
   }, [removeTab, tab.instanceId]);
 
   if (reachability.status === "unreachable") {
-    return (
-      <TerminalDeadState
-        hostLabel={reachability.hostLabel}
-        unavailability={reachability.unavailability}
-      />
-    );
+    return <TerminalDeadState hostLabel={reachability.hostLabel} />;
   }
   if (hostLoad.kind !== "ready") {
     return (

@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   use,
   useEffect,
@@ -8,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type {
+  ComponentProps,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
   PointerEvent,
@@ -68,7 +70,6 @@ import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
-import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
@@ -161,12 +162,22 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
-import {
-  PLAN_RESTRICTED_MOBILE_DETAIL,
-  planRestrictedMobileTitle,
-} from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
+import {
+  CpuReading,
+  StatusBarMetric,
+} from "@/components/layout/status-bar/status-bar-resource-segment";
+import {
+  isCpuWarning,
+  useStatusBarResourceMetrics,
+} from "@/components/layout/status-bar/use-status-bar-resource-views";
+import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import { ReadingsLine } from "@/components/layout/readings-line";
+import {
+  statusBarResourceSegmentLabel,
+  type StatusBarResourceMetricView,
+} from "@/lib/resources/status-bar-resource-reading";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { ClosedTilePayload } from "@/stores/epics/canvas/store";
@@ -239,7 +250,12 @@ const ROW_HOVER_REVEAL =
 export type ResourceMonitorPopoverTrigger =
   | {
       readonly trigger: "header-button";
-      readonly className: string | undefined;
+      /**
+       * The glyph, or an outlined box beside the usage button as its equal and
+       * so in that button's own treatment: the strip's tile and readout (F6),
+       * the width they are given, or the header's readings at their own (G6).
+       */
+      readonly form: BarReadingForm;
     }
   | {
       readonly trigger: "custom";
@@ -534,6 +550,7 @@ function ScopedResourceMonitorPopover(props: {
   /** The provided stream client is the picked host's, not a fallback. */
   readonly streamBoundToScope: boolean;
 }) {
+  const placement = useColumnOverlayPlacement("foot");
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const chord = useBindingForAction("app.resources.open");
@@ -552,13 +569,38 @@ function ScopedResourceMonitorPopover(props: {
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);
   const scope = props.scope;
-  const tooltipLabel = watchesNamedHost(scope, props.hasExplicitPick)
-    ? `Resources · ${scope.hostLabel}`
-    : "Resources";
+  // The status bar segment's own readings, for the forms that draw them.
+  // Every source under it is a store or context read, so the icon button pays
+  // nothing for asking.
+  const { views, cpuPercent } = useStatusBarResourceMetrics({
+    hostId: scope.hostId,
+    hostLabel: scope.hostLabel,
+    hasExplicitPick: props.hasExplicitPick,
+    compact:
+      props.trigger.trigger === "header-button" &&
+      isCompactForm(props.trigger.form),
+  });
+  const tooltipLabel = resourceTooltipLabel(
+    scope,
+    props.hasExplicitPick,
+    props.trigger,
+    views.find((view) => view.metric === "cpu") ?? null,
+  );
   const tooltip =
     chord === null
       ? tooltipLabel
       : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
+
+  // A closed trigger keeps the stream only while it draws live readings: the
+  // status bar's segment, or the header button in a form that prints them
+  // (every form but the glyph and the tile, which are a bare icon). So is any
+  // form with every metric switched off - closed, they show nothing the
+  // stream feeds, so it opens with the panel and closes with it rather than
+  // ticking in the background for numbers nobody sees. The registry is
+  // lease-counted, so one trigger letting go leaves another's lease alone.
+  const streamWhileClosed =
+    views.length > 0 &&
+    (props.trigger.trigger === "custom" || printsReadings(props.trigger.form));
 
   return (
     <>
@@ -566,7 +608,7 @@ function ScopedResourceMonitorPopover(props: {
           mounted and ignored: this mount OPENS a stream, and one opened on the
           ambient host would be sampling processes on a machine nobody asked
           about — and would then have to be disowned by every reader below. */}
-      {props.streamBoundToScope ? (
+      {props.streamBoundToScope && (open || streamWhileClosed) ? (
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>
@@ -576,21 +618,16 @@ function ScopedResourceMonitorPopover(props: {
             // Naming the active host on every hover would train people to ignore
             // the one case the words exist for.
             label={tooltip}
-            side="top"
+            side={placement?.side ?? "top"}
             sideOffset={6}
-            align={undefined}
+            align={placement?.align}
           >
             <PopoverTrigger asChild>
               <Button
                 type="button"
-                variant="muted"
-                size="icon-sm"
-                aria-label="Resources"
                 data-testid="resource-monitor-header-button"
-                className={cn(props.trigger.className)}
-              >
-                <Cpu className="size-3.5" />
-              </Button>
+                {...readingButtonLook(props.trigger.form, views, cpuPercent)}
+              />
             </PopoverTrigger>
           </TooltipWrapper>
         ) : (
@@ -817,6 +854,7 @@ function ResourceMonitorContent(props: {
   readonly streamBoundToScope: boolean;
   readonly contentSide: "top" | "bottom";
 }) {
+  const placement = useColumnOverlayPlacement("foot");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
   // The picker earns its row once there is a choice to make. One host means one
@@ -860,8 +898,8 @@ function ResourceMonitorContent(props: {
 
   return (
     <PopoverContent
-      align="end"
-      side={props.contentSide}
+      align={placement?.align ?? "end"}
+      side={placement?.side ?? props.contentSide}
       sideOffset={8}
       collisionPadding={12}
       role="dialog"
@@ -1056,52 +1094,6 @@ function ResourceMonitorHostUnavailableNotice(props: {
       >
         <MutedAgentSpinner />
         Finding {scope.hostLabel}…
-      </div>
-    );
-  }
-  // A plan-gated host is not an offline one, and the copy below would send
-  // someone to debug a network that is working: the machine is up, this app
-  // just may not attach to it remotely on the current plan. The scope gate
-  // makes exactly this distinction for the Settings panels
-  // (`host-scope-gate.tsx`), and a picker that can land on the same host owes
-  // the same answer and the same remedy.
-  if (scope.host?.planRestricted === true) {
-    return (
-      <div
-        role="status"
-        className="flex flex-col items-center gap-2 px-6 py-8 text-center"
-        data-testid="resource-monitor-host-plan-restricted"
-      >
-        {/* The installed mobile app may not offer the purchase or the upgrade
-            (App Store guideline 3.1.1), so it states the same fact without
-            either; `PlanRestrictedUpgradeAction` withholds the button itself
-            on that shell. The host is still named - that is the reason this
-            notice exists. */}
-        <p className="max-w-[40ch] text-ui-sm font-medium text-foreground">
-          {isMobileApp()
-            ? planRestrictedMobileTitle(scope.hostLabel)
-            : `Reading ${scope.hostLabel} needs a paid plan`}
-        </p>
-        <p className="max-w-[40ch] text-ui-sm text-muted-foreground">
-          {isMobileApp() ? (
-            PLAN_RESTRICTED_MOBILE_DETAIL
-          ) : (
-            <>
-              It keeps working on its own machine. This app just can&apos;t
-              attach to it remotely on the current plan, so its processes
-              can&apos;t be streamed here.
-            </>
-          )}
-        </p>
-        <PlanRestrictedUpgradeAction />
-        <button
-          type="button"
-          onClick={scope.returnToActive}
-          className="rounded-md px-1 py-0.5 text-ui-sm text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-          data-testid="resource-monitor-host-return-to-active"
-        >
-          Show the active host
-        </button>
       </div>
     );
   }
@@ -5209,4 +5201,147 @@ function buildProcessRows(input: {
 
 function countLabel(count: number, singular: string, plural: string): string {
   return `${formatProcessCount(count)} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * The strip's icon draws no number, so its hover carries the CPU reading - or
+ * why there is none, which the bare icon would otherwise hide.
+ */
+function resourceTooltipLabel(
+  scope: HostScope,
+  hasExplicitPick: boolean,
+  trigger: ResourceMonitorPopoverTrigger,
+  cpuView: StatusBarResourceMetricView | null,
+): string {
+  const label = watchesNamedHost(scope, hasExplicitPick)
+    ? `Resources · ${scope.hostLabel}`
+    : "Resources";
+  if (trigger.trigger !== "header-button" || trigger.form !== "strip") {
+    return label;
+  }
+  if (cpuView === null) return label;
+  if (cpuView.value !== null) return `${label} · CPU ${cpuView.value}`;
+  return cpuView.unavailableReason === null
+    ? label
+    : `${label} · ${cpuView.unavailableReason}`;
+}
+
+/** The Compact forms: one CPU reading, whatever Metrics says. */
+function isCompactForm(form: BarReadingForm): boolean {
+  return form === "strip" || form === "readout";
+}
+
+/** Every form but the bare icons prints numbers the stream feeds. */
+function printsReadings(form: BarReadingForm): boolean {
+  return form !== "glyph" && form !== "tile";
+}
+
+/**
+ * How the header button draws in each form: the glyph alone (phone header),
+ * the rail's outlined tile, the top strip's CPU icon (warning-colored when hot), the expanded
+ * strip's outlined "cpu N%" tile, or - Detailed - the chosen metrics, in the
+ * top strip's bounded share of the header or as the side strip's full-width
+ * block.
+ */
+function readingButtonLook(
+  form: BarReadingForm,
+  views: ReadonlyArray<StatusBarResourceMetricView>,
+  cpuPercent: number | null,
+): Pick<
+  ComponentProps<typeof Button>,
+  "variant" | "size" | "aria-label" | "className" | "children"
+> {
+  switch (form) {
+    case "glyph":
+      return {
+        variant: "muted",
+        size: "icon-sm",
+        "aria-label": "Resources",
+        className: undefined,
+        children: <Cpu className="size-3.5" />,
+      };
+    case "tile":
+      return {
+        variant: "outline",
+        size: "sm",
+        "aria-label": "Resources",
+        className: "w-full shadow-xs",
+        children: <Cpu className="size-3.5" />,
+      };
+    case "strip":
+      return {
+        variant: "muted",
+        size: "icon-sm",
+        "aria-label": "Resources",
+        className: undefined,
+        children: (
+          <Cpu
+            className={cn(
+              "size-3.5",
+              isCpuWarning(cpuPercent) && RUNNING_LOW_TEXT_CLASS_NAME,
+            )}
+          />
+        ),
+      };
+    case "readout":
+      return {
+        variant: "outline",
+        size: "sm",
+        "aria-label": statusBarResourceSegmentLabel(views),
+        className: "w-full shadow-xs",
+        children: <CpuReading view={views[0]} cpuPercent={cpuPercent} />,
+      };
+    case "inline":
+      return {
+        variant: "ghost",
+        size: "sm",
+        "aria-label": statusBarResourceSegmentLabel(views),
+        className: "min-w-0 shrink",
+        children: <ResourceReadout views={views} cpuPercent={cpuPercent} />,
+      };
+    case "rows":
+      return {
+        variant: "ghost",
+        size: "inline",
+        "aria-label": statusBarResourceSegmentLabel(views),
+        className: "w-full",
+        children: <ResourceReadout views={views} cpuPercent={cpuPercent} />,
+      };
+  }
+}
+
+/**
+ * The resource readings on a reading button: the status bar segment's
+ * metrics, drawn the same way, on the one line every bar reading uses
+ * (`ReadingsLine`) - whole readings only. The chip rides at the head of the
+ * line, so it centres with the readings it heads the way the usage tile's
+ * provider icons do. With every metric switched off it says what it is,
+ * and with not even that fitting it draws the chip alone - never a cut
+ * label; the button's accessible name and tooltip still say "Resources".
+ */
+function ResourceReadout(props: {
+  readonly views: ReadonlyArray<StatusBarResourceMetricView>;
+  readonly cpuPercent: number | null;
+}): ReactNode {
+  const cpuWarning = isCpuWarning(props.cpuPercent);
+  return (
+    <ReadingsLine
+      align="start"
+      tone="muted"
+      lead={<Cpu className="size-3.5" />}
+      fallback={<Cpu className="size-3.5 shrink-0" />}
+    >
+      {props.views.length === 0 ? (
+        <span>Resources</span>
+      ) : (
+        props.views.map((view) => (
+          <StatusBarMetric
+            key={view.metric}
+            view={view}
+            warning={view.metric === "cpu" && cpuWarning}
+          />
+        ))
+      )}
+    </ReadingsLine>
+  );
 }

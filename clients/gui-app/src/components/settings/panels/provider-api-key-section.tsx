@@ -65,6 +65,9 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   // from the host's `API_KEY_ENV_VAR`, `apiKey.supported` is false and this
   // section never renders for it.
   antigravity: null,
+  // Command Code is a subscription provider too (browser sign-in), absent
+  // from the host's `API_KEY_ENV_VAR`, so this section never renders for it.
+  commandcode: null,
 };
 
 function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {

@@ -508,19 +508,17 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     ).toBe(true);
   });
 
-  it("activity-group open: reopen-after-close restores open ids", () => {
+  it("activity-group open: reopen-after-close restores both open and closed ids", () => {
     const closed = chatIdIdentity("reg-activity");
-    getOrCreateActivityGroupOpenStore(closed)
-      .getState()
-      .setOpen("group-1", true);
+    const before = getOrCreateActivityGroupOpenStore(closed).getState();
+    before.setOpen("group-1", true);
+    before.setOpen("group-2", false);
     promoteActivityGroupOpenStoreToDurable(closed);
     evictActivityGroupOpenStores([closed.tileInstanceId]);
     const reopened = chatIdIdentity("reopen-new");
-    expect(
-      getOrCreateActivityGroupOpenStore(reopened)
-        .getState()
-        .openIds.has("group-1"),
-    ).toBe(true);
+    const after = getOrCreateActivityGroupOpenStore(reopened).getState();
+    expect(after.openIds.has("group-1")).toBe(true);
+    expect(after.closedIds.has("group-2")).toBe(true);
   });
 
   it("tool open: reopen-after-close restores segment ids via the sweep's promotion", () => {

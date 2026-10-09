@@ -112,24 +112,26 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
     return [
       {
         itemId,
-        width: rect.width,
-        contentLeft: rect.left - originX - renderedTranslateX(child),
+        extent: rect.width,
+        contentStart: rect.left - originX - renderedTranslateX(child),
         // Tile strips have no pair-into-split gesture, so no tile is ever a
         // merge target. This - not the zero band width - is what makes the
         // model's merge branch unreachable here.
         isMergeTarget: false,
+        lane: null,
+        groupId: null,
       },
     ];
   });
   const sorted = measured
     .slice()
-    .sort((left, right) => left.contentLeft - right.contentLeft);
+    .sort((left, right) => left.contentStart - right.contentStart);
   return sorted.map((slot, index) => ({
     ...slot,
     advance:
       index + 1 < sorted.length
-        ? sorted[index + 1].contentLeft - slot.contentLeft
-        : slot.width,
+        ? sorted[index + 1].contentStart - slot.contentStart
+        : slot.extent,
   }));
 }
 
@@ -155,16 +157,19 @@ export function measureTileStripGeometry(input: {
   const originX = stripRect.left - el.scrollLeft;
   return {
     slots,
+    // Tile tabs are not grouped.
+    groups: [],
+    runGap: 0,
     sourceIndex,
-    grabOffsetX: input.pointerX - (originX + source.contentLeft),
-    sourceInitialLeft: originX + source.contentLeft,
-    sourceWidth: source.width,
+    grabOffset: input.pointerX - (originX + source.contentStart),
+    sourceInitialStart: originX + source.contentStart,
+    sourceExtent: source.extent,
     // Tile tabs have no pair-into-split gesture: the split lives on the pane
     // BODY, a different target. `readTileStripSlots` marks every slot
     // `isMergeTarget: false`, which is what keeps the model's merge branch
     // unreachable here.
-    stripTop: stripRect.top,
-    stripBottom: stripRect.bottom,
+    bandStart: stripRect.top,
+    bandEnd: stripRect.bottom,
   };
 }
 

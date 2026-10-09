@@ -30,6 +30,25 @@ type AwaitLoginResponse = ResponseOfMethod<
 >;
 type AwaitLoginContext = { readonly hostId: string | null };
 
+/**
+ * One wait for a login: the wire request, and the caller's way to stop
+ * waiting for it.
+ *
+ * The request names a provider and a profile and nothing else, and the client
+ * shares one in-flight `providers.awaitLogin` between identical requests
+ * (`host-method-policy-table.ts`, mode `join`). That is right while both
+ * waiters wait on the same login, and wrong once one of them has let its
+ * login go: its request stays in flight for the seconds the host spends
+ * re-probing auth after the child exits, and a sign-in started again inside
+ * that window would take that request's "not signed in" for its own answer.
+ * Aborting `signal` detaches this wait, so the next one is asked afresh.
+ * `undefined` for a caller that only ever waits to the end.
+ */
+export type AwaitLoginVariables = {
+  readonly request: AwaitLoginRequest;
+  readonly signal: AbortSignal | undefined;
+};
+
 // The provider state a login echo carries. Named rather than inlined so the
 // capability-stripping helper below states its own contract.
 type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
@@ -71,12 +90,14 @@ function withoutLoginCapability(
  *
  * On success the returned state is merged into the tab host's `providers.list`
  * cache, so the re-auth gate flips (and unmounts the banner) without a second
- * probe. A `null` state means nothing was in flight to await - left untouched.
+ * probe. A `null` state means nothing about the provider changed - nothing was
+ * in flight to await, or the host could not install an approved sign-in - and
+ * leaves the cache untouched.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,
   HostRpcError,
-  AwaitLoginRequest,
+  AwaitLoginVariables,
   AwaitLoginContext
 > {
   const client = useTabHostClient();
@@ -94,7 +115,7 @@ export function useProvidersAwaitLogin(): UseMutationResult<
 export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,
   HostRpcError,
-  AwaitLoginRequest,
+  AwaitLoginVariables,
   AwaitLoginContext
 > {
   const client = useHostClient();
@@ -117,18 +138,20 @@ export function useProvidersAwaitLoginForClient(args: {
 }): UseMutationResult<
   AwaitLoginResponse,
   HostRpcError,
-  AwaitLoginRequest,
+  AwaitLoginVariables,
   AwaitLoginContext
 > {
   const queryClient = useQueryClient();
   return useHostMutationWithResponseTimeout<
     HostRpcRegistry,
     "providers.awaitLogin",
-    AwaitLoginContext
+    AwaitLoginContext,
+    AwaitLoginVariables
   >({
     client: args.client,
     method: "providers.awaitLogin",
-    mapVariables: (variables: AwaitLoginRequest) => variables,
+    mapVariables: (variables) => variables.request,
+    signalFor: (variables) => variables.signal,
     // Long-poll: the host holds the response until the OAuth child
     // terminates (bounded by its own 3-minute login timeout). The default
     // ~30 s frame timeout would abandon a healthy sign-in as soon as the
@@ -203,8 +226,12 @@ export function useProvidersAwaitLoginForClient(args: {
           queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't confirm sign-in."),
+      onError: (error, variables) => {
+        // A wait the caller itself dropped is not a failure to confirm
+        // anything: the caller already knows how its attempt ended.
+        if (variables.signal?.aborted === true) return;
+        toastFromHostError(error, "Couldn't confirm sign-in.");
+      },
     },
   });
 }

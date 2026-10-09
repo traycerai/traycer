@@ -1685,7 +1685,7 @@ describe("chat-queue-reconciler", () => {
       });
 
       const reason = result.failedSendRestoration?.reason ?? "";
-      expect(reason).toContain("Message was not confirmed after reconnect.");
+      expect(reason).toMatch(/^Message was not confirmed after reconnect\./);
       expect(reason).toContain("model gpt-5-codex");
       expect(reason).toContain("billing your personal account");
     });

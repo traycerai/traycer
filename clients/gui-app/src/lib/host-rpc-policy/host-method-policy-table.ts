@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
@@ -338,6 +339,7 @@ export const PROVIDERS_STALE_ERROR_POLL_LANE: ConditionPollLane = {
 const PROVIDERS_RESET_LANES: ReadonlySet<string> = new Set([
   PROVIDERS_STEADY_POLL_LANE.id,
 ]);
+
 const HARNESS_RESET_LANES: ReadonlySet<string> = new Set([
   HARNESS_ALL_AVAILABLE_POLL_LANE.id,
 ]);
@@ -790,8 +792,19 @@ export const HOST_METHOD_POLL_TABLE = {
       resetLaneIds: HARNESS_RESET_LANES,
     }),
   },
-  "agent.gui.listModels": { ...LATEST_SCHEDULING, poll: null },
-  "agent.gui.listCommands": { ...LATEST_SCHEDULING, poll: null },
+  // A catalog read waits on the host's own probe bound, which the user's
+  // Model list timeout can raise past the ordinary unary deadline; see
+  // `CATALOG_LIST_RESPONSE_TIMEOUT_MS`. Every caller passes it.
+  "agent.gui.listModels": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "agent.gui.listCommands": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "agent.gui.getPlan": { ...LATEST_SCHEDULING, poll: null },
   "agent.tui.listHarnesses": { ...LATEST_SCHEDULING, poll: null },
   // Preparing a launch creates or updates host-side harness launch state.
@@ -1155,6 +1168,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Creating a chat persists a new collaboration record.
   "epic.createChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.continueSubagent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Renaming a chat persists its title.
   "epic.renameChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Updating chat run settings changes persisted execution configuration.
@@ -1767,6 +1785,43 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Profile sync. The overview is statuses only and is read from the source
+  // host while its dialog is open; the three `host.*` methods travel between
+  // two linked hosts and are never sent by an app.
+  "providers.profileSync.overview": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
+  },
+  "providers.profileSync.syncNow": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileSync.setKeepInSync": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileSync.acceptAccount": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileSync.apply": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileSync.offerCredential": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileSync.fetchCredential": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "providers.detectVersion": { ...LATEST_SCHEDULING, poll: null },
   // Starting login spawns a provider-authentication process.
   "providers.startLogin": {
@@ -2152,6 +2207,18 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.catalog.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.worktrees.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.worktrees.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Auto mode's two host-scoped settings. Both are get/set pairs over a host
   // config file, so they take the `config.logLevels.*` shape above: a bounded
   // read that may coalesce, and a write that may not.
@@ -2185,6 +2252,18 @@ export const HOST_METHOD_POLL_TABLE = {
   // what delivers that (see `autoJudge.set` above - two bodies are two queue
   // keys); `autoPolicyWriteScope` on `useAutoPolicySetMutation` is.
   "autoPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The account-wide chat auto-archive setting. Read on Settings mount, never
+  // polled: another device's save reaches this host's cache on its own
+  // 5-minute refresh, and a timer here would only wake the host for it.
+  "chatAutoArchive.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, ordered on the client by
+  // `chatAutoArchiveWriteScope` on `useChatAutoArchiveSetMutation`, exactly as
+  // `autoPolicy.set` above.
+  "chatAutoArchive.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

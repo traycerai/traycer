@@ -13,7 +13,10 @@ import type {
 import { createElement, type ReactNode } from "react";
 import { ProviderCliCandidatesSection } from "@/components/settings/panels/provider-cli-candidates-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  anyTooltipHasText,
+  tooltipTextNear,
+} from "@/components/ui/__tests__/tooltip-probe";
 
 type CapturedVersionManagerProps = {
   readonly hostId: string | null;
@@ -321,6 +324,36 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     fireEvent.click(guide);
     expect(openLink).toHaveBeenCalledWith(
       "https://ampcode.com/manual",
+      "docs",
+      null,
+    );
+  });
+
+  it("shows Command Code's install notice with its quickstart link when candidates are empty", () => {
+    // Command Code is PATH-only as well (the user installs `command-code`
+    // from npm), so the same notice is its only route to an install.
+    const state = providerState({
+      providerId: "commandcode",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Command Code CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Command Code installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://commandcode.ai/docs/quickstart",
+    );
+
+    fireEvent.click(guide);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://commandcode.ai/docs/quickstart",
       "docs",
       null,
     );
@@ -1426,5 +1459,103 @@ describe("ProviderCliCandidatesSection: keyboard reachability", () => {
     });
     versionMenu.focus();
     expect(document.activeElement).toBe(versionMenu);
+  });
+});
+
+/**
+ * Antigravity's agent runs its managed pack's own ACP server, not a CLI a
+ * custom path could point at, so "Add custom path" is HELD rather than
+ * hidden: the button stays where the user expects it, disabled, with a
+ * tooltip explaining why - never silently offered-then-failed.
+ */
+describe("ProviderCliCandidatesSection: custom CLI path held for antigravity", () => {
+  it("holds Add custom path for antigravity, keyboard-reachable with the reason on its tooltip, and a click reveals no input", () => {
+    const state = providerState({
+      providerId: "antigravity",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    const button = screen.getByRole("button", { name: "Add custom path" });
+    // `aria-disabled`, not native `disabled`: the tooltip is the only place
+    // the reason lives, and a natively disabled button leaves the tab order.
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    button.blur();
+    // The button itself is the trigger, so focusing it (what the probe does)
+    // opens the reason.
+    expect(button.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(tooltipTextNear(button)).toBe(
+      "Antigravity runs only its own ACP server (`agy_acp_server`), not the `agy` CLI, so a custom CLI path isn't supported.",
+    );
+
+    fireEvent.click(button);
+    expect(
+      screen.queryByPlaceholderText("/absolute/path/to/binary"),
+    ).toBeNull();
+  });
+
+  it("leaves Add custom path enabled for codex, with no tooltip, and a click reveals the path input", () => {
+    // The complement of the case above, proving the positive path would have
+    // been observable here too: same button, same query, only the provider
+    // differs.
+    const state = providerState({
+      providerId: "codex",
+      selected: { kind: "path" },
+      candidates: [
+        pathCandidate({ path: "/usr/local/bin/codex", available: true }),
+      ],
+    });
+    renderSection(state);
+
+    const button = screen.getByRole("button", { name: "Add custom path" });
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.hasAttribute("aria-disabled")).toBe(false);
+    expect(tooltipTextNear(button)).toBeNull();
+
+    fireEvent.click(button);
+    expect(
+      screen.getByPlaceholderText("/absolute/path/to/binary"),
+    ).toBeDefined();
+  });
+});
+
+/**
+ * `CliBinaryMissingNotice`'s advice changes with `customPathSupported`: a
+ * provider that cannot take a custom path must not be told it can add one.
+ */
+describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-path support", () => {
+  it("tells antigravity only to install it - no mention of a custom path", () => {
+    const state = providerState({
+      providerId: "antigravity",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/add its path below/u)).toBeNull();
+  });
+
+  it("still tells codex it can add its path below", () => {
+    const state = providerState({
+      providerId: "codex",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Codex CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
   });
 });

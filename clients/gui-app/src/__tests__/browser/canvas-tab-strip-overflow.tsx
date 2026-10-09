@@ -52,10 +52,11 @@ import "@/index.css";
  * seeds the dnd store with an `artifact-tab-strip` drop preview at index N
  * before the first render, so `TabStripDropIndicator` mounts inside tab N
  * without a real drag gesture; omitted, no preview is seeded and behaviour is
- * unchanged. Structure follows
- * `status-bar-usage-scroll.tsx` (vite + headless Chrome over CDP via
- * `scripts/chrome-launcher.mjs`); wired into `scripts/run-tests.ts` behind
- * `RUN_DIFF_EDIT_BROWSER_REGRESSION`, next to that fixture's entry.
+ * unchanged. `?kind=chat` seeds chat tiles instead of blank ones, for the
+ * Edit Title regression (`browser-tests/canvas-tab-rename.spec.ts`): a blank
+ * tile cannot be renamed, so its menu has no Edit Title to choose. Structure
+ * follows `status-bar-usage-scroll.tsx`; driven by
+ * `browser-tests/canvas-tab-strip-overflow.spec.ts`.
  *
  * What it mounts around `TabStrip`, and why each layer is real rather than
  * mocked (there is no `vi.mock` outside vitest):
@@ -214,7 +215,9 @@ export function CanvasTabStripOverflowFixture(props: {
         onCloseAll: () => undefined,
         onSplit: () => undefined,
         onRevealInSidebar: () => undefined,
-        onRename: () => undefined,
+        onRename: (_groupId, tabId, title) => {
+          committedRenames.push({ tabId, title });
+        },
       }}
     />
   );
@@ -227,9 +230,25 @@ const tabCount =
   Number.isFinite(tabCountParam) && tabCountParam > 0
     ? Math.floor(tabCountParam)
     : 1;
-const tiles: EpicCanvasTileRef[] = Array.from({ length: tabCount }, () =>
-  makeBlankTileRef(),
+// `?kind=chat` seeds CHAT tiles instead of blank ones: a blank tile cannot be
+// renamed (`canRenameCanvasTab`), so the Edit Title regression needs a tab
+// kind whose context menu carries the item. The host is the fixture's own
+// local host, so the tab's host client resolves without any RPC.
+const kindParam = new URLSearchParams(window.location.search).get("kind");
+const tiles: EpicCanvasTileRef[] = Array.from({ length: tabCount }, (_, i) =>
+  kindParam === "chat"
+    ? {
+        id: `fixture-chat-${String(i)}`,
+        instanceId: `fixture-chat-inst-${String(i)}`,
+        type: "chat",
+        name: `Chat ${String(i)}`,
+        hostId: FIXTURE_HOST_ID,
+      }
+    : makeBlankTileRef(),
 );
+// Renames the strip commits, read by the rename spec.
+const committedRenames: { tabId: string; title: string }[] = [];
+Object.assign(window, { __committedRenames: committedRenames });
 seedCanvas(tiles);
 
 // `?dropIndex=N` seeds an `artifact-tab-strip` drop preview at index N before

@@ -19,7 +19,27 @@ export type MutationKind =
   | "recoverIfDown"
   | "freePortAndRestart"
   | "uninstallHost"
-  | "removeTraycer";
+  | "removeTraycer"
+  | "stopHost"
+  | "refreshService";
+
+/**
+ * The lane jobs that can leave a local host running where none ran: every
+ * converge, apply, activation, install, service registration and restart.
+ * Each reaches the lane through `HostController.enqueueHostStart`, which
+ * refuses it while the host lifecycle suspends host starts.
+ */
+export type HostStartMutationKind = Extract<
+  MutationKind,
+  | "ensure"
+  | "apply"
+  | "activate"
+  | "install"
+  | "register"
+  | "respawn"
+  | "recoverIfDown"
+  | "freePortAndRestart"
+>;
 
 export interface MutationProgress {
   readonly stage: string | null;
@@ -134,7 +154,42 @@ export interface HostControllerStatus {
   readonly reachable: boolean;
   readonly removedByUser: boolean;
   readonly checkedAt: string;
+  /** See the shared declaration: the last failed ensure, until one is `ok` or the host is reachable. */
+  readonly lastEnsureFailure: HostEnsureFailure | null;
+  /** See the shared declaration: why the ready update is waiting, or `null`. */
+  readonly updateDeferral: HostUpdateDeferral | null;
 }
+
+/** Mirror of `@traycer-clients/shared`'s `HostEnsureFailure` - see there. */
+export interface HostEnsureFailure {
+  readonly message: string;
+  readonly code: string | null;
+}
+
+/** Mirror of `@traycer-clients/shared`'s `HostUpdateDeferral` - see there. */
+export interface HostUpdateDeferral {
+  readonly message: string;
+  readonly code: string;
+}
+
+// The service-registration notices (a task that is not this account's -
+// another Windows user's, or one whose owner could not be confirmed; a task
+// its owner disabled): codes and this app's copy, shared with the renderer so
+// it can tell them from failures. See the shared module.
+export {
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  isServiceTaskNotOwnedMessage,
+  SERVICE_REGISTRATION_DISABLED_CODE,
+  SERVICE_TASK_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE,
+  serviceTaskLeftInPlaceMessage,
+  serviceTaskNotOwnedMessage,
+  serviceTaskNotOwnedReason,
+} from "@traycer-clients/shared/platform/host-service-notices";
 
 // ---- Continuations ----------------------------------------------------
 //
@@ -150,6 +205,30 @@ export type BusyContinuation = "retry-with-force" | "activate";
 // treat the deferral as terminal, so emit sites and the matcher must share
 // one definition rather than risk wording drift.
 export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
+
+// Emitted verbatim by a host start the host lifecycle suspended (see
+// `HostController.quiesce` / `holdAutomaticIntents`) - an automatic one, or a
+// person's Restart, Install or Update, which shows the text as it is. Two
+// messages because the automatic callers must tell the two apart and nothing
+// else crosses `IpcHostController`: a QUIESCED process committed `none` and
+// starts no local host again until it restarts, so a caller that retries
+// retires instead; a HELD one is inside a stop that may still be refused or
+// cancelled, so it retries on its own pacing. Neither is a failure to report.
+export const AUTOMATIC_INTENTS_QUIESCED_MESSAGE =
+  "This app no longer starts a local host. Restart Traycer to apply the host lifecycle setting.";
+export const AUTOMATIC_INTENTS_HELD_MESSAGE =
+  "Host starts are paused while the host is being stopped.";
+
+// Emitted verbatim by every lane job the CLI refused with
+// `E_HOST_NOT_SERVICE_RUN`: the running host is a person's `traycer host
+// start` in a terminal, and this app neither stops, restarts nor updates over
+// it (the CLI refuses those under desktop origin before touching anything).
+// A deferral, not a failure: nothing is wrong, and nothing here can change it -
+// `--force` is refused the same way, so no surface offers one. The health
+// monitor's recovery (`respawnIfDown`) matches on it to leave that run alone
+// until it is gone, and a surface shows it as it is.
+export const HOST_NOT_SERVICE_RUN_MESSAGE =
+  "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
 
 // Who asked for a local-host mutation. Three methods take it -
 // `convergeReady`, `registerService` and `freePortAndRestart` - and they use
@@ -219,7 +298,11 @@ export type MutationOutcome<TOk> =
   // ordinary successful apply: callers surface recovery rather than an
   // update-ready state.
   | { readonly kind: "installed-not-converged"; readonly message: string }
-  | { readonly kind: "failed"; readonly message: string };
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly errorCode: string | null;
+    };
 
 // The lane-head identity guard refused a `user-repair` intent: the local host
 // is no longer the one the repair named, so the job mutated NOTHING.
@@ -250,6 +333,69 @@ export type GuardedMutationOutcome<TOk> =
   | AbandonedByGuard;
 
 /**
+ * `host stop --if-idle` (the CLI refuses with `E_HOST_BUSY` and touches
+ * nothing when the host has work in progress) or `host stop --force`.
+ */
+export type StopHostMode = "if-idle" | "force";
+
+/**
+ * A respawn's service cycle: `host restart --if-idle` (the CLI refuses with
+ * `E_HOST_BUSY`, and stops nothing, while the host has work in progress) or
+ * `host restart --force`. Both replace the SUPERVISOR - a service cycle is
+ * the one restart an old supervisor cannot turn into a child respawn.
+ */
+export type HostRespawnMode = "if-idle" | "force";
+
+/**
+ * How the CLI child is spawned.
+ *
+ * - `attached` - piped stdio, like every other lane call. For a stop the app
+ *   outlives (a `→ none` mode change).
+ * - `detached` - its own process group with stdout/stderr going to files in
+ *   the host home, so a child admitted before a quit deadline finishes on its
+ *   own after the app exits instead of dying on a closed pipe.
+ */
+export type StopHostSpawn = "attached" | "detached";
+
+export interface StopHostRequest {
+  readonly mode: StopHostMode;
+  readonly spawn: StopHostSpawn;
+  /**
+   * Withdraws the request while it is still QUEUED: aborted before the lane
+   * reaches it, it spawns nothing and resolves `withdrawn`. Once the child is
+   * spawned this has no effect - an admitted stop runs to completion (the
+   * quit transaction's deadline rule). `null` when the caller never withdraws.
+   */
+  readonly withdrawal: AbortSignal | null;
+}
+
+/**
+ * What a stop request resolves. Like every lane intent it never rejects.
+ *
+ * - `stopped` - the CLI stopped the host (or found none running).
+ * - `host-busy` - `--if-idle` found work in progress (`E_HOST_BUSY`); nothing
+ *   was touched.
+ * - `lock-busy` - another lifecycle actor held the CLI lock past its bounded
+ *   wait (`E_CLI_LOCK_BUSY`); nothing ran.
+ * - `update-active` - a host update attempt is in flight
+ *   (`E_HOST_UPDATE_ATTEMPT_ACTIVE`); nothing ran.
+ * - `not-service-run` - the running host was started by `traycer host start`
+ *   in a terminal, not by the service (`E_HOST_NOT_SERVICE_RUN`), so the
+ *   service stop reached nothing and the host still runs. Never `stopped`,
+ *   and never a reason to escalate to `--force`: that host is the terminal's.
+ * - `withdrawn` - the request was withdrawn before the lane reached it.
+ * - `failed` - anything else, with the CLI's message.
+ */
+export type StopHostOutcome =
+  | { readonly kind: "stopped"; readonly forced: boolean }
+  | { readonly kind: "host-busy"; readonly message: string }
+  | { readonly kind: "lock-busy"; readonly message: string }
+  | { readonly kind: "update-active"; readonly message: string }
+  | { readonly kind: "not-service-run"; readonly message: string }
+  | { readonly kind: "withdrawn" }
+  | { readonly kind: "failed"; readonly message: string };
+
+/**
  * Narrows a guarded outcome for a caller that submitted a `background`
  * intent. A background intent carries no guard, so `abandoned` cannot occur
  * on that path; mapping it to `failed` rather than asserting it away keeps
@@ -259,7 +405,7 @@ export function backgroundMutationOutcome<TOk>(
   outcome: GuardedMutationOutcome<TOk>,
 ): MutationOutcome<TOk> {
   return outcome.kind === "abandoned"
-    ? { kind: "failed", message: outcome.message }
+    ? { kind: "failed", message: outcome.message, errorCode: null }
     : outcome;
 }
 
@@ -323,6 +469,24 @@ export interface ServiceRegistrationOk {
   readonly registered: boolean;
 }
 
+/**
+ * What `host service refresh` found and did (`HostController
+ * .refreshServiceDefinition`). `appliesAt` is set only for `refreshed`:
+ * `next-login` is the macOS plist that predates the launcher file, whose
+ * rewrite launchd picks up at the next login rather than at a respawn.
+ */
+export interface ServiceDefinitionRefreshOk {
+  readonly result: "not-registered" | "current" | "refreshed";
+  readonly appliesAt: "next-start" | "next-login" | null;
+}
+
+/**
+ * Whether `HostController.spawnServiceDefinitionRefresh` got its detached
+ * child running. `spawned` promises nothing about the refresh itself: the
+ * child may finish after the app is gone.
+ */
+export type ServiceDefinitionRefreshSpawn = "spawned" | "failed";
+
 export interface UninstallOk {
   readonly removedInstallDir: boolean;
   /**
@@ -348,6 +512,8 @@ export interface UninstallOk {
    * either way, `false` = verified absent (no platform produces this today).
    */
   readonly serviceRegistrationRetained: boolean | null;
+  /** See the shared `HostUninstalled.serviceWarning`. */
+  readonly serviceWarning: string | null;
 }
 
 export interface RemoveTraycerOk {
@@ -361,6 +527,8 @@ export interface RemoveTraycerOk {
    */
   readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
+  /** See the shared `TraycerRemoved.serviceWarning`. */
+  readonly serviceWarning: string | null;
 }
 
 export type ApplyStagedTrigger = "launch" | "manual";

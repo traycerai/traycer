@@ -153,11 +153,11 @@ export function groupCurrentTasks(
 ): CurrentTaskGroups {
   const inProgress = items
     .filter((item) => workingEpicIds.has(item.epicId))
-    .sort(byUpdatedAtDescending);
+    .sort(byRecentAtDescending);
   const claimed = new Set(inProgress.map((item) => item.id));
   const pinned = items
     .filter((item) => item.isPinned && !claimed.has(item.id))
-    .sort(byUpdatedAtDescending);
+    .sort(byRecentAtDescending);
   for (const item of pinned) claimed.add(item.id);
   const byEpicId = new Map(
     items
@@ -173,34 +173,9 @@ export function groupCurrentTasks(
   return { inProgress, pinned, open };
 }
 
-function byUpdatedAtDescending(left: HistoryItem, right: HistoryItem): number {
-  return right.updatedAtMs - left.updatedAtMs;
-}
-
-/**
- * The phone's stand-in for Home's "In progress" group: running tasks moved to
- * the front of an ordinary History feed.
- *
- * Desktop lifts a running task out of the feed by rendering it in
- * `CurrentTasksSection`, which the phone never mounts. Without that group the
- * feed's own order is all a phone has, and agent activity does not touch an
- * epic's `updatedAt` - so the one task the user is watching can sit pages
- * deep. Same semantics as {@link groupCurrentTasks}' `inProgress`, applied to
- * the list instead of beside it.
- *
- * Deduped by `epicId` rather than `id`: the lifted row and the feed's row for
- * one task can be built from different responses (a cloud list page vs. an
- * `epic.getTaskContexts` backfill), so only the epic identifies them as the
- * same task.
- *
- * Returns `items` itself when nothing is running, so a feed with no in-progress
- * task keeps its array identity and re-renders nothing.
- */
-export function withInProgressFirst(
-  inProgress: readonly HistoryItem[],
-  items: readonly HistoryItem[],
-): readonly HistoryItem[] {
-  if (inProgress.length === 0) return items;
-  const lifted = new Set(inProgress.map((item) => item.epicId));
-  return [...inProgress, ...items.filter((item) => !lifted.has(item.epicId))];
+function byRecentAtDescending(left: HistoryItem, right: HistoryItem): number {
+  return (
+    (right.recentAtMs ?? right.updatedAtMs) -
+    (left.recentAtMs ?? left.updatedAtMs)
+  );
 }

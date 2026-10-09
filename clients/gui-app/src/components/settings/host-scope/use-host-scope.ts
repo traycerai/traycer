@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
@@ -134,31 +134,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
   const { hosts, activeHostId, listsResolved, listsFailed, nowMs } = options;
 
   const { scopedHostId, setScopedHostId } = selection;
-  const authority = runnerHost.selectionAuthority;
-  // ONE activation at a time, and the guard is here rather than only on the
-  // button: the button is one caller, and this is the seam every caller passes
-  // through. `requestActivate` never rejects - it renders its own refusal and
-  // transport arms as toasts - so the latch always clears.
-  const [activatingHostId, setActivatingHostId] = useState<string | null>(null);
-  // The GUARD is a ref and the flag is state, and they are not interchangeable.
-  // Guarding on the state value reads it through this callback's closure, which
-  // only refreshes on re-render - so two clicks delivered in one React batch
-  // both see `null` and both write. That is precisely the double-click this
-  // exists to stop, and it survived a state-only guard.
-  const activatingRef = useRef(false);
-  const makeActive = useCallback(
-    (hostId: string) => {
-      if (activatingRef.current) return;
-      const option = findHostOption(hosts, hostId);
-      activatingRef.current = true;
-      setActivatingHostId(hostId);
-      void requestActivate(authority, hostId, option).finally(() => {
-        activatingRef.current = false;
-        setActivatingHostId(null);
-      });
-    },
-    [authority, hosts],
-  );
+  const { makeActive, isActivating } = useMakeActiveHost(hosts);
 
   // Still loading is not the same as gone, and a list that FAILED cannot prove
   // a host was removed. Both rules — and the reason the `vanished` verdict is
@@ -183,9 +159,8 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     host.hostId === activeHostId;
 
   // Gated on `connectable`, not on the entry's mere existence: an unavailable
-  // entry can still carry a stale URL, and a plan-restricted remote advertises
-  // one the server will refuse, so keying on the entry built a live-looking
-  // client for a host the status machine was about to call `unreachable`.
+  // entry can still carry a stale URL, so keying on the entry built a
+  // live-looking client for a host the status machine was about to call `unreachable`.
   // The rule itself lives in `transientClientEntry`, where a test can reach it.
   const overrideEntry = useMemo(
     () => transientClientEntry(host, isFollowing),
@@ -260,11 +235,76 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     localMaintenanceFallback: client !== null && client !== resolvedClient,
     setHostId: setScopedHostId,
     makeActive,
-    isActivating: activatingHostId !== null,
+    isActivating,
     isLoading: options.isLoading,
     listsFailed,
     retryLists: options.retryLists,
     nowMs,
+  };
+}
+
+/**
+ * The activation in flight, per authority: ONE `authority.activate` at a time
+ * for the whole window, whichever surface asked (R1-A2).
+ *
+ * It lives here, at module level, and not in the hook, because the hook's
+ * callers come and go while a write is still running: the account menu's Host
+ * section unmounts the moment a pick closes the menu, and Settings holds an
+ * instance of its own. A latch per mounted hook was a latch per surface, so a
+ * reopened menu - or Settings beside it - sent a second write before the first
+ * settled. Keyed by the authority so a window's writes share it and nothing
+ * else does. The entry is set synchronously before the write goes out (two
+ * picks in one React batch still see it) and cleared when the write settles;
+ * `requestActivate` never rejects, so it always does.
+ */
+const pendingActivations = new WeakMap<SelectionAuthorityClient, string>();
+const pendingActivationListeners = new Set<() => void>();
+
+function notifyPendingActivation(): void {
+  for (const listener of Array.from(pendingActivationListeners)) listener();
+}
+
+function subscribePendingActivation(listener: () => void): () => void {
+  pendingActivationListeners.add(listener);
+  return () => {
+    pendingActivationListeners.delete(listener);
+  };
+}
+
+/**
+ * Settings' Activate, as a hook of its own so the account menu's Host section
+ * (the one other place a person switches the window's host) calls the SAME
+ * write, guard, refusal toasts and analytics, rather than a second copy.
+ * `activatingHostId` is the write in flight from ANY surface, so every caller
+ * can hold its controls while one is running.
+ */
+export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
+  readonly makeActive: (hostId: string) => void;
+  readonly isActivating: boolean;
+  readonly activatingHostId: string | null;
+} {
+  const authority = useRunnerHost().selectionAuthority;
+  const activatingHostId = useSyncExternalStore(
+    subscribePendingActivation,
+    () => pendingActivations.get(authority) ?? null,
+  );
+  const makeActive = useCallback(
+    (hostId: string) => {
+      if (pendingActivations.has(authority)) return;
+      const option = findHostOption(hosts, hostId);
+      pendingActivations.set(authority, hostId);
+      notifyPendingActivation();
+      void requestActivate(authority, hostId, option).finally(() => {
+        pendingActivations.delete(authority);
+        notifyPendingActivation();
+      });
+    },
+    [authority, hosts],
+  );
+  return {
+    makeActive,
+    isActivating: activatingHostId !== null,
+    activatingHostId,
   };
 }
 

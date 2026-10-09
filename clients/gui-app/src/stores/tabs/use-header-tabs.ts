@@ -336,6 +336,8 @@ export function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
   );
   const lockSnapshot = useExactRefLockSnapshot(ref);
   if (ref === null) return null;
+  if (ref.kind === "sample-workspace")
+    return TAB_KINDS["sample-workspace"].build(null);
   if (ref.kind === "epic") {
     if (epic === null || lockSnapshot === "none") return null;
     return memoizedEpicHeaderTab(epic, hostId, lockSnapshot);
@@ -483,6 +485,8 @@ function resolveRef(
   sources: HeaderTabSources,
 ): ReadonlyArray<HeaderTab> {
   const { epicTabsById, draftTabsById, systemTabs } = sources;
+  if (ref.kind === "sample-workspace")
+    return [TAB_KINDS["sample-workspace"].build(null)];
   if (ref.kind === "epic") {
     const source = epicTabsById.get(ref.id);
     if (source === undefined) return [];

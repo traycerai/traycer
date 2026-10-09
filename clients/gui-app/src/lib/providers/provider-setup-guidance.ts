@@ -4,13 +4,11 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  providerHostBlockLabel,
   providerSupportsTerminalLogin,
-  providerTerminalLoginPackBlock,
+  providerTerminalLoginHostBlock,
+  type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
-import {
-  providerPackPreparingLabel,
-  type ProviderPackPreparing,
-} from "@/components/providers/provider-pack-readiness";
 import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
 /**
@@ -30,9 +28,10 @@ import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-pr
  * sign-in for providers where "prints a sign-in code" is wrong: the
  * launch-the-CLI providers (what actually opens is the CLI's own UI, and a
  * user left in front of a TUI with no instruction is where that flow stalls
- * - so the first step names the thing to type) and Kilo Code, Amp and Kiro
- * (a provider picker, a link that finishes in that terminal, and an
- * account-choice prompt). It stays the GENERIC guidance in every other
+ * - so the first step names the thing to type) and Kilo Code, Amp, Kiro and
+ * Command Code (a provider picker, a link that finishes in that terminal, an
+ * account-choice prompt, and a browser page the CLI opens itself). It stays
+ * the GENERIC guidance in every other
  * respect (no manual command, the same labels), so an old host that
  * declares no capability still shows nothing for them.
  *
@@ -209,6 +208,16 @@ export const TERMINAL_SIGN_IN_COPY: {
     terminalHint:
       "Kiro asks which account to use in that terminal, then walks you through that account's sign-in. Finish there, then use Refresh above.",
   },
+  // `cmd login` prints no code: it opens its sign-in page in a browser itself
+  // and waits for that page to call back to the machine the terminal runs on.
+  commandcode: {
+    summary:
+      "Command Code signs in from a terminal: it opens its sign-in page in a browser and waits in that terminal.",
+    firstStep:
+      "Finish the sign-in in the browser page that terminal opens, on the machine it runs on.",
+    terminalHint:
+      "Command Code opens its sign-in page in a browser on that machine and waits in the terminal. Finish there, then use Refresh above.",
+  },
 };
 
 /**
@@ -283,21 +292,22 @@ export function providerTerminalGuidance(
  * `state` is the `providers.list` row; while that has not resolved (`null`)
  * the capability answer is "not yet", never "no" - it re-resolves when the row
  * lands. It takes the whole row rather than `loginCapability` alone because a
- * second fact on the same row gates the SAME button: whether the provider's
- * managed pack would let the host spawn its CLI at all (`packPreparing`).
+ * second fact on the same row gates the SAME button: whether the host would
+ * act on the click at all (`hostBlock`).
  */
 export interface ProviderTerminalSetup {
   readonly guidance: ProviderSetupGuidance;
   /** Whether the connected host can open the sign-in terminal itself. */
   readonly canStartTerminal: boolean;
   /**
-   * The pack state blocking that terminal RIGHT NOW, or `null`. Transient
-   * where `canStartTerminal` is permanent: the host advertises the capability,
-   * and will honour it once the download lands - so this is not folded into
+   * What blocks that terminal RIGHT NOW, or `null`: the provider is off, its
+   * CLI is missing, or its pack is still on its way. Transient where
+   * `canStartTerminal` is permanent: the host advertises the capability, and
+   * will honour it once the block clears - so this is not folded into
    * `canStartTerminal`, whose `false` means "there is no button on this host
    * at all" and leads the copy with the manual route.
    */
-  readonly packPreparing: ProviderPackPreparing | null;
+  readonly hostBlock: ProviderHostBlock | null;
 }
 
 export function resolveProviderTerminalSetup(
@@ -310,27 +320,27 @@ export function resolveProviderTerminalSetup(
     // anything left to offer; the generic sign-in copy is all button.
     return override === null
       ? null
-      : { guidance: override, canStartTerminal: false, packPreparing: null };
+      : { guidance: override, canStartTerminal: false, hostBlock: null };
   }
   return {
     guidance: providerTerminalGuidance(providerId),
     canStartTerminal: true,
-    packPreparing: providerTerminalLoginPackBlock(state),
+    hostBlock: providerTerminalLoginHostBlock(state),
   };
 }
 
 /**
- * What to render where the button would be while `packPreparing` blocks it -
- * the same "Preparing X… 43%" / "X setup failed - …" sentence every other
- * gated surface shows, so the picker cannot phrase the wait a fourth way.
+ * What to render where the button would be while `hostBlock` stands - the
+ * same "Preparing X… 43%" / "X setup failed - …" sentence every other gated
+ * surface shows, so the picker cannot phrase the wait a fourth way.
  */
 export function providerSetupPreparingLabel(
   setup: ProviderTerminalSetup,
   providerId: ProviderId,
 ): string | null {
-  if (setup.packPreparing === null) return null;
-  return providerPackPreparingLabel(
-    setup.packPreparing,
+  if (setup.hostBlock === null) return null;
+  return providerHostBlockLabel(
+    setup.hostBlock,
     PROVIDER_DISPLAY_NAMES[providerId],
   );
 }
@@ -360,9 +370,9 @@ export type ProviderSetupActionPlacement =
    */
   | "unsupported-scope"
   /**
-   * A button here in principle, but the provider's pack cannot spawn yet. The
-   * preparing label stands where the button would; the steps read as they do
-   * for `here`, because that is what they will be once it lands.
+   * A button here in principle, but the host would refuse the click right now
+   * (`hostBlock`). The label stands where the button would; the steps read as
+   * they do for `here`, because that is what they will be once it clears.
    */
   | "preparing";
 
@@ -385,7 +395,7 @@ export function providerSetupActionPlacement(
   hasSurface: boolean,
   scopeSupport: ProviderTerminalLoginScopeSupport,
 ): ProviderSetupActionPlacement {
-  // Permanent reasons first: a pack that will finish downloading does not
+  // Permanent reasons first: a block that will clear by itself does not
   // change a host that can never carry this scope.
   if (!setup.canStartTerminal) return "unsupported-host";
   // `unsupported-scope` leads the steps with "this host's version can open
@@ -393,7 +403,7 @@ export function providerSetupActionPlacement(
   // proves. An unknown manifest, or no host at all, gets the claim-free copy.
   if (scopeSupport === "unknown") return "unsupported-host";
   if (scopeSupport === "unsupported") return "unsupported-scope";
-  if (setup.packPreparing !== null) return "preparing";
+  if (setup.hostBlock !== null) return "preparing";
   return hasSurface ? "here" : "other-surface";
 }
 

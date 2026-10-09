@@ -11,7 +11,13 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import {
+  SettingsDetailHeader,
+  SettingsMasterDetail,
+  SettingsMasterSelect,
+} from "@/components/settings/settings-master-detail";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { ProvidersCatalogTimeoutChip } from "@/components/settings/panels/providers-catalog-timeout-chip";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -21,13 +27,6 @@ import {
   PROVIDER_SETTINGS_UNREADABLE_COPY,
 } from "@/lib/providers/provider-settings-unreadable-error";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
@@ -78,6 +77,7 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
+import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -245,7 +245,9 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   reasonix:
     "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
   antigravity:
-    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in, but never signs it out or writes to its home.",
+    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in or switch its Google account, but never signs it out.",
+  commandcode:
+    "Command Code - a coding CLI via your Command Code account; install it yourself and sign in from a terminal.",
 };
 
 function hasPendingProviderProbe(
@@ -452,8 +454,17 @@ function ProvidersSettingsPanelInner({
       // override precisely because the ambient client already IS the scoped
       // host's. Gating on `ready` alone would hide the control in the ordinary
       // no-explicit-pick case.
+      //
+      // The Model list timeout chip sits beside it for the same reason: it is
+      // a host-wide setting covering every provider, not the selected one's.
+      // It carries its own scope gate as well (see the chip).
       headerAction={
-        isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : undefined
+        isHostScopeUsable(scope.status) ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <ProvidersCatalogTimeoutChip scope={scope} />
+            <ProvidersGlobalStatus />
+          </div>
+        ) : undefined
       }
     >
       <HostScopeGate
@@ -591,7 +602,7 @@ function ProvidersPanelBody({
     // recovery invalidation does land.
     //
     // A remote host that dialed and then went TERMINAL - an incompatible
-    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // handshake, a rejected credential, the reconnect cap -
     // owes no boundary either, and would strand this spinner just as badly.
     // That case never PERSISTS here, enforced at two layers. New requests:
     // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
@@ -686,7 +697,7 @@ function ProvidersRailLayout({
   const [initialFocus, setInitialFocus] = useState(() => {
     const focus = useProvidersFocusStore.getState();
     // The intent is consumed only by the rail of the host it NAMES. A profile
-    // deep link whose target is unreachable or plan-gated never mounts a rail
+    // deep link whose target is unreachable never mounts a rail
     // there, so the harness / profile / sign-in halves stay armed; without
     // this check the next reachable host the user picked consumed them and
     // could start an automatic sign-in on that machine whenever the same
@@ -811,116 +822,84 @@ function ProvidersRailLayout({
     // the rail's filtered `visibleProviders` - the rail's search/filter is a
     // pointer affordance that goes with it, so it must never narrow what a
     // phone can reach.
-    <div className="flex flex-col md:h-full md:min-h-0 md:flex-row">
-      <div className="shrink-0 border-b border-border/60 p-2 md:hidden">
-        <ProvidersMobileSelect
-          providers={orderedProviders}
-          activeId={active.providerId}
-          onSelect={onSelectProvider}
-        />
-      </div>
-      {/* The search row is a pinned SIBLING of the scroll box rather than the
-          first child of a scrolling column - the same shape the tab rail uses
-          below, and for the same reason: scrolling the list must never carry
-          the control that filters it out of reach. */}
-      <nav
-        aria-label="Providers"
-        className="hidden w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60 md:flex"
-      >
-        <ProviderRailControls
-          view={railView}
-          onViewChange={setRailView}
-          resultCount={visibleProviders.length}
-        />
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-2">
-          {visibleProviders.length === 0 ? (
-            <p className="px-2.5 py-2 text-ui-xs text-muted-foreground">
-              No providers match.
-            </p>
-          ) : (
-            <ProviderList
-              ariaLabel="Providers"
-              variant="settings"
-              className="gap-1"
-              phone={false}
-              rows={visibleProviders.map((state) => ({
-                providerId: state.providerId,
-                active: state.providerId === active.providerId,
-                dimmed: false,
-                enabled: state.enabled,
-                badge: null,
-                description: null,
-                trailing: null,
-                disabledReason: null,
-                phoneDescription: null,
-                onSelect: onSelectProvider,
-              }))}
-            />
-          )}
-        </div>
-      </nav>
-      {/* From `md` up the detail COLUMN does not scroll - the active tab's body
-          does (see `ProviderDetail`), so the provider header and section rail
-          stay pinned. Horizontal padding lives here rather than on each row so
-          the rail's `border-b` keeps exactly the width it had when this element
-          owned the scroll; the tab body cancels it with `-mx-5 px-5` to put its
-          scrollbar on the pane edge instead of 5 units inside it. */}
-      <div className="flex min-w-0 flex-1 flex-col px-5 pt-5 md:min-h-0">
-        <ProviderDetail
-          key={`${hostId}:${active.providerId}`}
-          state={active}
-          providers={orderedProviders}
-          activeTab={resolvedTab}
-          onActiveTabChange={setActiveTab}
-          hostId={hostId}
-          isSelectedHostLocal={isSelectedHostLocal}
-          initialProfileId={initialFocus.profileId}
-          initialSignIn={initialFocus.startSignIn}
-          permissionsTab={permissionsTab}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ProvidersMobileSelect(props: {
-  readonly providers: readonly ProviderCliState[];
-  readonly activeId: ProviderId;
-  readonly onSelect: (providerId: ProviderId) => void;
-}): ReactNode {
-  return (
-    <Select
-      value={props.activeId}
-      onValueChange={(value) => {
-        // Resolve through the provider list instead of asserting the select's
-        // string value back into the ProviderId union.
-        const match = props.providers.find((p) => p.providerId === value);
-        if (match !== undefined) props.onSelect(match.providerId);
-      }}
-    >
-      <SelectTrigger aria-label="Provider" className="w-full">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {/* The same `HarnessIcon` the desktop rail draws through
-            `ProviderList`, so the two presentations of the provider list mark a
-            provider the same way. `SelectItem` wraps its children in Radix's
-            `ItemText`, which portals the SELECTED item into the trigger - so
-            the icon rides the closed state too, from this one place. */}
-        {props.providers.map((provider) => (
-          <SelectItem key={provider.providerId} value={provider.providerId}>
-            <span className="flex min-w-0 items-center gap-2">
+    <SettingsMasterDetail
+      railLabel="Providers"
+      mobileSelect={
+        <SettingsMasterSelect
+          label="Provider"
+          value={active.providerId}
+          // The same `HarnessIcon` the rail draws through `ProviderList`, so
+          // the two presentations of the provider list mark a provider the
+          // same way.
+          options={orderedProviders.map((provider) => ({
+            value: provider.providerId,
+            label: PROVIDER_DISPLAY_NAMES[provider.providerId],
+            icon: (
               <HarnessIcon
                 harnessId={providerIdToGuiHarnessId(provider.providerId)}
               />
-              <span className="min-w-0 truncate">
-                {PROVIDER_DISPLAY_NAMES[provider.providerId]}
-              </span>
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+            ),
+            trailing: null,
+          }))}
+          onSelect={onSelectProvider}
+        />
+      }
+      rail={
+        // The search row is a pinned SIBLING of the scroll box rather than the
+        // first child of a scrolling column - the same shape the tab rail uses
+        // below, and for the same reason: scrolling the list must never carry
+        // the control that filters it out of reach.
+        <>
+          <ProviderRailControls
+            view={railView}
+            onViewChange={setRailView}
+            resultCount={visibleProviders.length}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-2">
+            {visibleProviders.length === 0 ? (
+              <p className="px-2.5 py-2 text-ui-xs text-muted-foreground">
+                No providers match.
+              </p>
+            ) : (
+              <ProviderList
+                ariaLabel="Providers"
+                variant="settings"
+                className="gap-1"
+                phone={false}
+                rows={visibleProviders.map((state) => ({
+                  providerId: state.providerId,
+                  active: state.providerId === active.providerId,
+                  dimmed: false,
+                  enabled: state.enabled,
+                  badge: null,
+                  description: null,
+                  trailing: null,
+                  disabledReason: null,
+                  phoneDescription: null,
+                  onSelect: onSelectProvider,
+                }))}
+              />
+            )}
+          </div>
+        </>
+      }
+    >
+      {/* From `md` up the detail COLUMN does not scroll - the active tab's body
+          does (see `ProviderDetail`), so the provider header and section rail
+          stay pinned. */}
+      <ProviderDetail
+        key={`${hostId}:${active.providerId}`}
+        state={active}
+        providers={orderedProviders}
+        activeTab={resolvedTab}
+        onActiveTabChange={setActiveTab}
+        hostId={hostId}
+        isSelectedHostLocal={isSelectedHostLocal}
+        initialProfileId={initialFocus.profileId}
+        initialSignIn={initialFocus.startSignIn}
+        permissionsTab={permissionsTab}
+      />
+    </SettingsMasterDetail>
   );
 }
 
@@ -1134,8 +1113,13 @@ function ProviderDetail({
   const anyProfileEnablementPending = state.profiles.some((profile) =>
     profileEnablementPending(profileCommitId(profile)),
   );
-  // Whether the detail pane below the header is inert - the Account and
-  // Profiles controls included.
+  // Whether the detail pane below the header is inert - the Account controls
+  // included. The Profiles tab is the one exception (`tab !== "usage"` below)
+  // and holds its own controls instead (`ProviderProfileScopedSection`),
+  // because one of them has to stay live while the provider is off: the host
+  // refuses to turn a provider on while none of its profiles is on, so with
+  // every profile off, turning one on is the step this pane's own switch is
+  // waiting for. An inert tab would leave that provider off for good.
   //
   // Keyed on the effective `enabled` flag, which is now the only thing it could
   // be keyed on. Not because `false` has a single cause - boot seeding leaves
@@ -1153,10 +1137,20 @@ function ProviderDetail({
     state,
     isSelectedHostLocal,
   );
+  // A focus intent names a profile by its wire `profileId`, while the selection
+  // holds its commit id - `null` for the Terminal account, whose wire id is
+  // the "ambient" sentinel. Comparing the two raw values made a sign-in link
+  // to the Terminal account select the row and then never open its sign-in.
+  const focusedProfile =
+    initialProfileId === null
+      ? null
+      : (state.profiles.find(
+          (profile) => profile.profileId === initialProfileId,
+        ) ?? null);
   const shouldStartInReauth =
     initialSignIn &&
-    initialProfileId !== null &&
-    selectedProfileId === initialProfileId &&
+    focusedProfile !== null &&
+    selectedProfileId === profileCommitId(focusedProfile) &&
     canAddProfile;
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
@@ -1200,47 +1194,45 @@ function ProviderDetail({
     // a subtree that has given up its own floor can only be as right as the
     // height handed to it. Keeping the floor makes that moot.
     <div className="flex flex-1 flex-col gap-4 md:min-h-0">
-      <div className="flex shrink-0 items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="font-medium text-foreground">
-              {PROVIDER_DISPLAY_NAMES[providerId]}
-            </div>
-            {state.profiles.length === 0 ? (
-              <ProviderAuthBadge state={state} />
-            ) : null}
-          </div>
-          <p className="text-ui-sm text-muted-foreground">
-            {PROVIDER_DESCRIPTIONS[providerId]}
-          </p>
-          {state.profiles.length === 0 ? (
+      <SettingsDetailHeader
+        title={PROVIDER_DISPLAY_NAMES[providerId]}
+        badge={
+          state.profiles.length === 0 ? (
+            <ProviderAuthBadge state={state} />
+          ) : null
+        }
+        description={PROVIDER_DESCRIPTIONS[providerId]}
+        footer={
+          state.profiles.length === 0 ? (
             <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
               <ProviderAuthLine state={state} />
             </div>
-          ) : null}
-        </div>
-        <ProviderEnablementControl
-          id={switchId}
-          providerId={providerId}
-          enabled={state.enabled}
-          isPending={setEnabled.isPending}
-          enabledProviderCount={enabledProviderCount}
-          profileEnablementAvailable={profileEnablementAvailable}
-          enabledProfileCount={
-            state.profiles.filter((profile) => profile.enabled).length
-          }
-          profileEnablementPending={anyProfileEnablementPending}
-          onSetEnabled={(id, enabled) =>
-            // Plain enable/disable - never a native mutation or profile
-            // rename/remove/recolor/drift-ack.
-            setEnabled.mutate({
-              providerId: id,
-              enabled,
-              profileAction: null,
-            })
-          }
-        />
-      </div>
+          ) : null
+        }
+        action={
+          <ProviderEnablementControl
+            id={switchId}
+            providerId={providerId}
+            enabled={state.enabled}
+            isPending={setEnabled.isPending}
+            enabledProviderCount={enabledProviderCount}
+            profileEnablementAvailable={profileEnablementAvailable}
+            enabledProfileCount={
+              state.profiles.filter((profile) => profile.enabled).length
+            }
+            profileEnablementPending={anyProfileEnablementPending}
+            onSetEnabled={(id, enabled) =>
+              // Plain enable/disable - never a native mutation or profile
+              // rename/remove/recolor/drift-ack.
+              setEnabled.mutate({
+                providerId: id,
+                enabled,
+                profileAction: null,
+              })
+            }
+          />
+        }
+      />
       <div className="flex flex-1 flex-col md:min-h-0">
         {/* Nothing renders between the provider header and the tab rail. The
             API-key card used to sit here, above the bar, so a provider's only
@@ -1510,8 +1502,9 @@ function ProviderTabBody({
               />
             ) : null}
           </div>
-          {/* Outside the inert block: it is not profile-scoped, so dimming it
-              while a profile switch settles would suggest it is. */}
+          {/* Outside the inert block: neither is profile-scoped, so dimming
+              them while a profile switch settles would suggest it is. */}
+          <ProviderUsageLimitsSection providerId={state.providerId} />
           <FallbackCrossLinkRow />
         </div>
       );

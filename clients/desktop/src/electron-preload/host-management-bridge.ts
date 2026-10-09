@@ -20,6 +20,7 @@ import type {
   HostRegistryUpdateState,
   HostRemovalState,
   HostRestartRequestResult,
+  HostServiceRestartResult,
   HostTrayCommand,
   HostUninstallResult,
   HostUpdateCheckResponseV11,
@@ -34,6 +35,7 @@ import type {
   ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
+  FreePortAndRestartResult,
 } from "../ipc-contracts/host-management-types";
 
 /**
@@ -56,6 +58,7 @@ export interface HostManagementBridgeSurface {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    retryWhenIdle: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,
@@ -84,7 +87,7 @@ export interface HostManagementBridgeSurface {
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
-  ): Promise<FreePortAndRestartInput>;
+  ): Promise<FreePortAndRestartResult>;
   freePortAndRestartIfIdle(
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<DoctorRepairDispatch>;
@@ -108,6 +111,9 @@ export interface HostManagementBridgeSurface {
   restartHostIfIdle(input: {
     readonly expectedHostId: string;
   }): Promise<HostRestartRequestResult>;
+  restartHostServiceIfHostIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostServiceRestartResult>;
   runDoctorRepairQueued(input: {
     readonly repair: QueuedDoctorRepair;
     readonly expectedHostId: string;
@@ -137,9 +143,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         trigger,
         force,
       }) as Promise<MutationOutcome<ApplyStagedOk>>,
-    activateInstalled: (force) =>
+    activateInstalled: (force, retryWhenIdle) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostActivateInstalled, {
         force,
+        retryWhenIdle,
       }) as Promise<MutationOutcome<ActivateInstalledOk>>,
     installVersion: (pin, force) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostInstallVersion, {
@@ -200,7 +207,7 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerFreePortAndRestart,
         input,
-      ) as Promise<FreePortAndRestartInput>,
+      ) as Promise<FreePortAndRestartResult>,
     freePortAndRestartIfIdle: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
@@ -233,6 +240,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestartIfIdle, {
         expectedHostId,
       }) as Promise<HostRestartRequestResult>,
+    restartHostServiceIfHostIdle: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostServiceRestartIfHostIdle, {
+        expectedHostId,
+      }) as Promise<HostServiceRestartResult>,
     runDoctorRepairQueued: ({ repair, expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairQueued, {
         repair,

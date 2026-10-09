@@ -114,9 +114,13 @@ function mutationBringsHostUp(kind: MutationKind): boolean {
     case "recoverIfDown":
     case "freePortAndRestart":
       return true;
+    // `refreshService` rewrites the service definition only; the host is
+    // neither brought up nor taken down.
+    case "refreshService":
     case "deregister":
     case "uninstallHost":
     case "removeTraycer":
+    case "stopHost":
       return false;
   }
 }
@@ -195,7 +199,7 @@ export function useHostOptions(): HostOptions {
   // Subscribed, not read ambiently: the session cache is pull-only, and the
   // memo below would otherwise keep answering with whatever was true at its
   // last directory/registry recompute - a session dying (or appearing) under
-  // an `offline`/plan-restricted entry would leave rows connectable/unreachable
+  // an `offline` entry would leave rows connectable/unreachable
   // until some unrelated input churned.
   const scopeHostIds = useMemo(
     () => [

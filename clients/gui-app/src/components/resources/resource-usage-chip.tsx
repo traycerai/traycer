@@ -12,9 +12,10 @@ import {
 } from "@/lib/resources/format-resource-usage";
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
+import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
 import type { NavigatorResourceMetric } from "@/stores/settings/settings-store";
-
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+
 function pluralize(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : plural;
 }
@@ -134,8 +135,13 @@ export interface OwnerResourceChipProps {
 /**
  * Owner-scoped chip. Renders nothing when there is no live snapshot for the
  * owner - absent means "not currently tracked" (unknown), never zero use.
+ *
+ * Holds its epic's stream lease while mounted: a chip is what draws these
+ * numbers, so the stream is open exactly while one is on screen, on every
+ * shell, and closes with the last of them.
  */
 export function OwnerResourceChip(props: OwnerResourceChipProps) {
+  useEpicResourcesLease(props.epicId, props.metrics.length > 0);
   const usage = useOwnerResourceUsage(
     props.epicId,
     props.kind,
@@ -151,6 +157,34 @@ export function OwnerResourceChip(props: OwnerResourceChipProps) {
       processCount={usage.processCount}
       metrics={props.metrics}
       label="Resource usage"
+      className={props.className}
+    />
+  );
+}
+
+export interface NavigatorResourceHotspotOwner {
+  readonly epicId: string;
+  readonly kind: ResourceOwnerKindWireV14;
+  readonly ownerId: string;
+  readonly hostId: string | null;
+}
+
+export interface NavigatorResourceHotspotChipProps {
+  /** Null for a row that never owns a tracked process (a spec, a ticket). */
+  readonly owner: NavigatorResourceHotspotOwner | null;
+  readonly metrics: ReadonlyArray<NavigatorResourceMetric>;
+  readonly className: string | undefined;
+}
+
+/** Resolve the snapshot before deciding whether this row has a measurable chip. */
+export function NavigatorResourceHotspotChip(
+  props: NavigatorResourceHotspotChipProps,
+): ReactNode {
+  if (props.owner === null || props.metrics.length === 0) return null;
+  return (
+    <OwnerResourceChip
+      {...props.owner}
+      metrics={props.metrics}
       className={props.className}
     />
   );

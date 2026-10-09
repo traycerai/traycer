@@ -12,21 +12,31 @@ import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
 /**
- * Presentation-only stale window for the title/context readers of
- * `epic.getTaskContexts`. These callers render a Task title next to an id;
- * nothing they show is destructive and nothing they show is time-critical, so
- * a fetch per mount buys nothing. Deliberately much longer than the existence
- * reconciler's window (`epic-tab-existence-reconciler.tsx`), which is the one
- * consumer whose freshness has consequences. A rename still lands promptly:
+ * Default stale window for the title/context readers of
+ * `epic.getTaskContexts`. Most callers render a Task title next to an id,
+ * so a fetch per mount buys nothing. History explicitly refetches its mounted
+ * batches while reconciling an off-page activity key. This default is much
+ * longer than the existence reconciler's window
+ * (`epic-tab-existence-reconciler.tsx`), which checks destructive existence.
+ * A rename still lands promptly:
  * the epic's own Y.Doc drives every surface that shows a live title, and this
  * batch only backfills ids no cloud-tasks page has cached.
  */
 export const TASK_CONTEXT_TITLE_STALE_TIME_MS = 5 * 60_000;
 
+export interface EpicTaskContextRefetchBatch {
+  readonly taskIds: readonly string[];
+  readonly refetch: () => Promise<void>;
+}
+
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  /** Refreshes each mounted context batch once, including inside staleTime. */
+  readonly refetch: () => Promise<void>;
+  /** Individual query batches so shared History scopes can dedupe by key. */
+  readonly refetchBatches: readonly EpicTaskContextRefetchBatch[];
   /**
-   * The subset of `tasksById` the host marked local-homed - `@1.1`'s
+   * The subset of `tasksById` the host marked local-homed - `@1.3`'s
    * `localHomedTaskIds` sibling.
    *
    * Carried rather than dropped because `tasks` is a `z.record`, so the home
@@ -41,8 +51,18 @@ export interface EpicTaskContexts {
    */
   readonly localHomedTaskIds: ReadonlySet<string>;
   readonly isFetching: boolean;
+  /**
+   * Some batch has not answered yet. Unlike `isFetching`, a background
+   * refetch of a batch that already answered does not count, so a caller can
+   * tell "no answer yet" apart from "answered, and refreshing".
+   */
+  readonly isPending: boolean;
   readonly error: Error | null;
 }
+
+type CombinedTaskContexts = Omit<EpicTaskContexts, "refetchBatches"> & {
+  readonly batchRefetches: readonly (() => Promise<void>)[];
+};
 
 export interface UseEpicGetTaskContextsOptions {
   /**
@@ -89,10 +109,10 @@ export function useEpicGetTaskContexts(
       })),
     [taskIds],
   );
-  return useHostQueries<
+  const combined = useHostQueries<
     HostRpcRegistry,
     "epic.getTaskContexts",
-    EpicTaskContexts
+    CombinedTaskContexts
   >({
     client,
     requests,
@@ -106,18 +126,34 @@ export function useEpicGetTaskContexts(
     },
     combine: combineTaskContextResults,
   });
+  return {
+    ...combined,
+    refetchBatches: requests.map((request, index) => ({
+      taskIds: request.params.taskIds,
+      refetch: combined.batchRefetches[index],
+    })),
+  };
 }
 
 function combineTaskContextResults(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
-): EpicTaskContexts {
+): CombinedTaskContexts {
   const tasksById = new Map<string, ListTaskLight>();
   const localHomedTaskIds = new Set<string>();
+  const batchRefetches = results.map((result) => async () => {
+    await result.refetch();
+  });
   for (const result of results) {
     if (result.data === undefined) continue;
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
       if (isFoundTaskContext(resolution)) {
-        tasksById.set(taskId, resolution.task);
+        const recentAt = result.data.recentAtByTaskId?.[taskId];
+        tasksById.set(
+          taskId,
+          recentAt === undefined
+            ? resolution.task
+            : { ...resolution.task, recentAt },
+        );
       }
     }
     for (const taskId of result.data.localHomedTaskIds ?? []) {
@@ -126,8 +162,13 @@ function combineTaskContextResults(
   }
   return {
     tasksById,
+    refetch: async () => {
+      await Promise.all(batchRefetches.map((refetch) => refetch()));
+    },
+    batchRefetches,
     localHomedTaskIds,
     isFetching: results.some((result) => result.isFetching),
+    isPending: results.some((result) => result.isPending),
     // Older host: method unsupported → degrade silently to an empty map.
     error:
       results

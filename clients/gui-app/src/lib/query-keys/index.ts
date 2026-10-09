@@ -26,6 +26,10 @@ export {
 } from "@/lib/query-keys/runner-mutation-keys";
 export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
 export { autoModeMutationKeys } from "@/lib/query-keys/auto-mode-mutation-keys";
+export {
+  chatAutoArchiveMutationKeys,
+  chatAutoArchiveWriteScope,
+} from "@/lib/query-keys/chat-auto-archive-keys";
 export { hostMaintenanceMutationKeys } from "@/lib/query-keys/host-maintenance-mutation-keys";
 export { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 export { migrationMutationKeys } from "@/lib/query-keys/migration-mutation-keys";
@@ -47,6 +51,7 @@ export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
+export { profileSyncKeys } from "@/lib/query-keys/profile-sync-keys";
 export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
 export {
   autoJudgeWriteScope,

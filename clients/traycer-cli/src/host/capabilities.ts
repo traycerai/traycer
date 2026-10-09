@@ -22,6 +22,8 @@
  * compatibility surface in the same sense as an RPC method name.
  */
 
+import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
+
 /** `traycer host start --service-label <label>` - reclaim probe identity binding. */
 export const HOST_CAPABILITY_SERVICE_LABEL = "service-label";
 /** A service wrapper can fetch and present an exact v2 start-adoption nonce. */
@@ -30,6 +32,16 @@ export const HOST_CAPABILITY_HOST_START_ADOPTION_V2 = "host-start-adoption-v2";
 export const HOST_CAPABILITY_MAINTENANCE_LEASE_V1 = "maintenance-lease-v1";
 /** Target-bound root-maintenance executor protocol. */
 export const HOST_CAPABILITY_MAINTENANCE_LEASE_V2 = "maintenance-lease-v2";
+/**
+ * This binary's supervisor enforces the host lifecycle policy: it parks
+ * unattended starts under a non-Background mode, publishes `supervisor.json`
+ * advertising the same token, and accepts `--lifecycle-origin`. The binary's
+ * answer here and a RUNNING supervisor's record are different questions - an
+ * old supervisor keeps running through a CLI upgrade - which is why both
+ * exist. Same spelling as the record's capability, by construction.
+ */
+export const HOST_CAPABILITY_LIFECYCLE_POLICY_V1 =
+  SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1;
 
 /** Schema version of the `--json` document, not of the token set. */
 export const HOST_CAPABILITIES_VERSION = 1;
@@ -39,6 +51,7 @@ export const HOST_CAPABILITIES: readonly string[] = [
   HOST_CAPABILITY_HOST_START_ADOPTION_V2,
   HOST_CAPABILITY_MAINTENANCE_LEASE_V1,
   HOST_CAPABILITY_MAINTENANCE_LEASE_V2,
+  HOST_CAPABILITY_LIFECYCLE_POLICY_V1,
 ];
 
 export type HostCapabilitiesRequest =

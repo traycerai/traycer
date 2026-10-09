@@ -318,6 +318,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   huggingface: "Hugging Face",
   reasonix: "Reasonix",
   antigravity: "Antigravity",
+  commandcode: "Command Code",
 };
 
 /**
@@ -2167,6 +2168,45 @@ export const providerCliStateSchemaV90 = lazySchema(() =>
 export type ProviderCliStateV90 = z.infer<typeof providerCliStateSchemaV90>;
 
 /**
+ * Frozen `providers.list@9.2` provider state: 9.1's shape with the five-key
+ * login capability 9.2 was opened to publish.
+ *
+ * 9.2 bound the live state while it was the head line. `1.5.0` shipped it, so
+ * the next provider id would have widened it in place, which is what happened
+ * to 8.0 with Antigravity. It is frozen here and major 10 carries the ids added
+ * since.
+ *
+ * Derived from the 9.1 snapshot, so every pin that one took covers this line
+ * too: both `providerId` enums (`providerIdSchemaV91`, twenty-one ids), the
+ * profile row, `managedInstallState`, `advisory`, `autoJudge` and
+ * `nativeCapabilities`. Only `loginCapability` differs, and it reads the live
+ * capability by reference: 9.2 is the line that shipped `remoteSafe` and
+ * `selfOpensBrowser`, and `frozen-catalog-lines.test.ts` pins this row's whole
+ * serialized shape, so a key added to that capability reddens it rather than
+ * widening this line unseen. When that happens, hand-freeze the capability
+ * here; do not regenerate the fixture.
+ *
+ * Do NOT add fields or ids here. Add them to `providerCliStateBaseShape`
+ * above, which only the head line (10.0 today) publishes.
+ */
+export const providerCliStateSchemaV92 = lazySchema(() =>
+  providerCliStateSchemaV91.extend({
+    loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  }),
+);
+export type ProviderCliStateV92 = z.infer<typeof providerCliStateSchemaV92>;
+
+export const providersListResponseSchemaV92 = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchemaV92),
+    native: nativeListResultSchema.nullable().default(null),
+  }),
+);
+export type ProvidersListResponseV92 = z.infer<
+  typeof providersListResponseSchemaV92
+>;
+
+/**
  * Canonical (live) `providers.list` request. Optional `native` list/discover
  * query folds the mcp/plugins/skills list verbs onto this carrier. Callers on
  * any earlier line predate it, so the v6.0 -> v7.0 upgrade fills `native: null`
@@ -3366,6 +3406,16 @@ export type ProvidersStartLoginRequestV11 = z.infer<
   typeof providersStartLoginRequestSchemaV11
 >;
 
+/** A caller's claim on a shared login. Null preserves released-client behavior. */
+export const providersStartLoginRequestSchemaV14 = lazySchema(() =>
+  providersStartLoginRequestSchemaV11.extend({
+    holderId: z.string().min(1).max(128).nullable().default(null),
+  }),
+);
+export type ProvidersStartLoginRequestV14 = z.infer<
+  typeof providersStartLoginRequestSchemaV14
+>;
+
 /**
  * `providers.startLogin@1.1` response - echoes the profile this login
  * targeted, so a `createProfile` caller learns the host-minted id without a
@@ -3417,6 +3467,84 @@ export type ProvidersStartLoginResponseV12 = z.infer<
 >;
 
 /**
+ * Why `started` is false when the sign-in has NOT failed: the host is still
+ * getting there, and asking again is the right move. Null on success and on
+ * every outcome that is final for this attempt.
+ *
+ * Deliberately not more members of `failure`. That field's contract is a
+ * reason the attempt is over, and a caller that renders it as an error is
+ * reading it correctly; these two are the opposite claim.
+ *
+ * `pack_preparing`: the provider's managed pack is queued or downloading, so
+ * there is no binary to spawn yet. Asking is what put it at the front of the
+ * queue; asking again reports how far it has got (`pack.percent`) and starts
+ * the sign-in once it has landed.
+ *
+ * `starting`: the login child is running and has not produced its sign-in URL
+ * within this call's wait. The host keeps the child alive, and a further
+ * `providers.startLogin` for the same target attaches to it rather than
+ * spawning another. The same target is the same `profileId`, or for a create
+ * the same `createProfile` request (label and sharing choice): the host
+ * continues the profile it minted for the first call rather than minting
+ * another, so the caller repeats its request unchanged. A caller that stops
+ * asking releases the child with `providers.cancelLogin`. Antigravity's server takes 36 to 42 s to answer
+ * `initialize` on Windows, which no single call inside the transport's
+ * response budget can wait out.
+ */
+export const providerLoginPendingSchema = lazySchema(() =>
+  z.enum(["pack_preparing", "starting"]),
+);
+export type ProviderLoginPending = z.infer<typeof providerLoginPendingSchema>;
+
+/**
+ * The provider's managed pack, as the sign-in found it, when the pack is the
+ * reason there was nothing to spawn. Null whenever a binary was resolved.
+ *
+ * `reason` decides which of two opposite things this says. Null: a transfer
+ * is queued or running, `percent` is how far it has got (null when the host
+ * cannot know - queued behind another pack, or fetched by a sibling host),
+ * and the response carries `pending: "pack_preparing"`. Non-null: the install
+ * FAILED, this attempt is over, and the value is the same reason the
+ * provider's `managedInstallState` reports on `providers.list` - repeated here
+ * because the caller is rendering the outcome of THIS call and its copy of
+ * the list may be a quarter of an hour old. `retryAtMs` is when the host
+ * tries again by itself; `providers.ensurePack` is how a user does it now.
+ *
+ * Every field degrades rather than throws. A reason this build has never
+ * heard of is still a failed install, so it reads as `unknown`, not as a
+ * download in progress.
+ */
+export const providerLoginPackSchema = lazySchema(() =>
+  z.object({
+    percent: z.number().min(0).max(100).nullable().catch(null),
+    reason: providerManagedInstallErrorReasonSchema.nullable().catch("unknown"),
+    retryAtMs: z.number().int().nonnegative().nullable().catch(null),
+  }),
+);
+export type ProviderLoginPack = z.infer<typeof providerLoginPackSchema>;
+
+/**
+ * `providers.startLogin@1.3` response - adds `pending` and `pack`. Request is
+ * unchanged from v1.1. Both are new KEYS, so a v1.2 caller loses them to its
+ * own schema's strip: it sees `started: false` with no failure, exactly what
+ * it saw before this minor, while the child it would have been told about
+ * stays alive for its next call to attach to.
+ *
+ * `.catch(null)` on both, which also covers a body that omits them. A value
+ * a later host adds to `pending` reads as null here - "not started", with no
+ * promise that asking again helps - rather than failing the whole response.
+ */
+export const providersStartLoginResponseSchemaV13 = lazySchema(() =>
+  providersStartLoginResponseSchemaV12.extend({
+    pending: providerLoginPendingSchema.nullable().catch(null),
+    pack: providerLoginPackSchema.nullable().catch(null),
+  }),
+);
+export type ProvidersStartLoginResponseV13 = z.infer<
+  typeof providersStartLoginResponseSchemaV13
+>;
+
+/**
  * `providers.awaitLogin@2.1` request. Blocks until an in-flight
  * `providers.startLogin` child finishes (the browser loopback completes or the
  * CLI exits), then returns the freshly re-probed state - the honest "did the
@@ -3430,7 +3558,7 @@ export type ProvidersStartLoginResponseV12 = z.infer<
 // field on the released 2.0 line; the 2.0 shapes are frozen without it below
 // and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
 // registry.ts explicitly drops it before the strict v1.0 parse (see
-// `providersAwaitLoginDowngradeV21ToV10`).
+// `providersAwaitLoginDowngradeV22ToV10`).
 export const providersAwaitLoginRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
@@ -3447,12 +3575,39 @@ export type ProvidersAwaitLoginRequest = z.infer<
 >;
 
 /**
- * `providers.awaitLogin@2.1` response. Returns the re-probed `state`.
+ * Why a provider refused a sign-in the user completed in the browser, in the
+ * provider's own words, and where it sends the user to resolve it.
+ *
+ * The consent page can succeed and the provider still turn the account away
+ * afterwards: Antigravity asks Google whether the account may use it, and an
+ * account Google wants verified first is refused with a verification link.
+ * The provider discards the sign-in, so nothing about the account changed.
+ *
+ * `reason` is text the provider wrote. A client renders it as text, never as
+ * markup. `actionUrl` is an `https` link the host has already checked against
+ * the provider's own sign-in hosts, or null when the provider offered none.
  */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+export const providerLoginRefusalSchema = lazySchema(() =>
+  z.object({
+    reason: z.string(),
+    actionUrl: z.string().nullable(),
+  }),
+);
+export type ProviderLoginRefusal = z.infer<typeof providerLoginRefusalSchema>;
+
+/**
+ * Frozen `providers.awaitLogin@2.1` response. Released, so it never grows:
+ * the refusal below is 2.2's. Keep construction inside the lazy factory.
+ */
+export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
   z.object({
     // The provider's state after the login child closed and auth was re-probed.
-    // Null when no login was in flight for this provider (nothing to await).
+    // Null when no login was in flight for this provider (nothing to await),
+    // and when the provider approved a sign-in the host could not install
+    // into the account's home: the account is what it was before, so a
+    // re-probed state would show the previous account and read as this
+    // sign-in's success. Either way nothing about the provider changed, and a
+    // caller reads null as "the sign-in did not complete".
     state: providerMutationCliStateSchemaV21.nullable(),
     // Create-profile only: when the authenticated account already belongs to
     // an active profile, the host discards the pending profile instead of
@@ -3471,10 +3626,23 @@ export const providersAwaitLoginResponseSchema = lazySchema(() =>
     // precedent as `providers.startLogin@1.1`'s
     // `createProfile.shareSkillsAndPlugins`): old hosts never emit it and
     // `.default(false)` keeps old-client parses byte-identical to today.
-    // `providers.awaitLogin` is now in `released-baseline-surface.json` at
-    // canonical 2.1, so 2.1 is frozen and the next field here costs 2.2 - do
-    // not read this as a standing licence to widen in place.
     codeRejected: z.boolean().default(false),
+  }),
+);
+
+/**
+ * `providers.awaitLogin@2.2` response. Returns the re-probed `state`, and
+ * `refusal` when the provider turned the sign-in away.
+ */
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginResponseSchemaV21.shape,
+    // Non-null when the provider refused the sign-in after the browser leg
+    // (`providerLoginRefusalSchema`). `state` is null then: the refusal is
+    // the answer, and a re-probe would describe whatever account was there
+    // before. A 2.1 caller drops the key and reads the null state as "the
+    // sign-in did not complete", which is still true.
+    refusal: providerLoginRefusalSchema.nullable().default(null),
   }),
 );
 export const providersAwaitLoginResponseSchemaV20 = lazySchema(() =>
@@ -3556,6 +3724,16 @@ export const providersCancelLoginRequestSchemaV11 = lazySchema(() =>
 );
 export type ProvidersCancelLoginRequestV11 = z.infer<
   typeof providersCancelLoginRequestSchemaV11
+>;
+
+/** Release one caller's claim; a null holder keeps the legacy scope cancel. */
+export const providersCancelLoginRequestSchemaV12 = lazySchema(() =>
+  providersCancelLoginRequestSchemaV11.extend({
+    holderId: z.string().min(1).max(128).nullable().default(null),
+  }),
+);
+export type ProvidersCancelLoginRequestV12 = z.infer<
+  typeof providersCancelLoginRequestSchemaV12
 >;
 
 /**
@@ -4838,6 +5016,18 @@ export function downgradeProviderCliStateListToV80(
   states: readonly unknown[],
 ): ProviderCliStateV80[] {
   return projectRowsOntoFrozenLine(providerCliStateSchemaV80, states);
+}
+
+/**
+ * Drop the providers major 9 cannot spell for an already-shipped major-9
+ * client. Nothing else differs from the head row, so the reparse is a pure row
+ * filter - an id outside the frozen enum fails the parse and the row is
+ * dropped, exactly as the v8.0 helper drops a post-v8.0 one.
+ */
+export function downgradeProviderCliStateListToV92(
+  states: readonly unknown[],
+): ProviderCliStateV92[] {
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV92, states);
 }
 
 /**

@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { hostBusyBreakdownSchema } from "@traycer/protocol/host/status/contracts";
+import {
+  hostBusyBreakdownV1Schema,
+  hostBusyBreakdownV2Schema,
+} from "@traycer/protocol/host/status/contracts";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
@@ -67,12 +70,28 @@ export const hostRestartBusyVerdictV11Schema = lazySchema(() =>
  * NOT that every component is zero. `blockers` is unchanged: a v1.2 host
  * still names the boolean deny signals, and a v1.1 host still upgrades them
  * to `null`.
+ *
+ * FROZEN at the V1 breakdown: this is what `host.restart` @1.2 shipped. The
+ * unversioned name stays bound to it so existing importers keep compiling
+ * against the shape they read; @1.3 is {@link hostRestartBusyVerdictV13Schema}.
  */
 export const hostRestartBusyVerdictSchema = lazySchema(() =>
   z.object({
     busySessionCount: z.number().int().nonnegative(),
     blockers: hostRestartBusyBlockersSchema.nullable(),
-    busyBreakdown: hostBusyBreakdownSchema.nullable(),
+    busyBreakdown: hostBusyBreakdownV1Schema.nullable(),
+  }),
+);
+
+/**
+ * v1.3 verdict: v1.2's, with `busyBreakdown` at V2 (V1 plus the informational
+ * `shells` and `scheduledWakes` counts, each `null` when the host did not
+ * report it). `busySessionCount` and `blockers` keep their v1.2 meaning; the
+ * two new counts are not part of the total.
+ */
+export const hostRestartBusyVerdictV13Schema = lazySchema(() =>
+  hostRestartBusyVerdictSchema.extend({
+    busyBreakdown: hostBusyBreakdownV2Schema.nullable(),
   }),
 );
 
@@ -96,12 +115,23 @@ export const hostRestartResponseV11Schema = lazySchema(() =>
   ]),
 );
 
+/** The v1.2 response, frozen with {@link hostRestartBusyVerdictSchema}. */
 export const hostRestartResponseSchema = lazySchema(() =>
   z.discriminatedUnion("outcome", [
     z.object({ outcome: z.literal("accepted") }),
     z.object({
       outcome: z.literal("busy"),
       verdict: hostRestartBusyVerdictSchema,
+    }),
+  ]),
+);
+
+export const hostRestartResponseV13Schema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({
+      outcome: z.literal("busy"),
+      verdict: hostRestartBusyVerdictV13Schema,
     }),
   ]),
 );
@@ -113,4 +143,10 @@ export type HostRestartBusyBlockers = z.infer<
 export type HostRestartBusyVerdict = z.infer<
   typeof hostRestartBusyVerdictSchema
 >;
+export type HostRestartBusyVerdictV13 = z.infer<
+  typeof hostRestartBusyVerdictV13Schema
+>;
 export type HostRestartResponse = z.infer<typeof hostRestartResponseSchema>;
+export type HostRestartResponseV13 = z.infer<
+  typeof hostRestartResponseV13Schema
+>;

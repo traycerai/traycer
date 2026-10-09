@@ -24,12 +24,17 @@ import {
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { EpicResourcesFallbackMount } from "@/providers/resources-stream-mount";
 import {
   EpicSessionPresentationContext,
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
+import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
+import {
+  useArrangementValue,
+  useStatusBarVisible,
+} from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import {
   selectHasActiveInitialChatHandoffForEpic,
@@ -147,7 +152,10 @@ function EpicShellSessionBody(
   return (
     <SnapshotLoadingProvider value={snapshotContextValue}>
       {props.active ? <EpicConnectionToasts epicId={props.epicId} /> : null}
-      <ResourcesStreamMount epicId={props.epicId} />
+      {/* This epic's resource chips lease its stream themselves, so the pane
+          opens one only to feed an old host's global fallback while a global
+          monitor is up. */}
+      <EpicResourcesFallbackMount epicId={props.epicId} />
       {snapshotFetchError === null && !hasActiveHandoff ? (
         <ChatStreamPrewarm
           epicId={props.epicId}
@@ -327,10 +335,32 @@ function CanvasColumn(props: {
   readonly statusRow: ReactNode;
   readonly canvas: ReactNode;
 }) {
+  // The canvas is the only bordered thing on the surface. Where it meets the
+  // side strip (the panel on the far side), the surface's seam line is that
+  // edge already, so the canvas leaves it off rather than double it. Same
+  // reasoning for the bottom edge: the app-wide status bar draws its own
+  // `border-t` directly below the surface, so the canvas leaves that edge off
+  // too rather than stacking a second line on top of it.
+  const stripEdge = sideTabStripEdge(useArrangementValue("tabStripPlacement"));
+  const sidebarSide = useArrangementValue("sidebarSide");
+  const seam = stripEdge === sidebarSide ? null : stripEdge;
+  // The shell's own mount decision, so the frame keeps its bottom border
+  // whenever the strip is not actually there to draw one.
+  const statusBarShown = useStatusBarVisible();
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {props.statusRow}
-      <div className="min-h-0 flex-1">{props.canvas}</div>
+      <div
+        data-epic-canvas-frame
+        className={cn(
+          "min-h-0 flex-1 border border-canvas-border/70 max-md:border-0",
+          seam === "left" && "md:border-s-0",
+          seam === "right" && "md:border-e-0",
+          statusBarShown && "md:border-b-0",
+        )}
+      >
+        {props.canvas}
+      </div>
     </div>
   );
 }
@@ -338,7 +368,7 @@ function CanvasColumn(props: {
 function LoadingTileCanvas() {
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground max-md:border-0"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden bg-canvas text-canvas-foreground"
       data-testid="tile-canvas-loading"
     >
       <CanvasSkeleton />

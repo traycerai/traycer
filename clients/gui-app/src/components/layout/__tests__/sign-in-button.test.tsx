@@ -239,6 +239,7 @@ function mountDeviceCodeProgress(host: MockRunnerHost): () => void {
         >
           <DeviceCodeProgress
             isHero
+            framed
             progress={{
               userCode: "ABCDE-FGHIJ",
               verificationUri: "https://app.traycer.ai/device",

@@ -32,13 +32,9 @@ import {
   transcriptWindowStaleTierBytes,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
-import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { OpenChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   CHAT_WINDOWS_SOFT_LIMIT_BYTES,
@@ -46,12 +42,17 @@ import {
   HOT_DOCS_SOFT_LIMIT_BYTES,
 } from "@/stores/replica-memory/budget-limits";
 
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 const CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
 };
 
-function userMessage(messageId: string, timestamp: number): Message {
+function userMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "user",
     messageId,
@@ -62,7 +63,7 @@ function userMessage(messageId: string, timestamp: number): Message {
   };
 }
 
-function event(eventId: string, timestamp: number): ChatEvent {
+function event(eventId: string, timestamp: number): OpenChatEvent {
   return {
     eventId,
     type: "turn.completed",
@@ -80,7 +81,7 @@ function event(eventId: string, timestamp: number): ChatEvent {
   };
 }
 
-function grownUserMessage(message: Message, index: number): Message {
+function grownUserMessage(message: OpenMessage, index: number): OpenMessage {
   if (message.role !== "user") return message;
   return {
     ...message,
@@ -113,8 +114,8 @@ function skeletonEntry(rowId: string, ordinal: number): RowSkeletonEntry {
 function rangeOf(
   fromOrdinal: number,
   rowIds: readonly string[],
-  messages: readonly Message[],
-): ChatRangeResponse {
+  messages: readonly OpenMessage[],
+): OpenChatRangeResponse {
   return {
     requestId: `req-${fromOrdinal}`,
     epoch: 1,

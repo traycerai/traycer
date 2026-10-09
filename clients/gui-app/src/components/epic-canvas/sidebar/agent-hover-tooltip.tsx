@@ -39,7 +39,7 @@
 import type { ReactElement, ReactNode } from "react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HoverCard } from "@/components/ui/hover-card";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 import { AgentRoleHoverContent } from "@/components/epic-canvas/sidebar/agent-role-badges";
 
@@ -168,14 +168,24 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   // its FULL name on hover - sidebar rows and graph nodes truncate, and the
   // tooltip is the only place the complete title is readable (upstream pinned
   // this for selection mode; the shared component gives it everywhere).
+  //
+  // The same primitive as the owner card, in its label appearance, so a row
+  // never switches primitive with its data and the tree's rows share one
+  // clock whichever outcome each one has.
   return (
-    <TooltipWrapper
-      label={fallbackTooltipLabel(nodeName, roleContent, extraContent)}
+    <HoverCard
+      trigger={props.trigger}
+      content={fallbackTooltipLabel(nodeName, roleContent, extraContent)}
+      appearance="tooltip"
+      semantics={{ role: "tooltip" }}
       side={side}
-      sideOffset={6}
       align="start"
-    >
-      {props.trigger}
-    </TooltipWrapper>
+      sideOffset={6}
+      enabled
+      open={null}
+      onOpenChange={null}
+      testId={null}
+      className="max-w-xs px-3 py-1.5 text-ui-xs [overflow-wrap:anywhere]"
+    />
   );
 }

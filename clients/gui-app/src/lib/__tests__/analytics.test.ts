@@ -112,6 +112,32 @@ describe("analytics", () => {
     ).toEqual({ provider: "antigravity", mode: "create" });
   });
 
+  it("accepts commandcode as a harness and as a provider value, and still drops an unknown id", async () => {
+    // The silent validators again: a missing runtime entry drops the property
+    // with no type error, so this goes through the public sanitize path.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "commandcode",
+      }),
+    ).toEqual({ harness: "commandcode" });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProviderProfileLinkSucceeded, {
+        provider: "commandcode",
+        mode: "create",
+      }),
+    ).toEqual({ provider: "commandcode", mode: "create" });
+    // Positive control for the drop: an id outside the allowlist is rejected,
+    // which is what a missing runtime entry for commandcode would have done.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "not-a-harness",
+      }),
+    ).toBeNull();
+  });
+
   it("accepts every settings section the type union declares", async () => {
     // The runtime allowlist is what `section` is validated against, and a
     // union member missing from it drops the event with no error anywhere -
@@ -1581,83 +1607,6 @@ describe("Layout page settings analytics", () => {
     ).toEqual({ source: "direct_ui", section: "layout" });
   });
 
-  it("tracks every layout.statusBar.* setting id through trackSettingChanged", async () => {
-    // Each of these is exercised through the real `trackSettingChanged` (not
-    // `sanitizeAnalyticsProperties` directly), so this also proves the
-    // `AnalyticsSetting` union member reaches `ANALYTICS_SETTINGS` - a value
-    // present in the type but missing from the runtime Set drops the event
-    // silently (`chatTurnMinimapSide` did exactly that before it was added).
-    const posthog = await import("posthog-js");
-    const captureSpy = vi.spyOn(posthog.default, "capture");
-    const { trackSettingChanged } = await import("@/lib/analytics");
-
-    const statusBarSettings = [
-      "layout.statusBar.placement",
-      "layout.statusBar.mobileFooter",
-      "layout.statusBar.rateLimits.enabled",
-      "layout.statusBar.rateLimits.percentMode",
-      "layout.statusBar.rateLimits.provider",
-      "layout.statusBar.rateLimits.providerAutomatic",
-      "layout.statusBar.rateLimits.providerLimits",
-      "layout.statusBar.rateLimits.showBar",
-      "layout.statusBar.rateLimits.showModeWord",
-      "layout.statusBar.rateLimits.showTimer",
-      "layout.statusBar.shownProfiles",
-      "layout.statusBar.resources.enabled",
-      "layout.statusBar.resources.metric",
-      "layout.statusBar.resources.scope",
-    ] as const;
-
-    for (const setting of statusBarSettings) {
-      trackSettingChanged("layout", setting);
-    }
-
-    // MODE === "test" disables PostHog entirely (see the top-of-file no-op
-    // test), so this is never about a real capture - it is about
-    // `Analytics.track` returning `true` (accepted, not sanitized away). The
-    // module's local `track()` return isn't exported, so the runtime
-    // allowlist is asserted directly instead, matching the "accepts every
-    // settings section" test above.
-    expect(captureSpy).not.toHaveBeenCalled();
-    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-      await import("@/lib/analytics");
-    for (const setting of statusBarSettings) {
-      expect(
-        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
-          source: "direct_ui",
-          section: "layout",
-          setting,
-        }),
-      ).toEqual({ source: "direct_ui", section: "layout", setting });
-    }
-  });
-
-  it("tracks the relocated layout settings (chat, sidebar, Home tab, resource monitor rows) under the layout section", async () => {
-    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-      await import("@/lib/analytics");
-
-    // `homeTabEnabled` is here rather than under `general` because the row
-    // moved to the Layout page; the setting id itself never changed, which is
-    // what keeps its history joinable across the move.
-    const relocatedSettings = [
-      "chatTurnMinimapSide",
-      "homeTabEnabled",
-      "pinContextUsageBreakdown",
-      "showGlobalResourceMonitor",
-      "showNavigatorResourceStats",
-    ] as const;
-
-    for (const setting of relocatedSettings) {
-      expect(
-        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
-          source: "direct_ui",
-          section: "layout",
-          setting,
-        }),
-      ).toEqual({ source: "direct_ui", section: "layout", setting });
-    }
-  });
-
   // Home reported two Layout rows and reports neither now: the view switch
   // went with the flat reading, and the density segment went because the two
   // spacings were barely distinguishable (user ruling, 2026-09-12). Nothing
@@ -1665,63 +1614,73 @@ describe("Layout page settings analytics", () => {
   // be checked against, so it has to stop ACCEPTING them rather than merely
   // stop being called. An unallowlisted setting id drops the whole event
   // rather than the one property.
-  it.each(["layout.home.density", "layout.home.view"])(
-    "has dropped %s from the runtime allowlist",
-    async (setting) => {
-      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-        await import("@/lib/analytics");
-
-      expect(
-        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
-          source: "direct_ui",
-          section: "layout",
-          setting,
-        }),
-      ).toBeNull();
-    },
-  );
-
-  it("tracks the sidebar resource metric picker under the layout section", async () => {
+  //
+  // The `layout.statusBar.*`, `layout.sidebar.*`, `layout.composer.*` and
+  // `layout.preset.*` ids join the list here for the same reason (L-46, L-54,
+  // C-47): Layout fires no per-control `setting_changed` at all now that
+  // `layout_snapshot` reports it (`trackLayoutSetting` and every one of these
+  // ids were deleted with the old visual editor's analytics).
+  //
+  // The five camelCase ids at the top are the LAST emitters of that shape to
+  // go. They were the old Layout page's relocated rows, and when the page
+  // went there was nothing left to fire them - a vocabulary the sanitizer
+  // still accepted and no site could produce. Deleting them from
+  // `AnalyticsSetting` is what makes a future emit a compile error; this is
+  // the runtime half.
+  it.each([
+    "chatTurnMinimapSide",
+    "homeTabEnabled",
+    "pinContextUsageBreakdown",
+    "showGlobalResourceMonitor",
+    "showNavigatorResourceStats",
+    "layout.home.density",
+    "layout.home.view",
+    "layout.preset.compact",
+    "layout.preset.default",
+    "layout.preset.detailed",
+    "layout.sidebar.panelOrder",
+    "layout.sidebar.panelVisibility",
+    "layout.sidebar.resetOrder",
+    "layout.sidebar.resetVisibility",
+    "layout.sidebar.resourceMetrics",
+    "layout.statusBar.placement",
+    "layout.statusBar.mobileFooter",
+    "layout.statusBar.rateLimits.enabled",
+    "layout.statusBar.rateLimits.percentMode",
+    "layout.statusBar.rateLimits.provider",
+    "layout.statusBar.rateLimits.providerAutomatic",
+    "layout.statusBar.rateLimits.providerLimits",
+    "layout.statusBar.rateLimits.showBar",
+    "layout.statusBar.rateLimits.showModeWord",
+    "layout.statusBar.rateLimits.showTimer",
+    "layout.statusBar.shownProfiles",
+    "layout.statusBar.resources.enabled",
+    "layout.statusBar.resources.metric",
+    "layout.statusBar.resources.scope",
+    "layout.statusBar.segmentOrder",
+    "layout.statusBar.resourceSide",
+    "layout.composer.filesChanged",
+    "layout.composer.activeAgents",
+    "layout.composer.background",
+    "layout.composer.attachImage",
+    "layout.composer.access",
+    "layout.composer.mic",
+    "layout.composer.compactButton",
+    "layout.composer.reasoningIndicator",
+    "layout.composer.reasoningFooterControl",
+    "layout.composer.toolbarOrder",
+    "layout.composer.dockOrder",
+  ])("has dropped %s from the runtime allowlist", async (setting) => {
     const { AnalyticsEvent, sanitizeAnalyticsProperties } =
       await import("@/lib/analytics");
 
-    // A NEW id rather than a relocated one, so it takes the Sidebar group's
-    // dotted family name instead of a bare key there is no history to join.
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
         source: "direct_ui",
         section: "layout",
-        setting: "layout.sidebar.resourceMetrics",
+        setting,
       }),
-    ).toEqual({
-      source: "direct_ui",
-      section: "layout",
-      setting: "layout.sidebar.resourceMetrics",
-    });
-  });
-
-  it("tracks every layout.sidebar.* setting id through trackSettingChanged", async () => {
-    const { AnalyticsEvent, sanitizeAnalyticsProperties, trackSettingChanged } =
-      await import("@/lib/analytics");
-
-    const sidebarSettings = [
-      "layout.sidebar.panelOrder",
-      "layout.sidebar.panelVisibility",
-      "layout.sidebar.resetOrder",
-      "layout.sidebar.resetVisibility",
-      "layout.sidebar.resourceMetrics",
-    ] as const;
-
-    for (const setting of sidebarSettings) {
-      trackSettingChanged("layout", setting);
-      expect(
-        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
-          source: "direct_ui",
-          section: "layout",
-          setting,
-        }),
-      ).toEqual({ source: "direct_ui", section: "layout", setting });
-    }
+    ).toBeNull();
   });
 
   it("accepts the general-section setting ids that the runtime allowlist used to omit", async () => {
@@ -1750,5 +1709,171 @@ describe("Layout page settings analytics", () => {
         }),
       ).toEqual({ source: "direct_ui", section: "general", setting });
     }
+  });
+});
+
+describe("host lifecycle analytics schema", () => {
+  it("accepts host_lifecycle_mode_set with every mode/source combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = [
+      "background",
+      "ask",
+      "stop-if-idle",
+      "linked",
+      "none",
+    ] as const;
+    const sources = ["settings", "quit-modal", "no-host-card", "cli"] as const;
+
+    for (const mode of modes) {
+      for (const source of sources) {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+            mode,
+            source,
+          }),
+        ).toEqual({ mode, source });
+      }
+    }
+  });
+
+  it("rejects host_lifecycle_mode_set with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "settings",
+        hostId: "host-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_lifecycle_mode_set with an out-of-taxonomy mode or source", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "always-on",
+        source: "settings",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "tray",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts host_quit_decision with every verdict/choice combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = ["ask", "stop-if-idle"] as const;
+    const verdicts = ["idle", "busy", "unknown"] as const;
+    const choices = ["keep", "stop", "cancel"] as const;
+
+    for (const mode of modes) {
+      for (const verdict of verdicts) {
+        for (const choice of choices) {
+          expect(
+            sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+              mode,
+              verdict,
+              choice,
+              forced: choice === "stop",
+              remembered: false,
+            }),
+          ).toEqual({
+            mode,
+            verdict,
+            choice,
+            forced: choice === "stop",
+            remembered: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("rejects host_quit_decision with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+        requestId: "req-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid mode or verdict", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "always-ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "checking",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid choice", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "force-stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with forced/remembered sent as non-booleans", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: "true",
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the runtime event contract complete after adding both events", async () => {
+    const { analyticsEventContractIsComplete } =
+      await import("@/lib/analytics");
+
+    expect(analyticsEventContractIsComplete()).toBe(true);
   });
 });

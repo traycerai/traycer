@@ -301,7 +301,7 @@ describe("remoteSafe never reaches a released providers.list line", () => {
     for (const target of [8, 7] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        9,
+        10,
         target,
         providersListResponseSchema.parse({
           providers: [

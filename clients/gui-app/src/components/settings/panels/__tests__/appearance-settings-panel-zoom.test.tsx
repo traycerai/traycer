@@ -1,10 +1,11 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
-import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
+import { assertSettingsSearchTargetsByNavigation } from "@/components/settings/__tests__/settings-search-targets";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import {
   isZoomRowAvailable,
@@ -76,6 +77,7 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
   it("renders the desktop Display zoom row and reflects live changes", async () => {
     const bridge = zoomState.bridge;
     renderWithQueryClient(<AppearanceSettingsPanel />);
+    await userEvent.click(screen.getByRole("tab", { name: "Interface" }));
 
     const zoomSelect = await screen.findByRole("combobox", {
       name: "Display zoom",
@@ -98,21 +100,23 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
     });
   });
 
-  it("hides the Display zoom row without the desktop bridge", () => {
+  it("hides the Display zoom row without the desktop bridge", async () => {
     zoomState.bridge = null;
     renderWithQueryClient(<AppearanceSettingsPanel />);
+    await userEvent.click(screen.getByRole("tab", { name: "Interface" }));
 
     expect(screen.queryByLabelText("Display zoom")).toBeNull();
   });
 
   // The search index offers Zoom exactly where this row renders. Both halves:
-  // an entry left always-available fails the bridge-absent case.
+  // an entry left always-available fails the bridge-absent case. Appearance
+  // shows one area at a time, so each anchor is judged after navigating to it.
   it("matches the search index with the zoom bridge present", () => {
     const container = renderWithQueryClient(<AppearanceSettingsPanel />);
 
     const context = currentAvailabilityContext();
     expect(isZoomRowAvailable(context)).toBe(true);
-    assertSettingsSearchTargets("appearance", context, container);
+    assertSettingsSearchTargetsByNavigation("appearance", context, container);
   });
 
   it("matches the search index with the zoom bridge absent", () => {
@@ -121,7 +125,7 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
 
     const context = currentAvailabilityContext();
     expect(isZoomRowAvailable(context)).toBe(false);
-    assertSettingsSearchTargets("appearance", context, container);
+    assertSettingsSearchTargetsByNavigation("appearance", context, container);
   });
 
   // A host-less shell has no runner host at all, and every hook the Zoom row
@@ -147,7 +151,7 @@ function currentAvailabilityContext(): SettingsAvailabilityContext {
     runnerHost: mountedRunnerHost,
     featureSettings: null,
     mobileApp: false,
-    mobileFooter: false,
+    phoneLayout: false,
   };
 }
 

@@ -1,7 +1,10 @@
+import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
+import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-lifecycle-analytics-bridge";
+import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
@@ -17,6 +20,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
+import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
@@ -88,6 +92,12 @@ export function RootComponent() {
       <MenuCommandListener />
       <HostTrayCommandListener />
       <DesktopDialogHost />
+      {/* The host quit modal: on every route, signed in or not, so a quit is
+          always answered in-window rather than by main's native prompt. */}
+      <HostQuitDecisionBridge />
+      {/* Reports a lifecycle mode once it is written (main's change push),
+          whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
+      <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
@@ -148,6 +158,12 @@ export function RootComponent() {
               <SystemTabModalHost />
               <ChatSearchDialogHost />
               <SweepReviewDialogHost />
+              {/* The Sync profiles dialog. Here rather than in Settings: Providers
+                  settings drops its body while a deep link moves its host scope,
+                  which is the navigation "Sign in on <source>" makes; and not
+                  behind the default-host scope, because it reads only the
+                  source host it captured. */}
+              <ProfileSyncModalHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
               <NotificationsMobileSheet />
@@ -180,19 +196,21 @@ function RootSurface(props: {
 }) {
   if (!props.isStandalone) {
     return (
-      <AppShell>
-        {/*
-         * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
-         * It owns the tear-off flow, which reaches `useRouterState` and so
-         * throws without a router. This is a route component - it renders under
-         * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
-         * the router requirement structural rather than a runtime check.
-         * Rendered by the provider instead, it would mount wherever the
-         * provider mounts, which is the provider-light case the move fixes.
-         */}
-        <TabDetachOwner />
-        <Outlet />
-      </AppShell>
+      <SampleSceneProvider>
+        <AppShell>
+          {/*
+           * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
+           * It owns the tear-off flow, which reaches `useRouterState` and so
+           * throws without a router. This is a route component - it renders under
+           * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
+           * the router requirement structural rather than a runtime check.
+           * Rendered by the provider instead, it would mount wherever the
+           * provider mounts, which is the provider-light case the move fixes.
+           */}
+          <TabDetachOwner />
+          <Outlet />
+        </AppShell>
+      </SampleSceneProvider>
     );
   }
   // Sign-in and the onboarding tour render without AppShell, so they lose the
@@ -246,7 +264,7 @@ function StandaloneShell(props: { readonly children: ReactNode }) {
   const menuBarActive = useDesktopMenuBarActive();
   return (
     <div data-full-bleed-surface="" className="fixed inset-0 flex flex-col">
-      {menuBarActive ? <DesktopMenuHeader /> : null}
+      {menuBarActive ? <DesktopMenuHeader variant="boot" /> : null}
       <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
     </div>
   );

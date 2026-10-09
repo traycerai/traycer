@@ -1,5 +1,6 @@
 import { animate, type MotionValue, type Transition } from "motion/react";
 import { appLogger } from "@/lib/logger";
+import type { StripAxis } from "@/components/epic-canvas/dnd/strip-axis";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "./header-strip-geometry";
 
 /**
@@ -43,8 +44,9 @@ import { HEADER_STRIP_SCROLL_TEST_ID } from "./header-strip-geometry";
  * on any of those would be a check whose outcome differs across cases that are
  * the same case.
  *
- * Baselines are measured with `offsetLeft`, never `getBoundingClientRect()`.
- * `offsetLeft` excludes transforms by definition, so it reads the slot without
+ * Baselines are measured with the axis's layout offset (`offsetLeft` or
+ * `offsetTop`), never `getBoundingClientRect()`. A layout offset excludes
+ * transforms by definition, so it reads the slot without
  * having to subtract the very transform being corrected, and it is immune to a
  * scroll landing on the same frame.
  */
@@ -52,7 +54,7 @@ import { HEADER_STRIP_SCROLL_TEST_ID } from "./header-strip-geometry";
 /**
  * One strip item's participation in the pass.
  *
- * `targetX` and `transition` are re-published by the item on every layout pass
+ * `target` and `transition` are re-published by the item on every layout pass
  * so the re-base can restart the spring toward the CURRENT target: `jump`
  * cancels the animation in flight, so a jump without a restart would park the
  * item at the re-based value instead of settling it.
@@ -60,16 +62,16 @@ import { HEADER_STRIP_SCROLL_TEST_ID } from "./header-strip-geometry";
 interface HeaderStripItemEntry {
   readonly value: MotionValue<number>;
   node: HTMLElement | null;
-  targetX: number;
+  target: number;
   transition: Transition;
-  lastBaselineLeft: number | null;
+  lastBaseline: number | null;
 }
 
 /**
  * Keyed by the item's MotionValue, which is stable for the life of the item -
  * NOT by its DOM node, which is not. Keying by node captured once at mount left
- * a recreated element stranded under a detached key, where `offsetLeft` reads 0
- * forever and the item is silently exempt from every commit.
+ * a recreated element stranded under a detached key, where its layout offset
+ * reads 0 forever and the item is silently exempt from every commit.
  *
  * The mutable bookkeeping lives here rather than on an object the component
  * owns: a component cannot hold a mutable handle without either reading a ref
@@ -85,9 +87,9 @@ export function registerHeaderStripItem(
   entries.set(value, {
     value,
     node: null,
-    targetX: value.get(),
+    target: value.get(),
     transition: { duration: 0 },
-    lastBaselineLeft: null,
+    lastBaseline: null,
   });
   return () => {
     entries.delete(value);
@@ -104,13 +106,13 @@ export function registerHeaderStripItem(
 export function syncHeaderStripItem(input: {
   readonly value: MotionValue<number>;
   readonly node: HTMLElement | null;
-  readonly targetX: number;
+  readonly target: number;
   readonly transition: Transition;
 }): void {
   const entry = entries.get(input.value);
   if (entry === undefined) return;
   entry.node = input.node;
-  entry.targetX = input.targetX;
+  entry.target = input.target;
   entry.transition = input.transition;
 }
 
@@ -133,25 +135,53 @@ export function isHeaderStripCommitHandoffArmed(): boolean {
 
 export function disarmHeaderStripCommitHandoff(): void {
   armed = false;
+  seededStarts.clear();
+}
+
+/**
+ * Where a commit's NEW item starts, by its id: a split pair a drop forms takes
+ * the place its target row was drawn at, and moves from there to its own slot
+ * as the rows around it do, rather than appearing at its slot while they are
+ * still moving.
+ */
+const seededStarts = new Map<string, number>();
+
+/**
+ * Before a commit that replaces `fromItemId` with a new `itemId`, record where
+ * `fromItemId` is drawn along `axis` (its slot plus the displacement it shows),
+ * so the new item starts there. Nothing is recorded for an item not drawn.
+ */
+export function seedHeaderStripItemFrom(
+  itemId: string,
+  fromItemId: string,
+  axis: StripAxis,
+): void {
+  const node = [
+    ...document.querySelectorAll<HTMLElement>(
+      `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"] [data-strip-item-id]`,
+    ),
+  ].find((candidate) => candidate.dataset.stripItemId === fromItemId);
+  if (node === undefined) return;
+  const entry = [...entries.values()].find((e) => e.node === node);
+  seededStarts.set(
+    itemId,
+    layoutBaselineOf(node, axis) + (entry?.value.get() ?? 0),
+  );
 }
 
 /**
  * The transform that leaves rendered position unchanged across a baseline move.
  *
- * `previousBaselineLeft + appliedTransformX` is where the item is rendered right
+ * `previousBaseline + appliedTransform` is where the item is rendered right
  * now; subtracting the new baseline gives the transform that reproduces that
  * exact position from the new slot.
  */
 export function handoffTransformFor(input: {
-  readonly previousBaselineLeft: number;
-  readonly nextBaselineLeft: number;
-  readonly appliedTransformX: number;
+  readonly previousBaseline: number;
+  readonly nextBaseline: number;
+  readonly appliedTransform: number;
 }): number {
-  return (
-    input.previousBaselineLeft +
-    input.appliedTransformX -
-    input.nextBaselineLeft
-  );
+  return input.previousBaseline + input.appliedTransform - input.nextBaseline;
 }
 
 /**
@@ -172,15 +202,61 @@ export interface HeaderStripHandoffReport {
 }
 
 /**
+ * An item's slot along `axis`, measured from the same origin for every item:
+ * its own layout offset plus those of the positioned ancestors it is measured
+ * against in turn. A tab in a group's block is offset within the block, which
+ * is itself offset in the strip, and a commit that moves the block moves the
+ * tab though its own offset does not change.
+ */
+function layoutBaselineOf(node: HTMLElement, axis: StripAxis): number {
+  let baseline = axis.layoutOffset(node);
+  let parent = node.offsetParent;
+  while (parent instanceof HTMLElement) {
+    baseline += axis.layoutOffset(parent);
+    parent = parent.offsetParent;
+  }
+  return baseline;
+}
+
+/**
+ * An item's first layout pass, with no snapshot to preserve a position
+ * against. A new item a commit put in another's place (`seededStarts`) starts
+ * where that one was and settles into its slot. Otherwise it is harmless on a
+ * first pass; at a commit it means an item joined late, which is reported -
+ * but not when it carries no displacement: a tab dropped into or out of a
+ * group, or the tabs of a group block it re-keyed, mount anew, and a frame
+ * that was never drawn at an old position and has no transform to unwind is
+ * already at its place.
+ */
+function firstLayoutOf(
+  entry: HeaderStripItemEntry,
+  id: string,
+  nextBaseline: number,
+): "rebased" | "uncorrected" | "placed" {
+  const seeded = armed ? seededStarts.get(id) : undefined;
+  if (seeded !== undefined) {
+    entry.value.jump(seeded - nextBaseline);
+    animate(entry.value, entry.target, entry.transition);
+    return "rebased";
+  }
+  return armed && (entry.value.get() !== 0 || entry.target !== 0)
+    ? "uncorrected"
+    : "placed";
+}
+
+/**
  * Re-base every item whose baseline moved, then release the arm.
  *
  * Driven from the strip container's layout effect on EVERY strip layout pass:
  * baselines have to be recorded even when nothing is armed, or the first commit
  * after a quiet render would compare against a stale slot. Walking the DOM
  * rather than the registry is deliberate - it is the only way to notice an item
- * that is on screen and NOT registered.
+ * that is on screen and NOT registered. Baselines are read along `axis`, the
+ * strip's main axis.
  */
-export function runHeaderStripCommitHandoff(): HeaderStripHandoffReport {
+export function runHeaderStripCommitHandoff(
+  axis: StripAxis,
+): HeaderStripHandoffReport {
   const byNode = new Map<HTMLElement, HeaderStripItemEntry>();
   for (const entry of entries.values()) {
     if (entry.node !== null) byNode.set(entry.node, entry);
@@ -202,28 +278,28 @@ export function runHeaderStripCommitHandoff(): HeaderStripHandoffReport {
       if (armed) uncorrected.push(id);
       continue;
     }
-    const previousBaselineLeft = entry.lastBaselineLeft;
-    const nextBaselineLeft = node.offsetLeft;
-    entry.lastBaselineLeft = nextBaselineLeft;
-    if (previousBaselineLeft === null) {
-      // No snapshot to preserve a position against. Harmless on a first layout
-      // pass; at a commit it means an item joined late and is reported.
-      if (armed) uncorrected.push(id);
+    const previousBaseline = entry.lastBaseline;
+    const nextBaseline = layoutBaselineOf(node, axis);
+    entry.lastBaseline = nextBaseline;
+    if (previousBaseline === null) {
+      const first = firstLayoutOf(entry, id, nextBaseline);
+      if (first === "rebased") rebased.push(id);
+      if (first === "uncorrected") uncorrected.push(id);
       continue;
     }
-    if (previousBaselineLeft === nextBaselineLeft) continue;
+    if (previousBaseline === nextBaseline) continue;
     moved.push(id);
     if (!armed) continue;
     entry.value.jump(
       handoffTransformFor({
-        previousBaselineLeft,
-        nextBaselineLeft,
-        appliedTransformX: entry.value.get(),
+        previousBaseline,
+        nextBaseline,
+        appliedTransform: entry.value.get(),
       }),
     );
     // `jump` cancels the in-flight animation, so the settle has to be restarted
     // explicitly or the item parks at the re-based value.
-    animate(entry.value, entry.targetX, entry.transition);
+    animate(entry.value, entry.target, entry.transition);
     rebased.push(id);
   }
   if (armed && uncorrected.length > 0) {

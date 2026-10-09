@@ -81,6 +81,7 @@ function createTerminalHandle(sessionId: string): TerminalSessionStoreHandle {
     rows: 24,
     reattachMode: "fresh",
     kind: "terminal-agent",
+    viewer: "presentation",
     streamClientFactory: () => ({
       sendAction: () => undefined,
       close: () => undefined,
@@ -127,6 +128,7 @@ describe("useRefreshOverviewStatusOnSessionActivity", () => {
         "term-b",
         () => createTerminalHandle("terminal-b"),
         HOST_B,
+        "presentation",
       );
     });
 
@@ -143,6 +145,7 @@ describe("useRefreshOverviewStatusOnSessionActivity", () => {
         "term-a",
         () => createTerminalHandle("terminal-a"),
         HOST_A,
+        "presentation",
       );
     });
 
@@ -203,6 +206,7 @@ describe("useRefreshOverviewStatusOnSessionActivity", () => {
         "term-a",
         () => createTerminalHandle("terminal-a"),
         HOST_A,
+        "presentation",
       );
     });
 

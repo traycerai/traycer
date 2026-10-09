@@ -6,22 +6,19 @@ import { StatusBarUsageTrigger } from "@/components/layout/status-bar/status-bar
 import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
 import { useStatusBarUsageDisplay } from "@/components/layout/status-bar/status-bar-usage-display";
 import { StatusBarUsageScroller } from "@/components/layout/status-bar/status-bar-usage-scroller";
-import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import { StatusBarPreviewFrame } from "@/components/settings/panels/layout/status-bar-preview";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitCluster,
   StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 import "@/index.css";
 
 /**
  * Real-layout fixture for the status bar's usage cluster: does it OVERFLOW
  * and scroll when it holds more readings than the strip is wide, does the
  * fade land on the edge that hides something, does the resource readout to
- * its right stay fully on screen while it does - and does the Settings
- * preview's frame, drawn at its Narrow width, scroll under a real wheel and a
- * real swipe rather than merely clipping?
+ * its right stay fully on screen while it does?
  *
  * jsdom lays nothing out - `scrollWidth` and `clientWidth` are 0 there, and
  * the mask class the fade hook picks is a string it cannot see the effect of
@@ -34,14 +31,17 @@ import "@/index.css";
  *
  * `?accounts=N` chooses how many account segments the cluster holds; the
  * driver sets the viewport width. The strip's row and the slot around the
- * scroller mirror `ScopedAppStatusBar`, the refresh control's box is the same
- * placeholder the Settings preview draws, and the resource segment is the
- * real one with no stream behind it - dashes, at the width dashes take. The
- * preview below the strip is the real `StatusBarPreviewFrame` at `narrow`,
- * so its inert boundary is the one the preview draws.
+ * scroller mirror `ScopedAppStatusBar`, the refresh control's box is a bare
+ * placeholder of the same size, and the resource segment is the real one with
+ * no stream behind it - dashes, at the width dashes take.
  */
 const PROVIDERS = ["codex", "claude-code", "grok"] as const;
 const FIXTURE_HOST_ID = "fixture-host";
+
+function severityFor(usedPercent: number): RateLimitWindowSeverity {
+  if (usedPercent >= 80) return "limited";
+  return usedPercent >= 40 ? "running_low" : "healthy";
+}
 
 function windowFor(
   providerId: (typeof PROVIDERS)[number],
@@ -56,7 +56,9 @@ function windowFor(
     // Six hours out: a countdown that reads `5h 59m`-ish and does not cross
     // an hour boundary while the driver measures.
     resetsAt: Date.now() + 6 * 60 * 60_000 - 30_000,
-    severity: usedPercent >= 80 ? "limited" : "healthy",
+    // The first two accounts stay calm (a bare bar) and the rest expand, so
+    // six of them outgrow a narrow strip and two still fit a wide one.
+    severity: severityFor(usedPercent),
   };
 }
 
@@ -67,6 +69,7 @@ function accountSegment(index: number): StatusBarProviderSegmentModel {
   return {
     providerId,
     profileId,
+    hidden: false,
     account: { profileId, accentColor: "#5b8def", label: profileId },
     state: "live",
     reason: null,
@@ -108,6 +111,7 @@ export function StatusBarUsageScrollFixture(props: {
               <StatusBarUsageTrigger
                 cluster={props.cluster}
                 display={display}
+                compact={false}
                 onRevealProfile={() => undefined}
               />
             </StatusBarUsageScroller>
@@ -120,30 +124,9 @@ export function StatusBarUsageScrollFixture(props: {
           hostId={FIXTURE_HOST_ID}
           hostLabel="Fixture"
           hasExplicitPick={false}
+          interactive={false}
         />
       </div>
-    </div>
-  );
-}
-
-/**
- * The Settings preview's frame at its Narrow width, well below the strip so
- * the driver can point a wheel and a swipe at one and not the other.
- */
-export function StatusBarPreviewScrollFixture(props: {
-  readonly cluster: StatusBarRateLimitCluster;
-}): React.ReactElement {
-  const display = useStatusBarUsageDisplay();
-  return (
-    <div data-testid="preview-fixture" className="mt-24 px-4">
-      <StatusBarPreviewFrame
-        width="narrow"
-        dimmed={false}
-        scope={hostScopeFixture({ hostLabel: "Fixture" })}
-        hasExplicitPick={false}
-        cluster={props.cluster}
-        display={display}
-      />
     </div>
   );
 }
@@ -160,7 +143,6 @@ createRoot(container).render(
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <StatusBarUsageScrollFixture cluster={clusterOf(accountCount)} />
-      <StatusBarPreviewScrollFixture cluster={clusterOf(accountCount)} />
     </TooltipProvider>
   </QueryClientProvider>,
 );

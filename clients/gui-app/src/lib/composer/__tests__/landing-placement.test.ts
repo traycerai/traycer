@@ -62,8 +62,6 @@ function remoteClientAddressing(
     transportDialability: "not-dialable",
     publicKey: "public-key",
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "offline",
       viewerReachability: "unknown",
@@ -168,28 +166,6 @@ describe("resolveLandingPlacement", () => {
     expect(placement).toEqual({
       kind: "refused",
       message: "Studio Mac is offline. Wait for it to come up and send again.",
-    });
-  });
-
-  it("refuses a relay-addressed remote host restricted by the current plan", () => {
-    const placement = resolveLandingPlacement(
-      targetWith({
-        client: remoteClientAddressing({
-          planAllowsRemote: false,
-          remoteStatus: {
-            connectivity: "connectable",
-            viewerReachability: "ok",
-            clientCloud: "ok",
-            updateState: "current",
-            appVersion: null,
-            lastSeenAt: null,
-          },
-        }),
-      }),
-    );
-    expect(placement).toEqual({
-      kind: "refused",
-      message: "Studio Mac isn't available on your plan.",
     });
   });
 

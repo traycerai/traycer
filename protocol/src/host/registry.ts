@@ -1,3 +1,4 @@
+import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
 import {
   organizationReadV10,
   organizationReadV11,
@@ -7,6 +8,8 @@ import {
   organizationRefreshUpgradeV10ToV11,
   organizationCommandV10,
   organizationHistoryV10,
+  organizationHistoryV11,
+  organizationHistoryUpgradeV10ToV11,
   organizationSubscribeV10,
   organizationSubscribeV11,
 } from "./organization/contracts";
@@ -72,6 +75,15 @@ import {
   agentListDowngradeV9ToV6,
   agentListDowngradeV9ToV7,
   agentListDowngradeV9ToV8,
+  agentListDowngradeV10ToV1,
+  agentListDowngradeV10ToV2,
+  agentListDowngradeV10ToV3,
+  agentListDowngradeV10ToV4,
+  agentListDowngradeV10ToV5,
+  agentListDowngradeV10ToV6,
+  agentListDowngradeV10ToV7,
+  agentListDowngradeV10ToV8,
+  agentListDowngradeV10ToV9,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
@@ -81,6 +93,8 @@ import {
   agentListUpgradeV7ToV8,
   agentListUpgradeV8ToV9,
   agentListUpgradeV90ToV91,
+  agentListUpgradeV91ToV92,
+  agentListUpgradeV92ToV100,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -91,6 +105,8 @@ import {
   agentListV80,
   agentListV90,
   agentListV91,
+  agentListV92,
+  agentListV100,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -124,6 +140,14 @@ import {
   agentConfigureV40,
   agentConfigureV50,
   agentConfigureV60,
+  agentConfigureV70,
+  agentConfigureUpgradeV60ToV70,
+  agentConfigureDowngradeV70ToV60,
+  agentConfigureDowngradeV70ToV50,
+  agentConfigureDowngradeV70ToV40,
+  agentConfigureDowngradeV70ToV30,
+  agentConfigureDowngradeV70ToV20,
+  agentConfigureDowngradeV70ToV10,
   agentConfigureUpgradeV10ToV20,
   agentConfigureUpgradeV20ToV30,
   agentConfigureUpgradeV30ToV40,
@@ -150,6 +174,14 @@ import {
   agentGetProviderProfileRateLimitsV40,
   agentGetProviderProfileRateLimitsV50,
   agentGetProviderProfileRateLimitsV60,
+  agentGetProviderProfileRateLimitsV70,
+  agentGetProviderProfileRateLimitsUpgradeV60ToV70,
+  agentGetProviderProfileRateLimitsDowngradeV70ToV60,
+  agentGetProviderProfileRateLimitsDowngradeV70ToV50,
+  agentGetProviderProfileRateLimitsDowngradeV70ToV40,
+  agentGetProviderProfileRateLimitsDowngradeV70ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV70ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV70ToV10,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsUpgradeV30ToV40,
@@ -176,6 +208,14 @@ import {
   agentListProviderProfilesV40,
   agentListProviderProfilesV50,
   agentListProviderProfilesV60,
+  agentListProviderProfilesV70,
+  agentListProviderProfilesUpgradeV60ToV70,
+  agentListProviderProfilesDowngradeV70ToV60,
+  agentListProviderProfilesDowngradeV70ToV50,
+  agentListProviderProfilesDowngradeV70ToV40,
+  agentListProviderProfilesDowngradeV70ToV30,
+  agentListProviderProfilesDowngradeV70ToV20,
+  agentListProviderProfilesDowngradeV70ToV10,
   agentListProviderProfilesUpgradeV10ToV20,
   agentListProviderProfilesUpgradeV20ToV30,
   agentListProviderProfilesUpgradeV30ToV40,
@@ -247,6 +287,15 @@ import {
   agentGuiListHarnessesDowngradeV9ToV6,
   agentGuiListHarnessesDowngradeV9ToV7,
   agentGuiListHarnessesDowngradeV9ToV8,
+  agentGuiListHarnessesDowngradeV10ToV1,
+  agentGuiListHarnessesDowngradeV10ToV2,
+  agentGuiListHarnessesDowngradeV10ToV3,
+  agentGuiListHarnessesDowngradeV10ToV4,
+  agentGuiListHarnessesDowngradeV10ToV5,
+  agentGuiListHarnessesDowngradeV10ToV6,
+  agentGuiListHarnessesDowngradeV10ToV7,
+  agentGuiListHarnessesDowngradeV10ToV8,
+  agentGuiListHarnessesDowngradeV10ToV9,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
@@ -259,6 +308,7 @@ import {
   agentGuiListHarnessesUpgradeV80ToV90,
   agentGuiListHarnessesUpgradeV90ToV91,
   agentGuiListHarnessesUpgradeV91ToV92,
+  agentGuiListHarnessesUpgradeV92ToV100,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -272,6 +322,7 @@ import {
   agentGuiListHarnessesV90,
   agentGuiListHarnessesV91,
   agentGuiListHarnessesV92,
+  agentGuiListHarnessesV100,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -292,6 +343,10 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
+  chatSubscribeV120,
+  chatSubscribeV121,
+  chatSubscribeV122,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -323,32 +378,54 @@ import {
   hostStatusUpgradeV12ToV13,
   hostStatusUpgradeV13ToV14,
   hostStatusUpgradeV14ToV15,
+  hostStatusUpgradeV15ToV16,
   hostStatusV15,
+  hostStatusV16,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
   hostRestartUpgradeV11ToV12,
+  hostRestartUpgradeV12ToV13,
   hostRestartV10,
   hostRestartV11,
   hostRestartV12,
+  hostRestartV13,
 } from "@traycer/protocol/host/restart/contracts";
 import {
   providersFallbackPolicyGetUpgradeV10ToV11,
   providersFallbackPolicyGetV10,
   providersFallbackPolicyGetV11,
+  providersFallbackPolicyGetV20,
+  providersFallbackPolicyGetUpgradeV11ToV20,
+  providersFallbackPolicyGetDowngradeV20ToV11,
   providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
   providersFallbackPolicyPreviewTierGroupsV10,
   providersFallbackPolicyPreviewTierGroupsV11,
+  providersFallbackPolicyPreviewTierGroupsV20,
+  providersFallbackPolicyPreviewTierGroupsUpgradeV11ToV20,
+  providersFallbackPolicyPreviewTierGroupsDowngradeV20ToV11,
   providersFallbackPolicyResetV10,
+  providersFallbackPolicyResetV20,
+  providersFallbackPolicyResetUpgradeV10ToV20,
+  providersFallbackPolicyResetDowngradeV20ToV10,
   providersFallbackPolicyRestoreTierGroupsV10,
+  providersFallbackPolicyRestoreTierGroupsV20,
+  providersFallbackPolicyRestoreTierGroupsUpgradeV10ToV20,
+  providersFallbackPolicyRestoreTierGroupsDowngradeV20ToV10,
   providersFallbackPolicySetUpgradeV10ToV11,
   providersFallbackPolicySetV10,
   providersFallbackPolicySetV11,
+  providersFallbackPolicySetV20,
+  providersFallbackPolicySetUpgradeV11ToV20,
+  providersFallbackPolicySetDowngradeV20ToV11,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   chatFallbackCancelV10,
   chatFallbackChooseTargetV10,
   chatFallbackListTargetsV10,
+  chatFallbackListTargetsV20,
+  chatFallbackListTargetsUpgradeV10ToV20,
+  chatFallbackListTargetsDowngradeV20ToV10,
   chatFallbackProceedV10,
   chatFallbackReturnToPreferredV10,
   chatFallbackRunManualRungUpgradeV10ToV11,
@@ -411,6 +488,10 @@ import {
   configShellResetV10,
   configShellRevertArgsV10,
   configShellSetV10,
+  configWorktreesGetV10,
+  configWorktreesSetV10,
+  configCatalogGetV10,
+  configCatalogSetV10,
 } from "@traycer/protocol/host/config/contracts";
 import {
   diagnosticsLogsListV10,
@@ -465,6 +546,9 @@ import { chatSearchV10 } from "@traycer/protocol/host/chat-search/contracts";
 import {
   draftsDeleteV10,
   draftsListV10,
+  draftsListV20,
+  draftsListUpgradeV10ToV20,
+  draftsListDowngradeV20ToV10,
   draftsPutBlobUpgradeV10ToV11,
   draftsPutBlobV10,
   draftsPutBlobV11,
@@ -473,7 +557,11 @@ import {
   draftsReadBlobV11,
   draftsRetractV10,
   draftsSubscribeV10,
+  draftsSubscribeV11,
   draftsUpsertV10,
+  draftsUpsertV20,
+  draftsUpsertUpgradeV10ToV20,
+  draftsUpsertDowngradeV20ToV10,
 } from "@traycer/protocol/host/drafts/contracts";
 import {
   chatLocateRowV10,
@@ -514,6 +602,10 @@ import {
   providersConsumeRateLimitResetCreditV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
+  providersRefreshProfileStatusV30,
+  providersRefreshProfileStatusUpgradeV20ToV30,
+  providersRefreshProfileStatusDowngradeV30ToV20,
+  providersRefreshProfileStatusDowngradeV30ToV10,
   providersRefreshProfileStatusUpgradeV10ToV20,
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
@@ -528,6 +620,7 @@ import {
   epicCreateChatV10,
   epicCreateChatV11,
   epicCreateChatV12,
+  epicContinueSubagentV10,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -549,9 +642,11 @@ import {
   epicGetTaskContextsV11,
   epicGetTaskContextsV12,
   epicGetTaskContextsV13,
+  epicGetTaskContextsV14,
   epicGetTaskContextsUpgradeV10ToV11,
   epicGetTaskContextsUpgradeV11ToV12,
   epicGetTaskContextsUpgradeV12ToV13,
+  epicGetTaskContextsUpgradeV13ToV14,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
@@ -571,7 +666,15 @@ import {
   epicGetChatRunSettingsV10,
   epicGetChatRunSettingsV20,
   epicGetChatRunSettingsV30,
+  epicGetChatRunSettingsV40,
+  epicGetChatRunSettingsUpgradeV30ToV40,
+  epicGetChatRunSettingsDowngradeV40ToV30,
+  epicGetChatRunSettingsDowngradeV40ToV20,
+  epicGetChatRunSettingsDowngradeV40ToV10,
   epicGetChatRunSettingsBatchV10,
+  epicGetChatRunSettingsBatchV20,
+  epicGetChatRunSettingsBatchUpgradeV10ToV20,
+  epicGetChatRunSettingsBatchDowngradeV20ToV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -590,12 +693,14 @@ import {
   epicListTasksV14,
   epicListTasksV15,
   epicListTasksV16,
+  epicListTasksV17,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
   epicListTasksUpgradeV13ToV14,
   epicListTasksUpgradeV14ToV15,
   epicListTasksUpgradeV15ToV16,
+  epicListTasksUpgradeV16ToV17,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -730,6 +835,7 @@ import {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   browserSavedLoginSitesV10,
@@ -842,6 +948,7 @@ import {
   sessionImportScanV10,
   sessionImportScanV11,
   sessionImportScanV12,
+  sessionImportScanV13,
 } from "@traycer/protocol/host/session-import/scan";
 import {
   autoJudgeGetUpgradeV10ToV11,
@@ -864,9 +971,14 @@ import {
   providersSetAutoJudgeV10,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import {
+  chatAutoArchiveGetV10,
+  chatAutoArchiveSetV10,
+} from "@traycer/protocol/host/chat-auto-archive/contracts";
+import {
   sessionImportRunV10,
   sessionImportRunV11,
   sessionImportRunV12,
+  sessionImportRunV13,
 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import {
@@ -887,6 +999,7 @@ import {
 import {
   providersChangedV10,
   providersChangedV11,
+  providersChangedV12,
 } from "@traycer/protocol/host/providers-changed-stream";
 import {
   epicCommunicationGraphSubscribeV10,
@@ -1028,10 +1141,12 @@ import {
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
+  providersAwaitLoginResponseSchemaV21,
   providersCancelLoginRequestSchemaV10,
   providersAwaitMcpAuthRequestSchema,
   providersAwaitMcpAuthResponseSchema,
   providersCancelLoginRequestSchemaV11,
+  providersCancelLoginRequestSchemaV12,
   providersCancelLoginResponseSchema,
   providersCancelMcpAuthRequestSchema,
   providersCancelMcpAuthResponseSchema,
@@ -1054,9 +1169,11 @@ import {
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchemaV10,
   providersStartLoginRequestSchemaV11,
+  providersStartLoginRequestSchemaV14,
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
   providersStartLoginResponseSchemaV12,
+  providersStartLoginResponseSchemaV13,
   providersSubmitLoginCodeRequestSchema,
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
@@ -1073,6 +1190,7 @@ import {
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
+  providersListResponseSchemaV92,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -1099,6 +1217,7 @@ import {
   downgradeProviderCliStateListToV60,
   downgradeProviderCliStateListToV70,
   downgradeProviderCliStateListToV80,
+  downgradeProviderCliStateListToV92,
   parseProvidersListResponseForFrozenLine,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
@@ -2515,7 +2634,34 @@ export const providersListV92 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 9, minor: 2 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen when 10.0 opened: `1.5.0` shipped major 9, so this line serves the
+  // twenty-one provider ids those peers negotiate. It bound the live schema
+  // while it was the head, which is how Antigravity reached 8.0. See
+  // `providerCliStateSchemaV92`.
+  responseSchema: providersListResponseSchemaV92,
+});
+
+// ── Major 10: the head line, where Command Code rides ──────────────────────
+//
+// Major 9 froze above because `1.5.0` shipped it. This is the sole live
+// response line; the v10 bridges below are the v9 bridges one major up.
+export const providersListV100 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV92ToV100 = defineUpgradePath<
+  typeof providersListV92,
+  typeof providersListV100
+>({
+  from: { major: 9, minor: 2 },
+  to: { major: 10, minor: 0 },
+  // Request shape is identical, and a 9.2 response is a valid 10.0 response
+  // (only the provider id enum grows), so both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const providersListUpgradeV91ToV92 = defineUpgradePath<
@@ -3067,6 +3213,198 @@ export const providersListDowngradeV9ToV1 = defineDowngradePath<
   typeof providersListV10
 >({
   from: { major: 9, minor: 2 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: enabledProviderProfilesOnly(response.providers).flatMap(
+        (provider) => {
+          const downgraded = downgradeProviderCliStateToV10(provider);
+          return downgraded === null ? [] : [downgraded];
+        },
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV10ToV9 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV92
+>({
+  from: { major: 10, minor: 0 },
+  // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
+  // contract parse then strips the keys its minor predates.
+  to: { major: 9, minor: 2 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchema.parse(request),
+  }),
+  // Drops the rows on a provider major 9 cannot spell - see the helper.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV92,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV92(response.providers),
+      },
+    ),
+  }),
+});
+
+export const providersListDowngradeV10ToV8 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV80
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 8, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchema.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV80,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV80(response.providers),
+      },
+    ),
+  }),
+});
+
+export const providersListDowngradeV10ToV7 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV70
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 7, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchema.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV70,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV70(response.providers),
+      },
+    ),
+  }),
+});
+
+export const providersListDowngradeV10ToV6 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV60
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV60.parse({
+      providers: downgradeProviderCliStateListToV60(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV10ToV5 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV50
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV10ToV4 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV40
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV10ToV3 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV30
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV10ToV2 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV20
+>({
+  from: { major: 10, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV10ToV1 = defineDowngradePath<
+  typeof providersListV100,
+  typeof providersListV10
+>({
+  from: { major: 10, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3655,6 +3993,58 @@ export const providersStartLoginUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
+// v1.3 adds `pending` and `pack` to the response. `pending`: `started: false`
+// because the host is still getting there (the managed pack is downloading,
+// or the login child is running and has not printed its sign-in URL yet), as
+// opposed to because the attempt is over. `pack`: the managed pack's state
+// when the pack is why nothing was spawned, a failed install included. New
+// KEYS rather than more members of `failure`, for two reasons. `failure` means
+// the attempt ended, and `pending` means it has not. And `@1.2` is a released
+// line: growing its enum would change a frozen schema, while a key a v1.2
+// caller has never heard of is dropped by that caller's own parse - so neither
+// needs `responseGrowthProjectionGated`.
+export const providersStartLoginV13 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: providersStartLoginRequestSchemaV11,
+  responseSchema: providersStartLoginResponseSchemaV13,
+});
+
+export const providersStartLoginUpgradeV12ToV13 = defineUpgradePath<
+  typeof providersStartLoginV12,
+  typeof providersStartLoginV13
+>({
+  from: { major: 1, minor: 2 },
+  to: { major: 1, minor: 3 },
+  upgradeRequest: (request) => request,
+  // A v1.2 host never keeps a child alive past its own wait and never reports
+  // a pack, so nothing it answers is pending.
+  upgradeResponse: (response) => ({
+    ...response,
+    pending: null,
+    pack: null,
+  }),
+});
+
+// Ownership is negotiated on both start@1.4 and cancel@1.2. Older callers
+// acquire an anonymous claim, preserving their scope-keyed cancellation.
+export const providersStartLoginV14 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: providersStartLoginRequestSchemaV14,
+  responseSchema: providersStartLoginResponseSchemaV13,
+});
+
+export const providersStartLoginUpgradeV13ToV14 = defineUpgradePath<
+  typeof providersStartLoginV13,
+  typeof providersStartLoginV14
+>({
+  from: { major: 1, minor: 3 },
+  to: { major: 1, minor: 4 },
+  upgradeRequest: (request) => ({ ...request, holderId: null }),
+  upgradeResponse: (response) => response,
+});
+
 export const providersAwaitLoginV10 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3697,7 +4087,7 @@ export const providersAwaitLoginV21 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: providersAwaitLoginRequestSchema,
-  responseSchema: providersAwaitLoginResponseSchema,
+  responseSchema: providersAwaitLoginResponseSchemaV21,
 });
 
 export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
@@ -3724,6 +4114,29 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
     existingProfileId: null,
     codeRejected: false,
   }),
+});
+
+// v2.2 adds `refusal` to the response: the provider turned the sign-in away
+// after the browser leg, in its own words, with the link it sends the user to.
+// A key a v2.1 caller has never heard of is dropped by that caller's own
+// parse, and the host answers a refusal with a null `state`, which a v2.1
+// caller already reads as "the sign-in did not complete".
+export const providersAwaitLoginV22 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: providersAwaitLoginRequestSchema,
+  responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
+  typeof providersAwaitLoginV21,
+  typeof providersAwaitLoginV22
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 2, minor: 2 },
+  upgradeRequest: (request) => request,
+  // A v2.1 host never read the provider's refusal, so it has none to report.
+  upgradeResponse: (response) => ({ ...response, refusal: null }),
 });
 
 export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
@@ -3753,11 +4166,11 @@ export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-export const providersAwaitLoginDowngradeV21ToV10 = defineDowngradePath<
-  typeof providersAwaitLoginV21,
+export const providersAwaitLoginDowngradeV22ToV10 = defineDowngradePath<
+  typeof providersAwaitLoginV22,
   typeof providersAwaitLoginV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   // Drop `profileId` before the parse: `providersAwaitLoginRequestSchemaV10`
   // is a strict object that never learned it, so passing the full request
@@ -3819,6 +4232,23 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({
     ...response,
   }),
+});
+
+export const providersCancelLoginV12 = defineRpcContract({
+  method: "providers.cancelLogin",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: providersCancelLoginRequestSchemaV12,
+  responseSchema: providersCancelLoginResponseSchema,
+});
+
+export const providersCancelLoginUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersCancelLoginV11,
+  typeof providersCancelLoginV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => ({ ...request, holderId: null }),
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -4997,11 +5427,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.history": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: organizationHistoryV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: organizationHistoryV11,
+          upgradeFromPreviousVersion: organizationHistoryUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -5160,6 +5594,35 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: autoPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The account-wide chat auto-archive setting, proxied like `autoPolicy.*`.
+  // Optional capabilities, never floor methods - see
+  // `chat-auto-archive/contracts.ts`.
+  "chatAutoArchive.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatAutoArchiveGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chatAutoArchive.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatAutoArchiveSetV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -5365,6 +5828,58 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "config.worktrees.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configWorktreesGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.worktrees.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configWorktreesSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.catalog.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configCatalogGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.catalog.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configCatalogSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "diagnostics.logs.list": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5393,7 +5908,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -5419,6 +5934,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: hostStatusV15,
           upgradeFromPreviousVersion: hostStatusUpgradeV14ToV15,
         },
+        6: {
+          contract: hostStatusV16,
+          upgradeFromPreviousVersion: hostStatusUpgradeV15ToV16,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -5429,7 +5948,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     // it with a racy activity read.
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostRestartV10,
@@ -5442,6 +5961,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostRestartV12,
           upgradeFromPreviousVersion: hostRestartUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostRestartV13,
+          upgradeFromPreviousVersion: hostRestartUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -5897,9 +6420,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "providers.refreshProfileStatus": {
     degrade: { kind: "unsupported" },
-    // v1.0 is frozen at the twenty provider ids `1.3.0` shipped; v2.0 carries
-    // the live union, and its v2->v1 bridge fails closed for an id v1.0 cannot
-    // represent (one provider per response, so there is nothing to filter).
+    // v1.0 is frozen at the twenty provider ids `1.3.0` shipped and v2.0 at
+    // the twenty-one `1.5.0` shipped; v3.0 carries the live union, and its
+    // bridges fail closed for an id the older line cannot represent (one
+    // provider per response, so there is nothing to filter).
     1: {
       latestMinor: 0,
       versions: {
@@ -5921,6 +6445,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {
         1: providersRefreshProfileStatusDowngradeV20ToV10,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshProfileStatusV30,
+          upgradeFromPreviousVersion:
+            providersRefreshProfileStatusUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersRefreshProfileStatusDowngradeV30ToV10,
+        2: providersRefreshProfileStatusDowngradeV30ToV20,
       },
     },
   },
@@ -6328,168 +6866,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
-  },
-  "agent.gui.listHarnesses": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
     2: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV20,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV1ToV2,
-        },
-        1: {
-          contract: agentGuiListHarnessesV21,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV20ToV21,
-        },
-      },
-      downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
-    },
-    3: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: agentGuiListHarnessesV30,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV2ToV3,
+          contract: chatFallbackListTargetsV20,
+          upgradeFromPreviousVersion: chatFallbackListTargetsUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV3ToV1,
-        2: agentGuiListHarnessesDowngradeV3ToV2,
-      },
-    },
-    4: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV40,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV3ToV4,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV4ToV1,
-        2: agentGuiListHarnessesDowngradeV4ToV2,
-        3: agentGuiListHarnessesDowngradeV4ToV3,
-      },
-    },
-    5: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV50,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV4ToV5,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV5ToV1,
-        2: agentGuiListHarnessesDowngradeV5ToV2,
-        3: agentGuiListHarnessesDowngradeV5ToV3,
-        4: agentGuiListHarnessesDowngradeV5ToV4,
-      },
-    },
-    6: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV60,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV5ToV6,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV6ToV1,
-        2: agentGuiListHarnessesDowngradeV6ToV2,
-        3: agentGuiListHarnessesDowngradeV6ToV3,
-        4: agentGuiListHarnessesDowngradeV6ToV4,
-        5: agentGuiListHarnessesDowngradeV6ToV5,
-      },
-    },
-    7: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV70,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV6ToV7,
-        },
-        1: {
-          contract: agentGuiListHarnessesV71,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV70ToV71,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV7ToV1,
-        2: agentGuiListHarnessesDowngradeV7ToV2,
-        3: agentGuiListHarnessesDowngradeV7ToV3,
-        4: agentGuiListHarnessesDowngradeV7ToV4,
-        5: agentGuiListHarnessesDowngradeV7ToV5,
-        6: agentGuiListHarnessesDowngradeV7ToV6,
-      },
-    },
-    8: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV80,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV71ToV80,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV8ToV1,
-        2: agentGuiListHarnessesDowngradeV8ToV2,
-        3: agentGuiListHarnessesDowngradeV8ToV3,
-        4: agentGuiListHarnessesDowngradeV8ToV4,
-        5: agentGuiListHarnessesDowngradeV8ToV5,
-        6: agentGuiListHarnessesDowngradeV8ToV6,
-        7: agentGuiListHarnessesDowngradeV8ToV7,
-      },
-    },
-    9: {
-      latestMinor: 2,
-      versions: {
-        0: {
-          contract: agentGuiListHarnessesV90,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV80ToV90,
-        },
-        1: {
-          contract: agentGuiListHarnessesV91,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV90ToV91,
-          // `supportedPermissionModes` gains `auto` over 9.0, which is response
-          // VALUE growth - refused by default, because a response value is
-          // normally decided by shared state and would poison every 9.0 peer's
-          // projection with no opt-out. Here it is genuinely emission-gated:
-          // the host resolves the catalog against the negotiated minor and
-          // serves a 9.0 peer the pre-`auto` array. `nativeAutoJudge` and
-          // `unavailableReason` need no annotation - each new KEY is stripped
-          // by the within-major re-parse. The reason widened 9.1 in place
-          // before it shipped; the 9.0 -> 9.1 bridge fills null for old hosts.
-          responseGrowthProjectionGated: true,
-        },
-        // `judgeDefaultModel` on the row. A new KEY, stripped for a 9.0/9.1
-        // peer by the within-major re-parse, so no annotation (the
-        // `providers.list@9.2` precedent). 9.1 is released and is frozen at
-        // `guiHarnessOptionSchemaV91`.
-        2: {
-          contract: agentGuiListHarnessesV92,
-          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV91ToV92,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGuiListHarnessesDowngradeV9ToV1,
-        2: agentGuiListHarnessesDowngradeV9ToV2,
-        3: agentGuiListHarnessesDowngradeV9ToV3,
-        4: agentGuiListHarnessesDowngradeV9ToV4,
-        5: agentGuiListHarnessesDowngradeV9ToV5,
-        6: agentGuiListHarnessesDowngradeV9ToV6,
-        7: agentGuiListHarnessesDowngradeV9ToV7,
-        8: agentGuiListHarnessesDowngradeV9ToV8,
+        1: chatFallbackListTargetsDowngradeV20ToV10,
       },
     },
   },
@@ -6762,151 +7148,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
   },
-  "agent.list": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV20,
-          upgradeFromPreviousVersion: agentListUpgradeV1ToV2,
-        },
-      },
-      downgradePathsFromLatest: { 1: agentListDowngradeV2ToV1 },
-    },
-    3: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV30,
-          upgradeFromPreviousVersion: agentListUpgradeV2ToV3,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV3ToV1,
-        2: agentListDowngradeV3ToV2,
-      },
-    },
-    4: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV40,
-          upgradeFromPreviousVersion: agentListUpgradeV3ToV4,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV4ToV1,
-        2: agentListDowngradeV4ToV2,
-        3: agentListDowngradeV4ToV3,
-      },
-    },
-    5: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV50,
-          upgradeFromPreviousVersion: agentListUpgradeV4ToV5,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV5ToV1,
-        2: agentListDowngradeV5ToV2,
-        3: agentListDowngradeV5ToV3,
-        4: agentListDowngradeV5ToV4,
-      },
-    },
-    6: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV60,
-          upgradeFromPreviousVersion: agentListUpgradeV5ToV6,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV6ToV1,
-        2: agentListDowngradeV6ToV2,
-        3: agentListDowngradeV6ToV3,
-        4: agentListDowngradeV6ToV4,
-        5: agentListDowngradeV6ToV5,
-      },
-    },
-    7: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV70,
-          upgradeFromPreviousVersion: agentListUpgradeV6ToV7,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV7ToV1,
-        2: agentListDowngradeV7ToV2,
-        3: agentListDowngradeV7ToV3,
-        4: agentListDowngradeV7ToV4,
-        5: agentListDowngradeV7ToV5,
-        6: agentListDowngradeV7ToV6,
-      },
-    },
-    8: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentListV80,
-          upgradeFromPreviousVersion: agentListUpgradeV7ToV8,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV8ToV1,
-        2: agentListDowngradeV8ToV2,
-        3: agentListDowngradeV8ToV3,
-        4: agentListDowngradeV8ToV4,
-        5: agentListDowngradeV8ToV5,
-        6: agentListDowngradeV8ToV6,
-        7: agentListDowngradeV8ToV7,
-      },
-    },
-    // @9.1 adds the terminal-agent session facet (`sessionState` /
-    // `lastExit`) to the row, so an orchestrator can tell a peer that is
-    // asleep and resumable from one that is over. Two plain added keys, which
-    // a @9.0 peer's schema strips - no growth to gate - and the eight
-    // downgrade bridges below now start at 9.1 because they must originate at
-    // the line's LATEST minor. Each still parses through its frozen summary,
-    // which drops the keys on the way out.
-    9: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: agentListV90,
-          upgradeFromPreviousVersion: agentListUpgradeV8ToV9,
-        },
-        1: {
-          contract: agentListV91,
-          upgradeFromPreviousVersion: agentListUpgradeV90ToV91,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentListDowngradeV9ToV1,
-        2: agentListDowngradeV9ToV2,
-        3: agentListDowngradeV9ToV3,
-        4: agentListDowngradeV9ToV4,
-        5: agentListDowngradeV9ToV5,
-        6: agentListDowngradeV9ToV6,
-        7: agentListDowngradeV9ToV7,
-        8: agentListDowngradeV9ToV8,
-      },
-    },
-  },
   "agent.resolveMessagePeer": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7091,7 +7332,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -7124,6 +7365,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // `localFirstPhase: "initial"`; lower-minor contracts strip that
           // directive and therefore retain their released response values.
           responseGrowthProjectionGated: true,
+        },
+        7: {
+          contract: epicListTasksV17,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV16ToV17,
         },
       },
       downgradePathsFromLatest: {},
@@ -7171,9 +7416,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     1: {
       // @1.1's new row-union values are projection-gated in host dispatch:
       // a v1.0 caller receives its released nullable rows, never a union arm.
-      // @1.3's `localHomedTaskIds` sibling needs no gate of its own - an
-      // older peer's frozen schema strips the optional key at parse time.
-      latestMinor: 3,
+      // @1.3's local-home list and @1.4's activity map are siblings; older
+      // peers' frozen response schemas strip these optional keys.
+      latestMinor: 4,
       versions: {
         0: {
           contract: epicGetTaskContextsV10,
@@ -7191,6 +7436,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: {
           contract: epicGetTaskContextsV13,
           upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV12ToV13,
+        },
+        4: {
+          contract: epicGetTaskContextsV14,
+          upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -7610,6 +7859,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  "epic.continueSubagent": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicContinueSubagentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    // Optional: a host without it cannot continue a subagent at all, and
+    // there is no older verb that could stand in. The GUI reads the host's
+    // manifest and does not offer the control there.
+    degrade: { kind: "unsupported" },
   },
   "epic.createChat": {
     1: {
@@ -8537,6 +8802,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: epicGetChatRunSettingsDowngradeV30ToV20,
       },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsV40,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: epicGetChatRunSettingsDowngradeV40ToV10,
+        2: epicGetChatRunSettingsDowngradeV40ToV20,
+        3: epicGetChatRunSettingsDowngradeV40ToV30,
+      },
+    },
     degrade: { kind: "unsupported" },
   },
   // N-chat counterpart of the unary above. Same owner-scoped nulls, same
@@ -8553,6 +8832,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsBatchV20,
+          upgradeFromPreviousVersion:
+            epicGetChatRunSettingsBatchUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: epicGetChatRunSettingsBatchDowngradeV20ToV10,
+      },
     },
     degrade: { kind: "unsupported" },
   },
@@ -9840,6 +10132,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: agentListProviderProfilesDowngradeV60ToV50,
       },
     },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV70,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV60ToV70,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV70ToV10,
+        2: agentListProviderProfilesDowngradeV70ToV20,
+        3: agentListProviderProfilesDowngradeV70ToV30,
+        4: agentListProviderProfilesDowngradeV70ToV40,
+        5: agentListProviderProfilesDowngradeV70ToV50,
+        6: agentListProviderProfilesDowngradeV70ToV60,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -9928,6 +10237,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: agentGetProviderProfileRateLimitsDowngradeV60ToV50,
       },
     },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV70,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV60ToV70,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV70ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV70ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV70ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV70ToV40,
+        5: agentGetProviderProfileRateLimitsDowngradeV70ToV50,
+        6: agentGetProviderProfileRateLimitsDowngradeV70ToV60,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -10007,6 +10334,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: agentConfigureDowngradeV60ToV30,
         4: agentConfigureDowngradeV60ToV40,
         5: agentConfigureDowngradeV60ToV50,
+      },
+    },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV70,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV60ToV70,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV70ToV10,
+        2: agentConfigureDowngradeV70ToV20,
+        3: agentConfigureDowngradeV70ToV30,
+        4: agentConfigureDowngradeV70ToV40,
+        5: agentConfigureDowngradeV70ToV50,
+        6: agentConfigureDowngradeV70ToV60,
       },
     },
   },
@@ -10247,161 +10591,18 @@ const HOST_RPC_NOTIFICATION_METHODS = {
  * The `providers.*` family, split out of the base definition purely to keep
  * declaration emit under `tsc`'s serialization ceiling (TS7056) - the same
  * reason `HOST_RPC_EDITING_REGISTRY_DEFINITION` exists. `providers.list`
- * alone carries seven majors and their bridges, and the inferred type of one
- * object literal holding every method crossed the limit as this family grew.
+ * alone carried seven majors and their bridges when this literal was cut, and
+ * the inferred type of one object literal holding every method crossed the
+ * limit as this family grew. It has since grown past this literal too:
+ * `providers.list` lives in `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` and
+ * the `providers.fallbackPolicy.*` methods in
+ * `HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION`.
  *
- * Purely a compile-time seam: the five definitions are intersected into one
+ * Purely a compile-time seam: the definitions are intersected into one
  * `HostRpcRegistryDefinition` below, so nothing about registration, ordering
  * or negotiation changes.
  */
 const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
-  "providers.list": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV20,
-          upgradeFromPreviousVersion: providersListUpgradeV1ToV2,
-        },
-      },
-      downgradePathsFromLatest: { 1: providersListDowngradeV2ToV1 },
-    },
-    3: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV30,
-          upgradeFromPreviousVersion: providersListUpgradeV2ToV3,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV3ToV1,
-        2: providersListDowngradeV3ToV2,
-      },
-    },
-    4: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV40,
-          upgradeFromPreviousVersion: providersListUpgradeV3ToV4,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV4ToV1,
-        2: providersListDowngradeV4ToV2,
-        3: providersListDowngradeV4ToV3,
-      },
-    },
-    5: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV50,
-          upgradeFromPreviousVersion: providersListUpgradeV4ToV5,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV5ToV1,
-        2: providersListDowngradeV5ToV2,
-        3: providersListDowngradeV5ToV3,
-        4: providersListDowngradeV5ToV4,
-      },
-    },
-    6: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV60,
-          upgradeFromPreviousVersion: providersListUpgradeV5ToV6,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV6ToV1,
-        2: providersListDowngradeV6ToV2,
-        3: providersListDowngradeV6ToV3,
-        4: providersListDowngradeV6ToV4,
-        5: providersListDowngradeV6ToV5,
-      },
-    },
-    7: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV70,
-          upgradeFromPreviousVersion: providersListUpgradeV6ToV7,
-        },
-      },
-      // Every older major needs its own entry: `downgradePathsFromLatest` is
-      // keyed by TARGET major and the framework applies exactly one hop, so a
-      // missing key is not a slower path, it is an unbridgeable peer.
-      // `two-sided-release-invariant.test.ts` is what catches an omission.
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV7ToV1,
-        2: providersListDowngradeV7ToV2,
-        3: providersListDowngradeV7ToV3,
-        4: providersListDowngradeV7ToV4,
-        5: providersListDowngradeV7ToV5,
-        6: providersListDowngradeV7ToV6,
-      },
-    },
-    8: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersListV80,
-          upgradeFromPreviousVersion: providersListUpgradeV70ToV80,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV8ToV1,
-        2: providersListDowngradeV8ToV2,
-        3: providersListDowngradeV8ToV3,
-        4: providersListDowngradeV8ToV4,
-        5: providersListDowngradeV8ToV5,
-        6: providersListDowngradeV8ToV6,
-        7: providersListDowngradeV8ToV7,
-      },
-    },
-    9: {
-      latestMinor: 2,
-      versions: {
-        0: {
-          contract: providersListV90,
-          upgradeFromPreviousVersion: providersListUpgradeV80ToV90,
-        },
-        1: {
-          contract: providersListV91,
-          upgradeFromPreviousVersion: providersListUpgradeV90ToV91,
-        },
-        2: {
-          contract: providersListV92,
-          upgradeFromPreviousVersion: providersListUpgradeV91ToV92,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersListDowngradeV9ToV1,
-        2: providersListDowngradeV9ToV2,
-        3: providersListDowngradeV9ToV3,
-        4: providersListDowngradeV9ToV4,
-        5: providersListDowngradeV9ToV5,
-        6: providersListDowngradeV9ToV6,
-        7: providersListDowngradeV9ToV7,
-        8: providersListDowngradeV9ToV8,
-      },
-    },
-  },
-
   "providers.setSelection": {
     1: {
       latestMinor: 0,
@@ -10500,7 +10701,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 2,
+      latestMinor: 4,
       versions: {
         0: {
           contract: providersStartLoginV10,
@@ -10513,6 +10714,14 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         2: {
           contract: providersStartLoginV12,
           upgradeFromPreviousVersion: providersStartLoginUpgradeV11ToV12,
+        },
+        3: {
+          contract: providersStartLoginV13,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV12ToV13,
+        },
+        4: {
+          contract: providersStartLoginV14,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -10530,7 +10739,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersAwaitLoginV20,
@@ -10540,15 +10749,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersAwaitLoginV21,
           upgradeFromPreviousVersion: providersAwaitLoginUpgradeV20ToV21,
         },
+        2: {
+          contract: providersAwaitLoginV22,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersAwaitLoginDowngradeV21ToV10,
+        1: providersAwaitLoginDowngradeV22ToV10,
       },
     },
   },
   "providers.cancelLogin": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersCancelLoginV10,
@@ -10557,6 +10770,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         1: {
           contract: providersCancelLoginV11,
           upgradeFromPreviousVersion: providersCancelLoginUpgradeV10ToV11,
+        },
+        2: {
+          contract: providersCancelLoginV12,
+          upgradeFromPreviousVersion: providersCancelLoginUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -10570,84 +10787,6 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         0: {
           contract: providersSetProfileEnabledV10,
           upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.fallbackPolicy.get": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersFallbackPolicyGetV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersFallbackPolicyGetV11,
-          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.fallbackPolicy.set": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersFallbackPolicySetV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersFallbackPolicySetV11,
-          upgradeFromPreviousVersion: providersFallbackPolicySetUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.fallbackPolicy.restoreTierGroups": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersFallbackPolicyRestoreTierGroupsV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.fallbackPolicy.reset": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersFallbackPolicyResetV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.fallbackPolicy.previewTierGroups": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersFallbackPolicyPreviewTierGroupsV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersFallbackPolicyPreviewTierGroupsV11,
-          upgradeFromPreviousVersion:
-            providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11124,6 +11263,18 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsUpsertV20,
+          upgradeFromPreviousVersion: draftsUpsertUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: draftsUpsertDowngradeV20ToV10,
+      },
+    },
   },
   "drafts.delete": {
     degrade: { kind: "unsupported" },
@@ -11149,6 +11300,18 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsListV20,
+          upgradeFromPreviousVersion: draftsListUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: draftsListDowngradeV20ToV10,
+      },
     },
   },
   "drafts.retract": {
@@ -11204,6 +11367,700 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
+/**
+ * A third cut for the TS7056 declaration-emit reason given on
+ * `HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION`: the base literal and the
+ * `providers.*` one each crossed the ceiling when the first harness id after
+ * 1.5.0 opened a new major on every released line that carries a harness or
+ * provider id. Where the cut falls carries no meaning; these seven methods are
+ * among the ones whose slots grew the most.
+ */
+const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
+  "agent.gui.listHarnesses": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV20,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV1ToV2,
+        },
+        1: {
+          contract: agentGuiListHarnessesV21,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV20ToV21,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV30,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV3ToV1,
+        2: agentGuiListHarnessesDowngradeV3ToV2,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV40,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV4ToV1,
+        2: agentGuiListHarnessesDowngradeV4ToV2,
+        3: agentGuiListHarnessesDowngradeV4ToV3,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV50,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV4ToV5,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV5ToV1,
+        2: agentGuiListHarnessesDowngradeV5ToV2,
+        3: agentGuiListHarnessesDowngradeV5ToV3,
+        4: agentGuiListHarnessesDowngradeV5ToV4,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV60,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV6ToV1,
+        2: agentGuiListHarnessesDowngradeV6ToV2,
+        3: agentGuiListHarnessesDowngradeV6ToV3,
+        4: agentGuiListHarnessesDowngradeV6ToV4,
+        5: agentGuiListHarnessesDowngradeV6ToV5,
+      },
+    },
+    7: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV70,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV6ToV7,
+        },
+        1: {
+          contract: agentGuiListHarnessesV71,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV70ToV71,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV7ToV1,
+        2: agentGuiListHarnessesDowngradeV7ToV2,
+        3: agentGuiListHarnessesDowngradeV7ToV3,
+        4: agentGuiListHarnessesDowngradeV7ToV4,
+        5: agentGuiListHarnessesDowngradeV7ToV5,
+        6: agentGuiListHarnessesDowngradeV7ToV6,
+      },
+    },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV80,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV71ToV80,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV8ToV1,
+        2: agentGuiListHarnessesDowngradeV8ToV2,
+        3: agentGuiListHarnessesDowngradeV8ToV3,
+        4: agentGuiListHarnessesDowngradeV8ToV4,
+        5: agentGuiListHarnessesDowngradeV8ToV5,
+        6: agentGuiListHarnessesDowngradeV8ToV6,
+        7: agentGuiListHarnessesDowngradeV8ToV7,
+      },
+    },
+    9: {
+      latestMinor: 2,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV90,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV80ToV90,
+        },
+        1: {
+          contract: agentGuiListHarnessesV91,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV90ToV91,
+          // `supportedPermissionModes` gains `auto` over 9.0, which is response
+          // VALUE growth - refused by default, because a response value is
+          // normally decided by shared state and would poison every 9.0 peer's
+          // projection with no opt-out. Here it is genuinely emission-gated:
+          // the host resolves the catalog against the negotiated minor and
+          // serves a 9.0 peer the pre-`auto` array. `nativeAutoJudge` and
+          // `unavailableReason` need no annotation - each new KEY is stripped
+          // by the within-major re-parse. The reason widened 9.1 in place
+          // before it shipped; the 9.0 -> 9.1 bridge fills null for old hosts.
+          responseGrowthProjectionGated: true,
+        },
+        // `judgeDefaultModel` on the row. A new KEY, stripped for a 9.0/9.1
+        // peer by the within-major re-parse, so no annotation (the
+        // `providers.list@9.2` precedent). 9.1 is released and is frozen at
+        // `guiHarnessOptionSchemaV91`.
+        2: {
+          contract: agentGuiListHarnessesV92,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV91ToV92,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV9ToV1,
+        2: agentGuiListHarnessesDowngradeV9ToV2,
+        3: agentGuiListHarnessesDowngradeV9ToV3,
+        4: agentGuiListHarnessesDowngradeV9ToV4,
+        5: agentGuiListHarnessesDowngradeV9ToV5,
+        6: agentGuiListHarnessesDowngradeV9ToV6,
+        7: agentGuiListHarnessesDowngradeV9ToV7,
+        8: agentGuiListHarnessesDowngradeV9ToV8,
+      },
+    },
+    // Major 10 carries the harness ids added since `1.5.0` shipped major 9.
+    // Every minor of major 9 is frozen at the twenty-one ids that release
+    // negotiated; the v10 bridges drop what a lower major cannot spell.
+    10: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV100,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV92ToV100,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV10ToV1,
+        2: agentGuiListHarnessesDowngradeV10ToV2,
+        3: agentGuiListHarnessesDowngradeV10ToV3,
+        4: agentGuiListHarnessesDowngradeV10ToV4,
+        5: agentGuiListHarnessesDowngradeV10ToV5,
+        6: agentGuiListHarnessesDowngradeV10ToV6,
+        7: agentGuiListHarnessesDowngradeV10ToV7,
+        8: agentGuiListHarnessesDowngradeV10ToV8,
+        9: agentGuiListHarnessesDowngradeV10ToV9,
+      },
+    },
+  },
+  "agent.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV20,
+          upgradeFromPreviousVersion: agentListUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentListDowngradeV2ToV1 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV30,
+          upgradeFromPreviousVersion: agentListUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV3ToV1,
+        2: agentListDowngradeV3ToV2,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV40,
+          upgradeFromPreviousVersion: agentListUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV4ToV1,
+        2: agentListDowngradeV4ToV2,
+        3: agentListDowngradeV4ToV3,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV50,
+          upgradeFromPreviousVersion: agentListUpgradeV4ToV5,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV5ToV1,
+        2: agentListDowngradeV5ToV2,
+        3: agentListDowngradeV5ToV3,
+        4: agentListDowngradeV5ToV4,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV60,
+          upgradeFromPreviousVersion: agentListUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV6ToV1,
+        2: agentListDowngradeV6ToV2,
+        3: agentListDowngradeV6ToV3,
+        4: agentListDowngradeV6ToV4,
+        5: agentListDowngradeV6ToV5,
+      },
+    },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV70,
+          upgradeFromPreviousVersion: agentListUpgradeV6ToV7,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV7ToV1,
+        2: agentListDowngradeV7ToV2,
+        3: agentListDowngradeV7ToV3,
+        4: agentListDowngradeV7ToV4,
+        5: agentListDowngradeV7ToV5,
+        6: agentListDowngradeV7ToV6,
+      },
+    },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV80,
+          upgradeFromPreviousVersion: agentListUpgradeV7ToV8,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV8ToV1,
+        2: agentListDowngradeV8ToV2,
+        3: agentListDowngradeV8ToV3,
+        4: agentListDowngradeV8ToV4,
+        5: agentListDowngradeV8ToV5,
+        6: agentListDowngradeV8ToV6,
+        7: agentListDowngradeV8ToV7,
+      },
+    },
+    // @9.1 adds the terminal-agent session facet (`sessionState` /
+    // `lastExit`) to the row, so an orchestrator can tell a peer that is
+    // asleep and resumable from one that is over. Two plain added keys, which
+    // a @9.0 peer's schema strips - no growth to gate - and the eight
+    // downgrade bridges below now start at 9.1 because they must originate at
+    // the line's LATEST minor. Each still parses through its frozen summary,
+    // which drops the keys on the way out.
+    //
+    // @9.2 adds `archived` to the row, the flag the host already marked on the
+    // direct A2A tool listing and the wire had no key for. One more plain
+    // added key: a @9.1 or @9.0 peer's schema strips it, an older host is
+    // upgraded to `null` ("never asked", not "not archived"), and the eight
+    // bridges move their origin to 9.2 for the same LATEST-minor reason.
+    9: {
+      latestMinor: 2,
+      versions: {
+        0: {
+          contract: agentListV90,
+          upgradeFromPreviousVersion: agentListUpgradeV8ToV9,
+        },
+        1: {
+          contract: agentListV91,
+          upgradeFromPreviousVersion: agentListUpgradeV90ToV91,
+        },
+        2: {
+          contract: agentListV92,
+          upgradeFromPreviousVersion: agentListUpgradeV91ToV92,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV9ToV1,
+        2: agentListDowngradeV9ToV2,
+        3: agentListDowngradeV9ToV3,
+        4: agentListDowngradeV9ToV4,
+        5: agentListDowngradeV9ToV5,
+        6: agentListDowngradeV9ToV6,
+        7: agentListDowngradeV9ToV7,
+        8: agentListDowngradeV9ToV8,
+      },
+    },
+    // Major 10 carries agents on the harness ids added since `1.5.0` shipped
+    // major 9, whose three minors are frozen at the set that release
+    // negotiated.
+    10: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV100,
+          upgradeFromPreviousVersion: agentListUpgradeV92ToV100,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV10ToV1,
+        2: agentListDowngradeV10ToV2,
+        3: agentListDowngradeV10ToV3,
+        4: agentListDowngradeV10ToV4,
+        5: agentListDowngradeV10ToV5,
+        6: agentListDowngradeV10ToV6,
+        7: agentListDowngradeV10ToV7,
+        8: agentListDowngradeV10ToV8,
+        9: agentListDowngradeV10ToV9,
+      },
+    },
+  },
+  "providers.fallbackPolicy.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicyGetV11,
+          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyGetV20,
+          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV11ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersFallbackPolicyGetDowngradeV20ToV11,
+      },
+    },
+  },
+  "providers.fallbackPolicy.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: providersFallbackPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicySetV11,
+          upgradeFromPreviousVersion: providersFallbackPolicySetUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicySetV20,
+          upgradeFromPreviousVersion: providersFallbackPolicySetUpgradeV11ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersFallbackPolicySetDowngradeV20ToV11,
+      },
+    },
+  },
+  "providers.fallbackPolicy.restoreTierGroups": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyRestoreTierGroupsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyRestoreTierGroupsV20,
+          upgradeFromPreviousVersion:
+            providersFallbackPolicyRestoreTierGroupsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersFallbackPolicyRestoreTierGroupsDowngradeV20ToV10,
+      },
+    },
+  },
+  "providers.fallbackPolicy.reset": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyResetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyResetV20,
+          upgradeFromPreviousVersion:
+            providersFallbackPolicyResetUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersFallbackPolicyResetDowngradeV20ToV10,
+      },
+    },
+  },
+  "providers.fallbackPolicy.previewTierGroups": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyPreviewTierGroupsV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicyPreviewTierGroupsV11,
+          upgradeFromPreviousVersion:
+            providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyPreviewTierGroupsV20,
+          upgradeFromPreviousVersion:
+            providersFallbackPolicyPreviewTierGroupsUpgradeV11ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersFallbackPolicyPreviewTierGroupsDowngradeV20ToV11,
+      },
+    },
+  },
+} as const;
+
+/**
+ * `providers.list` on its own, for the same TS7056 reason: ten majors and
+ * their bridges are more than any literal it shares can hold under the
+ * ceiling.
+ */
+const HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION = {
+  "providers.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV20,
+          upgradeFromPreviousVersion: providersListUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersListDowngradeV2ToV1 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV30,
+          upgradeFromPreviousVersion: providersListUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV3ToV1,
+        2: providersListDowngradeV3ToV2,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV40,
+          upgradeFromPreviousVersion: providersListUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV4ToV1,
+        2: providersListDowngradeV4ToV2,
+        3: providersListDowngradeV4ToV3,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV50,
+          upgradeFromPreviousVersion: providersListUpgradeV4ToV5,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV5ToV1,
+        2: providersListDowngradeV5ToV2,
+        3: providersListDowngradeV5ToV3,
+        4: providersListDowngradeV5ToV4,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV60,
+          upgradeFromPreviousVersion: providersListUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV6ToV1,
+        2: providersListDowngradeV6ToV2,
+        3: providersListDowngradeV6ToV3,
+        4: providersListDowngradeV6ToV4,
+        5: providersListDowngradeV6ToV5,
+      },
+    },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV70,
+          upgradeFromPreviousVersion: providersListUpgradeV6ToV7,
+        },
+      },
+      // Every older major needs its own entry: `downgradePathsFromLatest` is
+      // keyed by TARGET major and the framework applies exactly one hop, so a
+      // missing key is not a slower path, it is an unbridgeable peer.
+      // `two-sided-release-invariant.test.ts` is what catches an omission.
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV7ToV1,
+        2: providersListDowngradeV7ToV2,
+        3: providersListDowngradeV7ToV3,
+        4: providersListDowngradeV7ToV4,
+        5: providersListDowngradeV7ToV5,
+        6: providersListDowngradeV7ToV6,
+      },
+    },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV80,
+          upgradeFromPreviousVersion: providersListUpgradeV70ToV80,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV8ToV1,
+        2: providersListDowngradeV8ToV2,
+        3: providersListDowngradeV8ToV3,
+        4: providersListDowngradeV8ToV4,
+        5: providersListDowngradeV8ToV5,
+        6: providersListDowngradeV8ToV6,
+        7: providersListDowngradeV8ToV7,
+      },
+    },
+    9: {
+      latestMinor: 2,
+      versions: {
+        0: {
+          contract: providersListV90,
+          upgradeFromPreviousVersion: providersListUpgradeV80ToV90,
+        },
+        1: {
+          contract: providersListV91,
+          upgradeFromPreviousVersion: providersListUpgradeV90ToV91,
+        },
+        2: {
+          contract: providersListV92,
+          upgradeFromPreviousVersion: providersListUpgradeV91ToV92,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV9ToV1,
+        2: providersListDowngradeV9ToV2,
+        3: providersListDowngradeV9ToV3,
+        4: providersListDowngradeV9ToV4,
+        5: providersListDowngradeV9ToV5,
+        6: providersListDowngradeV9ToV6,
+        7: providersListDowngradeV9ToV7,
+        8: providersListDowngradeV9ToV8,
+      },
+    },
+    // Major 10 carries the provider ids added since `1.5.0` shipped major 9,
+    // whose three minors are frozen at the twenty-one ids that release
+    // negotiated.
+    10: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV100,
+          upgradeFromPreviousVersion: providersListUpgradeV92ToV100,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV10ToV1,
+        2: providersListDowngradeV10ToV2,
+        3: providersListDowngradeV10ToV3,
+        4: providersListDowngradeV10ToV4,
+        5: providersListDowngradeV10ToV5,
+        6: providersListDowngradeV10ToV6,
+        7: providersListDowngradeV10ToV7,
+        8: providersListDowngradeV10ToV8,
+        9: providersListDowngradeV10ToV9,
+      },
     },
   },
 } as const;
@@ -11313,7 +12170,8 @@ type HostRpcNotificationMethodMap = {
   };
 };
 
-// The six literals must not declare the same method. Nothing about the merge
+// The six local literals and the profile sync family must not declare the
+// same method. Nothing about the merge
 // below would tell you if they did: the spread silently keeps the LAST
 // occurrence, while the intersection claims a method that has two
 // contradictory version lines - so a duplicate would compile, type-check, and
@@ -11325,7 +12183,41 @@ type HostRpcNotificationMethodMap = {
 // cannot be dropped as unused (`tsc -b` reports TS6196 for one).
 type AssertNever<T extends never> = T;
 
+// Keep the already named profile sync family out of the large tail literal so
+// its versioned schemas do not push its declaration emission over TS7056.
+type HostRpcProfileMethods = typeof PROFILE_SYNC_LINK_RPC_METHODS;
+
 type DuplicateHostRpcMethodNames =
+  | Extract<
+      keyof HostRpcProfileMethods,
+      | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
+      | keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_NOTIFICATION_METHODS
+      | keyof typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION,
+      | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
+      | keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_NOTIFICATION_METHODS
+      | keyof typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION,
+      | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
+      | keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_NOTIFICATION_METHODS
+    >
   | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION,
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
@@ -11390,7 +12282,8 @@ type DuplicateHostRpcMethodNames =
 /**
  * The definition every consumer sees.
  *
- * Five of the six literals contribute their own precise `typeof`. The
+ * Seven of the eight local literals and the profile sync family contribute
+ * their own precise `typeof`. The
  * notification literal contributes `HostRpcNotificationMethodMap` instead:
  * its post-v1 minors carry the large protocol Zod unions that tip declaration
  * emit over TS7056's serialization ceiling, so those slots are manually named
@@ -11406,18 +12299,24 @@ type DuplicateHostRpcMethodNames =
  */
 type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION &
+  HostRpcProfileMethods &
   typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION &
   typeof HOST_RPC_EDITING_REGISTRY_DEFINITION &
   typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
+  typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION &
+  typeof HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION &
   HostRpcNotificationMethodMap &
   Record<AssertNever<DuplicateHostRpcMethodNames>, never>;
 
 const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_DEFINITION,
+  ...PROFILE_SYNC_LINK_RPC_METHODS,
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
   ...HOST_RPC_DRAFTS_REGISTRY_DEFINITION,
+  ...HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION,
+  ...HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION,
   ...HOST_RPC_NOTIFICATION_METHODS,
 };
 
@@ -11434,7 +12333,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.1`,
  * `chat.subscribe@1.6`, `notifications.subscribe@1.1`,
- * `terminal.subscribe@1.6`, `git.subscribeStatus@1.3`,
+ * `terminal.subscribe@1.7`, `git.subscribeStatus@1.3`,
  * `browser.sessions@1.0`, `browser.screencast@1.0`,
  * `resources.subscribe@1.4`, `agent.inbox.subscribe@1.2`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
@@ -11699,7 +12598,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -11721,6 +12620,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         6: {
           contract: terminalSubscribeV16,
+        },
+        7: {
+          contract: terminalSubscribeV17,
         },
       },
     },
@@ -12147,9 +13049,12 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // @1.2 DOES differ: @1.0/@1.1 are frozen at the twenty harness ids `1.3.0`
   // shipped, and only @1.2 may carry an Antigravity row. Same capability-by-
   // minor rule, one more thing to gate on.
+  //
+  // @1.3 differs the same way one release later: @1.2 is frozen at the
+  // twenty-one ids `1.5.0` shipped, and only @1.3 may carry a later harness.
   "sessionImport.scan": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: sessionImportScanV10,
@@ -12160,6 +13065,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         2: {
           contract: sessionImportScanV12,
         },
+        3: {
+          contract: sessionImportScanV13,
+        },
       },
     },
   },
@@ -12168,8 +13076,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // 1.1 is mainline's (Antigravity). 1.2 carries no shape delta over it -
       // it is the negotiable fact that the host understands `auto` in the open
       // request's `permissionMode`. See the contract's own note for why a
-      // shape cannot say that.
-      latestMinor: 2,
+      // shape cannot say that. 1.1 and 1.2 are frozen at the harness ids
+      // `1.5.0` shipped; 1.3 is the first that may name a later one.
+      latestMinor: 3,
       versions: {
         0: {
           contract: sessionImportRunV10,
@@ -12179,6 +13088,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: sessionImportRunV12,
+        },
+        3: {
+          contract: sessionImportRunV13,
         },
       },
     },
@@ -12243,16 +13155,21 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // @1.0 is frozen at the twenty provider ids `1.3.0` shipped; @1.1 is the
   // first minor whose `changed` frame may name Antigravity. A host must not
   // emit that id to a @1.0 subscriber - the frame is an invalidation signal,
-  // so withholding it costs a peer nothing it could have acted on.
+  // so withholding it costs a peer nothing it could have acted on. @1.1 is
+  // frozen in turn at the twenty-one ids `1.5.0` shipped, and @1.2 is the
+  // first that may name a later provider.
   "providers.changed": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersChangedV10,
         },
         1: {
           contract: providersChangedV11,
+        },
+        2: {
+          contract: providersChangedV12,
         },
       },
     },
@@ -12293,12 +13210,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // subscription degrades to `unsupported`, whose contract is device-local
   // drafts (same as the unary `drafts.*` degrade). Never add it to the
   // unary released floor — that list is fail-closed on the name set.
+  //
+  // @1.0 is frozen at the draft document `1.5.0` shipped; @1.1 is the first
+  // minor whose `upsert` may carry a draft naming a later harness.
   "drafts.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: draftsSubscribeV10,
+        },
+        1: {
+          contract: draftsSubscribeV11,
         },
       },
     },
@@ -12309,7 +13232,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 18,
+      latestMinor: 22,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12395,7 +13318,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         // @1.16 adds `tier` on the approval card's judge reason. A defaulted
         // key in a non-strict object: a @1.15 peer drops it on parse, so the
-        // host withholds nothing.
+        // host withholds nothing. Frozen since @1.17 opened above it.
         16: {
           contract: chatSubscribeV116,
         },
@@ -12403,15 +13326,52 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // queued prompt item: the machine the message was sent from, which
         // places a routed browser realm born on that turn. A defaulted key in
         // a non-strict object at every minor, so the host withholds nothing.
+        // Frozen at the pre-`pausedReason` queue and the pre-receipt bodies
+        // since @1.18 opened above it, and at the pre-parity cards and events
+        // since @1.20 did.
         17: {
           contract: chatSubscribeV117,
         },
         // @1.18 adds `receipt` on a provider notice's metadata (the settled
         // fallback card) and `pausedReason` on the queue. Optional keys in
         // non-strict objects at every minor, so the host withholds nothing: a
-        // @1.17 peer drops both on parse.
+        // @1.17 peer drops both on parse. Frozen at the pre-resume skeleton
+        // chunk since @1.19 opened above it, and at the pre-parity cards and
+        // events since @1.20 did.
         18: {
           contract: chatSubscribeV118,
+        },
+        // @1.19 adds a nullable skeleton claim on open and `retainedRows` on
+        // the first resumed chunk. Older lines keep their complete streams.
+        // Frozen at the pre-parity cards and events since @1.20 opened above
+        // it; @1.20 keeps the claim and the chunk.
+        19: {
+          contract: chatSubscribeV119,
+        },
+        // @1.20 is the Claude-parity line: the suggested prompt, the
+        // thinking-token estimate and its light frame, the `cron` background
+        // kind, and the approval card's display facts / `cautious` /
+        // `ruleForced`. All live-only; the host PROJECTS every one of them
+        // away below this minor (keys deleted, the frame dropped, the item
+        // omitted) rather than refusing the subscribe.
+        20: {
+          contract: chatSubscribeV120,
+        },
+        // @1.21 is the first line that may carry a harness added after 1.5.0
+        // (Command Code). No shape of its own: a row context's session anchor
+        // takes the live union here and the 1.5.0 one on 1.9-1.20, and the
+        // host refuses such a chat to a subscriber below this minor.
+        21: {
+          contract: chatSubscribeV121,
+        },
+        // @1.22 is the open-harness-id line: the leaves a chat names a harness
+        // through without the peer acting on it (agent senders, event actors,
+        // steer blocks, provider notices, plans, session and plan runtime
+        // events) take an open string, so a chat that merely heard from an
+        // agent on a harness the peer cannot name is served rather than
+        // refused. The head the peer drives keeps the closed enum.
+        22: {
+          contract: chatSubscribeV122,
         },
       },
     },

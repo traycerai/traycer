@@ -228,11 +228,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // Same reason gate as `terminal-tile`: a `plan-restricted` host is running,
-    // so nothing closed and a persisted "closed" entry would be a lie an
-    // upgrade immediately contradicts.
-    if (reachability.unavailability === "plan-restricted") return;
-    // And the same basis gate: since F4 this verdict also arrives from a
+    // The same basis gate as `terminal-tile`: since F4 this verdict also arrives from a
     // starting host that overran its budget, which is the UI's patience
     // expiring rather than proof the agent's session ended. The tile stops
     // waiting; the persisted notification still needs directory evidence.
@@ -272,7 +268,6 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [
     reachability.status,
     reachability.hostLabel,
-    reachability.unavailability,
     reachability.basis,
     reachability.hostKind,
     epicId,
@@ -288,7 +283,6 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
         reason="host-unreachable"
         hostLabel={reachability.hostLabel}
         ownerKind="agent"
-        unavailability={reachability.unavailability}
         onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
@@ -542,6 +536,7 @@ function TuiAgentTileLive(
     instanceId,
     sessionKind: "terminal-agent",
     preparePayload,
+    viewer: "presentation",
     enabled: agent !== null && prepareLaunch.isIdle,
     // `adoptOnly` rather than `enabled: false` for the sleeping arm, for the
     // reason the replica arm uses it: the create must not fire, but an ATTACH
@@ -795,31 +790,37 @@ function TuiAgentTileLive(
   // not a loading skeleton that would wait forever for a session no one is
   // going to start.
   //
-  // `hostHasSession === null` deliberately keeps waiting: that is the list
-  // still loading, which is not evidence of anything.
-  if (isCloudReplica && hostHasSession === false) {
+  // `null` deliberately keeps waiting: that is the list still loading, which
+  // is not evidence of anything. Keyed on the SETTLED verdict, which holds
+  // across a background refetch, so this arm and the one below do not flip
+  // to the loading body and back on every `terminal.list` invalidation. Both
+  // branches mount a `TerminalAgentWorktreeNotice` (at different positions),
+  // whose refresh driver invalidates the list on mount - so a flip here fed
+  // itself forever, and a restored sleeping tile never left the skeleton.
+  const hostSessionSettled = bootstrap.hostSessionSettled;
+  if (isCloudReplica && hostSessionSettled === false) {
     return (
       <TerminalDeadTileBanner
         reason="not-running-remotely"
         hostLabel={hostLabel}
         ownerKind="agent"
-        unavailability={null}
         onClose={closeTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
     );
   }
 
-  // OWN-HOST AND ASLEEP, in a tile nobody asked for. The host reports no live
-  // session (`false`, not `null` - that is the list still loading and is not
-  // evidence of anything) and the record says the agent is sleeping, so there
+  // OWN-HOST AND ASLEEP, in a tile nobody asked for. The last settled list
+  // reports no live session (`false`, not `null` - that is the list still
+  // loading and is not evidence of anything) and the record says the agent is
+  // sleeping, so there
   // is nothing to attach to and this tile is not going to create one on its
   // own. The honest end state is the notice, not a skeleton waiting forever.
   //
   // Deliberately NOT the dead-tile banner the replica arm uses: that banner
   // says an agent is somewhere this client cannot reach it, and this one is
   // right here, intact, one click from resuming the same conversation.
-  if (isSleepingUnrequested && hostHasSession === false) {
+  if (isSleepingUnrequested && hostSessionSettled === false) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice

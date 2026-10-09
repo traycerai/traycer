@@ -1,20 +1,70 @@
 ---
 title: "MCP servers"
-description: "Configure MCP servers for a selected coding-agent provider."
+description: "Add, sign in to, and manage MCP servers and their tools for a coding-agent provider."
 ---
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Add and check a local MCP server">
-  <source src="https://assets.traycer.ai/docs/videos/mcp-setup.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-Open **Settings → Providers**, select a provider, and open its **MCP** tab.
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/mcp-setup.mp4" label="Add and check a local MCP server" />
+
+Open **Settings → Providers**, select a provider, and open its **MCP** tab. Each provider keeps its own MCP servers, in that provider's own configuration.
+
+Devin, Pi, Reasonix, Antigravity, and Command Code have no **MCP** tab. Hermes Agent's tab lists the servers in its configuration; add and remove them in Hermes itself.
+
+## Choose Where Servers Live
+
+The location picker at the top of the tab chooses which configuration you are editing:
+
+- **Global**: every workspace on this host.
+- A workspace: servers for that project only. Pick one of this host's workspaces, or browse to add one.
+
+Servers you add go to the selected location.
 
 ## Add A Server
 
-1. Click **Add MCP server**.
-2. Choose the transport. **Remote** is the default; choose **Local (stdio)** for a command launched on the Host.
-3. Enter a name and the transport's configuration. Local servers use a command, arguments, and any required environment variables.
-4. Click **Add server** and check the resulting status.
+<Steps>
+  <Step title="Open the dialog">
+    Click **Add MCP server**.
+  </Step>
+  <Step title="Choose the transport">
+    **Remote** is the default. Choose **Local (stdio)** for a command the host launches.
+  </Step>
+  <Step title="Fill in the server">
+    Enter a **Name**, then the transport's settings:
 
-For Claude Code, **Reachable** and the discovered tool count describe a connectivity check. The row provides **Refresh** and **Delete** actions; it has no per-server enable switch. Controls and status reporting can differ by provider.
+    - **Remote:** the **Server URL**, the **Transport protocol** (**HTTP** or **SSE**), and **Authentication**: **None**, **Header** (custom headers), **Env var** (an environment variable that holds the token), or **OAuth** (with an optional client ID and resource). The options depend on the provider.
+    - **Local (stdio):** the **Command**, its **Args**, and any **Env vars**.
+  </Step>
+  <Step title="Add it">
+    Click **Add server**, then check the server's status.
+  </Step>
+</Steps>
+
+Secrets you entered are not shown again. When you edit a server, re-enter them to save.
+
+## Server Status
+
+| Status          | Meaning                                                                          |
+| --------------- | -------------------------------------------------------------------------------- |
+| **Connected**   | The provider reports the server as connected.                                    |
+| **Reachable**   | Traycer's own connectivity check reached the server. Claude Code shows this one. |
+| **Needs auth**  | The server needs you to sign in.                                                 |
+| **Error**       | The connection failed.                                                           |
+| **Disconnected**| The server is not connected.                                                     |
+| **Config only** | The server is in the configuration, but there's no live status for it.           |
+| **Disabled**    | The server is turned off.                                                        |
+
+## Manage A Server
+
+Each server row has actions for that server:
+
+- **Sign in**, **Re-authenticate**, and log out, for servers that use OAuth, where the provider supports it.
+- **Refresh** checks the server again.
+- **Delete** removes it after you confirm.
+- An on/off switch, for providers that support one: OpenCode, Traycer Inference, OpenRouter, Hugging Face, Grok, Kiro, Droid, Kimi, Kilo Code, Oh My Pi, and Cursor (for workspace servers only). Claude Code, Codex, Copilot, Qwen Code, and Amp have no per-server switch; delete a server to stop using it.
+
+## Tools
+
+Expand a server to see its **Tools (N)** and, where the server provides them, its **Instructions**. Where the provider supports it, each tool has its own switch, and **Enable all** · **Disable all** act on every tool. For Codex and Amp, tool switches apply only to sessions Traycer runs.
+
+Tools appear once the server is connected. A server that needs sign-in shows "Sign in to discover tools for this server."

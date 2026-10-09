@@ -141,13 +141,9 @@ export function createBrowserSessionsHostDirectory(
     if (result.kind !== "ok") return;
     const next = new Map<string, HostDirectoryEntry>();
     for (const item of result.response.hosts) {
-      // `planAllowsRemote: true` - main holds no plan state, and the fetcher's
-      // own contract says a not-yet-known plan reads as allowed: a wasted dial
-      // meets the relay's 403, while refusing here would silently strand the
-      // jar plane for a paying account.
       next.set(
         item.hostId,
-        hostListItemToDirectoryEntry(item, deps.relayBaseUrl, true),
+        hostListItemToDirectoryEntry(item, deps.relayBaseUrl),
       );
     }
     cachedRemote = next;

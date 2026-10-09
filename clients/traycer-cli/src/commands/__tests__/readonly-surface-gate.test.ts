@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
+import type { AgentWorktreeCreatePolicy } from "@traycer/protocol/config/schema";
 import type { CommandContext, CommandFn } from "../../runner/runner";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 
 // This suite proves the CLI-019 capability boundary itself - not the wiring
 // underneath it. Every command listed in `READONLY_REFUSED_COMMANDS` must be
@@ -29,8 +30,35 @@ vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: mocks.resolveHostAuthMock,
 }));
 
+// The user's Agent worktrees setting (`worktrees.agentCreate`), as
+// `worktree create` reads it. A mock rather than a real config file so no test
+// here depends on, or reads, the real `~/.traycer/cli/config.json`; `read` is a
+// `vi.fn` so a test can also prove the policy was never consulted for a person.
+const worktreePolicy = vi.hoisted(() => {
+  const state: { current: AgentWorktreeCreatePolicy } = { current: "allow" };
+  return {
+    state,
+    read: vi.fn((): AgentWorktreeCreatePolicy => state.current),
+  };
+});
+
+vi.mock("../../agent-worktree-create", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agent-worktree-create")>();
+  return {
+    ...actual,
+    readAgentWorktreeCreatePolicy: worktreePolicy.read,
+  };
+});
+
 beforeEach(() => {
   mocks.resolveHostAuthMock.mockClear();
+  worktreePolicy.state.current = "allow";
+  worktreePolicy.read.mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 vi.mock("../../runner/runner", async (importOriginal) => {
@@ -44,7 +72,12 @@ vi.mock("../../runner/runner", async (importOriginal) => {
           quiet: false,
           noProgress: false,
           noBootstrap: false,
-          nonInteractive: true,
+          // Interactive, so `profile add` / `profile login` reach their
+          // body: under CI or `--json` they refuse before any host call,
+          // which would fail the full-surface "reaches the body" assertion
+          // for the wrong reason. No gated command prompts before its first
+          // host call, so nothing here waits on stdin.
+          nonInteractive: false,
           environment: "production",
           logger: {
             debug: () => undefined,
@@ -206,6 +239,15 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
     "11111111-1111-4111-8111-111111111111",
   ],
   "worktree delete": ["--path", "/tmp/some-worktree"],
+  "profile add": ["claude"],
+  "profile login": ["claude", "ambient"],
+  "profile rename": ["claude", "profile-1", "Work"],
+  "profile enable": ["claude", "profile-1"],
+  "profile disable": ["claude", "profile-1"],
+  // `--yes`: without it the removal stops at its confirmation before any
+  // host call - refused where stdin is not a terminal, and waiting on a
+  // person where it is.
+  "profile remove": ["claude", "profile-1", "--yes"],
 };
 
 // Reads that stay runnable on the readonly surface: hidden from `--help`
@@ -296,6 +338,120 @@ describe("readonly-surface gate: hidden-but-ungated reads stay runnable", () => 
       });
     });
   }
+});
+
+// `worktree create` is not a READONLY_REFUSED_COMMANDS entry: what an agent may
+// do there is the user's Agent worktrees setting, enforced by
+// `assertAgentWorktreeCreateAllowed` in `withRunner` beside the surface check.
+// Driven end-to-end through the real program, like the table above, and with
+// the same two-sided proof: a refusal must leave `resolveHostAuth` (the deepest
+// dependency every host call bottoms out in) uncalled, and a command that is
+// allowed must reach it.
+//
+// This suite runs inside a live Traycer agent session, which already has
+// `TRAYCER_AGENT_ID` set, so every case stubs it explicitly - including the
+// person case, which stubs it to "" - and pins the surface to the unrestricted
+// default. The program is built AFTER the stubs because `worktree create`'s
+// hidden flag is decided when the command is registered.
+const WORKTREE_CREATE_ARGV = [
+  "worktree",
+  "create",
+  "--workspace",
+  "/repo",
+  "--branch",
+  "x",
+] as const;
+
+async function withSession<T>(
+  agentId: string,
+  surface: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  vi.stubEnv("TRAYCER_AGENT_ID", agentId);
+  vi.stubEnv("TRAYCER_AGENT_CLI_SURFACE", surface);
+  try {
+    return await run();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
+describe("Agent worktrees setting: gates 'worktree create' for an agent session", () => {
+  it.each(["", "readonly"])(
+    "refuses an agent session under never with E_FORBIDDEN before the body runs (surface %j)",
+    async (surface) => {
+      worktreePolicy.state.current = "never";
+      await withSession("agent-fixture", surface, async () => {
+        const program = buildProgramWithAgentRoles(true);
+        const thrown = await parseAndCapture(program, WORKTREE_CREATE_ARGV);
+        expect(thrown).toMatchObject({
+          code: CLI_ERROR_CODES.FORBIDDEN,
+          exitCode: 1,
+        });
+        expect(thrown).toBeInstanceOf(CliError);
+        if (!(thrown instanceof CliError)) throw new Error("unreachable");
+        expect(thrown.message).toContain("turned off for agents on this host");
+        expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("refuses an agent session under ask with E_FORBIDDEN before the body runs", async () => {
+    worktreePolicy.state.current = "ask";
+    await withSession("agent-fixture", "", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, WORKTREE_CREATE_ARGV);
+      expect(thrown).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        exitCode: 1,
+      });
+      expect(thrown).toBeInstanceOf(CliError);
+      if (!(thrown instanceof CliError)) throw new Error("unreachable");
+      expect(thrown.message).toContain("needs the user's approval");
+      expect(thrown.message).toContain("traycer_create_worktree");
+      expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not refuse an agent session under allow (reaches the command body)", async () => {
+    worktreePolicy.state.current = "allow";
+    await withSession("agent-fixture", "", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, WORKTREE_CREATE_ARGV);
+      expect(thrown).not.toBeNull();
+      expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+      expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+    });
+  });
+
+  it.each(["never", "ask"] as const)(
+    "does not refuse a person (empty TRAYCER_AGENT_ID) under %s, and never consults the policy",
+    async (policy) => {
+      worktreePolicy.state.current = policy;
+      await withSession("", "", async () => {
+        const program = buildProgramWithAgentRoles(true);
+        const thrown = await parseAndCapture(program, WORKTREE_CREATE_ARGV);
+        // Reached the body (mocked resolveHostAuth -> AUTH_NO_CREDENTIALS),
+        // not refused by the Agent worktrees gate.
+        expect(thrown).not.toBeNull();
+        expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+        expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+        // A person's command must not depend on the config file at all.
+        expect(worktreePolicy.read).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("leaves 'worktree list' runnable for an agent session under never", async () => {
+    worktreePolicy.state.current = "never";
+    await withSession("agent-fixture", "", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, ["worktree", "list"]);
+      expect(thrown).not.toBeNull();
+      expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+      expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+    });
+  });
 });
 
 describe("readonly-surface gate: traycer monitor is deliberately not gated", () => {

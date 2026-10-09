@@ -60,6 +60,7 @@ function QuoteHarness(props: { readonly enabled: boolean }) {
           taskId="task-1"
           snapshot={snapshot}
           onDismiss={dismiss}
+          onQuoted={() => undefined}
           boundaryRef={NULL_BOUNDARY}
           bottomOverlayInsetPx={0}
         />
