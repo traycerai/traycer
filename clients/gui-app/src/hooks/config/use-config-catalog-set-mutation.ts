@@ -34,8 +34,9 @@ type CatalogSetContext = {
  * was. So `onSuccess` CANCELS any read still in flight (one started before the
  * write would otherwise resolve on top of the answer), writes the answer, and
  * only then lets the mutation settle; the rows stay disabled while any write
- * on the host is outstanding (`useConfigCatalogSetOutstanding`). The read is revalidated afterwards, not awaited: the answer
- * already is the state, and the pick it settles should not wait on a read.
+ * on the host is outstanding (`useConfigCatalogSetOutstanding`). The read is
+ * revalidated afterwards, not awaited: the answer already is the state, and
+ * the pick it settles should not wait on a read.
  *
  * The write carries a dispatch-time floor of `config.catalog.set@1.1` (see
  * below), so it is refused rather than downgraded on a 1.0 connection.
