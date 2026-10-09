@@ -7,6 +7,10 @@ import {
   configBrowserResponseSchema,
   configBrowserSetRequestSchema,
   configBrowserSetResponseSchema,
+  configCatalogGetRequestSchema,
+  configCatalogResponseSchema,
+  configCatalogSetRequestSchema,
+  configCatalogSetResponseSchema,
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
   configEnvListRequestSchema,
@@ -196,4 +200,20 @@ export const configWorktreesSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configWorktreesSetRequestSchema,
   responseSchema: configWorktreesSetResponseSchema,
+});
+
+/** Reads the machine-wide catalog probe timeout and its bounds. */
+export const configCatalogGetV10 = defineRpcContract({
+  method: "config.catalog.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configCatalogGetRequestSchema,
+  responseSchema: configCatalogResponseSchema,
+});
+
+/** Writes the machine-wide catalog probe timeout. */
+export const configCatalogSetV10 = defineRpcContract({
+  method: "config.catalog.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configCatalogSetRequestSchema,
+  responseSchema: configCatalogSetResponseSchema,
 });

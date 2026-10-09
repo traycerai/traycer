@@ -71,6 +71,13 @@ export interface UseHostQueriesOptions<
    * `UseHostQueriesWithCombineOptions`, so both overloads are covered here.
    */
   readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
+  /**
+   * The method's declared response allowance, as on `useHostQuery`: every
+   * request in the batch is dispatched with it. HostClient refuses a value
+   * the scheduling policy does not declare; omitted keeps the ordinary
+   * transport response deadline.
+   */
+  readonly responseTimeoutMs?: number;
 }
 
 export interface UseHostQueriesWithCombineOptions<
@@ -143,6 +150,8 @@ export interface UseHostQueriesWithResponseMapOptions<
    * nothing.
    */
   readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
+  /** See `UseHostQueriesOptions.responseTimeoutMs`. */
+  readonly responseTimeoutMs?: number;
   /**
    * Same role as `UseHostQueryWithResponseMapOptions.mapResponse` in
    * `use-host-query.ts` (see that doc comment), applied per-request here -
@@ -231,19 +240,33 @@ export function useHostQueriesWithResponseMap<
         }
         args.preflight?.();
         const requirement = args.requiredHostMethodVersion?.() ?? null;
-        const response =
-          requirement === null
-            ? await client.requestWithSignal(
-                request.method,
-                request.params,
-                signal,
-              )
-            : await client.requestWithSignalRequiringHostMethodVersion(
-                request.method,
-                request.params,
-                signal,
-                requirement,
-              );
+        const responseTimeoutMs = args.responseTimeoutMs;
+        let response: ResponseOfMethod<Registry, Method>;
+        if (responseTimeoutMs !== undefined) {
+          response = await client.requestWithOptions(
+            request.method,
+            request.params,
+            {
+              responseTimeoutMs,
+              idempotencyKey: null,
+              requiredHostMethodVersion: requirement,
+              signal,
+            },
+          );
+        } else if (requirement === null) {
+          response = await client.requestWithSignal(
+            request.method,
+            request.params,
+            signal,
+          );
+        } else {
+          response = await client.requestWithSignalRequiringHostMethodVersion(
+            request.method,
+            request.params,
+            signal,
+            requirement,
+          );
+        }
         return mapResponse({ response, queryClient, queryKey });
       });
     const pollPolicy = HOST_METHOD_POLL_TABLE[request.method].poll;

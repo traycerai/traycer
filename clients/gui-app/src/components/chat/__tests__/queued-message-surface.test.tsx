@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   OpenChatQueuedItem,
@@ -1162,7 +1162,7 @@ describe("<QueuedMessagePanel />", () => {
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
-    it("renders a received A2A item's retained pending reason inline in its row", () => {
+    it("renders a received A2A item's retained pending reason inline in its row once the row is unfolded", () => {
       const reason = "Retained after the turn ended before it could steer.";
       renderPanel({
         queue: queueState([
@@ -1178,6 +1178,9 @@ describe("<QueuedMessagePanel />", () => {
 
       const row = screen.getByTestId("queued-message-row");
       expect(within(row).getByText("Agent response")).not.toBeNull();
+      // A folded agent row is one line, its reason included (#2441).
+      expect(within(row).queryByText(reason)).toBeNull();
+      fireEvent.click(within(row).getByTestId("queued-message-agent-fold"));
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
@@ -1566,25 +1569,36 @@ interface PanelInput {
 function renderPanel(input: PanelInput) {
   return render(
     <TooltipProvider delayDuration={0}>
-      <QueuedMessagePanel
-        queue={input.queue}
-        activeTurnStatus="running"
-        canAct={input.canAct}
-        resumeRequested={input.resumeRequested ?? false}
-        keepPausedRequested={input.keepPausedRequested ?? false}
-        readOnly={input.readOnly}
-        editingQueueItemId={null}
-        scrollRegionMaxHeightClass="max-h-96"
-        separated={false}
-        onPause={input.onPause ?? (() => null)}
-        onResume={input.onResume ?? (() => null)}
-        onEdit={vi.fn()}
-        onCancel={onCancelSpy}
-        onAbortSteer={onAbortSteerSpy}
-        onReorder={input.onReorder ?? vi.fn()}
-        onSteerNow={vi.fn()}
-      />
+      <StatefulQueuePanel input={input} />
     </TooltipProvider>,
+  );
+}
+
+/** The dock owns the fold in production; this holds it the same way. */
+function StatefulQueuePanel(props: { readonly input: PanelInput }) {
+  const { input } = props;
+  const [open, setOpen] = useState<boolean>(true);
+  return (
+    <QueuedMessagePanel
+      queue={input.queue}
+      activeTurnStatus="running"
+      canAct={input.canAct}
+      resumeRequested={input.resumeRequested ?? false}
+      keepPausedRequested={input.keepPausedRequested ?? false}
+      readOnly={input.readOnly}
+      editingQueueItemId={null}
+      scrollRegionMaxHeightClass="max-h-96"
+      separated={false}
+      open={open}
+      onOpenChange={setOpen}
+      onPause={input.onPause ?? (() => null)}
+      onResume={input.onResume ?? (() => null)}
+      onEdit={vi.fn()}
+      onCancel={onCancelSpy}
+      onAbortSteer={onAbortSteerSpy}
+      onReorder={input.onReorder ?? vi.fn()}
+      onSteerNow={vi.fn()}
+    />
   );
 }
 

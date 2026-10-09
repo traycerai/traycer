@@ -59,6 +59,7 @@ import {
   useRefreshHarnessCatalog,
   useRefreshHarnessCatalogForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const hostBindingMock = vi.hoisted(() => ({
   current: null as { readonly hostClient: unknown } | null,
@@ -208,6 +209,8 @@ function createCatalogFixture(
   let requestCounter = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    // The app's real policy: catalog reads carry its response allowance.
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
@@ -864,6 +867,8 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     };
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
+      // The app's real policy: catalog reads carry its response allowance.
+      schedulingPolicy: hostRpcSchedulingPolicy,
       invalidator: createHostQueryInvalidator(queryClient),
       findHostById: (id) => (id === entry.hostId ? entry : null),
       messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -1132,6 +1137,8 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     };
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
+      // The app's real policy: catalog reads carry its response allowance.
+      schedulingPolicy: hostRpcSchedulingPolicy,
       invalidator: createHostQueryInvalidator(queryClient),
       findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
       messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -1190,6 +1197,8 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     const calls = { harnesses: 0, models: 0, commands: 0 };
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
+      // The app's real policy: catalog reads carry its response allowance.
+      schedulingPolicy: hostRpcSchedulingPolicy,
       invalidator: createHostQueryInvalidator(queryClient),
       findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
       messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -1458,6 +1467,8 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     let requestCounter = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
+      // The app's real policy: catalog reads carry its response allowance.
+      schedulingPolicy: hostRpcSchedulingPolicy,
       invalidator: createHostQueryInvalidator(queryClient),
       findHostById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

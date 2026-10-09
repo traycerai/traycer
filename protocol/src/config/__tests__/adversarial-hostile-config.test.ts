@@ -23,6 +23,8 @@ import { cliConfigPath } from "../paths";
 import {
   loadEffectiveShellConfig,
   readCliConfig,
+  readCatalogConfig,
+  readCatalogConfigSync,
   readWorktreesConfig,
   readWorktreesConfigSync,
   removeShell,
@@ -173,6 +175,38 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
         worktrees,
       });
       expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    }
+  });
+
+  it("strips unknown keys inside the catalog block but keeps the timeout", async () => {
+    await writeRaw({
+      version: 1,
+      shell: { path: null, args: null },
+      envOverrides: {},
+      catalog: { probeTimeoutSeconds: 90, bogus: 42 },
+    });
+    expect(await readCatalogConfig()).toEqual({ probeTimeoutSeconds: 90 });
+    expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 90 });
+  });
+
+  it("never crashes the sync catalog reader on hostile block shapes", async () => {
+    for (const catalog of [
+      null,
+      "120",
+      42,
+      [],
+      { probeTimeoutSeconds: { nested: 120 } },
+      { probeTimeoutSeconds: [120] },
+      { probeTimeoutSeconds: "120" },
+      { probeTimeoutSeconds: 1e999 },
+    ]) {
+      await writeRaw({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        catalog,
+      });
+      expect(readCatalogConfigSync()).toEqual({ probeTimeoutSeconds: 60 });
     }
   });
 

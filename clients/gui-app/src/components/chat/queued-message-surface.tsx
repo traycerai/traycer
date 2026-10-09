@@ -54,6 +54,7 @@ import type {
   OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import {
   isReceivedAgentResponse,
   queuePausedAfterError,
@@ -135,6 +136,11 @@ interface QueuedMessageRowChromeInput {
   readonly mutationInFlight: boolean;
 }
 
+interface QueuedMessageRowContentAgentFold {
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}
+
 interface QueuedMessageEditActionCopy {
   readonly label: string;
   readonly title: string;
@@ -154,6 +160,13 @@ export interface QueuedMessagePanelProps {
   /** A hairline above this panel, because a sibling drew before it in the
    *  dock's shared frame (L-97). */
   readonly separated: boolean;
+  /**
+   * Whether the list is unfolded. Owned by the caller, not the panel (#2441):
+   * the panel unmounts whenever the queue drains, so a fold it kept itself
+   * came back open with the next queued message.
+   */
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   // Edit / steer are prompt-only by type: a managed-command item carries no
@@ -176,13 +189,29 @@ function queueItemAllowsReorder(item: OpenChatQueuedItem): boolean {
 }
 
 export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
-  const [open, setOpen] = useState(true);
+  // The received agent rows the user unfolded to read (#2441). Panel-local on
+  // purpose: an agent row's default is the one-line one, so forgetting these
+  // on a remount costs a click, never room.
+  const [expandedQueueItemIds, setExpandedQueueItemIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const toggleExpanded = useCallback((queueItemId: string) => {
+    setExpandedQueueItemIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(queueItemId)) next.add(queueItemId);
+      return next;
+    });
+  }, []);
   // Render the queue in its true order, user-typed and received A2A items
   // alike. Received items render read-only (see QueuedMessageRow) - the user
   // can reorder them but cannot edit, delete, or hand-steer them.
   const items = props.queue.items;
   const reorderableCount = useMemo(
     () => items.filter(queueItemAllowsReorder).length,
+    [items],
+  );
+  const agentCount = useMemo(
+    () => items.filter(isReceivedAgentResponse).length,
     [items],
   );
   const queueStatus = props.queue.status;
@@ -264,6 +293,8 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                 activeTurnStatus={props.activeTurnStatus}
                 hasSteerRestartPending={hasSteerRestartPending}
                 editing={props.editingQueueItemId === item.queueItemId}
+                expanded={expandedQueueItemIds.has(item.queueItemId)}
+                onToggleExpanded={toggleExpanded}
                 dropPreview={reorderDnd.dropPreview}
                 itemCount={items.length}
                 registerRowElement={registerRowElement}
@@ -281,8 +312,8 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
 
   return (
     <Collapsible
-      open={open}
-      onOpenChange={setOpen}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
       data-testid="queued-message-rows"
       className={cn(
         "@container",
@@ -292,8 +323,9 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       variant="panel"
     >
       <QueuedMessageHeader
-        open={open}
+        open={props.open}
         count={items.length}
+        agentCount={agentCount}
         queueStatus={queueStatus}
         canPauseQueue={hasPausableHumanItems}
         canResumeQueue={hasPausedItems}
@@ -382,8 +414,19 @@ function queueHeaderAnnouncement(input: {
   return "";
 }
 
+function messageCount(count: number): string {
+  return count === 1 ? "1 message" : `${count} messages`;
+}
+
+/**
+ * The header's count, split once agents are in it (#2441): "2 messages · 12
+ * from agents" says how much of the queue is the user's own pending sends and
+ * how much is replies they only read.
+ */
 function queueHeaderSummary(input: {
   readonly count: number;
+  /** How many of `count` are received agent messages. */
+  readonly agentCount: number;
   readonly resumeRequested: boolean;
   readonly keepPausedRequested: boolean;
 }): string {
@@ -393,10 +436,17 @@ function queueHeaderSummary(input: {
   if (input.resumeRequested) {
     return "Will send when ready";
   }
-  if (input.count === 1) {
-    return "1 message";
+  if (input.agentCount === 0) {
+    return messageCount(input.count);
   }
-  return `${input.count} messages`;
+  const fromAgents =
+    input.agentCount === 1
+      ? "1 from an agent"
+      : `${input.agentCount} from agents`;
+  if (input.agentCount === input.count) {
+    return `${messageCount(input.count)} from ${input.count === 1 ? "an agent" : "agents"}`;
+  }
+  return `${messageCount(input.count - input.agentCount)} · ${fromAgents}`;
 }
 
 function QueueResumeIcon(props: { readonly pending: boolean }) {
@@ -537,6 +587,8 @@ function QueuedMessageQueueControls(props: {
 export function QueuedMessageHeader(props: {
   readonly open: boolean;
   readonly count: number;
+  /** How many of `count` are received agent messages. */
+  readonly agentCount: number;
   readonly queueStatus: ChatSessionState["queue"]["status"];
   readonly canPauseQueue: boolean;
   readonly canResumeQueue: boolean;
@@ -549,6 +601,7 @@ export function QueuedMessageHeader(props: {
 }) {
   const {
     count,
+    agentCount,
     queueStatus,
     canPauseQueue,
     canResumeQueue,
@@ -565,6 +618,7 @@ export function QueuedMessageHeader(props: {
     !showResumeQueueButton && canPauseQueue && !readOnly;
   const summary = queueHeaderSummary({
     count,
+    agentCount,
     resumeRequested,
     keepPausedRequested,
   });
@@ -659,6 +713,9 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly hasSteerRestartPending: boolean;
   readonly editing: boolean;
+  /** A received agent row the user unfolded; meaningless for other rows. */
+  readonly expanded: boolean;
+  readonly onToggleExpanded: (queueItemId: string) => void;
   readonly dropPreview: QueuedMessageDropPreview | null;
   readonly itemCount: number;
   readonly registerRowElement: (
@@ -682,6 +739,8 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     activeTurnStatus,
     hasSteerRestartPending,
     editing,
+    expanded,
+    onToggleExpanded,
     dropPreview,
     itemCount,
     registerRowElement,
@@ -744,6 +803,10 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     if (promptItem === null) return;
     onAbortSteer(promptItem);
   }, [onAbortSteer, promptItem]);
+  const receivedAgentResponse = isReceivedAgentResponse(item);
+  const handleToggleExpanded = useCallback(() => {
+    onToggleExpanded(item.queueItemId);
+  }, [onToggleExpanded, item.queueItemId]);
   const editActionCopy = queuedMessageEditActionCopy(item);
   const statusLabel = queuedMessageStatusLabel(
     item,
@@ -762,7 +825,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   });
   const chrome = queuedMessageRowChrome({
     promptItem,
-    receivedAgentResponse: isReceivedAgentResponse(item),
+    receivedAgentResponse,
     readOnly,
     canAct,
     isLocked: actionState.isLocked,
@@ -816,6 +879,11 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         showOwnerActions={chrome.showOwnerActions}
         showManagedCommandCancel={chrome.showManagedCommandCancel}
         canAbortSteer={chrome.canAbortSteer}
+        agentFold={
+          receivedAgentResponse
+            ? { expanded, onToggle: handleToggleExpanded }
+            : null
+        }
         editActionCopy={editActionCopy}
         handleEdit={handleEdit}
         handleCancel={handleCancel}
@@ -839,6 +907,12 @@ function QueuedMessageRowContent(props: {
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
   readonly canAbortSteer: boolean;
+  /**
+   * A received agent row's fold (#2441), or `null` for every other row. Such
+   * a row is one line until the user clicks its text, because twenty agent
+   * replies at three lines each are mostly prose nobody acts on from here.
+   */
+  readonly agentFold: QueuedMessageRowContentAgentFold | null;
   readonly editActionCopy: { readonly label: string; readonly title: string };
   readonly handleEdit: () => void;
   readonly handleCancel: () => void;
@@ -851,6 +925,7 @@ function QueuedMessageRowContent(props: {
     props.showManagedCommandCancel ||
     props.canAbortSteer;
   const showFloatingChrome = framed || props.statusLabel !== null;
+  const compact = agentFoldCompact(props.agentFold);
 
   return (
     <div className="min-w-0 flex-1">
@@ -862,11 +937,13 @@ function QueuedMessageRowContent(props: {
           // there the frame's bottom border was cut off. The padding is that
           // room and the negative margin hands it back, so the row measures
           // what it did.
-          "-my-0.5 max-h-[calc(3lh+--spacing(1))] overflow-y-auto py-0.5 pr-1 wrap-break-word",
+          "-my-0.5 py-0.5 pr-1 wrap-break-word",
+          compact ? CONTENT_SCROLL_COMPACT : CONTENT_SCROLL_FULL,
           CHAT_DOCK_PANEL_ROW_TEXT,
         )}
         data-testid="queued-message-content-scroll"
         data-native-scrollbar="true"
+        data-compact={String(compact)}
       >
         <QueuedMessageProvenanceChip item={item} />
         {showFloatingChrome ? (
@@ -903,25 +980,138 @@ function QueuedMessageRowContent(props: {
             ) : null}
           </QueuedMessageFloatingChrome>
         ) : null}
-        {item.kind === "prompt" ? (
-          <ComposerContentPreview
-            content={item.message.content}
-            emptyLabel="Queued message"
-            testId="queued-message-content-preview"
-            className={undefined}
-          />
-        ) : (
-          // Both host-authored items (a shell's update, a forward's
-          // interruption) are content-free: the label is all they carry.
-          <span className="text-muted-foreground">{item.description}</span>
-        )}
+        <QueuedMessageRowText item={item} agentFold={props.agentFold} />
       </div>
-      <QueuedMessageFallbackReason
-        item={item}
-        pillSaysPausedAfterError={
-          props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
-        }
+      {/* A folded agent row is one line, its held reason included: the
+          reason comes back with the rest of the message when it is unfolded
+          (#2441, PR review). */}
+      {compact ? null : (
+        <QueuedMessageFallbackReason
+          item={item}
+          pillSaysPausedAfterError={
+            props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+/** A row's text at its usual three-line cap. */
+const CONTENT_SCROLL_FULL = "max-h-[calc(3lh+--spacing(1))] overflow-y-auto";
+/**
+ * A folded agent row's box. NOT clipped (#2441 review F1): the sender chip
+ * and the status toolbar float in this box and are taller than a text line,
+ * so a one-line cap here cropped them, and at a narrow width wrapped them out
+ * of sight altogether. `flow-root` contains the floats instead, and the one
+ * line is the PROSE's limit (`COMPACT_PREVIEW`), so a row the width can hold
+ * on one line measures exactly what a three-line row with one line does.
+ */
+const CONTENT_SCROLL_COMPACT = "flow-root";
+/**
+ * The folded prose (plain text): one line, ellipsized, never taller than that
+ * line. It is
+ * a formatting context of its own, so it sits BESIDE the floats; its minimum
+ * width is what sends it below them, at full width, once the space beside
+ * them is too narrow to read (a 239px pane), rather than shrinking it to
+ * nothing. `min(6rem, 100%)`, never a bare `6rem`: the floor is capped at the
+ * row's own width, so no pane is narrow enough for it to push the row wider.
+ */
+const COMPACT_PREVIEW = "line-clamp-1 max-h-[1lh] min-w-[min(6rem,100%)]";
+
+function agentFoldCompact(
+  fold: QueuedMessageRowContentAgentFold | null,
+): boolean {
+  return fold !== null && !fold.expanded;
+}
+
+function QueuedMessageRowText(props: {
+  readonly item: OpenChatQueuedItem;
+  readonly agentFold: QueuedMessageRowContentAgentFold | null;
+}): ReactNode {
+  const item = props.item;
+  if (item.kind !== "prompt") {
+    // Both host-authored items (a shell's update, a forward's interruption)
+    // are content-free: the label is all they carry.
+    return <span className="text-muted-foreground">{item.description}</span>;
+  }
+  if (agentFoldCompact(props.agentFold)) {
+    // Plain text, not the rich preview: a clamped rich preview still renders
+    // every link in the message, so a link past the one visible line would be
+    // focusable and activatable with nothing on screen to show it (#2441, PR
+    // review). The folded row is something to click open, not to act inside.
+    return (
+      <QueuedMessageAgentFoldToggle fold={props.agentFold}>
+        <div
+          className={cn("text-foreground", COMPACT_PREVIEW)}
+          data-testid="queued-message-content-preview"
+        >
+          {composerDisplayPlainText(item.message.content) || "Queued message"}
+        </div>
+      </QueuedMessageAgentFoldToggle>
+    );
+  }
+  return (
+    <QueuedMessageAgentFoldToggle fold={props.agentFold}>
+      <ComposerContentPreview
+        content={item.message.content}
+        emptyLabel="Queued message"
+        testId="queued-message-content-preview"
+        className={undefined}
       />
+    </QueuedMessageAgentFoldToggle>
+  );
+}
+
+/** Whether a click inside `toggle` landed on a link or button within it. */
+function clickFromNestedControl(
+  target: EventTarget,
+  toggle: HTMLElement,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest("a, button, [role='button']");
+  return control !== null && control !== toggle;
+}
+
+/**
+ * The click target that folds and unfolds a received agent row's text, or the
+ * text alone for every other row.
+ *
+ * A `role="button"` div rather than a `<button>`: the preview renders block
+ * paragraphs and lists, which a `<button>` may not contain. The floated chip
+ * and toolbar stay OUTSIDE it, so the sender badge's tooltip and the row's
+ * controls are never part of this control's name or its click.
+ */
+function QueuedMessageAgentFoldToggle(props: {
+  readonly fold: QueuedMessageRowContentAgentFold | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const fold = props.fold;
+  if (fold === null) return props.children;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={fold.expanded}
+      className="cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      data-testid="queued-message-agent-fold"
+      onClick={(event) => {
+        // A link in the message is its own control: following it must not
+        // also fold or unfold the row it sits in.
+        if (clickFromNestedControl(event.target, event.currentTarget)) return;
+        fold.onToggle();
+      }}
+      onKeyDown={(event) => {
+        // Only keys aimed at the toggle itself, once per press: Enter on a
+        // focused link inside belongs to the link, and a held key would
+        // otherwise flicker the row.
+        if (event.target !== event.currentTarget || event.repeat) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        fold.onToggle();
+      }}
+    >
+      {props.children}
     </div>
   );
 }
@@ -1002,7 +1192,9 @@ function QueuedMessageFallbackReason(props: {
  * `max-h-[3lh]` is untouched. A queued message is the user's own text and the
  * one thing in the dock they may need to READ before deciding to edit or
  * cancel it, so the answer to "one line or two" is neither: metadata gives up
- * its line, content keeps its three.
+ * its line, content keeps its three. A received agent message is the
+ * exception (#2441): the user can only reorder it, so it is one line until
+ * clicked, and the chip is what that one line leads with.
  */
 /** The one badge a queued row's provenance calls for, or `null` for none. */
 function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
@@ -1027,7 +1219,10 @@ function QueuedMessageProvenanceChip(props: {
   if (badge === null) return null;
   return (
     <span
-      className="float-left mr-1 inline-flex"
+      // `max-w-full`: a sender's name is a chat title and can be wider than a
+      // narrow row, so the chip is held to the row and its name truncates
+      // rather than scrolling the whole list sideways (#2441 review F2).
+      className="float-left mr-1 inline-flex max-w-full"
       data-testid="queued-message-provenance-chip"
     >
       {badge}
@@ -1162,7 +1357,9 @@ function QueuedMessageFloatingChrome(props: {
   return (
     <div
       className={cn(
-        "sticky top-0 z-10 float-right ml-2 flex shrink-0 items-center",
+        // `max-w-full`: never wider than the row's text box, so a narrow pane
+        // ellipsizes the status pill rather than pushing it out of the row.
+        "sticky top-0 z-10 float-right ml-2 flex max-w-full shrink-0 items-center",
         // `gap-1` rather than `gap-0.5`: the buttons are `size-6`, which is
         // 22.5px at this root, so 3.75px between them puts their centres
         // 26.25px apart and the undersized-target spacing exception is not
@@ -1421,7 +1618,11 @@ function QueuedMessageStatusBadge(props: {
         // reach the tooltip without every pill becoming a tab stop.
         tabIndex={props.tooltip === null ? undefined : 0}
         className={cn(
-          "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
+          // `min-w-0` with the label's `truncate`: in a pane narrower than
+          // the label ("Queued for next turn" is about 127px, a 239px pane
+          // leaves the row about 117px) the pill ellipsizes inside the row
+          // instead of running past its edge (#2441 review F1).
+          "inline-flex min-w-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
           props.embedded ? null : "border border-border/60 bg-background/70",
         )}
       >
@@ -1433,7 +1634,7 @@ function QueuedMessageStatusBadge(props: {
             className={undefined}
           />
         ) : null}
-        {props.label}
+        <span className="min-w-0 truncate">{props.label}</span>
       </span>
     </TooltipWrapper>
   );
@@ -1462,11 +1663,11 @@ function ReceivedAgentBadge(props: {
       align={undefined}
     >
       <span
-        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-ui-xs font-medium text-primary"
+        className="inline-flex min-w-0 items-center gap-1 rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-ui-xs font-medium text-primary"
         data-testid="queued-message-sender-badge"
       >
-        <Inbox className="size-3" aria-hidden />
-        <span className="max-w-[8rem] truncate">{name}</span>
+        <Inbox className="size-3 shrink-0" aria-hidden />
+        <span className="min-w-0 max-w-[8rem] truncate">{name}</span>
       </span>
     </TooltipWrapper>
   );

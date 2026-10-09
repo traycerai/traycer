@@ -29,6 +29,10 @@ import {
   worktreesOnlyConfigSchema,
   type AgentWorktreeCreatePolicy,
   type WorktreesConfig,
+  catalogOnlyConfigSchema,
+  clampCatalogProbeTimeoutSeconds,
+  CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
+  type CatalogConfig,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
 import { annotateWslHealth, probeWslHealthCached } from "./wsl-health";
@@ -1076,6 +1080,59 @@ export async function setAgentWorktreeCreatePolicy(
   await writeCliConfig({
     ...current,
     worktrees: { ...current.worktrees, agentCreate: policy },
+  });
+}
+
+/**
+ * The catalog probe timeout, clamped into its supported range. Throws on an
+ * unreadable or malformed file like every `readCliConfig` caller, so a
+ * Settings control shows an error rather than a value the file does not hold.
+ */
+export async function readCatalogConfig(): Promise<CatalogConfig> {
+  const { catalog } = await readCliConfig();
+  return {
+    probeTimeoutSeconds: clampCatalogProbeTimeoutSeconds(
+      catalog.probeTimeoutSeconds,
+    ),
+  };
+}
+
+/**
+ * Best-effort synchronous read for the host's catalog probes, which read it
+ * at every probe start so a change applies without a restart. Falls back to
+ * the default on an unreadable file: the setting only lengthens a wait, and a
+ * corrupt config must not fail a model or command list. It validates
+ * `catalogOnlyConfigSchema`, so a valid `catalog` block still governs beside
+ * an unrelated defect elsewhere in the file.
+ */
+export function readCatalogConfigSync(): CatalogConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = catalogOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) {
+      return {
+        probeTimeoutSeconds: clampCatalogProbeTimeoutSeconds(
+          result.data.catalog.probeTimeoutSeconds,
+        ),
+      };
+    }
+  } catch {
+    // Missing or unreadable: the default below.
+  }
+  return { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS };
+}
+
+/**
+ * Sets the catalog probe timeout while preserving the rest of the config. The
+ * caller owns the range check (the host refuses a value outside it).
+ */
+export async function setCatalogProbeTimeoutSeconds(
+  seconds: number,
+): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    catalog: { ...current.catalog, probeTimeoutSeconds: seconds },
   });
 }
 

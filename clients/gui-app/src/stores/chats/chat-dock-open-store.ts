@@ -15,6 +15,14 @@ import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
  * on this machine is the failure the per-chat reveal exists to avoid.
  *
  * Nothing ever auto-opens: a chat with no entry here has no panel attached.
+ *
+ * The Message queue's fold lives here too (#2441), for the same reason and one
+ * more: the queue panel unmounts whenever the queue drains, so a fold kept in
+ * the panel came back open with the next queued message - in a busy chat, all
+ * the time. A chat with no entry has its queue OPEN, which is what it always
+ * was; only a fold the user made is remembered. It is keyed by the tab's HOST
+ * as well as the chat: chat ids are host-minted, so two hosts can each hold a
+ * chat with the same id (gui-app AGENTS.md: a chat id is not a host binding).
  */
 const MAX_REMEMBERED_CHATS = 64;
 
@@ -24,22 +32,32 @@ interface ChatDockOpenState {
   readonly toggleSection: (chatId: string, section: ChatDockSection) => void;
   /** Closes whatever this chat had open - a section that went empty. */
   readonly closeSection: (chatId: string) => void;
+  /**
+   * Host-and-chat keys (`queueFoldKey`) whose Message queue the user folded;
+   * absent means open.
+   */
+  readonly queueCollapsedByHostChat: ReadonlyMap<string, boolean>;
+  readonly setQueueCollapsed: (
+    hostId: string,
+    chatId: string,
+    collapsed: boolean,
+  ) => void;
 }
 
 /**
  * Insertion-ordered and bounded: a long-lived window can visit thousands of
  * chats, and the oldest entry is the one nobody is looking at.
  */
-function withBoundedEntry(
-  current: ReadonlyMap<string, ChatDockSection>,
+function withBoundedEntry<T>(
+  current: ReadonlyMap<string, T>,
   chatId: string,
-  section: ChatDockSection,
-): ReadonlyMap<string, ChatDockSection> {
+  value: T,
+): ReadonlyMap<string, T> {
   const next = new Map(current);
   // Delete first so a re-opened chat moves to the END of the insertion order
   // and cannot be evicted while it is the one on screen.
   next.delete(chatId);
-  next.set(chatId, section);
+  next.set(chatId, value);
   while (next.size > MAX_REMEMBERED_CHATS) {
     const oldest = next.keys().next();
     if (oldest.done === true) break;
@@ -70,10 +88,46 @@ export const useChatDockOpenStore = create<ChatDockOpenState>((set) => ({
       return { openByChatId: next };
     });
   },
+  queueCollapsedByHostChat: new Map<string, boolean>(),
+  setQueueCollapsed: (hostId, chatId, collapsed) => {
+    const key = queueFoldKey(hostId, chatId);
+    set((state) => {
+      if (collapsed) {
+        return {
+          queueCollapsedByHostChat: withBoundedEntry(
+            state.queueCollapsedByHostChat,
+            key,
+            true,
+          ),
+        };
+      }
+      // Open is the default, so an opened queue drops its entry rather than
+      // holding a slot in the bound.
+      if (!state.queueCollapsedByHostChat.has(key)) return state;
+      const next = new Map(state.queueCollapsedByHostChat);
+      next.delete(key);
+      return { queueCollapsedByHostChat: next };
+    });
+  },
 }));
 
 export function useChatDockOpenSection(chatId: string): ChatDockSection | null {
   return useChatDockOpenStore(
     (state) => state.openByChatId.get(chatId) ?? null,
+  );
+}
+
+/**
+ * One key per (host, chat). A JSON pair rather than a joined string, so no
+ * character in either id can make two different pairs collide.
+ */
+export function queueFoldKey(hostId: string, chatId: string): string {
+  return JSON.stringify([hostId, chatId]);
+}
+
+export function useChatQueueCollapsed(hostId: string, chatId: string): boolean {
+  const key = queueFoldKey(hostId, chatId);
+  return useChatDockOpenStore(
+    (state) => state.queueCollapsedByHostChat.get(key) === true,
   );
 }

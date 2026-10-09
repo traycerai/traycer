@@ -92,6 +92,8 @@ interface ProbeWindow extends Window {
   __probeDock?: (members: ProbeDockMembers) => void;
   __probeTheme?: (mode: "light" | "dark") => void;
   __probeQueueAgentReply?: (text: string) => void;
+  /** The same reply under a given sender name: a chat title can be long. */
+  __probeQueueAgentReplyFrom?: (text: string, displayName: string) => void;
   /** Empties the queue, agent replies included: those have no Delete. */
   __probeQueueClear?: () => void;
   /** The row recipe every dock panel's one-line row is held to (L-171). */
@@ -166,6 +168,25 @@ export function ComposerQueueDockFixture(): ReactElement {
               harnessId: "claude",
               agentId: "probe-sender-agent",
               displayName: "Probe reviewer",
+              reply: { expectsReply: false },
+              inReplyTo: null,
+            },
+          },
+        ],
+      }));
+    };
+    probeWindow.__probeQueueAgentReplyFrom = (text, displayName) => {
+      setQueue((current) => ({
+        ...current,
+        items: [
+          ...current.items,
+          {
+            ...queuedPrompt(current.items.length + 100, text),
+            sender: {
+              type: "agent",
+              harnessId: "claude",
+              agentId: "probe-sender-agent",
+              displayName,
               reply: { expectsReply: false },
               inReplyTo: null,
             },

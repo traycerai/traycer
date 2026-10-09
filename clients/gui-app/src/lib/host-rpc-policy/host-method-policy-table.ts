@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
@@ -791,8 +792,19 @@ export const HOST_METHOD_POLL_TABLE = {
       resetLaneIds: HARNESS_RESET_LANES,
     }),
   },
-  "agent.gui.listModels": { ...LATEST_SCHEDULING, poll: null },
-  "agent.gui.listCommands": { ...LATEST_SCHEDULING, poll: null },
+  // A catalog read waits on the host's own probe bound, which the user's
+  // Model list timeout can raise past the ordinary unary deadline; see
+  // `CATALOG_LIST_RESPONSE_TIMEOUT_MS`. Every caller passes it.
+  "agent.gui.listModels": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "agent.gui.listCommands": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "agent.gui.getPlan": { ...LATEST_SCHEDULING, poll: null },
   "agent.tui.listHarnesses": { ...LATEST_SCHEDULING, poll: null },
   // Preparing a launch creates or updates host-side harness launch state.
@@ -2191,6 +2203,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
   "config.browser.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.catalog.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

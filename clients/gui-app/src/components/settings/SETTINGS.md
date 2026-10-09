@@ -1988,6 +1988,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     actions and Pause, under the pill row and every other row. It has no
     Size, no Shown and no dock position; stale stored values for it are
     dropped on rehydrate. It empties to nothing, leaving no gap.
+    Its fold is remembered per host and chat in `chat-dock-open-store.ts`
+    (#2441), because the panel unmounts whenever the queue drains and a fold
+    kept in the panel came back open with the next queued message; chat ids
+    are host-minted, so the host is part of the key. A received agent row is
+    one line (its sender chip and the message as plain text, ellipsized; a
+    held reason waits for the unfold) until its text is clicked, and the
+    header splits the count: `2 messages · 12 from agents`.
   - **Received A2A queue rows follow the Running agents mode**, and fold into
     the same chip with their own count. That is also why the chip exists
     whenever those rows do, even with no sub-agent running: without it, folding
@@ -3386,6 +3393,22 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       that instead of the generic sentence. The fallback stays TRUE for a bare
       code rather than becoming a wrong-bug answer: a config the parser rejects
       is a server that failed to start.
+    - **Model list timeout** (`providers-catalog-timeout-chip.tsx`) — a chip
+      on the heading row, left of "All providers · Refresh": how long the
+      scoped host waits for a provider's model or command list
+      (`catalog.probeTimeoutSeconds` in `~/.traycer/cli/config.json` on that
+      machine, read over `config.catalog.get` / `set`). Host-wide, like the
+      status beside it, which is why it is on the heading row and not in the
+      selected provider's card. It mounts under the same
+      `isHostScopeUsable` guard and also resolves the Worktrees chips' gate
+      (`resolveAutoCleanupGate`, both methods advertised); anything short of
+      `ready` renders nothing, so a host without the methods has no control.
+      A radio menu of 60 / 90 / 120 / 180 s filtered to the `bounds` the
+      host returns, plus the stored value as "N s (custom)" when a
+      hand-edited file holds another; picking the current value writes
+      nothing. A failed read (malformed config file) replaces the items with
+      the Worktrees chip's repair sentence. The host reads the value at every
+      catalog probe, so a change applies to the next read without a restart.
     - **The global "All providers" status lives on the panel HEADING row**, and
       renders only when `isHostScopeUsable(scope.status)`.
       `latestProviderCheckedAt` is a max over every provider and Refresh
