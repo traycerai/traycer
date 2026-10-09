@@ -71,6 +71,19 @@ describe("sandboxFailureMessage", () => {
     ).toBe("Your credits don't cover an hour of this sandbox.");
   });
 
+  it("rounds the credits to add UP, so the retry is not refused again by a rounded-down top-up", () => {
+    expect(
+      sandboxFailureMessage(
+        refused("insufficient_credit", {
+          reason: "denied",
+          shortfallMc: 10_100,
+        }),
+      ),
+    ).toBe(
+      "Your credits don't cover an hour of this sandbox. Add 11 credits and try again.",
+    );
+  });
+
   it("reads the gate's other verdicts as what they are", () => {
     expect(
       sandboxFailureMessage(

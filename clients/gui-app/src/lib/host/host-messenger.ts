@@ -790,11 +790,15 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
+  // What `OPEN` presents IS included: a sandbox first projected as a personal
+  // host (a list read before the sandbox facts arrived) must rebuild once the
+  // entry is corrected, or its RPCs keep riding a user-bearer session.
   return [
     entry.hostId,
     entry.websocketUrl,
     entry.version ?? "",
     entry.publicKey,
+    remoteOpenAuthFor(entry),
   ].join(TRANSPORT_KEY_SEPARATOR);
 }
 

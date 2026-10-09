@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   createFakeSandboxBinding,
   refusal,
@@ -285,6 +286,66 @@ describe("<SandboxCreateDialog />", () => {
       screen.getByText("Sandboxes aren't offered right now."),
     ).toBeDefined();
     expect(screen.queryByTestId("sandbox-create-submit")).toBeNull();
+  });
+
+  it("holds the submit while a create runs after its dialog was closed and reopened, and toasts the creation once when it lands", async () => {
+    let resolveCreate: (result: SandboxCreateFetchResult) => void = () =>
+      undefined;
+    mocks.binding?.auth.createSandbox.mockImplementation(
+      () =>
+        new Promise<SandboxCreateFetchResult>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    renderDialog();
+    await screen.findByTestId("sandbox-create-dialog");
+    type("sandbox-create-name", "build-box");
+    fireEvent.click(submit());
+    await waitFor(() => {
+      expect(mocks.binding?.auth.createSandbox).toHaveBeenCalledTimes(1);
+    });
+    // The form that is creating shows its own spinner, not the in-flight line.
+    expect(screen.queryByTestId("sandbox-create-in-flight")).toBeNull();
+
+    act(() => {
+      useSandboxCreateDialogStore.getState().closeDialog();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("sandbox-create-name")).toBeNull();
+    });
+    act(() => {
+      useSandboxCreateDialogStore.getState().openDialog();
+    });
+
+    // A fresh form, whose own mutation is idle, while the first still runs.
+    await screen.findByTestId("sandbox-create-in-flight");
+    expect(screen.getByTestId("sandbox-create-in-flight").textContent).toBe(
+      "A sandbox is being created…",
+    );
+    type("sandbox-create-name", "second-box");
+    expect(submit().hasAttribute("disabled")).toBe(true);
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+
+    // The form that sent it is long unmounted; the mutation still reports.
+    await act(async () => {
+      resolveCreate({
+        kind: "ok",
+        accepted: {
+          sandboxId: "sbx_1",
+          hostId: "host-1",
+          sandbox: sandboxSummaryFixture({ state: "creating" }),
+        },
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Created build-box");
+    expect(mocks.binding?.auth.createSandbox).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.queryByTestId("sandbox-create-in-flight")).toBeNull();
+    });
   });
 
   it("says to sign in, with no spinner, when the user is signed out", async () => {

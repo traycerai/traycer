@@ -3,6 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type {
   SandboxCreateAccepted,
   SandboxCreateRequest,
@@ -46,6 +47,12 @@ export function useSandboxCreate(): UseMutationResult<
         return result.accepted;
       }
       throw new Error(sandboxFailureMessage(result));
+    },
+    // At hook level, not the form's `mutate` call: the form unmounts when the
+    // dialog closes, and a create can take minutes, so only the mutation
+    // itself is still there to say it finished.
+    onSuccess: (_data, request) => {
+      toast.success(`Created ${request.displayName}`);
     },
     // Settled, not only success: a `502 provider_failed` leaves a `failed`
     // row behind, which the lists must show so it can be destroyed.

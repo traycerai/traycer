@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { toast } from "sonner";
+import { useIsMutating } from "@tanstack/react-query";
 import type {
   SandboxCatalogue,
   SandboxCatalogueProvider,
@@ -32,6 +32,7 @@ import {
   roundSandboxShape,
   sandboxShapeProblem,
 } from "@/lib/sandboxes/sandbox-pricing";
+import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 
@@ -198,6 +199,11 @@ function SandboxCreateForm(props: {
     ),
   );
   const create = useSandboxCreate();
+  // A create outlives this form: closing the dialog unmounts it, and a
+  // reopened form's own mutation is idle. Any create in flight, from any
+  // mount, holds the submit, so a second one is never sent meanwhile.
+  const creating =
+    useIsMutating({ mutationKey: sandboxMutationKeys.create() }) > 0;
   const provider = providerFor(props.catalogue, form.os);
   const requested = {
     cpus: Number(form.cpus),
@@ -211,7 +217,7 @@ function SandboxCreateForm(props: {
     null;
   const name = form.name.trim();
   const canSubmit =
-    problem === null && region !== null && name.length > 0 && !create.isPending;
+    problem === null && region !== null && name.length > 0 && !creating;
 
   return (
     // `noValidate`: the number inputs carry the catalogue's min / max / step
@@ -238,12 +244,7 @@ function SandboxCreateForm(props: {
             createdByHostId: null,
             createdByAgentId: null,
           },
-          {
-            onSuccess: () => {
-              toast.success(`Created ${name}`);
-              props.onDone();
-            },
-          },
+          { onSuccess: () => props.onDone() },
         );
       }}
     >
@@ -335,13 +336,21 @@ function SandboxCreateForm(props: {
         regionLabel={region?.label ?? null}
         fromAwakeMc={region?.fromPriceMcPerHour.awakeMc ?? null}
       />
+      {creating && !create.isPending ? (
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="sandbox-create-in-flight"
+        >
+          A sandbox is being created…
+        </p>
+      ) : null}
       <DialogFooter>
         <Button
           type="submit"
           disabled={!canSubmit}
           data-testid="sandbox-create-submit"
         >
-          {create.isPending ? (
+          {creating ? (
             <AgentSpinningDots
               className={undefined}
               testId="sandbox-create-spinner"

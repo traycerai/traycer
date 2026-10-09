@@ -10,7 +10,7 @@ import {
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
 } from "@traycer/protocol/host/sandbox-control";
-import { formatCredits } from "@/lib/sandboxes/sandbox-pricing";
+import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 
 /** `shape_not_offered`'s `reason`, in words. */
 const SHAPE_REASON_COPY: Record<string, string> = {
@@ -36,7 +36,7 @@ function insufficientCreditCopy(
   // of what is already awake), so the sentence names no verb.
   return failure.shortfallMc === null
     ? "Your credits don't cover an hour of this sandbox."
-    : `Your credits don't cover an hour of this sandbox. Add ${formatCredits(failure.shortfallMc)} credits and try again.`;
+    : `Your credits don't cover an hour of this sandbox. Add ${formatCreditsRequired(failure.shortfallMc)} credits and try again.`;
 }
 
 /**

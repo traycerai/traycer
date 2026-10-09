@@ -858,6 +858,80 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     binding.dispose();
   });
 
+  it("rebuilds its remote transport with a session grant when a personal-looking entry is corrected to a sandbox, and not for a same-content re-emit", async () => {
+    // A sandbox first projected as a personal host (a list read before the
+    // sandbox facts arrived) built a user-bearer transport. Once the entry is
+    // corrected that transport must not be kept.
+    const session = controllableSession();
+    mocks.createRemoteHostTransport.mockImplementation(() => ({
+      session,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    }));
+    let currentRemoteEntry: RemoteHostDirectoryEntry = remoteEntry;
+    const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      resolveTarget: (hostId) =>
+        hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
+      auth: null,
+      authnBaseUrl: "https://authn.invalid",
+      requestId: () => "req-1",
+      onRemoteAvailabilityRecovered: () => undefined,
+    });
+    const requestRemote = (): Promise<unknown> =>
+      binding.messenger
+        .request(
+          "host.status",
+          {},
+          {
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+            idempotencyKey: null,
+            authority: authorityFor(
+              REMOTE_HOST_ID,
+              remoteEntry.websocketUrl ?? "",
+            ),
+          },
+        )
+        .catch(() => undefined);
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(mocks.createRemoteHostTransport).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ openAuth: "user-bearer" }),
+    );
+
+    // Same content, re-emitted as a new object: the live transport is kept.
+    currentRemoteEntry = { ...remoteEntry };
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    // The same host, now carrying its sandbox facts: rebuilt on a grant.
+    currentRemoteEntry = {
+      ...remoteEntry,
+      sandbox: { state: "suspended", frozen: false, profile: null },
+    };
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+    expect(mocks.createRemoteHostTransport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ openAuth: "session-grant" }),
+    );
+
+    // And a same-content re-emit of the corrected entry keeps that one.
+    currentRemoteEntry = {
+      ...remoteEntry,
+      sandbox: { state: "suspended", frozen: false, profile: null },
+    };
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    binding.dispose();
+  });
+
   it("a routine close (no fatal) records no verdict, fires no invalidation, and the next request rebuilds", () => {
     // Linger expiry / supersession retire a session without a verdict; the
     // host's next visit must dial normally, not land on a poisoned error.

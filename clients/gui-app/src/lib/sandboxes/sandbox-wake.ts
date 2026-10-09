@@ -15,7 +15,7 @@ import type { HostDirectoryService } from "@/lib/host";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
-import { formatCredits } from "@/lib/sandboxes/sandbox-pricing";
+import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 
 /** How often the sandbox list is re-read while a wake is under way. */
 const WAKE_POLL_INTERVAL_MS = 2_000;
@@ -100,12 +100,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function runSharedWake(
-  auth: AuthService | null,
+  auth: AuthService,
   hostId: string,
 ): Promise<SandboxWakeRun> {
-  if (auth === null) {
-    return { outcome: { kind: "failed", detail: "signed out" }, joined: false };
-  }
   const running = wakesInFlight.get(hostId);
   if (running !== undefined) {
     return { outcome: await running, joined: true };
@@ -133,7 +130,7 @@ function toastWakeOutcome(outcome: SandboxWakeOutcome): void {
         description:
           outcome.shortfallMc === null
             ? "Add credits, then try again."
-            : `Add ${formatCredits(outcome.shortfallMc)} credits, then try again.`,
+            : `Add ${formatCreditsRequired(outcome.shortfallMc)} credits, then try again.`,
       });
       return;
     case "wake-not-available":
@@ -185,14 +182,15 @@ export function startSandboxWake(
   binding: SandboxWakeBinding | null,
   hostId: string,
 ): void {
-  const auth = binding === null ? null : binding.auth;
-  const directory = binding === null ? null : binding.directory;
+  // Signed out there is no sandbox row to wake, and nothing a retry fixes.
+  if (binding === null) return;
+  const { auth, directory } = binding;
   const observer = new QueryMutationObserver<SandboxWakeRun>(client, {
     mutationKey: sandboxMutationKeys.wake(hostId),
     mutationFn: () => runSharedWake(auth, hostId),
     onSuccess: (run) => {
       if (run.joined) return;
-      void directory?.refresh();
+      void directory.refresh();
       void client.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
@@ -200,8 +198,13 @@ export function startSandboxWake(
     },
     onError: () => toastWakeFailed(),
   });
-  // A rejection is already reported by `onError`.
-  observer.mutate().catch(() => undefined);
+  // Subscribed for the mutation's life, so the cache can collect it once it
+  // settles; a rejection is already reported by `onError`.
+  const unsubscribe = observer.subscribe(() => undefined);
+  observer
+    .mutate()
+    .catch(() => undefined)
+    .finally(unsubscribe);
 }
 
 /**

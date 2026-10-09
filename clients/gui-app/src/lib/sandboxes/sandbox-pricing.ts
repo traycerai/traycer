@@ -9,6 +9,18 @@ export function formatCredits(mc: number): string {
   return credits < 10 ? credits.toFixed(2) : Math.round(credits).toString();
 }
 
+/**
+ * A credit amount the user is told to ADD, in the same format, rounded UP:
+ * hundredths below 10 credits, whole credits above. A balance or a rate
+ * rounds to nearest (`formatCredits`); a top-up rounded down would leave the
+ * account short and the retry refused again.
+ */
+export function formatCreditsRequired(mc: number): string {
+  const centicredits = Math.ceil(mc / (MC_PER_CREDIT / 100));
+  const credits = centicredits / 100;
+  return credits < 10 ? credits.toFixed(2) : Math.ceil(credits).toString();
+}
+
 /** Megabytes as copy: GB from 1 GB up (one decimal when not whole), else MB. */
 export function formatMemory(memoryMb: number): string {
   if (memoryMb < MB_PER_GIB) return `${memoryMb} MB`;

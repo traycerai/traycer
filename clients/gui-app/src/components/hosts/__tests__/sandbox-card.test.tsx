@@ -21,6 +21,7 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
@@ -69,7 +70,7 @@ const NAME = "build-box";
 
 function renderCard(sandbox: HostScopeSandbox): void {
   const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
   render(
     <QueryClientProvider client={queryClient}>
@@ -310,6 +311,90 @@ describe("<SandboxCard /> per state", () => {
     const warning = screen.getByTestId("sandbox-balance-warning");
     expect(warning.getAttribute("data-level")).toBe("critical");
     expect(warning.textContent).toContain("20 min");
+  });
+});
+
+describe("<SandboxCard /> without a summary", () => {
+  // The details come from the sandbox list, which loads for a signed-in user.
+  beforeEach(() => {
+    useAuthStore.setState({ status: "signed-in" });
+  });
+  afterEach(() => {
+    useAuthStore.setState({ status: "signed-out" });
+  });
+
+  function renderWithoutSummary(state: HostScopeSandbox["state"]): void {
+    renderCard({ state, frozen: false, summary: null });
+  }
+
+  it("says it is loading while the list has not answered", async () => {
+    mocks.binding?.auth.listSandboxes.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    renderWithoutSummary("suspended");
+
+    await screen.findByText("Loading this sandbox's details…");
+    expect(screen.queryByTestId("sandbox-card-details-reload")).toBeNull();
+  });
+
+  it("says the details could not be loaded when the list failed, and Retry reads the list again", async () => {
+    mocks.binding?.auth.listSandboxes.mockResolvedValue({
+      kind: "network-error",
+      detail: "the request never completed (TypeError)",
+    });
+    renderWithoutSummary("suspended");
+
+    const failed = await screen.findByTestId("sandbox-card-details-failed");
+    expect(failed.textContent).toContain(
+      "Couldn't load this sandbox's details.",
+    );
+    const retry = screen.getByTestId("sandbox-card-details-reload");
+    expect(retry.textContent).toBe("Retry");
+    const reads = mocks.binding?.auth.listSandboxes.mock.calls.length ?? 0;
+
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(mocks.binding?.auth.listSandboxes).toHaveBeenCalledTimes(
+        reads + 1,
+      );
+    });
+  });
+
+  it("says a destroyed sandbox was destroyed once the list answered without it", async () => {
+    mocks.binding?.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    renderWithoutSummary("destroyed");
+
+    const destroyed = await screen.findByTestId(
+      "sandbox-card-details-destroyed",
+    );
+    expect(destroyed.textContent).toBe("This sandbox was destroyed.");
+    expect(screen.queryByTestId("sandbox-card-details-reload")).toBeNull();
+  });
+
+  it("says any other sandbox missing from an answered list is not in it, and Refresh reads the list again", async () => {
+    mocks.binding?.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    renderWithoutSummary("suspended");
+
+    const absent = await screen.findByTestId("sandbox-card-details-absent");
+    expect(absent.textContent).toContain("Not in your sandbox list.");
+    const refresh = screen.getByTestId("sandbox-card-details-reload");
+    expect(refresh.textContent).toBe("Refresh");
+    const reads = mocks.binding?.auth.listSandboxes.mock.calls.length ?? 0;
+
+    fireEvent.click(refresh);
+
+    await waitFor(() => {
+      expect(mocks.binding?.auth.listSandboxes).toHaveBeenCalledTimes(
+        reads + 1,
+      );
+    });
   });
 });
 

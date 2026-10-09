@@ -153,6 +153,35 @@ describe("wakeSandboxOnPick", () => {
     expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("names the credit shortfall rounded up, and none when the gate sent none", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 10_100,
+    });
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      { description: "Add 11 credits, then try again." },
+    );
+
+    binding.auth.runSandboxVerb.mockResolvedValueOnce(
+      refusal(402, "insufficient_credit"),
+    );
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      { description: "Add credits, then try again." },
+    );
+  });
+
   it("starts a fresh wake for a pick made after the last one settled", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
@@ -210,16 +239,21 @@ describe("wakeSandboxOnPick", () => {
     expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
   });
 
-  it("says a wake with no host binding failed rather than doing nothing", async () => {
+  it("does nothing, and says nothing, for a wake with no host binding", async () => {
     mocks.binding = null;
 
     wakeSandboxOnPick(sandboxOption("suspended", false));
+    // Synchronous: no mutation was ever created.
+    expect(wakeMutations()).toBe(0);
     await settleWake();
 
-    expect(mocks.toastError).toHaveBeenCalledTimes(1);
-    expect(mocks.toastError.mock.calls[0][0]).toBe(
-      "Couldn't wake this sandbox",
-    );
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+    expect(
+      queryClient
+        .getMutationCache()
+        .findAll({ mutationKey: sandboxMutationKeys.wake(HOST_ID) }),
+    ).toEqual([]);
   });
 
   it("runs under the host's wake mutation key while it is under way, so a tile can show Resuming", async () => {
@@ -236,5 +270,28 @@ describe("wakeSandboxOnPick", () => {
 
     await settleWake();
     expect(wakeMutations()).toBe(0);
+  });
+
+  it("lets the cache collect the wake's mutation once it settles, because nothing observes it any more", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    scriptListUntilVerb(binding, "suspended");
+    const findWakes = () =>
+      queryClient
+        .getMutationCache()
+        .findAll({ mutationKey: sandboxMutationKeys.wake(HOST_ID) });
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+
+    const settled = findWakes();
+    expect(settled).toHaveLength(1);
+    expect(settled[0].state.status).toBe("success");
+
+    // A mutation's observer list is private, so the unsubscribe is read
+    // through what it causes: the cache removes a settled mutation only once
+    // no observer is left, after its gc window.
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(findWakes()).toEqual([]);
   });
 });

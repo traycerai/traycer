@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SandboxShapeBounds } from "@traycer/protocol/host/sandbox-control";
 import {
   formatCredits,
+  formatCreditsRequired,
   formatMemory,
   roundSandboxShape,
   roundUpToStep,
@@ -29,6 +30,25 @@ describe("formatCredits", () => {
     expect(formatCredits(9_994)).toBe("9.99");
     expect(formatCredits(10_000)).toBe("10");
     expect(formatCredits(12_600)).toBe("13");
+  });
+
+  it("rounds a balance to nearest, unlike an amount to add", () => {
+    expect(formatCredits(10_100)).toBe("10");
+  });
+});
+
+describe("formatCreditsRequired", () => {
+  it("rounds an amount to add UP to the hundredth, then shows two decimals under ten credits", () => {
+    expect(formatCreditsRequired(1_000)).toBe("1.00");
+    expect(formatCreditsRequired(1_001)).toBe("1.01");
+    expect(formatCreditsRequired(300)).toBe("0.30");
+  });
+
+  it("shows whole credits, rounded up, from ten up", () => {
+    expect(formatCreditsRequired(10_000)).toBe("10");
+    expect(formatCreditsRequired(10_100)).toBe("11");
+    // Rounds up to ten credits, so it reads as a whole number.
+    expect(formatCreditsRequired(9_995)).toBe("10");
   });
 });
 

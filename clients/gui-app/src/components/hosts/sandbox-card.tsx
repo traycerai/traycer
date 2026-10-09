@@ -41,6 +41,7 @@ import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-co
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
@@ -99,9 +100,7 @@ export function SandboxCard(props: {
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         {summary === null ? (
-          <p className="text-ui-xs text-muted-foreground">
-            Loading this sandbox&apos;s details…
-          </p>
+          <SandboxDetailsMissing state={state} />
         ) : (
           <>
             <SandboxFacts summary={summary} />
@@ -117,6 +116,69 @@ export function SandboxCard(props: {
         </CardFooter>
       ) : null}
     </Card>
+  );
+}
+
+/**
+ * What the card says when the sandbox list has no row for it, from the list
+ * read's own status: still being read, failed (with Retry), or answered
+ * without this sandbox. The last is how a destroyed sandbox looks (the list
+ * leaves destroyed rows out while the host list keeps them); any other state
+ * missing from an answered list is a list that has not caught up, so it
+ * offers Refresh.
+ */
+function SandboxDetailsMissing(props: {
+  readonly state: HostSandboxState | null;
+}): ReactNode {
+  const list = useSandboxList();
+  const listed = list.data !== undefined && list.data !== null;
+  if (!listed && !list.isError) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">
+        Loading this sandbox&apos;s details…
+      </p>
+    );
+  }
+  if (listed && props.state === "destroyed") {
+    return (
+      <p
+        className="text-ui-xs text-muted-foreground"
+        data-testid="sandbox-card-details-destroyed"
+      >
+        This sandbox was destroyed.
+      </p>
+    );
+  }
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2"
+      data-testid={
+        listed ? "sandbox-card-details-absent" : "sandbox-card-details-failed"
+      }
+    >
+      <p className="text-ui-xs text-muted-foreground">
+        {listed
+          ? "Not in your sandbox list."
+          : "Couldn't load this sandbox's details."}
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={list.isFetching}
+        data-testid="sandbox-card-details-reload"
+        onClick={() => void list.refetch()}
+      >
+        {list.isFetching ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        {listed ? "Refresh" : "Retry"}
+      </Button>
+    </div>
   );
 }
 
