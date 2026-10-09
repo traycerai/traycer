@@ -480,6 +480,18 @@ export function groupHostOptions(
 }
 
 /**
+ * The rows a picker may offer as the TARGET of a credential: a sign-in, a
+ * provider's API key, a synced profile. A sandbox host refuses every one of
+ * them (`SANDBOX_HOST_REFUSES_CREDENTIALS`), so offering it would walk the
+ * user into a step that can only fail; personal hosts only.
+ */
+export function credentialTargetHostOptions(
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  return hosts.filter((host) => host.sandbox === null);
+}
+
+/**
  * {@link groupHostOptions} flattened for a surface that draws one flat list
  * (the account menu, the browser sidebar): personal hosts first, then the
  * pickable sandboxes, never a burst one.

@@ -27,13 +27,12 @@ import { sandboxMutationKeys } from "@/lib/query-keys";
  * deaf to keystrokes (a terminal's textarea would otherwise take them and
  * swallow Tab before it reached Resume) and hidden from assistive tech, which
  * would read the tile as live. The `contents` wrapper is there on every
- * render of a sandbox tile, overlay or not, so toggling `inert` never
- * remounts the body.
+ * render of every tile, sandbox or not and overlay or not, so neither the
+ * directory's first answer nor toggling `inert` ever remounts the body.
  *
- * Reads the tile's own host (`useTabHostId`). A personal host's tile gets its
- * children back unwrapped, so nothing changes for it. A sandbox tile is
- * wrapped from the moment the directory says it is one (the kind is fixed for
- * a host's life, so this happens once, at the first directory answer).
+ * Reads the tile's own host (`useTabHostId`). A personal host's tile is never
+ * greyed. With no host runtime above the tile at all the children come back
+ * unwrapped: there is no directory to read.
  */
 export function SandboxTileStateFrame(props: {
   readonly children: ReactNode;
@@ -55,8 +54,13 @@ function SandboxTileStateFrameInRuntime(props: {
   const entry = useHostDirectoryEntry(hostId);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  if (facts === null) return props.children;
-  const overlay = sandboxTileOverlay(facts.state, facts.frozen);
+  // The same two wrappers for every tile, from the first render: a restored
+  // tile mounts before the directory answers, and wrapping its body only once
+  // the entry says "sandbox" would move the body under new parents and
+  // remount it (a browser guest reloads, a terminal session is torn down),
+  // awake sandbox or not. Only the overlay and `inert` vary.
+  const overlay =
+    facts === null ? null : sandboxTileOverlay(facts.state, facts.frozen);
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"

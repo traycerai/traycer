@@ -8,6 +8,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
+  credentialTargetHostOptions,
   groupHostOptions,
   hostOptionKindLabel,
   hostOptionPickerGroup,
@@ -273,6 +274,49 @@ describe("sleeping sandbox picks", () => {
     expect(hostOptionPickerGroup(pod, false)).toBe("hidden");
     expect(hostOptionPickerGroup(pod, true)).toBe("sandbox");
     expect(pickableHostOptions([pod], null)).toEqual([]);
+  });
+});
+
+describe("credentialTargetHostOptions", () => {
+  const sandboxOf = (
+    hostId: string,
+    state: "awake" | "suspended",
+    frozen: boolean,
+    burst: boolean,
+  ): HostScopeOption =>
+    hostScopeOptionFixture({
+      hostId,
+      kind: "sandbox",
+      sandbox: {
+        state,
+        frozen,
+        summary: sandboxSummaryFixture({ hostId, state, frozen, burst }),
+      },
+    });
+
+  it("drops every sandbox row, awake, frozen or burst, and keeps personal hosts in their order", () => {
+    const first = hostScopeOptionFixture({ hostId: "laptop" });
+    const second = hostScopeOptionFixture({ hostId: "desktop" });
+
+    expect(
+      credentialTargetHostOptions([
+        first,
+        sandboxOf("sbx-awake", "awake", false, false),
+        sandboxOf("sbx-frozen", "suspended", true, false),
+        second,
+        sandboxOf("sbx-burst", "awake", false, true),
+      ]).map((h) => h.hostId),
+    ).toEqual(["laptop", "desktop"]);
+  });
+
+  it("drops a sandbox whose control-plane row has not answered, and is empty for no hosts", () => {
+    const unanswered = hostScopeOptionFixture({
+      hostId: "sbx-unknown",
+      kind: "sandbox",
+      sandbox: { state: "awake", frozen: false, summary: null },
+    });
+    expect(credentialTargetHostOptions([unanswered])).toEqual([]);
+    expect(credentialTargetHostOptions([])).toEqual([]);
   });
 });
 

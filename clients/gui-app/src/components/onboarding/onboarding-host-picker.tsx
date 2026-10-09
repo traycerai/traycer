@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { Monitor } from "lucide-react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
+import { credentialTargetHostOptions } from "@/components/settings/host-scope/host-option-model";
 import {
   onboardingHostReadiness,
   type OnboardingHostPicker,
@@ -16,17 +17,23 @@ export function OnboardingHostPickerBar(props: {
   readonly className: string;
 }): ReactNode {
   const { scope } = props.picker;
+  // The tour signs providers in on the picked host and imports onto it, and a
+  // sandbox refuses credentials: it is never offered here.
+  const hosts = useMemo(
+    () => credentialTargetHostOptions(scope.hosts),
+    [scope.hosts],
+  );
   // Every host the tour cannot reach, with the word its row would carry if
   // the status column were silent. The row's own status word ("offline",
   // "stopped") speaks first when it has one; this only makes the row inert.
   const refusalByHostId = useMemo(
     (): ReadonlyMap<string, string> =>
       new Map(
-        scope.hosts
+        hosts
           .filter((host) => !host.connectable)
           .map((host) => [host.hostId, "unreachable"]),
       ),
-    [scope.hosts],
+    [hosts],
   );
   // The host rows are served by a NON-polling observer; the Settings sidebar
   // is normally what opts a window into the liveness poll. During the tour
@@ -45,7 +52,7 @@ export function OnboardingHostPickerBar(props: {
         aria-hidden="true"
         className="pointer-events-none absolute left-2.5 size-3.5 shrink-0 text-muted-foreground"
       />
-      {scope.hosts.length === 1 && scope.hosts[0]?.hostId === scope.hostId ? (
+      {hosts.length === 1 && hosts[0]?.hostId === scope.hostId ? (
         <span
           data-testid="onboarding-host-name"
           className="min-w-0 break-words py-1.5 pl-8 pr-2.5 text-[0.8125rem]"
@@ -55,7 +62,7 @@ export function OnboardingHostPickerBar(props: {
       ) : (
         <div className="flex min-w-0 flex-1">
           <HostSwitcher
-            hosts={scope.hosts}
+            hosts={hosts}
             selected={scope.host}
             activeHostId={scope.activeHostId}
             onSelect={props.picker.onSelectHost}

@@ -89,7 +89,7 @@ function registryItem(kind: "personal" | "sandbox"): HostListItem {
   };
 }
 
-function useSandboxEntry(
+function setSandboxEntry(
   state: HostSandboxState | null,
   frozen: boolean,
 ): void {
@@ -170,7 +170,7 @@ afterEach(cleanup);
 
 describe("<SandboxTileStateFrame />", () => {
   it("returns the tile untouched, reading no directory, when there is no host runtime above it", () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     mocks.binding = null;
     const { container } = renderFrame(false);
 
@@ -181,27 +181,89 @@ describe("<SandboxTileStateFrame />", () => {
     expect(mocks.entryReads).not.toHaveBeenCalled();
   });
 
-  it("returns an unwrapped personal host's tile exactly as it was", () => {
+  it("frames a personal host's tile live, with no overlay and a body that is not inert", () => {
     mocks.entry = hostListItemToDirectoryEntry(
       registryItem("personal"),
       "wss://relay.example.test",
     );
     const { container } = renderFrame(false);
-    expect(container.querySelector("[data-sandbox-tile-state]")).toBeNull();
+    expect(
+      container
+        .querySelector("[data-sandbox-tile-state]")
+        ?.getAttribute("data-sandbox-tile-state"),
+    ).toBe("live");
     expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
     expect(bodyWrapper().hasAttribute("inert")).toBe(false);
     expect(screen.getByTestId("tile-body")).toBeDefined();
   });
 
-  it("returns the tile unwrapped while the directory has not answered for its host", () => {
+  it("frames the tile live, with no overlay, while the directory has not answered for its host", () => {
     mocks.entry = null;
     const { container } = renderFrame(false);
-    expect(container.querySelector("[data-sandbox-tile-state]")).toBeNull();
+    expect(
+      container
+        .querySelector("[data-sandbox-tile-state]")
+        ?.getAttribute("data-sandbox-tile-state"),
+    ).toBe("live");
+    expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+    expect(bodyWrapper().hasAttribute("inert")).toBe(false);
     expect(screen.getByTestId("tile-body")).toBeDefined();
   });
 
+  describe("the body survives the directory's first answer", () => {
+    function answerWith(kind: "personal" | "awake" | "suspended"): void {
+      if (kind === "personal") {
+        mocks.entry = hostListItemToDirectoryEntry(
+          registryItem("personal"),
+          "wss://relay.example.test",
+        );
+        return;
+      }
+      setSandboxEntry(kind, false);
+    }
+
+    it("keeps the same body node when the entry goes from unanswered to a personal host", () => {
+      mocks.entry = null;
+      const { rerenderFrame } = renderFrame(false);
+      const body = screen.getByTestId("tile-body");
+
+      answerWith("personal");
+      rerenderFrame();
+
+      expect(screen.getByTestId("tile-body")).toBe(body);
+      expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+    });
+
+    it("keeps the same body node when the entry goes from unanswered to an awake sandbox", () => {
+      mocks.entry = null;
+      const { rerenderFrame } = renderFrame(false);
+      const body = screen.getByTestId("tile-body");
+
+      answerWith("awake");
+      rerenderFrame();
+
+      expect(screen.getByTestId("tile-body")).toBe(body);
+      expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+      expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+    });
+
+    it("keeps the same body node, now inert under the overlay, when the entry goes from unanswered to a suspended sandbox", () => {
+      mocks.entry = null;
+      const { rerenderFrame } = renderFrame(false);
+      const body = screen.getByTestId("tile-body");
+      expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+
+      answerWith("suspended");
+      rerenderFrame();
+
+      expect(screen.getByTestId("tile-body")).toBe(body);
+      expect(screen.getByTestId("sandbox-tile-overlay")).toBeDefined();
+      expect(body.closest("[inert]")).not.toBeNull();
+    });
+  });
+
   it("wraps an awake sandbox's tile live: no overlay and the body is not inert", () => {
-    useSandboxEntry("awake", false);
+    setSandboxEntry("awake", false);
     const { container } = renderFrame(false);
     expect(
       container
@@ -220,7 +282,7 @@ describe("<SandboxTileStateFrame />", () => {
       "destroyed",
       "released",
     ] as const) {
-      useSandboxEntry(state, false);
+      setSandboxEntry(state, false);
       renderFrame(false);
       expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
       expect(bodyWrapper().hasAttribute("inert")).toBe(false);
@@ -229,7 +291,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("overlays a suspended sandbox with its copy and Resume, and makes the body inert", () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     renderFrame(false);
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
@@ -244,7 +306,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("overlays a stopped sandbox with Stopped and Start", () => {
-    useSandboxEntry("stopped", false);
+    setSandboxEntry("stopped", false);
     renderFrame(false);
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toContain(
       "Stopped",
@@ -260,7 +322,7 @@ describe("<SandboxTileStateFrame />", () => {
       ["resuming", "Resuming"],
       ["starting", "Starting"],
     ] as const) {
-      useSandboxEntry(state, false);
+      setSandboxEntry(state, false);
       renderFrame(false);
       const overlay = screen.getByTestId("sandbox-tile-overlay");
       expect(overlay.getAttribute("data-kind")).toBe("moving");
@@ -273,7 +335,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("overlays a frozen sandbox with the frozen line and its destroy date, and offers no wake", () => {
-    useSandboxEntry("suspended", true);
+    setSandboxEntry("suspended", true);
     mocks.list = {
       sandboxes: [
         sandboxSummaryFixture({
@@ -296,7 +358,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("frames a frozen row without a destroy date when the server sent no frozenAt", () => {
-    useSandboxEntry("stopped", true);
+    setSandboxEntry("stopped", true);
     renderFrame(false);
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
       "Frozen: out of credits. Top up to resume.",
@@ -304,7 +366,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("puts the body out of the tab order and Resume in it: Tab can reach Resume, not the terminal", () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     renderFrame(false);
 
     const body = screen.getByTestId("tile-body");
@@ -317,7 +379,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("wakes the sandbox through the control plane when Resume is pressed", async () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     renderFrame(false);
     fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
     await waitFor(() => {
@@ -329,7 +391,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("offers no button while the control plane's row for this host has not answered", () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     mocks.list = null;
     renderFrame(false);
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toContain(
@@ -339,7 +401,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("swaps Resume for Resuming (and Start for Starting) while the tab-open wake is in flight", async () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     renderFrame(true);
     expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
 
@@ -356,7 +418,7 @@ describe("<SandboxTileStateFrame />", () => {
     expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
     cleanup();
 
-    useSandboxEntry("stopped", false);
+    setSandboxEntry("stopped", false);
     renderFrame(true);
     fireEvent.click(screen.getByTestId("start-wake"));
     await waitFor(() => {
@@ -367,7 +429,7 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("does not swap a frozen overlay for a wake in flight", async () => {
-    useSandboxEntry("suspended", true);
+    setSandboxEntry("suspended", true);
     renderFrame(true);
     fireEvent.click(screen.getByTestId("start-wake"));
     await waitFor(() => {
@@ -381,12 +443,12 @@ describe("<SandboxTileStateFrame />", () => {
   });
 
   it("toggles inert without remounting the body when the sandbox wakes", () => {
-    useSandboxEntry("suspended", false);
+    setSandboxEntry("suspended", false);
     const { rerenderFrame } = renderFrame(false);
     const body = screen.getByTestId("tile-body");
     expect(bodyWrapper().hasAttribute("inert")).toBe(true);
 
-    useSandboxEntry("awake", false);
+    setSandboxEntry("awake", false);
     rerenderFrame();
 
     expect(screen.getByTestId("tile-body")).toBe(body);
@@ -396,7 +458,7 @@ describe("<SandboxTileStateFrame />", () => {
 
   describe("when the sandbox list's first read failed", () => {
     it("says it could not load the sandbox and offers a retry in place of Resume, which reads the list again", () => {
-      useSandboxEntry("suspended", false);
+      setSandboxEntry("suspended", false);
       mocks.list = undefined;
       mocks.listError = true;
       renderFrame(false);
@@ -414,7 +476,7 @@ describe("<SandboxTileStateFrame />", () => {
     });
 
     it("holds the retry while the list is being read again", () => {
-      useSandboxEntry("suspended", false);
+      setSandboxEntry("suspended", false);
       mocks.list = undefined;
       mocks.listError = true;
       mocks.listFetching = true;
@@ -428,7 +490,7 @@ describe("<SandboxTileStateFrame />", () => {
     });
 
     it("offers Resume and no retry when the list lists the row", () => {
-      useSandboxEntry("suspended", false);
+      setSandboxEntry("suspended", false);
       renderFrame(false);
 
       expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
@@ -441,7 +503,7 @@ describe("<SandboxTileStateFrame />", () => {
     });
 
     it("offers no retry while the first read is still pending, or when a later refetch failed over a good list", () => {
-      useSandboxEntry("suspended", false);
+      setSandboxEntry("suspended", false);
       mocks.list = undefined;
       renderFrame(false);
       expect(
@@ -450,7 +512,7 @@ describe("<SandboxTileStateFrame />", () => {
       cleanup();
 
       // A later failure keeps the last good rows: Resume stays available.
-      useSandboxEntry("suspended", false);
+      setSandboxEntry("suspended", false);
       mocks.listError = true;
       renderFrame(false);
       expect(

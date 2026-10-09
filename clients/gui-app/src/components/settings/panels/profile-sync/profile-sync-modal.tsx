@@ -5,6 +5,7 @@ import type {
   ProfileSyncItem,
   ProfileSyncOverview,
 } from "@traycer/protocol/host/profile-sync-link-schemas";
+import { credentialTargetHostOptions } from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
@@ -91,7 +92,8 @@ function deviceReach(host: HostScopeOption): ProfileSyncDeviceReach {
  * Every other device of the account, in the directory's order, each paired
  * with the source's record for it. A device the source has a record for stays
  * listed even when the directory no longer names it, so its state is never
- * hidden; a device removed from the account with no record is not offered.
+ * hidden; a device removed from the account with no record is not offered,
+ * and a sandbox never is (it refuses credentials).
  */
 function profileSyncDeviceRows(
   hosts: readonly HostScopeOption[],
@@ -101,7 +103,12 @@ function profileSyncDeviceRows(
   const records = new Map(
     overview.devices.map((device) => [device.hostId, device]),
   );
-  const listed = hosts
+  // A sandbox refuses a synced sign-in, so it is never a destination; and it
+  // is not brought back as an unnamed device by a record either.
+  const sandboxIds = new Set(
+    hosts.filter((host) => host.sandbox !== null).map((host) => host.hostId),
+  );
+  const listed = credentialTargetHostOptions(hosts)
     .filter(
       (host) =>
         host.hostId !== sourceHostId &&
@@ -117,7 +124,9 @@ function profileSyncDeviceRows(
   const unlisted = overview.devices
     .filter(
       (device) =>
-        device.hostId !== sourceHostId && !listedIds.has(device.hostId),
+        device.hostId !== sourceHostId &&
+        !listedIds.has(device.hostId) &&
+        !sandboxIds.has(device.hostId),
     )
     .map((device): ProfileSyncDeviceRow => ({
       hostId: device.hostId,
