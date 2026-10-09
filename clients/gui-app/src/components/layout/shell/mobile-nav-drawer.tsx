@@ -1,5 +1,5 @@
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   House,
@@ -16,6 +16,11 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import {
+  PullIndicator,
+  SETTLE_CLASS,
+} from "@/components/epics/mobile/mobile-history-list";
+import { usePullToRefresh } from "@/components/epics/mobile/use-pull-to-refresh";
 import {
   historyRowProvenance,
   historyRowProvenanceLabel,
@@ -233,13 +238,9 @@ export function MobileNavDrawer(): ReactNode {
         >
           <span>New task</span>
         </Button>
-        <div
-          className={cn("mt-1 min-h-0 flex-1 overflow-y-auto", LIST_FADE_CLASS)}
-        >
-          {open || historyEligible || drawerRequested ? (
-            <DrawerTaskList onNavigate={close} />
-          ) : null}
-        </div>
+        {open || historyEligible || drawerRequested ? (
+          <DrawerTaskList onNavigate={close} />
+        ) : null}
       </nav>
       <div className="flex shrink-0 flex-col gap-1 border-t border-border/60 p-2">
         <Button
@@ -412,6 +413,15 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
+  });
+
+  // The same pull History runs on a phone, over the same query: the drawer is
+  // the list the phone shows most, so it answers the same gesture.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pull = usePullToRefresh({
+    scrollRef,
+    onRefresh: refetch,
+    disabled: isPending || error !== null,
   });
 
   const openItem = (item: HistoryItem) => {
@@ -598,39 +608,59 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   }
 
   return (
-    <div
-      // `pb-8` is the blank strip `LIST_FADE_CLASS` fades over, so a full
-      // scroll never leaves the last row half-faded. Grouping here is
-      // whitespace rather than another rule: the drawer had four of them
-      // (identity, New task, this list, footer) and only the footer's - which
-      // separates the pinned actions from a moving list - earns its keep.
-      className="flex flex-col gap-1 pb-8"
-      data-testid="mobile-nav-task-list"
-    >
-      {/* Pinned while the rows scroll: the caption and the History entry
+    <div className="relative mt-1 min-h-0 flex-1 overflow-hidden">
+      <PullIndicator
+        pullPx={pull.pullPx}
+        isArmed={pull.isArmed}
+        isRefreshing={pull.isRefreshing}
+      />
+      <div
+        ref={scrollRef}
+        data-testid="mobile-nav-task-scroller"
+        // `overscroll-contain` for the same reason as History's scroller: the
+        // webview's own bounce would move under the pull's indicator.
+        className={cn(
+          "h-full overflow-y-auto overscroll-contain",
+          LIST_FADE_CLASS,
+          !pull.isPulling && SETTLE_CLASS,
+        )}
+        style={{ transform: `translate3d(0, ${pull.pullPx}px, 0)` }}
+      >
+        <div
+          // `pb-8` is the blank strip `LIST_FADE_CLASS` fades over, so a full
+          // scroll never leaves the last row half-faded. Grouping here is
+          // whitespace rather than another rule: the drawer had four of them
+          // (identity, New task, this list, footer) and only the footer's - which
+          // separates the pinned actions from a moving list - earns its keep.
+          className="flex flex-col gap-1 pb-8"
+          data-testid="mobile-nav-task-list"
+        >
+          {/* Pinned while the rows scroll: the caption and the History entry
           stay reachable at any scroll depth. Solid drawer background
           (`bg-popover`) so rows slide under it rather than through it. */}
-      <div className="sticky top-0 z-10 flex items-center justify-between bg-popover px-3 py-1">
-        <span className="text-overline text-muted-foreground">
-          Recent tasks
-        </span>
-        {/* Entry to the full history surface (search / filters / bulk
+          <div className="sticky top-0 z-10 flex items-center justify-between bg-popover px-3 py-1">
+            <span className="text-overline text-muted-foreground">
+              Recent tasks
+            </span>
+            {/* Entry to the full history surface (search / filters / bulk
             actions) - the inline list is only the top of the feed. */}
-        <button
-          type="button"
-          data-testid="mobile-nav-view-all-tasks"
-          className="text-ui-xs text-muted-foreground transition-colors active:text-foreground"
-          onClick={() => {
-            props.onNavigate();
-            openHistory();
-          }}
-        >
-          View all
-        </button>
+            <button
+              type="button"
+              data-testid="mobile-nav-view-all-tasks"
+              className="text-ui-xs text-muted-foreground transition-colors active:text-foreground"
+              onClick={() => {
+                props.onNavigate();
+                openHistory();
+              }}
+            >
+              View all
+            </button>
+          </div>
+          <NotificationIndicatorsProvider indicators={notificationIndicators}>
+            {body}
+          </NotificationIndicatorsProvider>
+        </div>
       </div>
-      <NotificationIndicatorsProvider indicators={notificationIndicators}>
-        {body}
-      </NotificationIndicatorsProvider>
     </div>
   );
 }

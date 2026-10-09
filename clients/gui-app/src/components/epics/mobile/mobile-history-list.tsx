@@ -22,7 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /** Matches the row settle, so the surface and its rows share one motion. */
-const SETTLE_CLASS = "transition-transform duration-220";
+export const SETTLE_CLASS = "transition-transform duration-220";
 
 export interface MobileHistoryListProps {
   readonly sort: HistorySortOption;
@@ -192,7 +192,7 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
  * being read, that releasing now would refresh, and that the refresh is running
  * - so the user never has to guess which of them is true.
  */
-function PullIndicator(props: {
+export function PullIndicator(props: {
   readonly pullPx: number;
   readonly isArmed: boolean;
   readonly isRefreshing: boolean;
