@@ -4,6 +4,7 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
 import {
   EPIC_READ_FILE_RANGE_MAX_BYTES,
+  decodeEpicStateFilesArm,
   epicCancelFetchFileV10,
   epicDeleteFileV10,
   epicFetchFileV10,
@@ -329,16 +330,16 @@ describe("epic.state.subscribe@1.2 files arm", () => {
     ],
   };
 
-  it("requires `files` on the snapshot, where @1.1 neither requires nor carries it", () => {
-    expect(
-      epicStateSubscribeServerFrameSchemaV12.safeParse(snapshotBase).success,
-    ).toBe(false);
-    expect(
-      epicStateSubscribeServerFrameSchemaV12.safeParse({
-        ...snapshotBase,
-        files: filesProjection,
-      }).success,
-    ).toBe(true);
+  it("reads a snapshot with no `files` key as no arm, where @1.1 neither requires nor carries it", () => {
+    const missing = epicStateSubscribeServerFrameSchemaV12.parse(snapshotBase);
+    if (missing.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(decodeEpicStateFilesArm(missing.files)).toBeNull();
+    const present = epicStateSubscribeServerFrameSchemaV12.parse({
+      ...snapshotBase,
+      files: filesProjection,
+    });
+    if (present.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(decodeEpicStateFilesArm(present.files)?.files).toHaveLength(1);
     expect(
       epicStateSubscribeServerFrameSchemaV11.safeParse(snapshotBase).success,
     ).toBe(true);
@@ -358,34 +359,84 @@ describe("epic.state.subscribe@1.2 files arm", () => {
     ).toBe(false);
   });
 
-  it("requires a delta to say whether it touched files (null), unlike @1.1", () => {
+  it("accepts a delta that omits `files`, as one that did not touch files", () => {
     const withMeta = {
       ...deltaBase,
       roleClaims: { revision: 1, claims: [] },
     };
+    const frame = epicStateSubscribeServerFrameSchemaV12.parse(withMeta);
+    if (frame.kind !== "delta") throw new Error("expected a delta");
+    expect(decodeEpicStateFilesArm(frame.files)).toBeNull();
+  });
+
+  it("drops a bad file record and keeps the good ones, on a snapshot and a delta", () => {
+    const good = {
+      path: "files/pages/report-1.html",
+      entry,
+      localState: { kind: "present" },
+    };
+    const files = {
+      revision: 4,
+      files: [
+        { path: "" },
+        good,
+        { path: "files/b.txt", entry, localState: { kind: "uploading" } },
+      ],
+    };
+    const snapshot = epicStateSubscribeServerFrameSchemaV12.parse({
+      ...snapshotBase,
+      files,
+    });
+    if (snapshot.kind !== "snapshot") throw new Error("expected a snapshot");
+    const decodedSnapshot = decodeEpicStateFilesArm(snapshot.files);
+    expect(decodedSnapshot?.revision).toBe(4);
+    expect(decodedSnapshot?.files.map((record) => record.path)).toEqual([
+      good.path,
+    ]);
+    const delta = epicStateSubscribeServerFrameSchemaV12.parse({
+      ...deltaBase,
+      files,
+    });
+    if (delta.kind !== "delta") throw new Error("expected a delta");
     expect(
-      epicStateSubscribeServerFrameSchemaV12.safeParse(withMeta).success,
-    ).toBe(false);
-    expect(
-      epicStateSubscribeServerFrameSchemaV12.safeParse({
-        ...withMeta,
-        files: null,
-      }).success,
-    ).toBe(true);
-    expect(
-      epicStateSubscribeServerFrameSchemaV11.safeParse(withMeta).success,
-    ).toBe(true);
+      decodeEpicStateFilesArm(delta.files)?.files.map((record) => record.path),
+    ).toEqual([good.path]);
+  });
+
+  it("reads a wholly unreadable files arm as no arm, keeping the rest of the frame", () => {
+    const snapshot = epicStateSubscribeServerFrameSchemaV12.parse({
+      ...snapshotBase,
+      files: { revision: "x", files: "nope" },
+    });
+    if (snapshot.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(decodeEpicStateFilesArm(snapshot.files)).toBeNull();
+    expect(snapshot.roleClaims).toEqual({ revision: 0, claims: [] });
+    const delta = epicStateSubscribeServerFrameSchemaV12.parse({
+      ...deltaBase,
+      roleClaims: { revision: 1, claims: [] },
+      files: 7,
+    });
+    if (delta.kind !== "delta") throw new Error("expected a delta");
+    expect(decodeEpicStateFilesArm(delta.files)).toBeNull();
+    expect(delta.roleClaims).toEqual({ revision: 1, claims: [] });
   });
 
   it("types localState as present | absent | downloading with byte counts", () => {
-    const withState = (localState: unknown) =>
-      epicStateSubscribeServerFrameSchemaV12.safeParse({
+    // A record with a `localState` this reader does not know is dropped, so
+    // "valid" here means the record survived decoding.
+    const withState = (localState: unknown) => {
+      const frame = epicStateSubscribeServerFrameSchemaV12.parse({
         ...snapshotBase,
         files: {
           revision: 0,
           files: [{ path: "files/a.txt", entry, localState }],
         },
-      }).success;
+      });
+      return (
+        frame.kind === "snapshot" &&
+        decodeEpicStateFilesArm(frame.files)?.files.length === 1
+      );
+    };
     expect(withState({ kind: "absent" })).toBe(true);
     expect(withState({ kind: "downloading", received: 5, total: 10 })).toBe(
       true,

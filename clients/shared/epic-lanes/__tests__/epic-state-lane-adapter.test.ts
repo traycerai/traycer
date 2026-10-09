@@ -1235,14 +1235,30 @@ describe("createEpicStateLaneAdapter - files row", () => {
     expect(filesRows(log)).toEqual([]);
   });
 
-  it("drops a malformed files arm but still delivers the rest of the frame", () => {
+  it("drops a malformed file record and still delivers the rest of the frame", () => {
     const { callbacks, log } = attached();
-    const malformed = {
-      ...snapshotFrame({}),
-      files: { revision: 2, files: [{ path: "" }] },
-    };
 
-    callbacks.onSnapshot(malformed);
+    callbacks.onSnapshot(
+      snapshotFrameWithFiles({
+        revision: 2,
+        files: [{ path: "" }, fileWire("files/ok.txt", { kind: "present" })],
+      }),
+    );
+
+    const [row] = filesRows(log);
+    if (row.row.kind !== "files") throw new Error("expected a files row");
+    expect(row.row.files.map((record) => record.path)).toEqual([
+      "files/ok.txt",
+    ]);
+    expect(snapshotRows(log).map((row) => row.rowId)).toContain(
+      ROLE_CLAIMS_ROW_ID,
+    );
+  });
+
+  it("emits no files row for a wholly unreadable arm but delivers the rest", () => {
+    const { callbacks, log } = attached();
+
+    callbacks.onSnapshot(snapshotFrameWithFiles({ revision: "x", files: 3 }));
 
     expect(filesRows(log)).toEqual([]);
     expect(snapshotRows(log).map((row) => row.rowId)).toContain(

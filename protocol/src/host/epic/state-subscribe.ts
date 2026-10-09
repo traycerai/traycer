@@ -158,7 +158,7 @@ import {
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
-import { epicStateFilesProjectionSchema } from "@traycer/protocol/host/epic/files";
+import { epicStateFilesArmSchema } from "@traycer/protocol/host/epic/files";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -913,19 +913,20 @@ export const epicStateSubscribeV11 = defineStreamRpcContract({
  * `localState` (whether its bytes are here, or downloading).
  *
  * Revisioned as a whole SET, like `roleClaims` (see
- * {@link epicStateFilesProjectionSchema}): required on the snapshot, `null` on
- * a delta that did not touch files. The host gates the arm on the negotiated
+ * {@link epicStateFilesProjectionSchema}): the whole set on a snapshot, `null`
+ * on a delta that did not touch files. A record or arm this reader cannot
+ * parse is dropped, not fatal - see {@link epicStateFilesArmSchema}. The host gates the arm on the negotiated
  * minor, so an `@1.1` subscriber is never sent it; every other frame, the
  * open request and the client frames are `@1.1`'s by reference.
  */
 const epicStateSubscribeSnapshotFrameSchemaV12 = lazySchema(() =>
   epicStateSubscribeSnapshotFrameSchemaV11.extend({
-    files: epicStateFilesProjectionSchema,
+    files: epicStateFilesArmSchema,
   }),
 );
 const epicStateSubscribeDeltaFrameSchemaV12 = lazySchema(() =>
   epicStateSubscribeDeltaFrameSchemaV11.extend({
-    files: epicStateFilesProjectionSchema.nullable(),
+    files: epicStateFilesArmSchema,
   }),
 );
 export const epicStateSubscribeServerFrameSchemaV12 = lazySchema(() =>

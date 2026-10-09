@@ -67,7 +67,10 @@ import type {
   EpicStateTrustChangedFrame,
 } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
-import type { EpicStateFilesProjection } from "@traycer/protocol/host/epic/files";
+import {
+  decodeEpicStateFilesArm,
+  type EpicStateFilesProjection,
+} from "@traycer/protocol/host/epic/files";
 import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   COMMENT_THREAD_REMOVE_REASON,
@@ -144,13 +147,13 @@ export interface EpicStateLaneAdapter extends LaneAdapter<EpicStateLaneEvent> {
 /**
  * The files arm of a frame, or `null` when the frame carries none: an `@1.1`
  * frame (a host older than `@1.2`) has no such key, and an `@1.2` delta that
- * did not touch files carries `null`. The stream client already decoded the
- * arm against the negotiated schema.
+ * did not touch files carries `null`. The stream decoder reads the arm
+ * leniently, so the records are parsed (and the unreadable ones dropped) here.
  */
 export function filesProjectionOf(
   frame: EpicStateSnapshotFrame | EpicStateDeltaFrame,
 ): EpicStateFilesProjection | null {
-  return "files" in frame ? frame.files : null;
+  return "files" in frame ? decodeEpicStateFilesArm(frame.files) : null;
 }
 
 export function createEpicStateLaneAdapter(

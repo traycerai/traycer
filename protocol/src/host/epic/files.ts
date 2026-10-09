@@ -358,3 +358,41 @@ export const epicStateFilesProjectionSchema = lazySchema(() =>
 export type EpicStateFilesProjection = z.infer<
   typeof epicStateFilesProjectionSchema
 >;
+
+/**
+ * The files arm as the `epic.state.subscribe@1.2` frames carry it: the same
+ * set, but each record is read as `unknown` and decoded one at a time by
+ * {@link decodeEpicStateFilesArm}. The manifest is lenient per ENTRY, so one
+ * record this reader cannot parse (a bad path, a `localState` a newer host
+ * added) must cost that record and not the frame - a strict array here would
+ * fail the whole server frame and with it the epic's entire state lane. An
+ * arm that is unreadable as a whole (a bad revision, a non-object) reads as
+ * `null`, "no files arm", the way an `@1.1` frame does. Because `.catch`
+ * also answers a missing key, the key is no longer required on `@1.2`.
+ *
+ * Decoding is a plain function and not a schema transform: protocol schemas
+ * must stay representable in JSON Schema.
+ */
+export const epicStateFilesArmSchema = lazySchema(() =>
+  z
+    .object({
+      ...epicLaneRowRevisionFields,
+      files: z.array(z.unknown()),
+    })
+    .nullable()
+    .catch(null),
+);
+export type EpicStateFilesArm = z.infer<typeof epicStateFilesArmSchema>;
+
+/** Keeps the records of a files arm this reader can parse; `null` stays `null`. */
+export function decodeEpicStateFilesArm(
+  arm: EpicStateFilesArm | undefined,
+): EpicStateFilesProjection | null {
+  if (arm === undefined || arm === null) return null;
+  const files: EpicStateFileRecord[] = [];
+  for (const record of arm.files) {
+    const parsed = epicStateFileRecordSchema.safeParse(record);
+    if (parsed.success) files.push(parsed.data);
+  }
+  return { revision: arm.revision, files };
+}
