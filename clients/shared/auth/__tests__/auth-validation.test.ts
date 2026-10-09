@@ -14,6 +14,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "./no-native-abort-helpers";
+import {
   AUTH_FETCH_MAX_ATTEMPTS,
   SUPPORTED_USER_RECORD_MAJORS,
   authRetryDelayMs,
@@ -78,7 +83,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
 }
 
 // A real `Response` (so it stays `Response`-typed with no casts) whose body read
-// rejects with a `TimeoutError` - mirrors `AbortSignal.timeout` firing during
+// rejects with a `TimeoutError` - mirrors a per-attempt timeout firing during
 // `response.json()`, after the status/headers have already arrived.
 function responseWithAbortingBody(status: number): Response {
   const response = new Response("{}", { status });
@@ -115,7 +120,7 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
         body: typeof init?.body === "string" ? init.body : null,
         hasSignal: init?.signal instanceof AbortSignal,
       });
-      // Mirror what a fired `AbortSignal.timeout` throws into `fetch`.
+      // Mirror what a fired per-attempt timeout throws into `fetch`.
       throw new DOMException("The operation timed out.", "TimeoutError");
     }) as typeof fetch;
 
@@ -206,7 +211,7 @@ describe("refreshOnceAbortable", () => {
 
   it("returns network-error when the caller supplies a pre-aborted AbortSignal", async () => {
     // Production currently only passes `signal: null` (FileTokenStore + mock),
-    // so the `AbortSignal.any([caller, timeout])` combine branch is otherwise
+    // so the caller-signal-plus-timeout combine branch is otherwise
     // dormant. A pre-aborted signal exercises that path: fetch throws →
     // network-error (nothing spent).
     let fetchCalls = 0;
@@ -776,5 +781,153 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     // fallback that multiplied with the retry ceiling would produce).
     expect(result.kind).toBe("network-error");
     expect(urlCalls).toHaveLength(2 * AUTH_FETCH_MAX_ATTEMPTS);
+  });
+});
+
+describe("the abortable auth calls on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  const TOKEN_PAIR = {
+    status: 200,
+    body: { token: "exchanged-bearer", refreshToken: "exchanged-refresh" },
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  describe("exchangeCodeForTokens", () => {
+    it("still makes the exchange request", async () => {
+      installMockFetch([TOKEN_PAIR]);
+
+      const result = await exchangeCodeForTokens(
+        AUTHN_BASE_URL,
+        "pkce-code",
+        "pkce-verifier",
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(result.kind).toBe("exchanged");
+    });
+
+    it("aborts an exchange that never answers after 10 s, and resolves to network-error without retrying", async () => {
+      const fetchMock = stubHangingFetch();
+
+      const pending = exchangeCodeForTokens(
+        AUTHN_BASE_URL,
+        "pkce-code",
+        "pkce-verifier",
+      );
+      const signal = signalOfLastFetch(fetchMock);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal.aborted).toBe(true);
+      expect((await pending).kind).toBe("network-error");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("refreshOnceAbortable", () => {
+    const ARGS = {
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      clientKind: null,
+    } as const;
+
+    it("still makes the refresh request", async () => {
+      installMockFetch([TOKEN_PAIR]);
+
+      const result = await refreshOnceAbortable({ ...ARGS, signal: null });
+
+      expect(calls).toHaveLength(1);
+      expect(result.kind).toBe("refreshed");
+    });
+
+    it("aborts a refresh that never answers after 10 s, and resolves to network-error", async () => {
+      const fetchMock = stubHangingFetch();
+
+      const pending = refreshOnceAbortable({ ...ARGS, signal: null });
+      const signal = signalOfLastFetch(fetchMock);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal.aborted).toBe(true);
+      expect(await pending).toEqual({ kind: "network-error" });
+    });
+
+    it("aborts the request when the caller's signal aborts, well before the timeout", async () => {
+      const fetchMock = stubHangingFetch();
+      const caller = new AbortController();
+
+      const pending = refreshOnceAbortable({ ...ARGS, signal: caller.signal });
+      const signal = signalOfLastFetch(fetchMock);
+      expect(signal.aborted).toBe(false);
+
+      caller.abort();
+
+      expect(signal.aborted).toBe(true);
+      expect(await pending).toEqual({ kind: "network-error" });
+    });
+  });
+
+  describe("validateAuthTokenIdentityAccessOnceAbortable", () => {
+    it("still makes the identity request", async () => {
+      const fetchMock = vi.fn<typeof fetch>(
+        async () => new Response("{}", { status: 503 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "token",
+        signal: null,
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    it("aborts an identity request that never answers after 10 s, and resolves to network-error", async () => {
+      const fetchMock = stubHangingFetch();
+
+      const pending = validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "token",
+        signal: null,
+      });
+      const signal = signalOfLastFetch(fetchMock);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal.aborted).toBe(true);
+      expect((await pending).kind).toBe("network-error");
+    });
+
+    it("aborts the request when the caller's signal aborts, well before the timeout", async () => {
+      const fetchMock = stubHangingFetch();
+      const caller = new AbortController();
+
+      const pending = validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "token",
+        signal: caller.signal,
+      });
+      const signal = signalOfLastFetch(fetchMock);
+
+      caller.abort();
+
+      expect(signal.aborted).toBe(true);
+      expect((await pending).kind).toBe("network-error");
+    });
   });
 });

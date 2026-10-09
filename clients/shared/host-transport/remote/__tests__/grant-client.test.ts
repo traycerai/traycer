@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAttachGrantProvider,
   createSandboxAttachGrantProvider,
   mintAttachGrantViaHttp,
 } from "../grant-client";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "../../../auth/__tests__/no-native-abort-helpers";
 import { SANDBOX_FROZEN_MESSAGE } from "../../../host-client/sandbox-control";
 
 const AUTHN = "https://authn.test";
@@ -20,6 +25,45 @@ function jsonResponse(body: unknown, status: number): Response {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("mintAttachGrantViaHttp on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("still makes the mint request and parses the grant", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ grant: "jws-abc", role: "client", expires_in: 120 }, 200),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      kind: "ok",
+      grant: { grant: "jws-abc", expiresInSeconds: 120 },
+    });
+  });
+
+  it("aborts a mint that never answers once its 10 s timeout passes, and resolves to network-error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toMatchObject({ kind: "network-error" });
+  });
 });
 
 describe("mintAttachGrantViaHttp", () => {

@@ -95,6 +95,17 @@ describe("sandboxRefusalCopyFor", () => {
       expect(copy?.hostDetail).toBe(DETAIL);
     });
 
+    it("tells the user to retry in a minute, not to wait for a configured marker the card never shows", () => {
+      const description = sandboxRefusalCopyFor(
+        "SANDBOX_GUEST_NOT_CONFIGURED",
+        MESSAGE,
+      )?.description;
+      expect(description).toContain(
+        "Retry in a minute, or once the setup notice on its card clears",
+      );
+      expect(description).not.toContain("shows the sandbox is configured");
+    });
+
     it("matches the message prefix when the block carries no code, with the same detail", () => {
       const copy = sandboxRefusalCopyFor(null, MESSAGE);
       expect(copy?.headline).toBe(HEADLINE);

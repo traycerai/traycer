@@ -1,5 +1,5 @@
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -42,6 +42,7 @@ import type {
   ClientRequestFrame,
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { removeNativeAbortHelpers } from "../../auth/__tests__/no-native-abort-helpers";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -1047,5 +1048,62 @@ describe("HostClient", () => {
         client.requestWithOptions("host.ping", {}, options),
       ).rejects.toThrow();
     });
+  });
+});
+
+describe("HostClient request authority on a WebView without AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The abort signal the messenger was handed for the one request sent. */
+  async function sendOneRequest(
+    client: HostClient<typeof registry>,
+    requester: HostClient<typeof registry>,
+    messenger: MockHostMessenger<typeof registry>,
+  ): Promise<AbortSignal> {
+    const result = await requester.request("host.ping", {});
+    expect(result).toEqual({ pong: true });
+    expect(client.getRequestContext()).not.toBeNull();
+    const call = messenger.calls.at(-1);
+    if (call === undefined) {
+      throw new Error("the messenger received no request");
+    }
+    return call.authority.abortSignal;
+  }
+
+  it("still runs the request, with an authority signal that has not fired", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+
+    const signal = await sendOneRequest(client, requester, messenger);
+
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("aborts the authority signal when the request context aborts", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    const context = makeContext("user-1", "tok-1");
+    client.setRequestContext(context);
+    const signal = await sendOneRequest(client, requester, messenger);
+    expect(signal.aborted).toBe(false);
+
+    context.abort("signed out");
+
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("aborts the authority signal when the host binding is retired", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+    const signal = await sendOneRequest(client, requester, messenger);
+    expect(signal.aborted).toBe(false);
+
+    client.getAuthorityRegistry().dispose();
+
+    expect(signal.aborted).toBe(true);
   });
 });

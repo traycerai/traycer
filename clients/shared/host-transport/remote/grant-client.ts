@@ -10,6 +10,7 @@ import type {
   AttachGrantProvider,
   AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
+import { composeRequestAbort } from "../../auth/request-abort";
 import { SANDBOX_FROZEN_MESSAGE } from "../../host-client/sandbox-control";
 
 export type {
@@ -249,6 +250,28 @@ export async function mintAttachGrantViaHttp(
   hostId: string,
   bearerToken: string,
 ): Promise<AttachGrantResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. Cleared once the body is read, which the timeout also
+  // bounds.
+  const abort = composeRequestAbort(null, GRANT_FETCH_TIMEOUT_MS);
+  try {
+    return await mintAttachGrantWithSignal(
+      authnBaseUrl,
+      hostId,
+      bearerToken,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function mintAttachGrantWithSignal(
+  authnBaseUrl: string,
+  hostId: string,
+  bearerToken: string,
+  signal: AbortSignal,
+): Promise<AttachGrantResult> {
   let response: Response;
   try {
     response = await fetch(attachGrantUrl(authnBaseUrl, hostId), {
@@ -259,7 +282,7 @@ export async function mintAttachGrantViaHttp(
         Accept: "application/json",
       },
       body: JSON.stringify({ role: "client" }),
-      signal: AbortSignal.timeout(GRANT_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch (error) {
     const failure = describeFetchFailure(error);

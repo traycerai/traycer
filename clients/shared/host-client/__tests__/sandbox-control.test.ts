@@ -1,12 +1,17 @@
 import {
   afterEach,
+  beforeEach,
   describe,
   expect,
   it,
   vi,
   type Mock,
-  type MockInstance,
 } from "vitest";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "../../auth/__tests__/no-native-abort-helpers";
 import {
   SANDBOX_FROZEN_MESSAGE,
   createSandboxViaHttp,
@@ -29,6 +34,8 @@ const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
 /** A request timeout the tests that do not examine it pass. */
 const VERB_TIMEOUT_MS = 60_000;
+/** The list route's own ceiling (private to the module under test). */
+const LIST_TIMEOUT_MS = 10_000;
 /** A real-shaped sandbox id: the server mints lowercase ULIDs. */
 const ULID = "01jbz8k3m4n5p6q7r8s9t0vwxy";
 /** Ids that are not one plain path segment, so no URL is built from them. */
@@ -271,12 +278,16 @@ describe("runSandboxVerbViaHttp", () => {
 });
 
 describe("runSandboxVerbViaHttp request deadline", () => {
-  /** The signal timeout each request is built with, observed on the platform call. */
-  function watchTimeouts(): MockInstance<typeof AbortSignal.timeout> {
-    return vi.spyOn(AbortSignal, "timeout");
-  }
+  const TIMEOUT_DETAIL = {
+    kind: "network-error",
+    detail: "the request never completed (TimeoutError)",
+  };
 
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -284,69 +295,141 @@ describe("runSandboxVerbViaHttp request deadline", () => {
     expect(SANDBOX_VERB_FETCH_TIMEOUT_MS).toBe(370_000);
   });
 
-  it("aborts the request at the timeout it was passed", async () => {
-    stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
-    const timeout = watchTimeouts();
+  it("aborts the request at the timeout it was passed, and reads the abort as a network error", async () => {
+    const fetchMock = stubHangingFetch();
 
-    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 120_000);
-
-    expect(timeout).toHaveBeenCalledTimes(1);
-    expect(timeout).toHaveBeenCalledWith(120_000);
-  });
-
-  it("keeps a timeout that is exactly the ceiling, and caps one above it", async () => {
-    stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
-    const timeout = watchTimeouts();
-
-    await runSandboxVerbViaHttp(
+    const pending = runSandboxVerbViaHttp(
       BASE,
       BEARER,
       "sbx_1",
       "resume",
-      SANDBOX_VERB_FETCH_TIMEOUT_MS,
+      120_000,
     );
-    expect(timeout).toHaveBeenLastCalledWith(370_000);
+    const signal = signalOfLastFetch(fetchMock);
 
-    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 370_001);
-    expect(timeout).toHaveBeenLastCalledWith(370_000);
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(signal.aborted).toBe(false);
 
-    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 1_000_000);
-    expect(timeout).toHaveBeenLastCalledWith(370_000);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual(TIMEOUT_DETAIL);
+  });
+
+  it("keeps a timeout that is exactly the ceiling, and caps one above it", async () => {
+    for (const requested of [
+      SANDBOX_VERB_FETCH_TIMEOUT_MS,
+      SANDBOX_VERB_FETCH_TIMEOUT_MS + 1,
+      1_000_000,
+    ]) {
+      const fetchMock = stubHangingFetch();
+      const pending = runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "resume",
+        requested,
+      );
+      const signal = signalOfLastFetch(fetchMock);
+
+      await vi.advanceTimersByTimeAsync(SANDBOX_VERB_FETCH_TIMEOUT_MS - 1);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(true);
+      expect(await pending).toEqual(TIMEOUT_DETAIL);
+    }
   });
 
   it("treats a negative timeout as already spent rather than throwing", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      "sbx_1",
+      "resume",
+      -5_000,
+    );
+    const signal = signalOfLastFetch(fetchMock);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual(TIMEOUT_DETAIL);
+  });
+
+  it("still lets a prompt answer through under a negative timeout", async () => {
     stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
-    const timeout = watchTimeouts();
 
     await expect(
       runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", -5_000),
     ).resolves.toEqual({ kind: "ok", settled: true });
-    expect(timeout).toHaveBeenCalledWith(0);
   });
 
-  it("hands fetch a signal that fires at that timeout, and reads the abort as a network error", async () => {
-    const seen: { signal: AbortSignal | null } = { signal: null };
-    stubFetch(
-      (_url, init) =>
-        new Promise<Response>((_resolve, reject) => {
-          seen.signal = init.signal ?? null;
-          init.signal?.addEventListener("abort", () => {
-            reject(init.signal?.reason);
-          });
-        }),
+  it("leaves no timer behind once the request has answered", async () => {
+    stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
+
+    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 120_000);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("still makes the request", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandboxes: [] }),
     );
 
-    const pending = runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 30);
-    await Promise.resolve();
-    // A signal exists and has not fired yet.
-    expect(seen.signal).not.toBeNull();
-    expect(seen.signal?.aborted).toBe(false);
+    await listSandboxesViaHttp(BASE, BEARER);
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a request that never answers once the site's timeout passes, and resolves to a network error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = listSandboxesViaHttp(BASE, BEARER);
+    const signal = signalOfLastFetch(fetchMock);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS);
+
+    expect(signal.aborted).toBe(true);
     expect(await pending).toEqual({
       kind: "network-error",
       detail: "the request never completed (TimeoutError)",
     });
-    expect(seen.signal?.aborted).toBe(true);
+  });
+
+  it("runs a lifecycle verb through the same call: the request is made and its deadline fires", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      "sbx_1",
+      "resume",
+      30_000,
+    );
+    const signal = signalOfLastFetch(fetchMock);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({
+      kind: "network-error",
+      detail: "the request never completed (TimeoutError)",
+    });
   });
 });
 

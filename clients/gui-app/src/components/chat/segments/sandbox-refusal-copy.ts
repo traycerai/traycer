@@ -43,7 +43,7 @@ const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
   SANDBOX_GUEST_NOT_CONFIGURED: {
     headline: "Waiting for this sandbox's setup to finish",
     description:
-      "The agent could not start because this sandbox is still being set up. Send the message again once its card shows the sandbox is configured.",
+      "The agent could not start because this sandbox is still being set up. Retry in a minute, or once the setup notice on its card clears.",
     showsHostDetail: true,
   },
   SANDBOX_HOST_REFUSES_CREDENTIALS: {

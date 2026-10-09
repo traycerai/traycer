@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { composeRequestAbort } from "@traycer-clients/shared/auth/request-abort";
 import type { ThemeDefinition } from "@/lib/themes/theme-definition";
 import {
   importVerifiedThemePackage,
@@ -158,12 +159,39 @@ async function lookupOpenVsxIdentity(
   }
 }
 
-export async function searchOpenVsxThemes(
+/**
+ * Runs `request` under the caller's signal plus a timeout, cleared once it
+ * settles. Not `AbortSignal.any`/`timeout`, which the iOS WebView floor lacks;
+ * see `request-abort.ts`.
+ */
+async function withTimeout<T>(
+  signal: AbortSignal,
+  timeoutMs: number,
+  request: (requestSignal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const abort = composeRequestAbort(signal, timeoutMs);
+  try {
+    return await request(abort.signal);
+  } finally {
+    abort.clear();
+  }
+}
+
+export function searchOpenVsxThemes(
   query: string,
   sort: "downloadCount" | "rating" | "timestamp" | "relevance",
   signal: AbortSignal,
 ): Promise<OpenVsxExtension[]> {
-  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
+  return withTimeout(signal, 15000, (requestSignal) =>
+    searchOpenVsxThemesWithin(query, sort, requestSignal),
+  );
+}
+
+async function searchOpenVsxThemesWithin(
+  query: string,
+  sort: "downloadCount" | "rating" | "timestamp" | "relevance",
+  requestSignal: AbortSignal,
+): Promise<OpenVsxExtension[]> {
   const identity = /^([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)$/.exec(query.trim());
   if (identity) {
     const extension = await lookupOpenVsxIdentity(
@@ -191,9 +219,18 @@ export async function searchOpenVsxThemes(
   });
 }
 
-export async function installOpenVsxTheme(
+export function installOpenVsxTheme(
   extension: OpenVsxExtension,
   signal: AbortSignal,
+): Promise<ThemeDefinition[]> {
+  return withTimeout(signal, 60000, (requestSignal) =>
+    installOpenVsxThemeWithin(extension, requestSignal),
+  );
+}
+
+async function installOpenVsxThemeWithin(
+  extension: OpenVsxExtension,
+  requestSignal: AbortSignal,
 ): Promise<ThemeDefinition[]> {
   const [namespace, name, ...extra] = extension.id.split(".");
   if (
@@ -203,7 +240,6 @@ export async function installOpenVsxTheme(
   ) {
     throw new Error("Invalid Open VSX extension identity.");
   }
-  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(60000)]);
   const detailBytes = await readResponse(
     `${API}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${encodeURIComponent(extension.version)}`,
     512 * 1024,

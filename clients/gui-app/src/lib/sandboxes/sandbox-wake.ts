@@ -17,6 +17,7 @@ import type { HostDirectoryService } from "@/lib/host";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 
 /** How often the sandbox list is re-read while a wake is under way. */
@@ -34,8 +35,16 @@ const WAKE_TIMEOUT_MS = 120_000;
  * settled, not when the wake answered: a wake that timed out has its request
  * aborted, and until that abort lands a retry joins the timed-out wake rather
  * than sending a second verb into the first one's transition.
+ *
+ * Keyed by the account as well as the host: a wake started under another
+ * account is fenced (see `readSandboxFacts`), so a caller signed in as someone
+ * else never joins it and is never handed its outcome.
  */
 const wakesInFlight = new Map<string, Promise<SandboxWakeOutcome>>();
+
+function wakeKey(startedBy: string | null, hostId: string): string {
+  return JSON.stringify([startedBy, hostId]);
+}
 
 /**
  * A started wake: its `outcome`, and `settled`, which resolves once the
@@ -64,11 +73,40 @@ type SandboxFactsRead =
   | { readonly kind: "unread" }
   | { readonly kind: "listed"; readonly facts: SandboxDialFacts | null };
 
+/**
+ * The account a wake started under is no longer the one signed in. The wake
+ * stops there: its next read would run under the new account's bearer, and
+ * that account's list does not hold this sandbox, so the read would call it
+ * gone. Thrown, so it rejects the wake. The starter's observer then sees the
+ * account changed and reports nothing.
+ */
+class SandboxWakeAccountChangedError extends Error {
+  constructor() {
+    super("The signed-in account changed while the sandbox was waking.");
+    this.name = "SandboxWakeAccountChangedError";
+  }
+}
+
+function assertStillSignedIn(startedBy: string | null): void {
+  if (signedInUserId() !== startedBy) {
+    throw new SandboxWakeAccountChangedError();
+  }
+}
+
+/**
+ * One list read for the wake, fenced on both sides. The account is checked
+ * before the read, so a read is never sent under another account's bearer.
+ * It is checked again after, because a switch can land while the read is in
+ * flight.
+ */
 async function readSandboxFacts(
   auth: AuthService,
   hostId: string,
+  startedBy: string | null,
 ): Promise<SandboxFactsRead> {
+  assertStillSignedIn(startedBy);
   const result = await auth.listSandboxes();
+  assertStillSignedIn(startedBy);
   if (result.kind !== "ok") return { kind: "unread" };
   const row = result.response.sandboxes.find((s) => s.hostId === hostId);
   return {
@@ -83,11 +121,13 @@ async function readSandboxFacts(
 function startWakeAttempt(
   auth: AuthService,
   hostId: string,
+  startedBy: string | null,
 ): SandboxWakeAttempt {
   let verbRequest: Promise<unknown> = Promise.resolve();
   const outcome = wakeSandboxHost(
     auth,
     hostId,
+    startedBy,
     (sandboxId, verb, timeoutMs) => {
       const request = auth.runSandboxVerb(sandboxId, verb, timeoutMs);
       verbRequest = request;
@@ -106,9 +146,10 @@ function startWakeAttempt(
 async function wakeSandboxHost(
   auth: AuthService,
   hostId: string,
+  startedBy: string | null,
   wake: EnsureSandboxAwakeDeps["wake"],
 ): Promise<SandboxWakeOutcome> {
-  const first = await readSandboxFacts(auth, hostId);
+  const first = await readSandboxFacts(auth, hostId, startedBy);
   // The directory already said this host is a sandbox, so a failed first
   // read is a failure to retry, never "it no longer exists".
   if (first.kind === "unread") {
@@ -122,7 +163,7 @@ async function wakeSandboxHost(
     initial: first.facts,
     wake,
     readFacts: async () => {
-      const read = await readSandboxFacts(auth, hostId);
+      const read = await readSandboxFacts(auth, hostId, startedBy);
       // A failed poll says nothing about the sandbox: keep waiting on what
       // was last known rather than calling it gone.
       if (read.kind === "unread") return last;
@@ -153,16 +194,18 @@ function startBudget(ms: number): SandboxWakeBudget {
 async function runSharedWake(
   auth: AuthService,
   hostId: string,
+  startedBy: string | null,
 ): Promise<SandboxWakeRun> {
-  const running = wakesInFlight.get(hostId);
+  const key = wakeKey(startedBy, hostId);
+  const running = wakesInFlight.get(key);
   if (running !== undefined) {
     return { outcome: await running, joined: true };
   }
-  const attempt = startWakeAttempt(auth, hostId);
-  wakesInFlight.set(hostId, attempt.outcome);
+  const attempt = startWakeAttempt(auth, hostId, startedBy);
+  wakesInFlight.set(key, attempt.outcome);
   void attempt.settled.then(() => {
-    if (wakesInFlight.get(hostId) === attempt.outcome) {
-      wakesInFlight.delete(hostId);
+    if (wakesInFlight.get(key) === attempt.outcome) {
+      wakesInFlight.delete(key);
     }
   });
   return { outcome: await attempt.outcome, joined: false };
@@ -244,18 +287,26 @@ export function startSandboxWake(
     toast.warning("Couldn't wake this sandbox", { description: unavailable });
     return;
   }
+  // The account this wake runs for. A wake that ends under another account
+  // stops polling (see `readSandboxFacts`), and reports and refreshes nothing:
+  // its outcome, a credit shortfall included, is the first account's. The next
+  // wake under the right account starts fresh.
+  const startedBy = signedInUserId();
   const observer = new QueryMutationObserver<SandboxWakeRun>(client, {
     mutationKey: sandboxMutationKeys.wake(hostId),
-    mutationFn: () => runSharedWake(auth, hostId),
+    mutationFn: () => runSharedWake(auth, hostId, startedBy),
     onSuccess: (run) => {
-      if (run.joined) return;
+      if (run.joined || signedInUserId() !== startedBy) return;
       void directory.refresh();
       void client.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
       toastWakeOutcome(run.outcome);
     },
-    onError: () => toastWakeFailed(),
+    onError: () => {
+      if (signedInUserId() !== startedBy) return;
+      toastWakeFailed();
+    },
   });
   // Subscribed for the mutation's life, so the cache can collect it once it
   // settles; a rejection is already reported by `onError`.

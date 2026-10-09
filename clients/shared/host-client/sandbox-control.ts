@@ -15,6 +15,7 @@ import {
   type SandboxListResponse,
   type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import { composeRequestAbort } from "../auth/request-abort";
 
 /**
  * The raw calls to traycer-server's sandbox control plane (`/api/sandboxes`)
@@ -143,14 +144,33 @@ type RawCall =
     }
   | { readonly kind: "network-error"; readonly detail: string };
 
+interface CallInit {
+  readonly method: string;
+  readonly body: string | null;
+  readonly timeoutMs: number;
+}
+
 async function call(
   url: string,
-  init: {
-    readonly method: string;
-    readonly body: string | null;
-    readonly timeoutMs: number;
-  },
+  init: CallInit,
   bearerToken: string,
+): Promise<RawCall> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor does not have; see
+  // `request-abort.ts`. Cleared once the body is read, which the timeout also
+  // bounds.
+  const abort = composeRequestAbort(null, init.timeoutMs);
+  try {
+    return await callWithSignal(url, init, bearerToken, abort.signal);
+  } finally {
+    abort.clear();
+  }
+}
+
+async function callWithSignal(
+  url: string,
+  init: CallInit,
+  bearerToken: string,
+  signal: AbortSignal,
 ): Promise<RawCall> {
   let response: Response;
   try {
@@ -168,7 +188,7 @@ async function call(
               "Content-Type": "application/json",
             },
       body: init.body,
-      signal: AbortSignal.timeout(init.timeoutMs),
+      signal,
     });
   } catch (error: unknown) {
     return {

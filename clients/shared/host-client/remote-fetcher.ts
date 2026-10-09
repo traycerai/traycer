@@ -7,6 +7,7 @@ import {
   type HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
 import type { CloudBearerSource } from "../auth/bearer-source";
+import { composeRequestAbort } from "../auth/request-abort";
 import type { AuthEra } from "../auth/request-context-provider";
 import { applyHostKeyPins } from "./host-key-pin";
 import { isSandboxFrozenInEffect } from "./sandbox-control";
@@ -72,6 +73,26 @@ export async function fetchRegisteredHostsViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
 ): Promise<HostListFetchResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. Cleared once the body is read, which the timeout also
+  // bounds.
+  const abort = composeRequestAbort(null, HOST_LIST_FETCH_TIMEOUT_MS);
+  try {
+    return await fetchRegisteredHostsWithSignal(
+      authnBaseUrl,
+      bearerToken,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function fetchRegisteredHostsWithSignal(
+  authnBaseUrl: string,
+  bearerToken: string,
+  signal: AbortSignal,
+): Promise<HostListFetchResult> {
   let response: Response;
   try {
     response = await fetch(hostsApiUrl(authnBaseUrl), {
@@ -80,7 +101,7 @@ export async function fetchRegisteredHostsViaHttp(
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
       },
-      signal: AbortSignal.timeout(HOST_LIST_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch {
     // A thrown `fetch` — transport failure or the per-attempt timeout — is

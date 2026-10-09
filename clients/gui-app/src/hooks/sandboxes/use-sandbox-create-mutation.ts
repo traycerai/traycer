@@ -15,7 +15,7 @@ import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
-} from "@/hooks/sandboxes/sandbox-mutation-account";
+} from "@/lib/sandboxes/sandbox-account-fence";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface SandboxCreateContext {

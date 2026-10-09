@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostListItem,
   HostListResponse,
   HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "../../auth/__tests__/no-native-abort-helpers";
 import type { AuthEra } from "../../auth/request-context-provider";
 import {
   createRemoteHostFetcher,
@@ -139,6 +144,43 @@ describe("fetchRegisteredHostsViaHttp", () => {
     expect((await fetchRegisteredHostsViaHttp(AUTHN, "x")).kind).toBe(
       "network-error",
     );
+  });
+});
+
+describe("fetchRegisteredHostsViaHttp on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("still makes the request and returns the parsed envelope", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(200, envelope()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegisteredHostsViaHttp(AUTHN, "jwt-abc");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("ok");
+  });
+
+  it("aborts a list that never answers once its 10 s timeout passes, and resolves to network-error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = fetchRegisteredHostsViaHttp(AUTHN, "jwt-abc");
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
   });
 });
 

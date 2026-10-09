@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import type { QueryClient } from "@tanstack/react-query";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -7,6 +16,10 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type {
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 
@@ -40,6 +53,7 @@ vi.mock("@/lib/query-client", async () => {
 import { queryClient } from "@/lib/query-client";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 function sandboxOption(
   state: HostSandboxState,
@@ -498,5 +512,248 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
       "resume",
       120_000,
     );
+  });
+});
+
+// A wake can outlive a sign-out and a sign-in as someone else. It then stops
+// reading the list under the new account's bearer, and reports and refreshes
+// nothing: its outcome belongs to the account that started it.
+describe("wakeSandboxOnPick across accounts", () => {
+  const REGISTERED_HOSTS_KEY = ["auth", "registered-hosts"];
+
+  interface Deferred<T> {
+    readonly promise: Promise<T>;
+    readonly resolve: (value: T) => void;
+  }
+
+  function deferred<T>(): Deferred<T> {
+    let resolve: (value: T) => void = () => undefined;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  function signInAs(userId: string): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId, username: userId },
+    });
+  }
+
+  let invalidate: MockInstance<QueryClient["invalidateQueries"]>;
+
+  beforeEach(() => {
+    invalidate = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockResolvedValue(undefined);
+    signInAs("user-a");
+  });
+  afterEach(async () => {
+    // Runs any wake still polling out to its end, so none leaks into the next
+    // test through the module-level map of wakes in flight.
+    await vi.advanceTimersByTimeAsync(300_000);
+    invalidate.mockRestore();
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  });
+
+  function expectNothingReported(binding: FakeSandboxBinding): void {
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(binding.directory.refresh).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+  }
+
+  it("started as A, stops reading the list once B is signed in, and reports nothing", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    // The first read and the verb are done; the wake is waiting to poll.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+
+    signInAs("user-b");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
+    expectNothingReported(binding);
+    expect(wakeMutations()).toBe(0);
+  });
+
+  it("started as A, does not call the sandbox gone when B signs in during a poll whose answer lacks the row", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    const poll = deferred<SandboxListFetchResult>();
+    binding.auth.listSandboxes
+      .mockImplementationOnce(listOf({ state: "suspended" }))
+      .mockImplementationOnce(() => poll.promise);
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The verb was sent and the poll is in flight.
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+
+    signInAs("user-b");
+    poll.resolve({ kind: "ok", response: { sandboxes: [] } });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expectNothingReported(binding);
+    expect(wakeMutations()).toBe(0);
+  });
+
+  it("started as A, toasts no credit shortfall when B is signed in by the time the gate answers", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    const verb = deferred<SandboxVerbFetchResult>();
+    binding.auth.runSandboxVerb.mockImplementation(() => verb.promise);
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+
+    signInAs("user-b");
+    verb.resolve(refusal(402, "insufficient_credit"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expectNothingReported(binding);
+    expect(wakeMutations()).toBe(0);
+  });
+
+  it("after a fenced wake, a pick under B for the same host starts fresh instead of joining it", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    // Asleep until the second verb: A's wake never gets to see it awake.
+    binding.auth.listSandboxes.mockImplementation(() =>
+      listOf({
+        state:
+          binding.auth.runSandboxVerb.mock.calls.length >= 2
+            ? "awake"
+            : "suspended",
+      })(),
+    );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(0);
+    signInAs("user-b");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wakeMutations()).toBe(0);
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
+    expectNothingReported(binding);
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // It read the list again and sent its own verb, rather than awaiting the
+    // fenced wake's outcome.
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+    // B's wake is B's: it refreshes the directory, and A's did not.
+    expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("a pick under B while A's wake is still polling starts B's own wake instead of joining A's, and A's fenced wake toasts nothing", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    const poll = deferred<SandboxListFetchResult>();
+    binding.auth.listSandboxes
+      .mockImplementationOnce(listOf({ state: "suspended" }))
+      .mockImplementationOnce(() => poll.promise)
+      .mockImplementation(() =>
+        listOf({
+          state:
+            binding.auth.runSandboxVerb.mock.calls.length >= 2
+              ? "awake"
+              : "suspended",
+        })(),
+      );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    // A's verb was sent and A's next list read is in flight.
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+
+    signInAs("user-b");
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // B's own attempt read the list and, the row being asleep, sent its own verb.
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3);
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(2);
+
+    // A's read lands late; the fence ends A's wake without a word.
+    poll.resolve({
+      kind: "ok",
+      response: {
+        sandboxes: [
+          sandboxSummaryFixture({
+            id: "sbx_1",
+            hostId: HOST_ID,
+            state: "suspended",
+          }),
+        ],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+    // Only B's wake refreshed.
+    expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(wakeMutations()).toBe(0);
+  });
+
+  it("control: with the same account throughout, the outcome is toasted and the directory and host list are refreshed", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    binding.auth.runSandboxVerb.mockResolvedValue(
+      refusal(402, "insufficient_credit"),
+    );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+
+    expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
+    expect(mocks.toastWarning).toHaveBeenCalledWith(
+      "Not enough credits to wake this sandbox",
+      { description: "Add credits, then try again." },
+    );
+    expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: REGISTERED_HOSTS_KEY });
+  });
+
+  it("control: with the same account throughout, a wake that finds the sandbox awake refreshes and says nothing", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    scriptListUntilVerb(binding, "suspended");
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+
+    expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: REGISTERED_HOSTS_KEY });
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
   });
 });

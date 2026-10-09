@@ -21,7 +21,7 @@ import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
-} from "@/hooks/sandboxes/sandbox-mutation-account";
+} from "@/lib/sandboxes/sandbox-account-fence";
 
 /**
  * How a verb ended: `settled` (`200`, at rest), `moving` (`202`, still
