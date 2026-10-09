@@ -10,6 +10,7 @@ import {
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "./sandbox-fixtures";
@@ -39,13 +40,33 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: list.current }),
 }));
 
-const AUTH = vi.hoisted(() => ({ marker: "auth-service" }));
+// The cost view's answer, whose awake burn sets the credits poll.
+const costs = vi.hoisted<{
+  current: { readonly awakeBurnMillicreditsPerHour: number } | undefined;
+}>(() => ({ current: undefined }));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-costs-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-costs-query")
+    >()),
+    useSandboxCosts: () => ({ data: costs.current }),
+  }),
+);
+
+const AUTH = vi.hoisted(() => ({
+  marker: "auth-service",
+  fetchAuthenticatedUser: vi.fn<() => Promise<AuthenticatedUser | null>>(() =>
+    Promise.resolve(null),
+  ),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => AUTH,
 }));
 
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const COSTS_KEY = ["auth", "sandbox-costs"];
 const USER_KEY = ["auth", "user", AUTH];
@@ -70,7 +91,7 @@ function setup() {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-  return { invalidate, wrapper };
+  return { invalidate, wrapper, queryClient };
 }
 
 function keysInvalidated(invalidate: Mock<QueryClient["invalidateQueries"]>) {
@@ -81,9 +102,12 @@ describe("useRefreshSandboxCosts", () => {
   beforeEach(() => {
     turns.handlers.clear();
     list.current = undefined;
+    costs.current = undefined;
+    AUTH.fetchAuthenticatedUser.mockClear();
   });
   afterEach(() => {
     cleanup();
+    useAuthStore.setState({ status: "signed-out" });
   });
 
   it("invalidates the costs and the balance on a signature change, not on the first answer or an identical refetch", () => {
@@ -186,5 +210,60 @@ describe("useRefreshSandboxCosts", () => {
 
     second.unmount();
     expect(turns.handlers.size).toBe(0);
+  });
+
+  describe("the balance poll", () => {
+    function creditsObservers(queryClient: QueryClient) {
+      return (
+        queryClient.getQueryCache().find({ queryKey: USER_KEY })?.observers ??
+        []
+      );
+    }
+
+    it("polls the credits every minute, only while foregrounded, while an awake sandbox burns", () => {
+      useAuthStore.setState({ status: "signed-in" });
+      costs.current = { awakeBurnMillicreditsPerHour: 120 };
+      const { wrapper, queryClient } = setup();
+      renderHook(() => useRefreshSandboxCosts(), { wrapper });
+
+      const observers = creditsObservers(queryClient);
+      expect(observers.length).toBeGreaterThan(0);
+      expect(observers.some((o) => o.options.refetchInterval === 60_000)).toBe(
+        true,
+      );
+      expect(
+        observers.every((o) => o.options.refetchIntervalInBackground === false),
+      ).toBe(true);
+    });
+
+    it("sets no poll when nothing burns, or when the cost view has not answered", () => {
+      useAuthStore.setState({ status: "signed-in" });
+      const { wrapper, queryClient } = setup();
+
+      costs.current = { awakeBurnMillicreditsPerHour: 0 };
+      const idle = renderHook(() => useRefreshSandboxCosts(), { wrapper });
+      expect(creditsObservers(queryClient).length).toBeGreaterThan(0);
+      expect(
+        creditsObservers(queryClient).every(
+          (o) => o.options.refetchInterval === false,
+        ),
+      ).toBe(true);
+
+      costs.current = undefined;
+      idle.rerender();
+      expect(
+        creditsObservers(queryClient).every(
+          (o) => o.options.refetchInterval === false,
+        ),
+      ).toBe(true);
+    });
+
+    it("does not fetch the credits for a signed-out user, whatever the burn", () => {
+      costs.current = { awakeBurnMillicreditsPerHour: 120 };
+      const { wrapper } = setup();
+      renderHook(() => useRefreshSandboxCosts(), { wrapper });
+
+      expect(AUTH.fetchAuthenticatedUser).not.toHaveBeenCalled();
+    });
   });
 });

@@ -10,6 +10,26 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 
+/** How often the balance and the cost view refresh while something burns. */
+const AWAKE_BURN_REFRESH_MS = 60_000;
+
+/**
+ * The poll for the balance and the cost view: every minute while an awake
+ * sandbox is burning credits, none otherwise. With the app focused on one
+ * screen and nothing changing state, no event would ever refresh the two, and
+ * the runway warning could cross both thresholds unseen. Paused while the app
+ * is in the background (`refetchIntervalInBackground: false` at each use);
+ * focus refetches on return.
+ */
+export function sandboxCostsRefetchInterval(
+  awakeBurnMillicreditsPerHour: number | null,
+): number | false {
+  return awakeBurnMillicreditsPerHour !== null &&
+    awakeBurnMillicreditsPerHour > 0
+    ? AWAKE_BURN_REFRESH_MS
+    : false;
+}
+
 function sandboxCostsQueryOptions(
   auth: AuthService | null,
   userId: string | null,
@@ -34,10 +54,15 @@ function sandboxCostsQueryOptions(
       throw new Error(sandboxFailureMessage(result));
     },
     enabled,
-    // Same cadence as the credits it is divided into (`useAuthUser`): on
-    // focus, and on the events `useRefreshSandboxCosts` invalidates on. No
-    // polling of its own.
+    // On focus, on the events `useRefreshSandboxCosts` invalidates on, and
+    // every minute while its own answer says a sandbox is burning (the
+    // balance it is divided into polls on the same rule there).
     refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      sandboxCostsRefetchInterval(
+        query.state.data?.awakeBurnMillicreditsPerHour ?? null,
+      ),
+    refetchIntervalInBackground: false,
   });
 }
 

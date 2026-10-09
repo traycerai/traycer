@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 import { subscribeChatTurnCompletions } from "@/lib/chats/chat-turn-completions";
+import { authUserQueryOptions } from "@/hooks/auth/use-auth-user-query";
+import {
+  sandboxCostsRefetchInterval,
+  useSandboxCosts,
+} from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 
@@ -43,7 +49,9 @@ function notifyOwnerChanged(): void {
 /**
  * While mounted, keeps the sandbox cost view and the balance it is divided
  * into live, on the pattern of `useRefreshCreditsOnTraycerTurn`: invalidation
- * on events, never a timer.
+ * on events, plus a one-minute poll of both while an awake sandbox burns
+ * (`sandboxCostsRefetchInterval`), since a burn moves the balance with no
+ * event at all.
  *
  * The events: a Traycer turn completing (it spent credits), and a sandbox
  * changing state or freezing (the burn moved), seen through the sandbox list
@@ -71,6 +79,18 @@ export function useRefreshSandboxCosts(): void {
   const auth = useAuthService();
   const signature = burnSignature(useSandboxList().data);
   const previousRef = useRef<string | null>(null);
+
+  // The balance polls on the cost view's rule while a sandbox burns: with
+  // nothing changing state and no turn completing, no event above would
+  // refresh it. An observer of the shared credits query, from the owner only,
+  // so one poll however many surfaces mount this.
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const burn = useSandboxCosts().data?.awakeBurnMillicreditsPerHour ?? null;
+  useQuery({
+    ...authUserQueryOptions(auth, signedIn && isOwner),
+    refetchInterval: sandboxCostsRefetchInterval(burn),
+    refetchIntervalInBackground: false,
+  });
 
   useEffect(() => {
     if (!isOwner) return undefined;

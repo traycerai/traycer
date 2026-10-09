@@ -9,7 +9,7 @@ import { useAuthService } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { authQueryKeys } from "@/lib/query-keys";
 
-function authUserQueryOptions(auth: AuthService, enabled: boolean) {
+export function authUserQueryOptions(auth: AuthService, enabled: boolean) {
   return queryOptions<AuthenticatedUser | null>({
     queryKey: authQueryKeys.user(auth),
     queryFn: () => auth.fetchAuthenticatedUser(),

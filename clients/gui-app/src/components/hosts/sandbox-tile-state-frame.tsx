@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 
 /**
@@ -35,6 +36,19 @@ import { sandboxMutationKeys } from "@/lib/query-keys";
  * a host's life, so this happens once, at the first directory answer).
  */
 export function SandboxTileStateFrame(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  // A tile rendered with no host runtime above it (a shell mounted bare, a
+  // tile under test) has no directory to read and no sandbox to frame.
+  if (useHostBinding() === null) return props.children;
+  return (
+    <SandboxTileStateFrameInRuntime>
+      {props.children}
+    </SandboxTileStateFrameInRuntime>
+  );
+}
+
+function SandboxTileStateFrameInRuntime(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const hostId = useTabHostId();

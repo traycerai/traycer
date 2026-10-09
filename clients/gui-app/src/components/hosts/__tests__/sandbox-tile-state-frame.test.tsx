@@ -37,13 +37,17 @@ const mocks = vi.hoisted(() => ({
   listError: false,
   listFetching: false,
   listRefetch: vi.fn(),
+  entryReads: vi.fn(),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-sbx-1",
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => mocks.entry,
+  useHostDirectoryEntry: () => {
+    mocks.entryReads();
+    return mocks.entry;
+  },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({
@@ -160,10 +164,23 @@ beforeEach(() => {
   mocks.listError = false;
   mocks.listFetching = false;
   mocks.listRefetch.mockClear();
+  mocks.entryReads.mockClear();
 });
 afterEach(cleanup);
 
 describe("<SandboxTileStateFrame />", () => {
+  it("returns the tile untouched, reading no directory, when there is no host runtime above it", () => {
+    useSandboxEntry("suspended", false);
+    mocks.binding = null;
+    const { container } = renderFrame(false);
+
+    expect(screen.getByTestId("tile-body")).toBeDefined();
+    expect(container.querySelector("[data-sandbox-tile-state]")).toBeNull();
+    expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+    expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+    expect(mocks.entryReads).not.toHaveBeenCalled();
+  });
+
   it("returns an unwrapped personal host's tile exactly as it was", () => {
     mocks.entry = hostListItemToDirectoryEntry(
       registryItem("personal"),

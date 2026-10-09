@@ -223,6 +223,67 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
   });
 
+  it("spends its one shot on the first directory entry: a sandbox first seen awake that later suspends is not woken", async () => {
+    mocks.entry = entryFor("sandbox", "awake", false);
+    const auth = mocks.binding?.auth;
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      wrapper: wrapper(),
+    });
+    await settleWake();
+    expect(auth?.listSandboxes).not.toHaveBeenCalled();
+
+    // Idled to sleep under the open tab, by the sandbox's own idle timer.
+    mocks.entry = entryFor("sandbox", "suspended", false);
+    view.rerender();
+    await settleWake();
+
+    expect(auth?.listSandboxes).not.toHaveBeenCalled();
+    expect(auth?.runSandboxVerb).not.toHaveBeenCalled();
+  });
+
+  it("waits through a directory that has not answered, then wakes once on the first entry if it is asleep", async () => {
+    mocks.entry = null;
+    const auth = mocks.binding?.auth;
+    auth?.listSandboxes
+      .mockImplementationOnce(listOf({ state: "suspended" }))
+      .mockImplementation(listOf({ state: "awake" }));
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      wrapper: wrapper(),
+    });
+    await settleWake();
+    expect(auth?.listSandboxes).not.toHaveBeenCalled();
+    expect(auth?.runSandboxVerb).not.toHaveBeenCalled();
+
+    mocks.entry = entryFor("sandbox", "suspended", false);
+    view.rerender();
+    await settleWake();
+
+    expect(auth?.runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(auth?.runSandboxVerb).toHaveBeenCalledWith("sbx_1", "resume");
+  });
+
+  it("wakes once for a first entry that is asleep, and not again when the entry later reads awake and then suspended", async () => {
+    mocks.entry = entryFor("sandbox", "suspended", false);
+    const auth = mocks.binding?.auth;
+    auth?.listSandboxes
+      .mockImplementationOnce(listOf({ state: "suspended" }))
+      .mockImplementation(listOf({ state: "awake" }));
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      wrapper: wrapper(),
+    });
+    await settleWake();
+    expect(auth?.runSandboxVerb).toHaveBeenCalledTimes(1);
+
+    mocks.entry = entryFor("sandbox", "awake", false);
+    view.rerender();
+    await settleWake();
+    mocks.entry = entryFor("sandbox", "suspended", false);
+    view.rerender();
+    await settleWake();
+
+    expect(auth?.runSandboxVerb).toHaveBeenCalledTimes(1);
+  });
+
   it("wakes a host once however many tiles open on it together", async () => {
     mocks.entry = entryFor("sandbox", "suspended", false);
     // Asleep until a verb has been sent, awake after: both tiles' first reads

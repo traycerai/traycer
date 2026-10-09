@@ -13,8 +13,8 @@ import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
  * name, while a restore (or a session's reconnect loop) waking every sandbox a
  * canvas ever showed would keep forgotten machines awake on the meter.
  *
- * Fires once per mount, when the host's directory entry says the sandbox is
- * suspended, stopped or frozen, through the same wake a host picker's pick
+ * Fires at most once per mount, decided on the host's FIRST directory entry:
+ * only when that entry says the sandbox is suspended, stopped or frozen, through the same wake a host picker's pick
  * starts (`startSandboxWake`), so a tab opened on a host a pick is
  * already waking joins that wake. A frozen sandbox is refused at once with the
  * typed `SANDBOX_FROZEN` refusal, instead of a dial that would wait out relay
@@ -29,10 +29,16 @@ export function useSandboxWakeForOpenedTile(hostId: string): void {
 
   const binding = useHostBinding();
   const queryClient = useQueryClient();
+  // One shot, spent on the FIRST directory answer for the host, whatever it
+  // says. The open is the inbound action; a sandbox that was awake then and
+  // idles to `suspended` later was suspended by its idle timer, and waking it
+  // again for a tab left open would defeat the suspension and keep the meter
+  // running for a tab nobody is using.
   const firedRef = useRef(false);
+  const known = entry !== null;
   useEffect(() => {
-    if (!needsWake || firedRef.current) return;
+    if (!known || firedRef.current) return;
     firedRef.current = true;
-    startSandboxWake(queryClient, binding, hostId);
-  }, [binding, hostId, needsWake, queryClient]);
+    if (needsWake) startSandboxWake(queryClient, binding, hostId);
+  }, [binding, hostId, known, needsWake, queryClient]);
 }
