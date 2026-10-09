@@ -127,6 +127,18 @@ const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
 /**
+ * What a sentence calls a host: its directory label, or its id when it has no
+ * label. A blank label is no label - "On ." is not a sentence.
+ */
+function hostNameOf(
+  entry: { readonly label: string } | null,
+  hostId: string | null,
+): string | null {
+  const label = entry?.label.trim() ?? "";
+  return label.length > 0 ? label : hostId;
+}
+
+/**
  * The host-wide "let agents use the in-app browser" switch (plan B08).
  *
  * Off means agent registrations on this host are minted with no browser MCP
@@ -144,8 +156,10 @@ function AgentBrowserAccessRow(props: {
   readonly hostId: string | null;
 }): ReactNode {
   const client = useHostClient();
-  const entry = useHostDirectoryEntry(props.hostId);
-  const hostName = entry?.label ?? props.hostId;
+  const hostName = hostNameOf(
+    useHostDirectoryEntry(props.hostId),
+    props.hostId,
+  );
   const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -194,8 +208,10 @@ const AGENT_PAGES_SET = "config.visualization.set";
  */
 function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
   const client = useHostClient();
-  const entry = useHostDirectoryEntry(props.hostId);
-  const hostName = entry?.label ?? props.hostId;
+  const hostName = hostNameOf(
+    useHostDirectoryEntry(props.hostId),
+    props.hostId,
+  );
   const query = useHostQuery<HostRpcRegistry, "config.visualization.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -890,8 +906,10 @@ function SavedWebsiteSessionDetails(props: {
     contributedByHostId !== props.localHostId
       ? contributedByHostId
       : null;
-  const entry = useHostDirectoryEntry(remoteHostId);
-  const hostName = entry === null ? remoteHostId : entry.label;
+  const hostName = hostNameOf(
+    useHostDirectoryEntry(remoteHostId),
+    remoteHostId,
+  );
 
   return (
     <div className="min-w-0 flex-1">

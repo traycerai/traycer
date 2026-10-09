@@ -20,6 +20,22 @@ function progressPercent(received: number, total: number): number {
   return Math.min(100, Math.round((received / total) * 100));
 }
 
+/** The line under the heading: what happens next, or how far the copy is. */
+function notDownloadedDetail(
+  noun: string,
+  size: string | null,
+  copy: Pick<EpicFileCopy, "copying" | "progress">,
+): string {
+  if (copy.copying) {
+    return copy.progress === null
+      ? "Downloading to this device…"
+      : `Downloading to this device… ${progressPercent(copy.progress.received, copy.progress.total)}%`;
+  }
+  return size === null
+    ? `This ${noun} downloads when you open it.`
+    : `This ${size} ${noun} downloads when you open it.`;
+}
+
 /**
  * A file too big for the eager mirror, not on this device yet (Viewers,
  * "Large file not downloaded yet"): the size, one Download action, and once the
@@ -51,9 +67,7 @@ export function EpicFileNotDownloaded(
           Not on this device yet
         </p>
         <p className="text-ui-sm text-muted-foreground/60">
-          {size === null
-            ? `This ${props.noun} downloads when you open it.`
-            : `This ${size} ${props.noun} downloads when you open it.`}
+          {notDownloadedDetail(props.noun, size, copy)}
         </p>
       </div>
       {copy.copying ? (

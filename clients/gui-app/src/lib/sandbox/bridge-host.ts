@@ -132,6 +132,13 @@ export const TEARDOWN_GRACE_MS = 2_000;
 /** After the reader declines a link, a frame asks about none for this long. */
 export const DECLINED_LINK_QUIET_MS = 2_000;
 /**
+ * The tallest page that errored before it loaded and still counts as having
+ * drawn nothing: an empty body with the browser's default 8px margins measures
+ * 16px, so this leaves room for those and a stray empty line, and no room for
+ * a real heading or chart.
+ */
+export const CRASHED_PAGE_MAX_HEIGHT_PX = 32;
+/**
  * A link longer than this is refused before the reader is asked: no one can
  * check it, and the confirm has to show all of it. A parsed URL's `href` is
  * ASCII, so this is bytes as well as characters.
@@ -648,7 +655,10 @@ export class SandboxBridgeHost {
     // Too late: the watchdog already reported this frame.
     if (this.crashed) return;
     const height = finiteSize(params.height);
-    if (this.earlyError && (height === null || height === 0)) {
+    if (
+      this.earlyError &&
+      (height === null || height <= CRASHED_PAGE_MAX_HEIGHT_PX)
+    ) {
       this.markCrashed();
       return;
     }

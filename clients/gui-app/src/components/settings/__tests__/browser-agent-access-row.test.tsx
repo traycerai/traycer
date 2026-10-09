@@ -45,6 +45,10 @@ const pagesSupport = vi.hoisted(
   }),
 );
 const tracked = vi.hoisted(() => vi.fn());
+/** A label to report for every host in place of its own; `null` keeps it. */
+const labelOverride = vi.hoisted((): { current: string | null } => ({
+  current: null,
+}));
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
@@ -74,7 +78,9 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string | null) => {
     for (const entry of [mockLocalHostEntry, mockRemoteHostEntry]) {
-      if (entry.hostId === hostId) return { label: entry.label };
+      if (entry.hostId === hostId) {
+        return { label: labelOverride.current ?? entry.label };
+      }
     }
     return null;
   },
@@ -248,6 +254,7 @@ afterEach(() => {
   pagesSupport.set = false;
   active.hostId = null;
   client.current = null;
+  labelOverride.current = null;
   tracked.mockClear();
   useSettingsStore.setState({ browserDevOrigins: [] });
 });
@@ -332,6 +339,24 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
         /^On Mock Mac\..*Running agents pick this up on their next turn\.$/,
       ),
     ).not.toBeNull();
+  });
+
+  it("does not name a host whose label is blank", async () => {
+    labelOverride.current = "  ";
+    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
+
+    await waitFor(() => {
+      expect(row().getAttribute("data-state")).toBe("checked");
+    });
+    expect(
+      screen.getByText(
+        new RegExp(
+          `^On ${mockLocalHostEntry.hostId}\\..*Running agents pick this up on their next turn\\.$`,
+        ),
+      ),
+    ).not.toBeNull();
+    expect(screen.queryByText(/^On\s*\./)).toBeNull();
   });
 
   it("shows both members when origins exist too", async () => {

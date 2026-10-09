@@ -53,6 +53,8 @@ export interface SandboxFrameProps {
   readonly html: string;
   readonly kind: SandboxKind;
   readonly title: string;
+  /** An MCP App's server, which the link confirm names; `null` otherwise. */
+  readonly appName: string | null;
   readonly networkPolicy: SandboxNetworkPolicy;
   /** An MCP App's normalized CSP; ignored for pages and wireframes. */
   readonly appCsp: McpAppCsp | null;
@@ -408,7 +410,12 @@ export function SandboxFrame(props: SandboxFrameProps) {
         )}
         style={{ height: height ?? undefined }}
       />
-      <SandboxLinkConfirm url={confirmUrl} kind={kind} onDecide={decideLink} />
+      <SandboxLinkConfirm
+        url={confirmUrl}
+        kind={kind}
+        appName={props.appName}
+        onDecide={decideLink}
+      />
     </>
   );
 }

@@ -9,6 +9,7 @@ import { useEpicFileCopy } from "@/hooks/files/use-epic-file-copy";
 import { useEpicFileRecord } from "@/hooks/files/use-epic-file-record";
 import {
   epicFileUnavailableMessage,
+  epicFileUnavailableRetries,
   type EpicFileAddress,
 } from "@/hooks/files/use-epic-file-text-query";
 import { formatByteSize } from "@/lib/format-byte-size";
@@ -78,7 +79,7 @@ export function BlobViewerShell(props: BlobViewerShellProps): ReactNode {
       return (
         <ShellNotice
           title={epicFileUnavailableMessage(result.reason)}
-          action={retry}
+          action={epicFileUnavailableRetries(result.reason) ? retry : null}
         />
       );
     }

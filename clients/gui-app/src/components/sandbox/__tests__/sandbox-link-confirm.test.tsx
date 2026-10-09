@@ -12,22 +12,53 @@ afterEach(() => {
 describe("<SandboxLinkConfirm />", () => {
   it("names an app as an app", () => {
     render(
-      <SandboxLinkConfirm url={URL_ASKED} kind="app" onDecide={vi.fn()} />,
+      <SandboxLinkConfirm
+        url={URL_ASKED}
+        kind="app"
+        appName={null}
+        onDecide={vi.fn()}
+      />,
     );
     expect(screen.getByRole("dialog").textContent).toContain(
       "The app wants to open:",
     );
   });
 
+  it("names the asking app's server when it has one", () => {
+    render(
+      <SandboxLinkConfirm
+        url={URL_ASKED}
+        kind="app"
+        appName="linear"
+        onDecide={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "The linear app wants to open:",
+    );
+  });
+
   it("shows nothing until a page asks", () => {
-    render(<SandboxLinkConfirm url={null} kind="page" onDecide={vi.fn()} />);
+    render(
+      <SandboxLinkConfirm
+        url={null}
+        kind="page"
+        appName={null}
+        onDecide={vi.fn()}
+      />,
+    );
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the whole URL and opens only on Open", async () => {
     const onDecide = vi.fn<(open: boolean) => void>();
     render(
-      <SandboxLinkConfirm url={URL_ASKED} kind="page" onDecide={onDecide} />,
+      <SandboxLinkConfirm
+        url={URL_ASKED}
+        kind="page"
+        appName={null}
+        onDecide={onDecide}
+      />,
     );
     expect(screen.getByRole("dialog").textContent).toContain(URL_ASKED);
     // Cancel takes focus, so a stray Enter never opens the link.
@@ -47,7 +78,12 @@ describe("<SandboxLinkConfirm />", () => {
   ])("declines on %s", async (_label, act) => {
     const onDecide = vi.fn<(open: boolean) => void>();
     render(
-      <SandboxLinkConfirm url={URL_ASKED} kind="page" onDecide={onDecide} />,
+      <SandboxLinkConfirm
+        url={URL_ASKED}
+        kind="page"
+        appName={null}
+        onDecide={onDecide}
+      />,
     );
     await act();
     expect(onDecide.mock.calls).toEqual([[false]]);

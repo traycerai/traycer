@@ -88,8 +88,10 @@ export function TouchActionsSheet(props: {
               room for. */}
         <div className="flex items-center gap-3 border-b border-canvas-border/70 p-4">
           {props.icon}
-          <div className="min-w-0">
-            <DrawerTitle className="truncate">{props.title}</DrawerTitle>
+          {/* A phone has no hover to reveal a cut title, so it wraps whole;
+              `overflow-wrap` inherits, so a long unbroken name breaks too. */}
+          <div className="min-w-0 break-words">
+            <DrawerTitle>{props.title}</DrawerTitle>
             <DrawerDescription>{props.description}</DrawerDescription>
           </div>
         </div>

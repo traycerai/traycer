@@ -13,6 +13,7 @@ import { useScrollToChatPage } from "@/components/chat/chat-scroll-to-block";
 import { HtmlViewer } from "@/components/files/viewers/html-viewer";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { Shimmer } from "@/components/ui/shimmer";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BlockFloatingToolbar } from "@/editor-core/nodes/shared/block-floating-toolbar";
 import { ToolbarButton } from "@/editor-core/toolbar/toolbar-button";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -83,9 +84,9 @@ export function PageRow(props: PageRowProps): ReactNode {
     props.page === null &&
     !props.stopped &&
     props.error !== null &&
-    props.error.length > 0
+    props.error.trim().length > 0
   ) {
-    return <FailedPage error={props.error} />;
+    return <FailedPage error={props.error.trim()} />;
   }
   return props.fallback;
 }
@@ -117,12 +118,22 @@ function BuildingPage(props: {
       className="flex items-center gap-2 p-1 text-ui-sm text-muted-foreground"
     >
       <FileCode className="size-3.5 shrink-0 text-foreground" aria-hidden />
-      <Shimmer
-        as="span"
-        className="min-w-0 truncate font-medium [--shimmer-text-color:var(--color-muted-foreground)]"
+      <TooltipWrapper
+        label={label}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        {label}
-      </Shimmer>
+        {/* Shimmer passes no trigger props through: the span takes them. */}
+        <span className="flex min-w-0">
+          <Shimmer
+            as="span"
+            className="min-w-0 truncate font-medium [--shimmer-text-color:var(--color-muted-foreground)]"
+          >
+            {label}
+          </Shimmer>
+        </span>
+      </TooltipWrapper>
       <LiveElapsed startedAt={props.startedAt} />
       <LivePulse
         size="xs"
@@ -148,9 +159,16 @@ function FailedPage(props: { readonly error: string }) {
       <span aria-hidden className="shrink-0 opacity-40">
         ·
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-code-sm">
-        {props.error}
-      </span>
+      <TooltipWrapper
+        label={props.error}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span className="min-w-0 flex-1 truncate font-mono text-code-sm">
+          {props.error}
+        </span>
+      </TooltipWrapper>
       <span className="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-1 text-overline font-medium uppercase">
         error
       </span>

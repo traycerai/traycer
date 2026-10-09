@@ -17,7 +17,10 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { EpicReadFileResponse } from "@traycer/protocol/host/epic/files";
+import type {
+  EpicFileUnavailableReason,
+  EpicReadFileResponse,
+} from "@traycer/protocol/host/epic/files";
 import type {
   ToolCallPageStamp,
   ToolInputDetail,
@@ -266,6 +269,17 @@ describe("<PageRow /> when the call failed", () => {
     );
   });
 
+  it("leaves a call whose error is only whitespace to the ordinary tool row", () => {
+    renderRow(
+      makeRpc(textResponse("open")),
+      { ...SHOWN, page: null, error: " \n " },
+      null,
+    );
+
+    expect(screen.getByTestId("ordinary-tool-row")).toBeTruthy();
+    expect(screen.queryByTestId("page-row-failed")).toBeNull();
+  });
+
   it("leaves a stopped call to the ordinary tool row", () => {
     renderRow(
       makeRpc(textResponse("open")),
@@ -418,6 +432,24 @@ describe("<PageRow /> when the page cannot be read", () => {
     expect(rpc.readFile).toHaveBeenCalledTimes(2);
     expect(rpc.fetchFile).not.toHaveBeenCalled();
   });
+
+  const NO_RETRY: ReadonlyArray<readonly [EpicFileUnavailableReason, string]> =
+    [
+      ["missing", "This file is no longer available."],
+      ["local-only", "Its task keeps files on the host that made it."],
+    ];
+  it.each(NO_RETRY)(
+    "says a %s page cannot be shown, and offers no Retry that could not help",
+    async (reason, copy) => {
+      const rpc = makeRpc(textResponse("open"));
+      rpc.readFile.mockResolvedValueOnce({ kind: "unavailable", reason });
+      renderRow(rpc, SHOWN, null);
+
+      const notice = await screen.findByRole("status");
+      expect(notice.textContent).toContain(copy);
+      expect(within(notice).queryByRole("button")).toBeNull();
+    },
+  );
 
   it("offers Download for a page too big to mirror, which copies it over and reads it again", async () => {
     const rpc = makeRpc(textResponse("open"));

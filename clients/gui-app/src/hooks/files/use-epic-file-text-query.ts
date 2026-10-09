@@ -68,13 +68,34 @@ export function epicFileUnavailableMessage(
 ): string {
   switch (reason) {
     case "upload-pending":
-    case "missing":
       return "Still uploading from the host that made it. It shows here when it lands.";
+    case "missing":
+      return "This file is no longer available.";
     case "not-downloaded":
       return "Not on this device yet. Download it to show it here.";
     case "local-only":
       return "Its task keeps files on the host that made it. Open it there.";
     case "failed":
       return "Copying it to this device failed.";
+  }
+}
+
+/**
+ * Whether asking again can change the answer, so the notice offers Retry: a
+ * copy that failed, one not made yet (its Retry is Download), an upload that
+ * may have landed since. A missing file and one kept on another host stay so
+ * however often it is asked.
+ */
+export function epicFileUnavailableRetries(
+  reason: EpicFileUnavailableReason,
+): boolean {
+  switch (reason) {
+    case "failed":
+    case "not-downloaded":
+    case "upload-pending":
+      return true;
+    case "missing":
+    case "local-only":
+      return false;
   }
 }

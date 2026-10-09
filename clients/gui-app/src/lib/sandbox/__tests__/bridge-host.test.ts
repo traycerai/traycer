@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  CRASHED_PAGE_MAX_HEIGHT_PX,
   DECLINED_LINK_QUIET_MS,
   LOAD_TIMEOUT_MS,
   MAX_IN_FLIGHT_APP_REQUESTS,
@@ -803,6 +804,22 @@ describe("crash detection", () => {
     harness.host.receive(documentReady(NONCE, 0));
     expect(harness.host.status).toBe("crashed");
     expect(harness.all("ping")).toEqual([]);
+  });
+
+  it("marks a frame crashed when it errored early and drew only the body's default margins", () => {
+    const harness = createHarness({ appRequests: null, openLink: OPENS });
+    harness.host.receive(proxyReady());
+    harness.host.receive(notification("traycer/notifications/early-error", {}));
+    harness.host.receive(documentReady(NONCE, 16));
+    expect(harness.host.status).toBe("crashed");
+  });
+
+  it("trusts an early error that still drew more than empty margins", () => {
+    const harness = createHarness({ appRequests: null, openLink: OPENS });
+    harness.host.receive(proxyReady());
+    harness.host.receive(notification("traycer/notifications/early-error", {}));
+    harness.host.receive(documentReady(NONCE, CRASHED_PAGE_MAX_HEIGHT_PX + 1));
+    expect(harness.host.status).toBe("ready");
   });
 
   it("trusts an early error that still rendered something", () => {

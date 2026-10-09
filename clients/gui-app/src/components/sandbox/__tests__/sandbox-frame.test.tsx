@@ -41,6 +41,7 @@ describe("<SandboxFrame /> link confirm", () => {
         html="<p>page</p>"
         kind="page"
         title="Page"
+        appName={null}
         networkPolicy="open"
         appCsp={null}
         permissions={[]}

@@ -269,6 +269,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
         html={htmlContent}
         kind="wireframe"
         title={title}
+        appName={null}
         networkPolicy="https-only"
         appCsp={null}
         permissions={NO_PERMISSIONS}

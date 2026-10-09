@@ -7,8 +7,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEpicFileCopy } from "@/hooks/files/use-epic-file-copy";
 import { useEpicFileRecord } from "@/hooks/files/use-epic-file-record";
 import { formatByteSize } from "@/lib/format-byte-size";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   epicFileUnavailableMessage,
+  epicFileUnavailableRetries,
   useEpicFileTextQuery,
   type EpicFileAddress,
 } from "@/hooks/files/use-epic-file-text-query";
@@ -89,7 +91,11 @@ export function HtmlViewer(props: HtmlViewerProps) {
         icon={<FileCode aria-hidden />}
         title={title}
         detail={epicFileUnavailableMessage(response.reason)}
-        actions={<RetryButton onRetry={() => void query.refetch()} />}
+        actions={
+          epicFileUnavailableRetries(response.reason) ? (
+            <RetryButton onRetry={() => void query.refetch()} />
+          ) : null
+        }
       />
     );
   }
@@ -157,6 +163,7 @@ export function HtmlViewer(props: HtmlViewerProps) {
       html={response.text}
       kind="page"
       title={title}
+      appName={null}
       networkPolicy={response.networkPolicy}
       appCsp={null}
       permissions={NO_PERMISSIONS}
@@ -263,7 +270,10 @@ function PageSkeleton(props: { readonly height: number | null }) {
   );
 }
 
-/** PageStates 5 and 7: a one-line box standing in for the page. */
+/**
+ * PageStates 5 and 7: a one-line box standing in for the page. On a narrow row
+ * the actions wrap below the text rather than squeeze it.
+ */
 function PageNotice(props: {
   readonly icon: ReactNode;
   readonly title: string;
@@ -273,14 +283,25 @@ function PageNotice(props: {
   return (
     <div
       role="status"
-      className="flex w-full items-center gap-2.5 rounded-md border border-canvas-border/40 bg-foreground/5 px-3 py-2 text-ui-sm [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground"
+      className="flex w-full flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-canvas-border/40 bg-foreground/5 px-3 py-2 text-ui-sm [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground"
     >
       {props.icon}
-      <div className="min-w-0 flex-1">
-        <div className="truncate">{props.title}</div>
+      <div className="min-w-48 flex-1 basis-0">
+        <TooltipWrapper
+          label={props.title}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <div className="truncate">{props.title}</div>
+        </TooltipWrapper>
         <div className="text-ui-xs text-muted-foreground">{props.detail}</div>
       </div>
-      {props.actions}
+      {props.actions === null ? null : (
+        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+          {props.actions}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -7,14 +8,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  SCROLL_MORE_BELOW_FADE_CLASS,
+  useScrollMoreBelow,
+} from "@/hooks/ui/use-scroll-more-below";
 import type { SandboxKind } from "@/lib/sandbox/bridge-host";
+import { cn } from "@/lib/utils";
 
 interface SandboxLinkConfirmProps {
   /** The link a page asked to open, or `null` when nothing is asked. */
   readonly url: string | null;
   /** What asked: the line names an app as an app, anything else as a page. */
   readonly kind: SandboxKind;
+  /** The asking app's server, named in the line; `null` for a page. */
+  readonly appName: string | null;
   readonly onDecide: (open: boolean) => void;
+}
+
+function linkAsker(kind: SandboxKind, appName: string | null): string {
+  if (kind !== "app") return "The page";
+  return appName === null ? "The app" : `The ${appName} app`;
 }
 
 /**
@@ -24,7 +37,9 @@ interface SandboxLinkConfirmProps {
  * Cancel comes first, so it is what the dialog focuses; Esc cancels too.
  */
 export function SandboxLinkConfirm(props: SandboxLinkConfirmProps) {
-  const { url, kind, onDecide } = props;
+  const { url, kind, appName, onDecide } = props;
+  const [urlBox, setUrlBox] = useState<HTMLParagraphElement | null>(null);
+  const moreBelow = useScrollMoreBelow(urlBox);
   return (
     <Dialog
       open={url !== null}
@@ -42,13 +57,18 @@ export function SandboxLinkConfirm(props: SandboxLinkConfirmProps) {
       >
         <DialogHeader className="shrink-0 space-y-1">
           <DialogTitle>Open this link?</DialogTitle>
-          <DialogDescription>
-            {kind === "app" ? "The app" : "The page"} wants to open:
+          <DialogDescription className="break-words">
+            {linkAsker(kind, appName)} wants to open:
           </DialogDescription>
         </DialogHeader>
         <p
+          ref={setUrlBox}
           data-testid="sandbox-link-url"
-          className="max-h-[40svh] min-h-0 overflow-y-auto px-5 py-3 font-mono text-ui-sm break-all text-foreground"
+          data-more-below={moreBelow}
+          className={cn(
+            "max-h-[40svh] min-h-0 overflow-y-auto px-5 py-3 font-mono text-ui-sm break-all text-foreground",
+            moreBelow && SCROLL_MORE_BELOW_FADE_CLASS,
+          )}
         >
           {url}
         </p>

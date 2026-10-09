@@ -19,6 +19,7 @@ if (container !== null) {
     <SandboxLinkConfirm
       url={LONGEST_URL}
       kind="page"
+      appName={null}
       onDecide={() => undefined}
     />,
   );

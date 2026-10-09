@@ -43,12 +43,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BlockFloatingToolbar } from "@/editor-core/nodes/shared/block-floating-toolbar";
 import { ToolbarButton } from "@/editor-core/toolbar/toolbar-button";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { useEpicFileTextQuery } from "@/hooks/files/use-epic-file-text-query";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import {
+  SCROLL_MORE_BELOW_FADE_CLASS,
+  useScrollMoreBelow,
+} from "@/hooks/ui/use-scroll-more-below";
 import { formatByteSize } from "@/lib/format-byte-size";
 import {
   canDownloadToDevice,
@@ -71,6 +76,7 @@ import {
   type McpAppDownload,
   type McpAppUnreachableReason,
 } from "@/lib/sandbox/mcp-app-bridge";
+import { mcpAppDownloadCopy } from "@/lib/sandbox/mcp-app-download-copy";
 import { useMcpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 import {
   claimFullscreen,
@@ -563,8 +569,13 @@ function LiveMcpApp(props: {
               className={cn(
                 fullscreen
                   ? "min-h-0 flex-1"
-                  : app.prefersBorder &&
-                      "overflow-hidden rounded-lg border border-canvas-border/60",
+                  : // Rounded either way: a light-only app keeps its white
+                    // canvas in dark mode (D43), and a card's corners keep
+                    // it from reading as a slab.
+                    cn(
+                      "overflow-hidden rounded-lg",
+                      app.prefersBorder && "border border-canvas-border/60",
+                    ),
               )}
             >
               <SandboxFrame
@@ -572,6 +583,7 @@ function LiveMcpApp(props: {
                 html={html}
                 kind="app"
                 title={`${app.server} · ${app.tool}`}
+                appName={app.server}
                 // Apps run under their own CSP, built from `appCsp`.
                 networkPolicy="https-only"
                 appCsp={app.csp}
@@ -625,43 +637,54 @@ function AppFigure(props: {
   );
 }
 
-/** McpApp states 1 and 2: who made the app, or that its session is waking. */
+/**
+ * McpApp states 1 and 2: who made the app, or that its session is waking. A
+ * long server name truncates rather than push the tool out of the row; the
+ * whole `server · tool` is the tooltip.
+ */
 function AppLabelLine(props: {
   readonly server: string;
   readonly tool: string;
   readonly waking: boolean;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 p-1 text-ui-sm text-muted-foreground">
-      <AppWindow
-        className="size-3.5 shrink-0 text-[var(--term-ansi-magenta)]"
-        aria-hidden
-      />
-      <span className="shrink-0 font-medium text-foreground/85">
-        {props.server}
-      </span>
-      <span aria-hidden className="shrink-0 opacity-40">
-        ·
-      </span>
-      {props.waking ? (
-        <span
-          role="status"
-          className="flex min-w-0 items-center gap-1.5"
-          data-testid="mcp-app-waking"
-        >
-          <span className="truncate">Waking the agent session</span>
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
+    <TooltipWrapper
+      label={`${props.server} · ${props.tool}`}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <div className="flex min-w-0 items-center gap-2 p-1 text-ui-sm text-muted-foreground">
+        <AppWindow
+          className="size-3.5 shrink-0 text-[var(--term-ansi-magenta)]"
+          aria-hidden
+        />
+        <span className="min-w-0 truncate font-medium text-foreground/85">
+          {props.server}
         </span>
-      ) : (
-        <span className="min-w-0 truncate font-mono text-code-sm">
-          {props.tool}
+        <span aria-hidden className="shrink-0 opacity-40">
+          ·
         </span>
-      )}
-    </div>
+        {props.waking ? (
+          <span
+            role="status"
+            className="flex min-w-0 items-center gap-1.5"
+            data-testid="mcp-app-waking"
+          >
+            <span className="truncate">Waking the agent session</span>
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          </span>
+        ) : (
+          <span className="min-w-0 truncate font-mono text-code-sm">
+            {props.tool}
+          </span>
+        )}
+      </div>
+    </TooltipWrapper>
   );
 }
 
@@ -846,14 +869,21 @@ function AppApprovalCard(props: {
       data-testid="mcp-app-approval"
       className="flex flex-col gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2.5 text-ui-sm"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <ShieldAlert className="size-3.5 shrink-0 text-primary" aria-hidden />
-        <span className="select-none font-medium uppercase text-overline text-primary">
+        <span className="shrink-0 select-none whitespace-nowrap font-medium uppercase text-overline text-primary">
           Approval needed
         </span>
-        <span className="text-ui-xs text-muted-foreground">
-          · the {server} app wants to run a tool
-        </span>
+        <TooltipWrapper
+          label={`The ${server} app wants to run a tool`}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+            · the {server} app wants to run a tool
+          </span>
+        </TooltipWrapper>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
         <span
@@ -931,8 +961,14 @@ function AppDownloadConfirm(props: {
   readonly onDecide: (confirmed: boolean) => void;
 }) {
   const { downloads, onDecide } = props;
-  const linksOnly =
-    downloads !== null && downloads.every((item) => item.kind === "link");
+  const links = (downloads ?? []).filter((item) => item.kind === "link");
+  const copy = mcpAppDownloadCopy(
+    props.server,
+    (downloads ?? []).length - links.length,
+    links.length,
+  );
+  const [list, setList] = useState<HTMLUListElement | null>(null);
+  const moreBelow = useScrollMoreBelow(list);
   return (
     <Dialog
       open={downloads !== null}
@@ -947,16 +983,20 @@ function AppDownloadConfirm(props: {
         showCloseButton={false}
       >
         <DialogHeader className="shrink-0 space-y-1">
-          <DialogTitle>
-            {linksOnly ? "Open this download?" : "Save this file?"}
-          </DialogTitle>
-          <DialogDescription>
-            {linksOnly
-              ? `The ${props.server} app wants to open:`
-              : `The ${props.server} app wants to save:`}
+          <DialogTitle>{copy.title}</DialogTitle>
+          <DialogDescription className="break-words">
+            {copy.description}
           </DialogDescription>
         </DialogHeader>
-        <ul className="m-0 flex max-h-[40svh] min-h-0 list-none flex-col gap-2 overflow-y-auto px-5 py-3 text-ui-sm">
+        <ul
+          ref={setList}
+          data-testid="mcp-app-download-list"
+          data-more-below={moreBelow}
+          className={cn(
+            "m-0 flex max-h-[40svh] min-h-0 list-none flex-col gap-2 overflow-y-auto px-5 py-3 text-ui-sm",
+            moreBelow && SCROLL_MORE_BELOW_FADE_CLASS,
+          )}
+        >
           {(downloads ?? []).map((item) => (
             <li
               key={`${item.kind}:${item.name}:${item.kind === "file" ? item.bytes.byteLength : item.url}`}
@@ -997,7 +1037,7 @@ function AppDownloadConfirm(props: {
             Cancel
           </Button>
           <Button type="button" size="sm" onClick={() => onDecide(true)}>
-            {linksOnly ? "Open" : "Save"}
+            {copy.confirm}
           </Button>
         </DialogFooter>
       </DialogContent>
