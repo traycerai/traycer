@@ -67,6 +67,7 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
 describe("resolveCreateProfileGate", () => {
   it("allows creating a profile on a local host with browser sign-in", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({ loginCapability: OAUTH_CAP }),
     );
@@ -79,6 +80,7 @@ describe("resolveCreateProfileGate", () => {
   // browser OAuth), with copy that names the terminal, not "browser sign-in".
   it("disables profile creation for a terminal-login provider without saying 'browser sign-in'", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({ loginCapability: TERMINAL_LOGIN_CAP }),
     );
@@ -95,6 +97,7 @@ describe("resolveCreateProfileGate", () => {
   // find a local host they were already on.
   it("allows creating a profile when oauthArgs is empty but non-null", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({
         loginCapability: {
@@ -118,6 +121,7 @@ describe("resolveCreateProfileGate", () => {
   // decoy proving the sniff is really gone.
   it("allows creating a profile on a remote host for a remote-safe flow", () => {
     const gate = resolveCreateProfileGate(
+      null,
       false,
       providerState({
         loginCapability: {
@@ -138,6 +142,7 @@ describe("resolveCreateProfileGate", () => {
   // codex/grok regression: the same argv WITHOUT the marker must be refused.
   it("refuses a remote host for --device-auth argv with no remote-safe marker", () => {
     const gate = resolveCreateProfileGate(
+      null,
       false,
       providerState({
         loginCapability: {
@@ -155,6 +160,7 @@ describe("resolveCreateProfileGate", () => {
 
   it("allows creating a profile on a remote host for code-paste", () => {
     const gate = resolveCreateProfileGate(
+      null,
       false,
       providerState({
         loginCapability: {
@@ -176,6 +182,7 @@ describe("resolveCreateProfileGate", () => {
     // empty argv is a sign-in the HOST performs, so the loopback constraint is
     // unchanged.
     const gate = resolveCreateProfileGate(
+      null,
       false,
       providerState({
         loginCapability: {
@@ -202,6 +209,7 @@ describe("resolveCreateProfileGate", () => {
   // never exercised.
   it("falls through to the generic reason for a null loginCapability", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({ loginCapability: null }),
     );
@@ -216,7 +224,7 @@ describe("resolveCreateProfileGate", () => {
   // null capability does, so this must fall through to the same generic
   // reason rather than throwing on an unresolved row.
   it("falls through to the generic reason for an unresolved row (state undefined)", () => {
-    const gate = resolveCreateProfileGate(true, undefined);
+    const gate = resolveCreateProfileGate(null, true, undefined);
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
       "Add profiles from a local host with browser sign-in available.",
@@ -234,6 +242,7 @@ describe("resolveCreateProfileGate", () => {
     "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
     ({ oauthArgs }) => {
       const gate = resolveCreateProfileGate(
+        null,
         true,
         providerState({
           loginCapability: {
@@ -258,6 +267,7 @@ describe("resolveCreateProfileGate", () => {
 
   it("is not disabled for an enabled row with an available candidate", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({ loginCapability: OAUTH_CAP }),
     );
@@ -267,6 +277,7 @@ describe("resolveCreateProfileGate", () => {
 
   it("disables profile creation for a disabled provider, with the host-block label as reason", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({ enabled: false, loginCapability: OAUTH_CAP }),
     );
@@ -278,6 +289,7 @@ describe("resolveCreateProfileGate", () => {
 
   it("disables profile creation when no candidate is available, with the host-block label as reason", () => {
     const gate = resolveCreateProfileGate(
+      null,
       true,
       providerState({ candidates: [], loginCapability: OAUTH_CAP }),
     );
@@ -285,5 +297,37 @@ describe("resolveCreateProfileGate", () => {
     expect(gate.reason).toBe(
       "The Claude Code CLI is not installed on this host.",
     );
+  });
+
+  // A sandbox takes no sign-in at all, so the refusal wins over every other
+  // answer and is the reason shown, whatever the provider's capability says.
+  it("disables profile creation with the credential refusal as reason, whatever the provider", () => {
+    const refusal = "Sandboxes don't take sign-ins";
+    for (const loginCapability of [
+      OAUTH_CAP,
+      TERMINAL_LOGIN_CAP,
+      null,
+    ] as const) {
+      for (const hostIsLocal of [true, false]) {
+        expect(
+          resolveCreateProfileGate(
+            refusal,
+            hostIsLocal,
+            providerState({ loginCapability }),
+          ),
+        ).toEqual({ disabled: true, reason: refusal });
+      }
+    }
+    expect(resolveCreateProfileGate(refusal, true, undefined)).toEqual({
+      disabled: true,
+      reason: refusal,
+    });
+    expect(
+      resolveCreateProfileGate(
+        refusal,
+        true,
+        providerState({ enabled: false, candidates: [] }),
+      ),
+    ).toEqual({ disabled: true, reason: refusal });
   });
 });

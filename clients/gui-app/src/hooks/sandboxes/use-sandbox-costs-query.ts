@@ -9,6 +9,7 @@ import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 /** How often the balance and the cost view refresh while something burns. */
 const AWAKE_BURN_REFRESH_MS = 60_000;
@@ -79,5 +80,8 @@ export function useSandboxCosts(): UseQueryResult<UserSandboxCost | null> {
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  return useQuery(sandboxCostsQueryOptions(auth, userId, signedIn));
+  const unavailable = useSandboxControlUnavailableReason() !== null;
+  return useQuery(
+    sandboxCostsQueryOptions(auth, userId, signedIn && !unavailable),
+  );
 }

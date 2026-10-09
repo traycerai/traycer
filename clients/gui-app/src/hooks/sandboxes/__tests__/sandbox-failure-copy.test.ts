@@ -35,6 +35,15 @@ describe("sandboxFailureMessage", () => {
     expect(message).not.toContain("TypeError");
   });
 
+  it("says the unavailable failure's own reason, whatever it is", () => {
+    expect(
+      sandboxFailureMessage({
+        kind: "unavailable",
+        reason: "Sandboxes aren't available in staging builds.",
+      }),
+    ).toBe("Sandboxes aren't available in staging builds.");
+  });
+
   it("words the frozen and busy refusals the card and the tile surface", () => {
     expect(
       sandboxFailureMessage(refused("sandbox_frozen", NO_DETAIL)),

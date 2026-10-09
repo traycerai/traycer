@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   listFetching: false,
   listRefetch: vi.fn(),
   entryReads: vi.fn(),
+  /** `IRunnerHost.sandboxControlUnavailableReason`; `null` reaches the control plane. */
+  unavailableReason: null as string | null,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -63,6 +65,9 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ refreshHostFleet: vi.fn() }),
+  useRunnerHostOrNull: () => ({
+    sandboxControlUnavailableReason: mocks.unavailableReason,
+  }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
@@ -165,6 +170,7 @@ beforeEach(() => {
   mocks.listFetching = false;
   mocks.listRefetch.mockClear();
   mocks.entryReads.mockClear();
+  mocks.unavailableReason = null;
 });
 afterEach(cleanup);
 
@@ -487,6 +493,40 @@ describe("<SandboxTileStateFrame />", () => {
           .getByTestId("sandbox-tile-overlay-retry-list")
           .hasAttribute("disabled"),
       ).toBe(true);
+    });
+
+    it("says why in place of the retry when the build cannot reach the control plane, with no wake offered", () => {
+      mocks.unavailableReason =
+        "Sandboxes aren't available in the staging build.";
+      setSandboxEntry("suspended", false);
+      mocks.list = undefined;
+      mocks.listError = true;
+      renderFrame(false);
+
+      expect(
+        screen.getByTestId("sandbox-tile-overlay-unavailable").textContent,
+      ).toBe("Sandboxes aren't available in the staging build.");
+      expect(
+        screen.queryByTestId("sandbox-tile-overlay-retry-list"),
+      ).toBeNull();
+      expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
+      expect(
+        screen.getByTestId("sandbox-tile-overlay").textContent,
+      ).not.toContain("Couldn't load this sandbox.");
+    });
+
+    it("shows no unavailable line when the control plane is reachable", () => {
+      setSandboxEntry("suspended", false);
+      mocks.list = undefined;
+      mocks.listError = true;
+      renderFrame(false);
+
+      expect(
+        screen.queryByTestId("sandbox-tile-overlay-unavailable"),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("sandbox-tile-overlay-retry-list"),
+      ).toBeDefined();
     });
 
     it("offers Resume and no retry when the list lists the row", () => {

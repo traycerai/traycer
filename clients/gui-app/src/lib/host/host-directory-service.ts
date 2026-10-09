@@ -1035,22 +1035,28 @@ export class HostDirectoryService implements IHostDirectoryService {
     // `unknown-host`: the user is told a machine they just registered is "no
     // longer registered to this account".
     //
-    // ADDED ids only. A REMOVED id is the deregister mutation's own
-    // announcement and must not be made twice; a first fetch that finds hosts
-    // fires once, which is correct rather than noise - main's fleet can be
-    // exactly as stale at cold start as at any other moment, and the cost is
-    // one refetch.
+    // REMOVED ids too, for the same staleness the other way round. A sandbox
+    // leaves the registry well after anything in this client asked it to: a
+    // destroy answers `202` with the row still `destroying`, and the server
+    // destroys on its own (the day-30 freeze, a lost machine). Nothing else
+    // tells the fleet, so a gone sandbox would stay the selection's target. A
+    // removal this client did announce itself (a deregister) costs one more
+    // refetch, which is the price of not needing to know which.
     //
-    // The `hosts` check is DOCUMENTARY, not load-bearing, and a mutation probe
-    // proved it: `failed` returns above this line, and `signed-out` commits an
-    // empty set, so neither can ever satisfy the added-ids predicate. It stays
-    // because it states the rule a future edit has to keep - but no test pins
-    // it, because no mutation of it can go red.
-    if (
-      outcome.kind === "hosts" &&
-      outcome.entries.some((entry) => !previousRemoteIds.has(entry.hostId))
-    ) {
-      requestFleetRefresh(this.runnerHost);
+    // A first fetch that finds hosts fires once, which is correct rather than
+    // noise - main's fleet can be exactly as stale at cold start as at any
+    // other moment.
+    //
+    // The `hosts` check IS load-bearing for removals: `signed-out` commits an
+    // empty set, which would otherwise read as every host removed (`failed`
+    // returns above this line).
+    if (outcome.kind === "hosts") {
+      const listedIds = new Set(outcome.entries.map((entry) => entry.hostId));
+      const added = outcome.entries.some(
+        (entry) => !previousRemoteIds.has(entry.hostId),
+      );
+      const removed = [...previousRemoteIds].some((id) => !listedIds.has(id));
+      if (added || removed) requestFleetRefresh(this.runnerHost);
     }
     await this.reseedLocalHostIdIfUnknown();
     if (observedChanged || concludedChanged) {

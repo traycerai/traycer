@@ -41,6 +41,9 @@ vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
   useLandingProviderStartTerminalLogin: () => ({
     start: mocks.start,
     isPending: false,
+    // The sandbox refusal has its own suite
+    // (`provider-setup-terminal-action.test.tsx`).
+    credentialRefusal: null,
   }),
 }));
 

@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import {
   useProvidersStartTerminalLoginForClient,
   type StartTerminalLoginMutationResult,
@@ -17,6 +18,8 @@ import { openLandingSignInTerminal } from "@/lib/terminals/landing-sign-in-termi
 export type LandingProviderTerminalLoginStarter =
   StartTerminalLoginMutationResult<string | null> & {
     readonly start: (landingPageId: string) => void;
+    /** See `ProviderTerminalLoginStarter.credentialRefusal`. */
+    readonly credentialRefusal: string | null;
   };
 
 /**
@@ -66,6 +69,7 @@ export function useLandingProviderStartTerminalLogin(args: {
 }): LandingProviderTerminalLoginStarter {
   const { providerId, hostId, launchedFromSessionId } = args;
   const client = useHostClientForHostId(hostId);
+  const credentialRefusal = useHostCredentialRefusal(hostId);
   // Press order. `start` pushes, the capture below shifts; TanStack runs each
   // mutation's `onMutate` in the order the `mutate()`s were called.
   const queuedLandingPageIdsRef = useRef<string[]>([]);
@@ -111,6 +115,7 @@ export function useLandingProviderStartTerminalLogin(args: {
 
   const start = useCallback(
     (landingPageId: string): void => {
+      if (credentialRefusal !== null) return;
       queuedLandingPageIdsRef.current.push(landingPageId);
       startTerminalLogin.mutate({
         providerId,
@@ -121,8 +126,8 @@ export function useLandingProviderStartTerminalLogin(args: {
         rows: 24,
       });
     },
-    [providerId, startTerminalLogin],
+    [credentialRefusal, providerId, startTerminalLogin],
   );
 
-  return { ...startTerminalLogin, start };
+  return { ...startTerminalLogin, start, credentialRefusal };
 }

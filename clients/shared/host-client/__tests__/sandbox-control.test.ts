@@ -13,6 +13,7 @@ import {
   type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
   type SandboxVerbFetchResult,
+  type SandboxWakeBudget,
 } from "../sandbox-control";
 
 const BASE = "https://server.example.test";
@@ -424,6 +425,26 @@ describe("isSandboxAsleep", () => {
 });
 
 describe("ensureSandboxAwake", () => {
+  /**
+   * A budget the test spends by hand. `start` records the budget's length and
+   * `cancel` how often the wake released it.
+   */
+  function controlledBudget(): {
+    readonly budget: SandboxWakeBudget;
+    readonly cancel: Mock<() => void>;
+    readonly start: Mock<(ms: number) => SandboxWakeBudget>;
+    spend(): void;
+  } {
+    let spend: () => void = () => undefined;
+    const elapsed = new Promise<void>((resolve) => {
+      spend = resolve;
+    });
+    const cancel = vi.fn<() => void>();
+    const budget: SandboxWakeBudget = { elapsed, cancel };
+    const start = vi.fn<(ms: number) => SandboxWakeBudget>(() => budget);
+    return { budget, cancel, start, spend: () => spend() };
+  }
+
   function deps(input: {
     readonly initial: SandboxDialFacts;
     readonly wake: EnsureSandboxAwakeDeps["wake"];
@@ -446,6 +467,12 @@ describe("ensureSandboxAwake", () => {
       now: () => clock.t,
       pollIntervalMs: 1_000,
       timeoutMs: 5_000,
+      // A budget that never runs out on its own: the clock-driven deadline
+      // is what ends a wake unless a test hands in a spendable one.
+      startBudget: () => ({
+        elapsed: new Promise<void>(() => undefined),
+        cancel: () => undefined,
+      }),
     };
   }
 
@@ -670,5 +697,174 @@ describe("ensureSandboxAwake", () => {
       }),
     );
     expect(outcome.kind).toBe("refused");
+  });
+
+  describe("the wake budget covers the lifecycle verb", () => {
+    it("starts the budget for the whole timeout before the verb is sent", async () => {
+      const order: string[] = [];
+      const controlled = controlledBudget();
+      const outcome = await ensureSandboxAwake({
+        ...deps({
+          initial: suspended,
+          wake: async () => {
+            order.push("wake");
+            return ok;
+          },
+          reads: [awake],
+        }),
+        startBudget: (ms) => {
+          order.push(`budget:${ms}`);
+          return controlled.start(ms);
+        },
+      });
+
+      expect(outcome).toEqual({ kind: "awake" });
+      expect(order).toEqual(["budget:5000", "wake"]);
+      expect(controlled.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails the wake as timed out when the verb's own request outlives the budget", async () => {
+      const controlled = controlledBudget();
+      const readFacts = vi.fn(async () => awake);
+      const pending = ensureSandboxAwake({
+        ...deps({
+          initial: suspended,
+          // A request that never answers: the old budget only started after it.
+          wake: () => new Promise<SandboxVerbFetchResult>(() => undefined),
+          reads: [awake],
+        }),
+        readFacts,
+        startBudget: controlled.start,
+      });
+      controlled.spend();
+
+      expect(await pending).toEqual({
+        kind: "failed",
+        detail: "the sandbox did not report awake in time",
+      });
+      // The poll never began: the verb ate the whole budget.
+      expect(readFacts).not.toHaveBeenCalled();
+      expect(controlled.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails the wake as timed out when a poll read outlives the budget", async () => {
+      const controlled = controlledBudget();
+      const pending = ensureSandboxAwake({
+        ...deps({ initial: suspended, wake: async () => ok, reads: [awake] }),
+        readFacts: () => new Promise<SandboxDialFacts | null>(() => undefined),
+        startBudget: controlled.start,
+      });
+      controlled.spend();
+
+      expect(await pending).toEqual({
+        kind: "failed",
+        detail: "the sandbox did not report awake in time",
+      });
+      expect(controlled.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not start a budget for a row that is settled before any verb", async () => {
+      const controlled = controlledBudget();
+      const wake = vi.fn(async () => ok);
+
+      expect(
+        await ensureSandboxAwake({
+          ...deps({ initial: awake, wake, reads: [awake] }),
+          startBudget: controlled.start,
+        }),
+      ).toEqual({ kind: "awake" });
+      expect(
+        await ensureSandboxAwake({
+          ...deps({
+            initial: { ...suspended, frozen: true },
+            wake,
+            reads: [awake],
+          }),
+          startBudget: controlled.start,
+        }),
+      ).toEqual({
+        kind: "refused",
+        code: "SANDBOX_FROZEN",
+        message: SANDBOX_FROZEN_MESSAGE,
+      });
+      expect(controlled.start).not.toHaveBeenCalled();
+      expect(controlled.cancel).not.toHaveBeenCalled();
+    });
+
+    it("releases the budget once on every way a started wake can end", async () => {
+      const refused: SandboxVerbFetchResult = {
+        kind: "refused",
+        status: 402,
+        code: "sandbox_frozen",
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+      };
+      const cases: readonly {
+        readonly name: string;
+        readonly build: () => EnsureSandboxAwakeDeps;
+        readonly kind: string;
+      }[] = [
+        {
+          name: "awake",
+          build: () =>
+            deps({ initial: suspended, wake: async () => ok, reads: [awake] }),
+          kind: "awake",
+        },
+        {
+          name: "the verb refused",
+          build: () =>
+            deps({
+              initial: suspended,
+              wake: async () => refused,
+              reads: [awake],
+            }),
+          kind: "refused",
+        },
+        {
+          name: "the row vanished",
+          build: () =>
+            deps({ initial: suspended, wake: async () => ok, reads: [null] }),
+          kind: "not-wakeable",
+        },
+        {
+          name: "the clock deadline passed",
+          build: () =>
+            deps({
+              initial: suspended,
+              wake: async () => ok,
+              reads: [{ ...suspended, state: "resuming" }],
+            }),
+          kind: "failed",
+        },
+      ];
+      for (const testCase of cases) {
+        const controlled = controlledBudget();
+        const outcome = await ensureSandboxAwake({
+          ...testCase.build(),
+          startBudget: controlled.start,
+        });
+        expect(outcome.kind, testCase.name).toBe(testCase.kind);
+        expect(controlled.cancel, testCase.name).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("releases the budget when the verb throws", async () => {
+      const controlled = controlledBudget();
+      await expect(
+        ensureSandboxAwake({
+          ...deps({
+            initial: suspended,
+            wake: async () => {
+              throw new Error("socket closed");
+            },
+            reads: [awake],
+          }),
+          startBudget: controlled.start,
+        }),
+      ).rejects.toThrow("socket closed");
+      expect(controlled.cancel).toHaveBeenCalledTimes(1);
+    });
   });
 });

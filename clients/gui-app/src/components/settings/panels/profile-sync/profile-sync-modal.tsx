@@ -50,6 +50,8 @@ import { cn } from "@/lib/utils";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 /** What a machine is called when the account's host list does not name it. */
 const UNNAMED_SOURCE = "this device";
@@ -159,6 +161,9 @@ export function ProfileSyncModal(props: {
   const { hosts } = useHostOptions();
   const overview = useProfileSyncOverview(sourceHostId);
   const close = useProfileSyncModalStore((state) => state.close);
+  // The entry button never opens this on a sandbox; this holds for any other
+  // way in, so no sync action is offered from one.
+  const credentialRefusal = useHostCredentialRefusal(sourceHostId);
   const sourceName =
     hosts.find((host) => host.hostId === sourceHostId)?.name ?? UNNAMED_SOURCE;
   const data = overview.data;
@@ -173,9 +178,13 @@ export function ProfileSyncModal(props: {
         </DialogDescription>
       </DialogHeader>
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-5 py-4">
-        {data === undefined ? (
+        {credentialRefusal === null ? null : (
+          <CredentialRefusalNote refusal={credentialRefusal} />
+        )}
+        {credentialRefusal === null && data === undefined ? (
           <ProfileSyncUnloaded error={overview.error} sourceName={sourceName} />
-        ) : (
+        ) : null}
+        {credentialRefusal === null && data !== undefined ? (
           <ProfileSyncDevices
             sourceHostId={sourceHostId}
             sourceName={sourceName}
@@ -183,7 +192,7 @@ export function ProfileSyncModal(props: {
             rows={profileSyncDeviceRows(hosts, data, sourceHostId)}
             refreshFailed={overview.isError}
           />
-        )}
+        ) : null}
       </div>
       <DialogFooter>
         <Button type="button" onClick={close}>

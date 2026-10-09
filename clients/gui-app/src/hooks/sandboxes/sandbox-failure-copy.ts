@@ -48,6 +48,9 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
   if (failure.kind === "unauthorized") {
     return "Sign in again to try that.";
   }
+  if (failure.kind === "unavailable") {
+    return failure.reason;
+  }
   if (failure.kind === "network-error") {
     return "Couldn't reach Traycer. Try again in a moment.";
   }

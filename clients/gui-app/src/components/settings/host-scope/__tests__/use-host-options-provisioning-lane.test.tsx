@@ -64,6 +64,7 @@ const runnerHostBox = vi.hoisted<{ current: MockRunnerHost | null }>(() => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => runnerHostBox.current,
+  useRunnerHostOrNull: () => runnerHostBox.current,
 }));
 
 const IDLE_CONTROLLER_STATUS: HostControllerStatus = {

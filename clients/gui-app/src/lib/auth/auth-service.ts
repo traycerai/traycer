@@ -39,6 +39,7 @@ import type {
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
 import type {
   SandboxCatalogueFetchResult,
+  SandboxControlFailure,
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
@@ -2921,7 +2922,24 @@ export class AuthService {
    * bearer, the way a list has an empty state to render; the writes throw, for
    * the reason {@link updateHostVersionPolicy} gives.
    */
+  /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
+  sandboxControlUnavailableReason(): string | null {
+    return this.runnerHost.sandboxControlUnavailableReason;
+  }
+
+  /**
+   * The floor under every sandbox call: a build that cannot reach the
+   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging)
+   * sends none of them, and each answers this failure instead.
+   */
+  private sandboxControlRefusal(): SandboxControlFailure | null {
+    const reason = this.sandboxControlUnavailableReason();
+    return reason === null ? null : { kind: "unavailable", reason };
+  }
+
   async listSandboxes(): Promise<SandboxListFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };
@@ -2930,6 +2948,8 @@ export class AuthService {
   }
 
   async getSandboxCosts(): Promise<SandboxCostsFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };
@@ -2938,6 +2958,8 @@ export class AuthService {
   }
 
   async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };
@@ -2948,6 +2970,8 @@ export class AuthService {
   async createSandbox(
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       throw new Error("Sign in to create a sandbox.");
@@ -2956,6 +2980,8 @@ export class AuthService {
   }
 
   async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       throw new Error("Sign in to destroy this sandbox.");
@@ -2972,6 +2998,8 @@ export class AuthService {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
   ): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };

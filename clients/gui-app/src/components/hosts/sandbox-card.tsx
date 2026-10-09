@@ -52,6 +52,7 @@ import {
   sandboxRunwayMinutes,
 } from "@/lib/sandboxes/sandbox-balance";
 import { formatCredits, formatMemory } from "@/lib/sandboxes/sandbox-pricing";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 /**
  * The card a sandbox host shows above its identity card in Settings: its
@@ -131,7 +132,20 @@ function SandboxDetailsMissing(props: {
   readonly state: HostSandboxState | null;
 }): ReactNode {
   const list = useSandboxList();
+  const unavailable = useSandboxControlUnavailableReason();
   const listed = list.data !== undefined && list.data !== null;
+  // A build that cannot reach the control plane never reads the list: say
+  // why, rather than "Loading" forever.
+  if (unavailable !== null) {
+    return (
+      <p
+        className="text-ui-xs text-muted-foreground"
+        data-testid="sandbox-card-details-unavailable"
+      >
+        {unavailable}
+      </p>
+    );
+  }
   if (!listed && !list.isError) {
     return (
       <p className="text-ui-xs text-muted-foreground">

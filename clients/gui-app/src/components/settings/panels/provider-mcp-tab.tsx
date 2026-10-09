@@ -67,6 +67,8 @@ import {
   ProviderListSearchEmptyState,
 } from "./provider-list-search";
 import { useProviderNativeScope } from "./use-provider-native-scope";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 
@@ -200,6 +202,7 @@ function useResumeOauthPolling(
 function mcpMutationFlags(
   capabilities: ProviderMcpCapabilities,
   effectiveScope: ProviderNativeScope,
+  credentialRefusal: string | null,
 ) {
   const scopes = capabilities.actionScopes;
   const canAdd = scopes.add.includes(effectiveScope);
@@ -222,6 +225,9 @@ function mcpMutationFlags(
     canToggleServer,
     canDiscover,
     canAuth,
+    // A server's sign-in is a credential, and a sandbox takes none: Login and
+    // Force re-auth hold on this. Log out sends nothing secret (`canAuth`).
+    canSignIn: canAuth && credentialRefusal === null,
     toolsReadOnly,
   };
 }
@@ -386,14 +392,18 @@ export function ProviderMcpTab(props: {
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
   const deleteDialogPending = mutate.isPending && deleteTarget !== null;
 
+  // `handleAuth` refuses a sign-in on a sandbox as the floor under every
+  // caller; the flags hide its controls (`canSignIn`).
+  const credentialRefusal = useHostCredentialRefusal(hostId);
   const {
     canAdd,
     canRemove,
     canToggleServer,
     canDiscover,
     canAuth,
+    canSignIn,
     toolsReadOnly,
-  } = mcpMutationFlags(capabilities, effectiveScope);
+  } = mcpMutationFlags(capabilities, effectiveScope, credentialRefusal);
 
   const markPending = useCallback((name: string, pending: boolean) => {
     setPendingServerNames((prev) => {
@@ -553,6 +563,7 @@ export function ProviderMcpTab(props: {
 
   const handleAuth = useCallback(
     (serverName: string, action: "login" | "logout" | "forceReauth") => {
+      if (credentialRefusal !== null && action !== "logout") return;
       markPending(serverName, true);
       setAuthInstruction(null);
       clearRowError(serverName);
@@ -624,6 +635,7 @@ export function ProviderMcpTab(props: {
     [
       auth,
       clearRowError,
+      credentialRefusal,
       hostId,
       markPending,
       openLink,
@@ -700,15 +712,16 @@ export function ProviderMcpTab(props: {
 
   const handleAdded = useCallback(
     (args: { name: string; requiresAuth: boolean }) => {
-      if (args.requiresAuth && canAuth) {
+      if (args.requiresAuth && canSignIn) {
         handleAuth(args.name, "login");
       }
     },
-    [canAuth, handleAuth],
+    [canSignIn, handleAuth],
   );
 
   return (
     <div className="flex flex-col gap-3" data-testid="provider-mcp-tab">
+      <CredentialRefusalNote refusal={credentialRefusal} />
       <McpScopeHeader
         multiScope={multiScope}
         effectiveScope={effectiveScope}
@@ -775,6 +788,7 @@ export function ProviderMcpTab(props: {
         canToggleServer={canToggleServer}
         canDiscover={canDiscover}
         canAuth={canAuth}
+        canSignIn={canSignIn}
         toolsReadOnly={toolsReadOnly}
         onRefresh={handleRefresh}
         onToggleServer={handleToggleServer}
@@ -955,6 +969,8 @@ function McpServerList(props: {
   readonly canToggleServer: boolean;
   readonly canDiscover: boolean;
   readonly canAuth: boolean;
+  /** `canAuth`, less a host that takes no credentials (a sandbox). */
+  readonly canSignIn: boolean;
   readonly toolsReadOnly: boolean;
   readonly onRefresh: (serverName: string) => void;
   readonly onToggleServer: (
@@ -1068,6 +1084,7 @@ function McpServerList(props: {
                 canToggleServer={props.canToggleServer}
                 canDiscover={props.canDiscover}
                 canAuth={props.canAuth}
+                canSignIn={props.canSignIn}
                 toolsReadOnly={props.toolsReadOnly}
                 onRefresh={() => {
                   props.onRefresh(server.name);
@@ -1181,11 +1198,12 @@ function serverRowFlags(
   server: ProviderMcpServer,
   capabilities: ProviderMcpCapabilities,
   canAuth: boolean,
+  canSignIn: boolean,
 ) {
   // Auth action buttons require both the action in authActions and the
   // selected scope advertising auth support (actionScopes.auth).
   const showLogin =
-    canAuth &&
+    canSignIn &&
     capabilities.authActions.includes("login") &&
     (server.status === "needs_auth" || server.status === "error");
   const showLogout =
@@ -1193,7 +1211,7 @@ function serverRowFlags(
     capabilities.authActions.includes("logout") &&
     server.status === "connected";
   const showForceReauth =
-    canAuth &&
+    canSignIn &&
     capabilities.authActions.includes("forceReauth") &&
     (server.status === "needs_auth" || server.status === "error");
   const toolsListable =
@@ -1227,6 +1245,8 @@ function McpServerRow(props: {
   readonly canToggleServer: boolean;
   readonly canDiscover: boolean;
   readonly canAuth: boolean;
+  /** `canAuth`, less a host that takes no credentials (a sandbox). */
+  readonly canSignIn: boolean;
   readonly toolsReadOnly: boolean;
   readonly onRefresh: () => void;
   readonly onToggleServer: (enabled: boolean) => void;
@@ -1247,6 +1267,7 @@ function McpServerRow(props: {
     canToggleServer,
     canDiscover,
     canAuth,
+    canSignIn,
     toolsReadOnly,
     onRefresh,
     onToggleServer,
@@ -1262,7 +1283,7 @@ function McpServerRow(props: {
 
   const statusLabel = statusLabelFor(server);
   const { showLogin, showLogout, showForceReauth, toolsListable } =
-    serverRowFlags(server, capabilities, canAuth);
+    serverRowFlags(server, capabilities, canAuth, canSignIn);
 
   return (
     <li className="rounded-lg border border-border/60">
@@ -1329,7 +1350,7 @@ function McpServerRow(props: {
               <ToolsUnavailableState
                 server={server}
                 onLogin={
-                  canAuth && capabilities.authActions.includes("login")
+                  canSignIn && capabilities.authActions.includes("login")
                     ? onLogin
                     : null
                 }

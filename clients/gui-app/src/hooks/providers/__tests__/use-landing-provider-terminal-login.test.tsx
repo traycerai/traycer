@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   // composer's target host can move WHILE a request is in flight, which
   // re-points this client underneath the pending mutation.
   activeHostId: { current: "host-1" },
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
+  credentialRefusal: { current: null as string | null },
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mocks.credentialRefusal.current,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -87,6 +93,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     );
     mocks.startTerminalLoginRequest.mockReset();
     mocks.activeHostId.current = HOST_ID;
+    mocks.credentialRefusal.current = null;
   });
 
   afterEach(() => {
@@ -115,6 +122,40 @@ describe("useLandingProviderStartTerminalLogin", () => {
         rows: 24,
       },
     );
+  });
+
+  it("exposes the credential refusal and sends nothing from start() while it is set", async () => {
+    mocks.credentialRefusal.current = "Sandboxes don't take sign-ins";
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    expect(result.current.credentialRefusal).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    act(() => {
+      result.current.start(LANDING_PAGE_ID);
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    expect(mocks.startTerminalLoginRequest).not.toHaveBeenCalled();
+  });
+
+  it("exposes a null refusal and starts the login on a host that takes sign-ins", async () => {
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    expect(result.current.credentialRefusal).toBeNull();
+    act(() => {
+      result.current.start(LANDING_PAGE_ID);
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    expect(mocks.startTerminalLoginRequest).toHaveBeenCalledTimes(1);
   });
 
   it("on success, adds a provider-login tab, opens the panel, and records the provider", async () => {

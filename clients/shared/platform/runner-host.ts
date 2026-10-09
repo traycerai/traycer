@@ -510,6 +510,14 @@ export interface IRunnerHost {
   readonly hasLocalHost: boolean;
 
   /**
+   * Why this build cannot reach the sandbox control plane at all, or `null`
+   * when it can. Set on a staging build (`SANDBOXES_UNAVAILABLE_IN_STAGING`):
+   * every sandbox call is refused there before it is sent, and the sandbox
+   * surfaces show this line instead of failing one request at a time.
+   */
+  readonly sandboxControlUnavailableReason: string | null;
+
+  /**
    * Whether an image written through the web clipboard API on this shell
    * actually reaches the system clipboard.
    *

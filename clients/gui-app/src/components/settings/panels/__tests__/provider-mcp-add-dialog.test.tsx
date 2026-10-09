@@ -26,6 +26,12 @@ const mcpMocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   reset: vi.fn(),
   mutateIsPending: false,
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mcpMocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
@@ -149,6 +155,7 @@ describe("<ProviderMcpAddDialog />", () => {
     mcpMocks.mutate.mockReset();
     mcpMocks.reset.mockReset();
     mcpMocks.mutateIsPending = false;
+    mcpMocks.credentialRefusal = null;
   });
 
   afterEach(() => {
@@ -614,5 +621,163 @@ describe("<ProviderMcpAddDialog />", () => {
     expect(footer?.className).not.toContain("-mx-4");
     expect(footer?.className).not.toContain("-mb-4");
     expect(footer?.className).toContain("border-t");
+  });
+});
+
+describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+
+  beforeEach(() => {
+    mcpMocks.mutate.mockReset();
+    mcpMocks.reset.mockReset();
+    mcpMocks.mutateIsPending = false;
+    mcpMocks.credentialRefusal = REFUSAL;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function fillName(dialog: HTMLElement): void {
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+      target: { value: "srv" },
+    });
+  }
+
+  it("refuses an http server with header auth, sets the form error and calls no mutate", async () => {
+    renderDialog({
+      capabilities: FULL_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://mcp.example.com" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Header" }));
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Header 1 name" }),
+      { target: { value: "Authorization" } },
+    );
+    fireEvent.change(within(dialog).getByLabelText("Header 1 value"), {
+      target: { value: "Bearer secret" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    expect(
+      await within(dialog).findByText(
+        `${REFUSAL}: remove the header or environment values to add this server here.`,
+      ),
+    ).toBeDefined();
+    expect(mcpMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stdio server that carries env values, sets the form error and calls no mutate", async () => {
+    renderDialog({
+      capabilities: STDIO_ONLY_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Command" }), {
+      target: { value: "npx" },
+    });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Env var 1 name" }),
+      { target: { value: "GITHUB_TOKEN" } },
+    );
+    fireEvent.change(within(dialog).getByLabelText("Env var 1 value"), {
+      target: { value: "ghp_secret" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    expect(
+      await within(dialog).findByText(
+        `${REFUSAL}: remove the header or environment values to add this server here.`,
+      ),
+    ).toBeDefined();
+    expect(mcpMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("still submits a bare stdio server with no env values", async () => {
+    renderDialog({
+      capabilities: STDIO_ONLY_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Command" }), {
+      target: { value: "npx" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByText(/remove the header or environment values/),
+    ).toBeNull();
+  });
+
+  it("still submits an http server that names an env variable instead of carrying a value", async () => {
+    renderDialog({
+      capabilities: CODEX_CAPS,
+      providerId: "codex",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://mcp.example.com" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Env var" }));
+    fireEvent.change(
+      within(dialog).getByRole("textbox", {
+        name: "Environment variable name",
+      }),
+      { target: { value: "GITHUB_TOKEN" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
+  });
+
+  it("control: on a host that takes credentials the same header server is submitted", async () => {
+    mcpMocks.credentialRefusal = null;
+    renderDialog({
+      capabilities: FULL_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://mcp.example.com" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Header" }));
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Header 1 name" }),
+      { target: { value: "Authorization" } },
+    );
+    fireEvent.change(within(dialog).getByLabelText("Header 1 value"), {
+      target: { value: "Bearer secret" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
   });
 });

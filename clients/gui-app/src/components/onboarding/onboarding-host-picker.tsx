@@ -2,8 +2,13 @@ import { useMemo, type ReactNode } from "react";
 import { Monitor } from "lucide-react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
-import { credentialTargetHostOptions } from "@/components/settings/host-scope/host-option-model";
 import {
+  credentialTargetHostOptions,
+  hostTakesCredentials,
+  SANDBOX_CREDENTIALS_REFUSED,
+} from "@/components/settings/host-scope/host-option-model";
+import {
+  onboardingHostIsSandbox,
   onboardingHostReadiness,
   type OnboardingHostPicker,
 } from "@/components/onboarding/onboarding-host-picker-model";
@@ -63,7 +68,14 @@ export function OnboardingHostPickerBar(props: {
         <div className="flex min-w-0 flex-1">
           <HostSwitcher
             hosts={hosts}
-            selected={scope.host}
+            // A sandbox scope is never shown as the tour's pick: it is not one
+            // of the rows above, and the stages are held until a personal
+            // host is chosen.
+            selected={
+              scope.host !== null && hostTakesCredentials(scope.host)
+                ? scope.host
+                : null
+            }
             activeHostId={scope.activeHostId}
             onSelect={props.picker.onSelectHost}
             // The tour WRITES to the picked host - it imports sessions onto
@@ -118,18 +130,37 @@ export function OnboardingHostUnavailableNotice(props: {
           className="flex max-w-[40ch] flex-col items-center gap-2 text-center"
         >
           <p className="text-ui-sm font-medium text-foreground">
-            {props.refusal ??
-              (scope.status === "vanished"
-                ? `${scope.hostLabel} is no longer connected`
-                : `Can't reach ${scope.hostLabel}`)}
+            {onboardingNoticeHeadline(props.picker, props.refusal)}
           </p>
           <p className="text-ui-sm text-muted-foreground">
-            {props.refusal === null
-              ? "Reconnect this device to continue."
-              : `Update Traycer on ${scope.hostLabel}.`}
+            {onboardingNoticeNextStep(props.picker, props.refusal)}
           </p>
         </div>
       )}
     </div>
   );
+}
+
+function onboardingNoticeHeadline(
+  picker: OnboardingHostPicker,
+  refusal: string | null,
+): string {
+  const { scope } = picker;
+  if (onboardingHostIsSandbox(picker)) return SANDBOX_CREDENTIALS_REFUSED;
+  if (refusal !== null) return refusal;
+  return scope.status === "vanished"
+    ? `${scope.hostLabel} is no longer connected`
+    : `Can't reach ${scope.hostLabel}`;
+}
+
+function onboardingNoticeNextStep(
+  picker: OnboardingHostPicker,
+  refusal: string | null,
+): string {
+  if (onboardingHostIsSandbox(picker)) {
+    return "Pick one of your own devices to continue.";
+  }
+  return refusal === null
+    ? "Reconnect this device to continue."
+    : `Update Traycer on ${picker.scope.hostLabel}.`;
 }

@@ -575,4 +575,72 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     ).toBeDefined();
     expect(screen.queryByText("Paused: account out of credits")).toBeNull();
   });
+
+  it("renders SANDBOX_GUEST_NOT_CONFIGURED as an interruption with the setup copy and the host's last status under it", () => {
+    const root = renderRow({
+      code: "SANDBOX_GUEST_NOT_CONFIGURED",
+      message:
+        "SANDBOX_GUEST_NOT_CONFIGURED: sandbox host 'build-box': guest setup stopped at step 3 of 5",
+    });
+
+    expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
+    expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
+    expect(
+      screen.getByText("Waiting for this sandbox's setup to finish"),
+    ).toBeDefined();
+    expect(screen.getByText(/still being set up/)).toBeDefined();
+    const detail = screen.getByTestId("sandbox-refusal-host-detail");
+    expect(detail.textContent).toBe(
+      "Last setup status: sandbox host 'build-box': guest setup stopped at step 3 of 5",
+    );
+    // The raw `CODE:` sentence is replaced, not shown beside the copy.
+    expect(screen.queryByText(/^SANDBOX_GUEST_NOT_CONFIGURED/)).toBeNull();
+    expect(screen.queryByText("Error")).toBeNull();
+  });
+
+  it("recognises SANDBOX_GUEST_NOT_CONFIGURED from the message prefix and still shows the detail", () => {
+    const root = renderRow({
+      code: null,
+      message: "SANDBOX_GUEST_NOT_CONFIGURED: guest setup is queued",
+    });
+
+    expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
+    expect(screen.getByTestId("sandbox-refusal-host-detail").textContent).toBe(
+      "Last setup status: guest setup is queued",
+    );
+  });
+
+  it("omits the detail line when the host sent nothing past the code", () => {
+    const root = renderRow({
+      code: "SANDBOX_GUEST_NOT_CONFIGURED",
+      message: "SANDBOX_GUEST_NOT_CONFIGURED:",
+    });
+
+    expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
+    expect(
+      screen.getByText("Waiting for this sandbox's setup to finish"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("sandbox-refusal-host-detail")).toBeNull();
+  });
+
+  it("renders SANDBOX_HOST_REFUSES_CREDENTIALS as an interruption with no detail line", () => {
+    const root = renderRow({
+      code: "SANDBOX_HOST_REFUSES_CREDENTIALS",
+      message:
+        "SANDBOX_HOST_REFUSES_CREDENTIALS: sandbox host 'build-box': refuses a provider key",
+    });
+
+    expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
+    expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
+    expect(screen.getByText("Sandboxes don't take sign-ins")).toBeDefined();
+    expect(screen.getByText(/never holds your credentials/)).toBeDefined();
+    expect(screen.queryByTestId("sandbox-refusal-host-detail")).toBeNull();
+    expect(screen.queryByText(/refuses a provider key/)).toBeNull();
+  });
+
+  it("shows no detail line on the frozen copy", () => {
+    renderRow({ code: "SANDBOX_FROZEN", message: RAW_MESSAGE });
+
+    expect(screen.queryByTestId("sandbox-refusal-host-detail")).toBeNull();
+  });
 });

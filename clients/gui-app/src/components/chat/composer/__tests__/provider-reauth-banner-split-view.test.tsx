@@ -22,6 +22,11 @@ const mocks = vi.hoisted(() => ({
   request: vi.fn(),
 }));
 
+// The real hook resolves the tab's host through the directory, which this
+// suite's bare binding does not carry; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => HOST_ID,
 }));

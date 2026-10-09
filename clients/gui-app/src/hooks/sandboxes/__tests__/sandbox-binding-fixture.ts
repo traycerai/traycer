@@ -22,6 +22,8 @@ type DestroySandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
 
 /** The AuthService methods the sandbox mutations and the tab-open wake call. */
 export interface FakeSandboxAuth {
+  /** `null` is a build that can reach the control plane; a string is why not. */
+  readonly sandboxControlUnavailableReason: Mock<() => string | null>;
   readonly listSandboxes: Mock<ListSandboxes>;
   readonly createSandbox: Mock<CreateSandbox>;
   readonly runSandboxVerb: Mock<RunSandboxVerb>;
@@ -36,6 +38,7 @@ export interface FakeSandboxBinding {
 export function createFakeSandboxBinding(): FakeSandboxBinding {
   return {
     auth: {
+      sandboxControlUnavailableReason: vi.fn<() => string | null>(() => null),
       listSandboxes: vi.fn<ListSandboxes>(() =>
         Promise.resolve({ kind: "ok", response: { sandboxes: [] } }),
       ),

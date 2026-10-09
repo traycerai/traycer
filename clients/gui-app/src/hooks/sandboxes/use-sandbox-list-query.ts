@@ -9,6 +9,7 @@ import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 function sandboxListQueryOptions(
   auth: AuthService | null,
@@ -54,5 +55,10 @@ export function useSandboxList(): UseQueryResult<SandboxListResponse | null> {
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  return useQuery(sandboxListQueryOptions(auth, userId, signedIn));
+  // A build that cannot reach the control plane reads nothing: its answer
+  // stays "not known", so no picker or banner reports a failed list.
+  const unavailable = useSandboxControlUnavailableReason() !== null;
+  return useQuery(
+    sandboxListQueryOptions(auth, userId, signedIn && !unavailable),
+  );
 }

@@ -12,6 +12,7 @@ import {
   hostUnavailability,
   isConfirmedHostDeath,
   isConfirmedTransportRefusal,
+  isSandboxHostDirectoryEntry,
   isWithinRelayFuseGrace,
   RELAY_FUSE_MAX_ATTACH_MS,
   RELAY_FUSE_MAX_CLOCK_SKEW_MS,
@@ -216,6 +217,40 @@ describe("hostListItemToDirectoryEntry", () => {
       hostListItemToDirectoryEntry(sandboxItem("suspended"), RELAY_BASE_URL)
         .sandbox?.frozen,
     ).toBe(true);
+  });
+});
+
+describe("isSandboxHostDirectoryEntry", () => {
+  it("is true for a remote entry carrying sandbox facts", () => {
+    const entry = hostListItemToDirectoryEntry(
+      {
+        ...onlineItem(),
+        kind: "sandbox",
+        sandboxState: "awake",
+        sandboxFrozen: false,
+        profile: "agent",
+      },
+      RELAY_BASE_URL,
+    );
+    expect(isSandboxHostDirectoryEntry(entry)).toBe(true);
+  });
+
+  it("is false for a remote personal entry and for a local one", () => {
+    expect(
+      isSandboxHostDirectoryEntry(
+        hostListItemToDirectoryEntry(onlineItem(), RELAY_BASE_URL),
+      ),
+    ).toBe(false);
+    expect(
+      isSandboxHostDirectoryEntry({
+        hostId: "local-1",
+        label: "This machine",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:9/stream",
+        version: "1.2.3",
+        transportDialability: "dialable",
+      }),
+    ).toBe(false);
   });
 });
 

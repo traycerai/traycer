@@ -134,6 +134,8 @@ export interface MobileRunnerHostOptions {
   readonly authnBaseUrl: string;
   /** traycer-server, which serves the sandbox control plane. */
   readonly serverBaseUrl: string;
+  /** `IRunnerHost.sandboxControlUnavailableReason`. */
+  readonly sandboxControlUnavailableReason: string | null;
   readonly hostLabel: string;
   /** The relay's fixed WS attach endpoint (`IRunnerHost.relayBaseUrl`). */
   readonly relayBaseUrl: string;
@@ -244,6 +246,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   private readonly serverBaseUrl: string;
+  readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
@@ -329,6 +332,8 @@ export class MobileRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
     this.serverBaseUrl = options.serverBaseUrl;
+    this.sandboxControlUnavailableReason =
+      options.sandboxControlUnavailableReason;
     this.relayBaseUrl = options.relayBaseUrl;
     this.fleetHostIds = options.fleetHostIds;
     this.linkCodeScanner = options.linkCodeScanner;

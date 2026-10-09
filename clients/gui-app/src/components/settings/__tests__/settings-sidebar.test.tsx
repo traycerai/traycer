@@ -88,6 +88,15 @@ vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
   SandboxBalanceBanner: () => null,
 }));
 
+// What `IRunnerHost.sandboxControlUnavailableReason` reads as; a build that
+// reaches the control plane (every test here but one) answers `null`.
+const sandboxControl = vi.hoisted(() => ({
+  reason: null as string | null,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
+  useSandboxControlUnavailableReason: () => sandboxControl.reason,
+}));
+
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => (
@@ -511,6 +520,7 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.setState({ status: "signed-out" });
+    sandboxControl.reason = null;
   });
 
   function renderSidebar(): void {
@@ -527,6 +537,36 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     renderSidebar();
 
     expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
+  });
+
+  it("says why instead of offering New sandbox… on a build that cannot reach the control plane", async () => {
+    sandboxControl.reason = "Sandboxes aren't available in staging builds.";
+    useAuthStore.setState({ status: "signed-in" });
+    renderSidebar();
+
+    const line = await screen.findByTestId("settings-sandboxes-unavailable");
+    expect(line.textContent).toBe(
+      "Sandboxes aren't available in staging builds.",
+    );
+    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
+  });
+
+  it("shows no unavailable line when the control plane is reachable", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    renderSidebar();
+
+    expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
+    expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
+  });
+
+  it("shows neither the entry nor the line when signed out, whatever the build", async () => {
+    sandboxControl.reason = "Sandboxes aren't available in staging builds.";
+    useAuthStore.setState({ status: "signed-out" });
+    renderSidebar();
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
+    expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
   });
 
   it("offers no New sandbox… when signed out", async () => {

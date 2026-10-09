@@ -312,6 +312,15 @@ export function ErrorSegment({
           <span className="whitespace-pre-wrap break-words text-foreground/90">
             {sandboxRefusal === null ? message : sandboxRefusal.description}
           </span>
+          {sandboxRefusal === null ||
+          sandboxRefusal.hostDetail === null ? null : (
+            <span
+              data-testid="sandbox-refusal-host-detail"
+              className="whitespace-pre-wrap break-words text-muted-foreground"
+            >
+              Last setup status: {sandboxRefusal.hostDetail}
+            </span>
+          )}
           {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
             <EnvCredentialSettingsAction harnessId={harnessId} />
           ) : null}

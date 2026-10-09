@@ -186,6 +186,20 @@ export function isRemoteHostDirectoryEntry(
 }
 
 /**
+ * Whether a directory entry names a sandbox host. A sandbox runs code the
+ * user did not write on a machine they do not hold, so nothing that speaks
+ * for the user is ever sent to it: not the desktop's cookie jar, not a
+ * provider key, not a sign-in. Every such send checks this first and is
+ * never built for a sandbox, rather than relying on the sandbox to refuse
+ * a secret it has already received.
+ */
+export function isSandboxHostDirectoryEntry(
+  entry: HostDirectoryEntry,
+): boolean {
+  return isRemoteHostDirectoryEntry(entry) && entry.sandbox !== null;
+}
+
+/**
  * WHY a directory entry cannot be dialed — the distinction the coarse bit
  * erases.
  *

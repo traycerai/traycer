@@ -51,7 +51,9 @@ const SHIPPED_ENVIRONMENTS = {
   staging: {
     authnBaseUrl: "https://authn.dev.traycer.ai",
     // The host's staging `traycerServerBaseUrl`. Fronted by IAP, so a call
-    // carrying only the user bearer is refused there until that is resolved.
+    // carrying only the user bearer is refused there: a staging build turns
+    // its sandbox surfaces off (`SANDBOXES_UNAVAILABLE_IN_STAGING`, set in
+    // `src/web/main.tsx`) rather than sending calls that cannot pass.
     serverBaseUrl: "https://server.dev.traycer.ai",
     cloudUiBaseUrl: "https://dev.traycer.ai",
     relayBaseUrl: "wss://relay.dev.traycer.ai/attach",

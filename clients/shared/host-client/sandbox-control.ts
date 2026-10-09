@@ -74,7 +74,13 @@ export type SandboxControlFailure =
       readonly newRateMcPerHour: number | null;
       readonly currentAwakeBurnMcPerHour: number | null;
     }
-  | { readonly kind: "network-error"; readonly detail: string };
+  | { readonly kind: "network-error"; readonly detail: string }
+  /**
+   * Never sent: this build cannot reach the control plane at all
+   * (`IRunnerHost.sandboxControlUnavailableReason`). `reason` is the
+   * user-facing line.
+   */
+  | { readonly kind: "unavailable"; readonly reason: string };
 
 export type SandboxListFetchResult =
   | { readonly kind: "ok"; readonly response: SandboxListResponse }
@@ -434,9 +440,53 @@ export interface EnsureSandboxAwakeDeps {
   readonly now: () => number;
   /** How often the facts are re-read while waiting for `awake`. */
   readonly pollIntervalMs: number;
-  /** How long a wake may take before the caller is told it failed. */
+  /**
+   * How long a wake may take before the caller is told it failed: the WHOLE
+   * wake, the lifecycle verb included.
+   */
   readonly timeoutMs: number;
+  /** Starts the wake's budget clock; see {@link SandboxWakeBudget}. */
+  readonly startBudget: (ms: number) => SandboxWakeBudget;
 }
+
+/**
+ * The wake's one budget, started before the lifecycle verb is sent.
+ * `elapsed` settles once the budget is spent and every await of the wake
+ * races it; `cancel` stops the clock once the wake has its answer.
+ */
+export interface SandboxWakeBudget {
+  readonly elapsed: Promise<void>;
+  cancel(): void;
+}
+
+const BUDGET_SPENT: unique symbol = Symbol("sandbox-wake-budget-spent");
+
+/** `work`'s answer, or {@link BUDGET_SPENT} if the budget runs out first. */
+function withinBudget<T>(
+  work: Promise<T>,
+  budget: SandboxWakeBudget,
+): Promise<T | typeof BUDGET_SPENT> {
+  return new Promise<T | typeof BUDGET_SPENT>((resolve, reject) => {
+    void work.then(resolve, reject);
+    void budget.elapsed.then(() => resolve(BUDGET_SPENT));
+  });
+}
+
+const WAKE_TIMED_OUT: SandboxWakeOutcome = {
+  kind: "failed",
+  detail: "the sandbox did not report awake in time",
+};
+
+/**
+ * Why a STAGING build offers no sandbox surfaces
+ * (`IRunnerHost.sandboxControlUnavailableReason`). Staging's traycer-server,
+ * which serves the sandbox control plane, is fronted by Google IAP, and IAP
+ * admits only the host's own service account: an app's call carries the
+ * user's bearer alone and is refused before it reaches the server. No client
+ * holds an IAP credential, and none is given one.
+ */
+export const SANDBOXES_UNAVAILABLE_IN_STAGING =
+  "Sandboxes aren't available in staging builds: the staging server only accepts calls from hosts.";
 
 export const SANDBOX_FROZEN_MESSAGE =
   "This sandbox is paused because your credits ran out. Add credits to wake it.";
@@ -454,26 +504,36 @@ export async function ensureSandboxAwake(
   const settled = settledOutcome(deps.initial);
   if (settled !== null) return settled;
 
-  const verb = wakeVerbFor(deps.initial.state);
-  if (verb !== null) {
-    const result = await deps.wake(deps.initial.sandboxId, verb);
-    if (result.kind !== "ok") return outcomeOfWakeFailure(result);
-  }
-
+  // One budget for the whole wake, taken BEFORE the verb: the lifecycle verb
+  // alone can hold its request for minutes, and a budget that started after
+  // it let one wake pend for over six minutes with every retry joining it.
   const deadline = deps.now() + deps.timeoutMs;
-  while (deps.now() < deadline) {
-    await deps.sleep(deps.pollIntervalMs);
-    const facts = await deps.readFacts();
-    if (facts === null) {
-      return { kind: "not-wakeable", state: null };
+  const budget = deps.startBudget(deps.timeoutMs);
+  try {
+    const verb = wakeVerbFor(deps.initial.state);
+    if (verb !== null) {
+      const result = await withinBudget(
+        deps.wake(deps.initial.sandboxId, verb),
+        budget,
+      );
+      if (result === BUDGET_SPENT) return WAKE_TIMED_OUT;
+      if (result.kind !== "ok") return outcomeOfWakeFailure(result);
     }
-    const outcome = settledOutcome(facts);
-    if (outcome !== null) return outcome;
+
+    while (deps.now() < deadline) {
+      await deps.sleep(deps.pollIntervalMs);
+      const facts = await withinBudget(deps.readFacts(), budget);
+      if (facts === BUDGET_SPENT) return WAKE_TIMED_OUT;
+      if (facts === null) {
+        return { kind: "not-wakeable", state: null };
+      }
+      const outcome = settledOutcome(facts);
+      if (outcome !== null) return outcome;
+    }
+    return WAKE_TIMED_OUT;
+  } finally {
+    budget.cancel();
   }
-  return {
-    kind: "failed",
-    detail: "the sandbox did not report awake in time",
-  };
 }
 
 /** A final answer from facts alone, or `null` while the sandbox is on its way. */
@@ -547,6 +607,9 @@ function outcomeOfWakeFailure(
   }
   if (failure.kind === "network-error") {
     return { kind: "failed", detail: failure.detail };
+  }
+  if (failure.kind === "unavailable") {
+    return { kind: "failed", detail: failure.reason };
   }
   if (failure.code === SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE) {
     return { kind: "wake-not-available" };

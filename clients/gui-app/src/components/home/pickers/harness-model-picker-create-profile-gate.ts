@@ -76,9 +76,15 @@ export function useCreateProfileHostIsLocal(
 }
 
 export function resolveCreateProfileGate(
+  credentialRefusal: string | null,
   hostIsLocal: boolean,
   state: ProviderCliState | undefined,
 ): { readonly disabled: boolean; readonly reason: string | undefined } {
+  // First, and whatever the provider: a sandbox takes no sign-in at all
+  // (`useHostCredentialRefusal`).
+  if (credentialRefusal !== null) {
+    return { disabled: true, reason: credentialRefusal };
+  }
   const loginCapability = state?.loginCapability;
   // A terminal-login provider is answered before the `oauthArgs` gate below,
   // whichever way its `oauthArgs` point. Copilot carries real ones (its

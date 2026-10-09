@@ -9,6 +9,7 @@ import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 /** The catalogue moves on a provider contract, not on a user's action. */
 const SANDBOX_CATALOGUE_STALE_MS = 10 * 60_000;
@@ -51,7 +52,12 @@ export function useSandboxCatalogue(
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const unavailable = useSandboxControlUnavailableReason() !== null;
   return useQuery(
-    sandboxCatalogueQueryOptions(auth, userId, signedIn && enabled),
+    sandboxCatalogueQueryOptions(
+      auth,
+      userId,
+      signedIn && enabled && !unavailable,
+    ),
   );
 }

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   ensureSandboxAwake,
   type SandboxDialFacts,
+  type SandboxWakeBudget,
   type SandboxWakeOutcome,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { AuthService } from "@/lib/auth/auth-service";
@@ -19,7 +20,10 @@ import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 
 /** How often the sandbox list is re-read while a wake is under way. */
 const WAKE_POLL_INTERVAL_MS = 2_000;
-/** A resume is single-digit seconds and a cold start tens; past this it failed. */
+/**
+ * A resume is single-digit seconds and a cold start tens; past this it failed.
+ * The budget covers the whole wake, the lifecycle verb's own request included.
+ */
 const WAKE_TIMEOUT_MS = 120_000;
 
 /**
@@ -92,11 +96,21 @@ async function wakeSandboxHost(
     now: () => Date.now(),
     pollIntervalMs: WAKE_POLL_INTERVAL_MS,
     timeoutMs: WAKE_TIMEOUT_MS,
+    startBudget,
   });
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function startBudget(ms: number): SandboxWakeBudget {
+  let stop = (): void => undefined;
+  const elapsed = new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    stop = () => clearTimeout(timer);
+  });
+  return { elapsed, cancel: () => stop() };
 }
 
 async function runSharedWake(
@@ -185,6 +199,13 @@ export function startSandboxWake(
   // Signed out there is no sandbox row to wake, and nothing a retry fixes.
   if (binding === null) return;
   const { auth, directory } = binding;
+  // A build that cannot reach the control plane (staging) sends no wake: it
+  // says why once, instead of a failed request's "try again".
+  const unavailable = auth.sandboxControlUnavailableReason();
+  if (unavailable !== null) {
+    toast.warning("Couldn't wake this sandbox", { description: unavailable });
+    return;
+  }
   const observer = new QueryMutationObserver<SandboxWakeRun>(client, {
     mutationKey: sandboxMutationKeys.wake(hostId),
     mutationFn: () => runSharedWake(auth, hostId),

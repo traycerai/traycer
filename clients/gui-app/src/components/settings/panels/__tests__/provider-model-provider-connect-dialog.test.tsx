@@ -44,6 +44,12 @@ const mocks = vi.hoisted(() => ({
   cancelCalls: [] as CancelCall[],
   openLink: vi.fn(),
   authIsPending: false,
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
@@ -226,6 +232,7 @@ beforeEach(() => {
   mocks.awaitCalls.length = 0;
   mocks.cancelCalls.length = 0;
   mocks.authIsPending = false;
+  mocks.credentialRefusal = null;
   mocks.openLink.mockReset();
   useModelProviderPendingAuthStore.setState({ entries: {} });
 });
@@ -353,6 +360,44 @@ describe("connect with an API key", () => {
         inputs: {},
       },
     });
+  });
+
+  it("disables Connect, shows the refusal and sends nothing when the host takes no credentials, even with a key typed", () => {
+    mocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-secret" },
+    });
+    const submit = screen.getByRole("button", { name: "Connect" });
+    expect(submit.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(submit);
+    fireEvent.submit(submit);
+
+    expect(mocks.authCalls).toHaveLength(0);
+  });
+
+  it("shows no refusal and connects when the host takes credentials", () => {
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(mocks.authCalls).toHaveLength(1);
   });
 
   it("keeps Connect disabled until a key is typed", () => {

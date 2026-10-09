@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   costs: null as UserSandboxCost | null,
   warning: { kind: "none" } as SandboxRunwayWarning,
+  /** `IRunnerHost.sandboxControlUnavailableReason`; `null` reaches the control plane. */
+  unavailableReason: null as string | null,
 }));
 
 vi.mock("sonner", () => ({
@@ -45,6 +47,9 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ refreshHostFleet: vi.fn() }),
+  useRunnerHostOrNull: () => ({
+    sandboxControlUnavailableReason: mocks.unavailableReason,
+  }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
@@ -121,6 +126,7 @@ beforeEach(() => {
   mocks.catalogue = null;
   mocks.costs = null;
   mocks.warning = { kind: "none" };
+  mocks.unavailableReason = null;
   mocks.toastSuccess.mockClear();
   mocks.toastInfo.mockClear();
   mocks.toastFromAuthError.mockClear();
@@ -359,6 +365,21 @@ describe("<SandboxCard /> without a summary", () => {
         reads + 1,
       );
     });
+  });
+
+  it("says why instead of loading when the build cannot reach the control plane, and never reads the list", async () => {
+    mocks.unavailableReason =
+      "Sandboxes aren't available in the staging build.";
+    renderWithoutSummary("suspended");
+
+    const line = await screen.findByTestId("sandbox-card-details-unavailable");
+    expect(line.textContent).toBe(
+      "Sandboxes aren't available in the staging build.",
+    );
+    expect(screen.queryByText("Loading this sandbox's details…")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-details-reload")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-details-failed")).toBeNull();
+    expect(mocks.binding?.auth.listSandboxes).not.toHaveBeenCalled();
   });
 
   it("says a destroyed sandbox was destroyed once the list answered without it", async () => {

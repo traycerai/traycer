@@ -33,7 +33,11 @@ function resetFeatureAnnouncementsStore(): void {
   useFeatureAnnouncementsStore.setState({ consumed: {} });
 }
 
-const hostsMock = vi.hoisted(() => ({ ids: ["host-a"] as readonly string[] }));
+const hostsMock = vi.hoisted(() => ({
+  ids: ["host-a"] as readonly string[],
+  // Which of `ids` are sandboxes; every other one is a personal host.
+  sandboxIds: [] as readonly string[],
+}));
 const capabilityMock = vi.hoisted(() => ({ available: true }));
 const scanMock = vi.hoisted(() => ({ activeCalls: [] as boolean[] }));
 const safeAreaInsetsMock = vi.hoisted(() => ({ left: 0, right: 0 }));
@@ -216,7 +220,14 @@ import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 
 function tourScope(selection: HostScopeSelection): HostScope {
   const hosts = hostsMock.ids.map((hostId) =>
-    hostScopeOptionFixture({ hostId, name: hostId }),
+    hostsMock.sandboxIds.includes(hostId)
+      ? hostScopeOptionFixture({
+          hostId,
+          name: hostId,
+          kind: "sandbox",
+          sandbox: { state: "awake", frozen: false, summary: null },
+        })
+      : hostScopeOptionFixture({ hostId, name: hostId }),
   );
   const picked =
     selection.scopedHostId === null
@@ -408,6 +419,7 @@ describe("OnboardingPage", () => {
     setMobileApp(false);
     capabilityMock.available = true;
     hostsMock.ids = ["host-a"];
+    hostsMock.sandboxIds = [];
     prefetchMock.renders = 0;
     hostReadinessMock.streamMismatchFor = null;
     hostReadinessMock.unsupportedImportFor = null;
@@ -717,6 +729,65 @@ describe("OnboardingPage", () => {
     expect(
       screen.getByTestId("host-unavailable").getAttribute("data-refusal"),
     ).toBe("host-b can't import sessions");
+  });
+
+  it("moves a tour that opens on a sandbox to the first connectable personal host, and shows its stages there", async () => {
+    // The window's host is a sandbox: the tour's stages sign providers in and
+    // import onto their host, and a sandbox takes neither.
+    hostsMock.ids = ["sbx-1", "host-a", "host-b"];
+    hostsMock.sandboxIds = ["sbx-1"];
+    renderPage(false);
+    await advanceToStep("providers");
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("onboarding-host-picker-bar")
+          .getAttribute("data-host-id"),
+      ).toBe("host-a");
+    });
+    expect(
+      screen.getByTestId("detected-agents-stub").getAttribute("data-host-id"),
+    ).toBe("host-a");
+    expect(screen.queryByTestId("host-unavailable")).toBeNull();
+  });
+
+  it("holds the provider and import stages on the notice when the only host is a sandbox", async () => {
+    hostsMock.ids = ["sbx-1"];
+    hostsMock.sandboxIds = ["sbx-1"];
+    renderPage(false);
+    await advanceToStep("providers");
+
+    expect(screen.getByTestId("host-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("detected-agents-stub")).toBeNull();
+    // Nothing to move to: the scope stays on the sandbox.
+    expect(
+      screen
+        .getByTestId("onboarding-host-picker-bar")
+        .getAttribute("data-host-id"),
+    ).toBe("sbx-1");
+
+    await advanceToStep("session-import");
+    expect(screen.queryByTestId("session-import-wizard")).toBeNull();
+    expect(screen.getByTestId("host-unavailable")).toBeTruthy();
+  });
+
+  it("does not move a tour that is already on a personal host", async () => {
+    hostsMock.ids = ["host-a", "sbx-1"];
+    hostsMock.sandboxIds = ["sbx-1"];
+    renderPage(false);
+    await advanceToStep("providers");
+
+    expect(
+      screen
+        .getByTestId("onboarding-host-picker-bar")
+        .getAttribute("data-host-id"),
+    ).toBe("host-a");
+    // Still following the window's own host: no pick was written.
+    expect(
+      screen.getByTestId("detected-agents-stub").getAttribute("data-host-id"),
+    ).toBe("");
+    expect(screen.queryByTestId("host-unavailable")).toBeNull();
   });
 
   it("uses arrows, Enter, and Escape for navigation while ignoring controls, editors, and overlays", async () => {

@@ -40,6 +40,7 @@ import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map"
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { cn } from "@/lib/utils";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 type TransportKind = "remote" | "local";
 type RemoteTransportType = "http" | "sse";
@@ -287,6 +288,11 @@ export function ProviderMcpAddDialog(props: {
   );
   const [formError, setFormError] = useState<string | null>(null);
   const mutate = useProvidersMcpMutate();
+  // A server whose definition carries a secret (an auth header's value, a
+  // stdio env value) is never written to a sandbox. One with none (a bare
+  // command, an OAuth or env-name server) still is: that is configuration,
+  // and its OAuth login is refused on its own.
+  const credentialRefusal = useHostCredentialRefusal(null);
   const form = useForm({
     defaultValues,
     onSubmit: ({ value }) => {
@@ -450,6 +456,15 @@ export function ProviderMcpAddDialog(props: {
   function submitValues(values: McpFormValues): void {
     const submission = submissionFromValues(values);
     if (submission.error !== undefined) return;
+    if (
+      credentialRefusal !== null &&
+      mcpTransportCarriesSecret(submission.transport)
+    ) {
+      setFormError(
+        `${credentialRefusal}: remove the header or environment values to add this server here.`,
+      );
+      return;
+    }
     setFormError(null);
     const requiresAuth =
       submission.transport.type !== "stdio" &&
@@ -1066,6 +1081,18 @@ function splitArgs(text: string): string[] {
   const trimmed = text.trim();
   if (trimmed.length === 0) return [];
   return trimmed.split(/\s+/);
+}
+
+/**
+ * Whether a server definition carries a secret VALUE: an auth header's value,
+ * or a stdio env value. An OAuth server's client id and an env-auth server's
+ * variable NAME are not secrets.
+ */
+function mcpTransportCarriesSecret(
+  transport: ProviderMcpServerTransportWrite,
+): boolean {
+  if (transport.type === "stdio") return transport.env !== null;
+  return transport.auth !== null && transport.auth.type === "header";
 }
 
 function buildRemoteAuth(

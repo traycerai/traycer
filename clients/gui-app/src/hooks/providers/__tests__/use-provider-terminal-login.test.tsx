@@ -13,6 +13,12 @@ const HOST_ID = "host-1";
 
 const mocks = vi.hoisted(() => ({
   startTerminalLoginRequest: vi.fn(),
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
+  credentialRefusal: { current: null as string | null },
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mocks.credentialRefusal.current,
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -99,10 +105,45 @@ describe("useProviderTerminalLogin", () => {
     );
     nestedFocusBoundaryMock.navigateNested.mockClear();
     mocks.startTerminalLoginRequest.mockReset();
+    mocks.credentialRefusal.current = null;
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("exposes the credential refusal and sends nothing from start() while it is set, with an epic and a view tab resolved", async () => {
+    mocks.credentialRefusal.current = "Sandboxes don't take sign-ins";
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter("tab-1", wrapper);
+
+    expect(result.current.credentialRefusal).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    act(() => {
+      result.current.start();
+    });
+
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(mocks.startTerminalLoginRequest).not.toHaveBeenCalled();
+  });
+
+  it("exposes a null refusal and starts the login on a host that takes sign-ins", async () => {
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter("tab-1", wrapper);
+
+    expect(result.current.credentialRefusal).toBeNull();
+    act(() => {
+      result.current.start();
+    });
+
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(mocks.startTerminalLoginRequest).toHaveBeenCalledTimes(1);
   });
 
   // The surfaces that mount this hook (the composer banner, the ended-tile

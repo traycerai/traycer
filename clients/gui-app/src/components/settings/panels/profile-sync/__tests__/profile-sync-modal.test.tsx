@@ -47,6 +47,12 @@ const testState = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
   hosts: [] as HostScopeOption[],
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
+  /** What `useHostCredentialRefusal` answers for the source; `null` is a host that syncs. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => testState.credentialRefusal,
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
@@ -271,6 +277,7 @@ describe("<ProfileSyncModalHost />", () => {
     testState.request.mockReset();
     testState.hosts = [sourceHost(), officeHost()];
     testState.openSettings.mockReset();
+    testState.credentialRefusal = null;
     useProfileSyncModalStore.getState().close();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
@@ -296,6 +303,38 @@ describe("<ProfileSyncModalHost />", () => {
 
     expect(screen.getByRole("heading", { name: "Sync profiles" })).toBeTruthy();
     expect(await screen.findByText("From MacBook · 3 profiles")).toBeTruthy();
+  });
+
+  it("renders the refusal and no device rows when the source host takes no credentials", async () => {
+    testState.credentialRefusal = "Sandboxes don't take sign-ins";
+    answerOverview(officeWithItems());
+    renderHost(makeQueryClient());
+    const dialog = await openDialog();
+
+    expect(within(dialog).getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+    expect(screen.queryByRole("region", { name: "Office Linux" })).toBeNull();
+    expect(within(dialog).queryByText("Loading devices")).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "Sync now" }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("switch", {
+        name: "Keep Office Linux in sync",
+      }),
+    ).toBeNull();
+  });
+
+  it("control: the same overview on a source that takes credentials shows the device and no refusal", async () => {
+    answerOverview(officeWithItems());
+    renderHost(makeQueryClient());
+    const dialog = await openDialog();
+
+    expect(
+      await screen.findByRole("region", { name: "Office Linux" }),
+    ).toBeTruthy();
+    expect(within(dialog).queryByTestId("credential-refusal")).toBeNull();
   });
 
   it("reads Not synced yet for a device with no overview entry, with Sync now and an off Keep in sync switch", async () => {

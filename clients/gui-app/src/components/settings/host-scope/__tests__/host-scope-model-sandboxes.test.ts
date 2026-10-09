@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   buildHostScopeOptions,
@@ -10,10 +11,13 @@ import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   credentialTargetHostOptions,
   groupHostOptions,
+  hostEntryTakesCredentials,
   hostOptionKindLabel,
   hostOptionPickerGroup,
   isHostOptionSelectable,
   pickableHostOptions,
+  SANDBOX_CREDENTIALS_REFUSED,
+  hostTakesCredentials,
   sandboxStateWord,
 } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -349,5 +353,92 @@ describe("sandbox row words", () => {
         hostScopeOptionFixture({ hostId: "p", isLocalMachine: false }),
       ),
     ).toBe("Host");
+  });
+});
+
+describe("SANDBOX_CREDENTIALS_REFUSED", () => {
+  it("is the one line every credential control shows", () => {
+    expect(SANDBOX_CREDENTIALS_REFUSED).toBe("Sandboxes don't take sign-ins");
+  });
+});
+
+describe("hostTakesCredentials", () => {
+  it("is false for a sandbox row in every state, even one whose control-plane row has not answered", () => {
+    for (const [state, frozen, summary] of [
+      ["awake", false, sandboxSummaryFixture({ hostId: "s", state: "awake" })],
+      ["suspended", true, null],
+      ["awake", false, null],
+    ] as const) {
+      expect(
+        hostTakesCredentials(
+          hostScopeOptionFixture({
+            hostId: "s",
+            kind: "sandbox",
+            sandbox: { state, frozen, summary },
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("is true for a personal host, local or remote", () => {
+    expect(hostTakesCredentials(hostScopeOptionFixture({ hostId: "p" }))).toBe(
+      true,
+    );
+    expect(
+      hostTakesCredentials(
+        hostScopeOptionFixture({ hostId: "p", isLocalMachine: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("agrees with credentialTargetHostOptions: exactly the rows it keeps", () => {
+    const rows = [
+      hostScopeOptionFixture({ hostId: "laptop" }),
+      hostScopeOptionFixture({
+        hostId: "sbx",
+        kind: "sandbox",
+        sandbox: { state: "awake", frozen: false, summary: null },
+      }),
+    ];
+    expect(credentialTargetHostOptions(rows)).toEqual(
+      rows.filter(hostTakesCredentials),
+    );
+  });
+});
+
+describe("hostEntryTakesCredentials", () => {
+  function remote(kind: "personal" | "sandbox"): HostDirectoryEntry {
+    const row = item({
+      hostId: "host-r",
+      kind,
+      ...(kind === "sandbox"
+        ? {
+            sandboxState: "awake" as const,
+            sandboxFrozen: false,
+            profile: "agent" as const,
+          }
+        : {}),
+    });
+    return hostListItemToDirectoryEntry(row, "wss://relay.example.test");
+  }
+
+  it("is false for a sandbox directory entry", () => {
+    expect(hostEntryTakesCredentials(remote("sandbox"))).toBe(false);
+  });
+
+  it("is true for a personal remote entry, this machine's own entry, and an unknown host (null)", () => {
+    expect(hostEntryTakesCredentials(remote("personal"))).toBe(true);
+    expect(
+      hostEntryTakesCredentials({
+        hostId: "host-local",
+        label: "This machine",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:9/stream",
+        version: "1.5.0",
+        transportDialability: "dialable",
+      }),
+    ).toBe(true);
+    expect(hostEntryTakesCredentials(null)).toBe(true);
   });
 });

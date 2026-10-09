@@ -1,6 +1,8 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
   HostScopeOption,
   HostScopeSandbox,
@@ -497,15 +499,43 @@ export function groupHostOptions(
 }
 
 /**
- * The rows a picker may offer as the TARGET of a credential: a sign-in, a
- * provider's API key, a synced profile. A sandbox host refuses every one of
- * them (`SANDBOX_HOST_REFUSES_CREDENTIALS`), so offering it would walk the
- * user into a step that can only fail; personal hosts only.
+ * The one line every credential control shows, disabled, on a sandbox.
+ */
+export const SANDBOX_CREDENTIALS_REFUSED = "Sandboxes don't take sign-ins";
+
+/**
+ * Whether a credential (a sign-in, a provider's API key or env override, a
+ * synced profile, an MCP server's auth) may be sent to this host. A sandbox
+ * runs code the user did not write on a machine they do not hold, so it takes
+ * none of them. The check is made BEFORE the RPC: the sandbox's own
+ * `SANDBOX_HOST_REFUSES_CREDENTIALS` arrives only after the secret already
+ * has. {@link hostEntryTakesCredentials} is the same rule over a directory
+ * entry, for a surface that holds one instead of a picker row.
+ */
+export function hostTakesCredentials(host: HostScopeOption): boolean {
+  return host.sandbox === null;
+}
+
+/**
+ * {@link hostTakesCredentials} over a directory entry. An unknown host
+ * (`null`) is not refused here: with no directory row there is no route to
+ * send through either.
+ */
+export function hostEntryTakesCredentials(
+  entry: HostDirectoryEntry | null,
+): boolean {
+  return entry === null || !isSandboxHostDirectoryEntry(entry);
+}
+
+/**
+ * The rows a picker may offer as the TARGET of a credential: personal hosts
+ * only ({@link hostTakesCredentials}), so a sandbox is never offered as a
+ * step that would hand it a secret.
  */
 export function credentialTargetHostOptions(
   hosts: readonly HostScopeOption[],
 ): readonly HostScopeOption[] {
-  return hosts.filter((host) => host.sandbox === null);
+  return hosts.filter(hostTakesCredentials);
 }
 
 /**

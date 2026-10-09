@@ -41,6 +41,7 @@ import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -176,6 +177,7 @@ function SettingsSidebarHostPicker(props: {
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
   const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const sandboxesUnavailable = useSandboxControlUnavailableReason();
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
@@ -209,8 +211,18 @@ function SettingsSidebarHostPicker(props: {
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
       />
-      {/* A sandbox is an account's machine: nothing to create signed out. */}
-      {signedIn ? (
+      {/* A sandbox is an account's machine: nothing to create signed out,
+          and nothing at all from a build that cannot reach the control
+          plane (staging), which says so instead. */}
+      {signedIn && sandboxesUnavailable !== null ? (
+        <p
+          data-testid="settings-sandboxes-unavailable"
+          className="px-2 py-1 text-ui-xs text-muted-foreground"
+        >
+          {sandboxesUnavailable}
+        </p>
+      ) : null}
+      {signedIn && sandboxesUnavailable === null ? (
         <Button
           type="button"
           variant="ghost"

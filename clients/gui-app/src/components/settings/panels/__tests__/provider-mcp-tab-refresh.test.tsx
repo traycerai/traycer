@@ -60,6 +60,9 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ hostClient: runtimeMocks.client }),
 }));
 
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => runtimeMocks.addressableHostId,
 }));

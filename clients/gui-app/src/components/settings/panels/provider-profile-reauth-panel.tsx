@@ -36,6 +36,8 @@ import {
   useProviderProfileLoginFlow,
   type ProviderProfileLoginFlow,
 } from "./use-provider-profile-login-flow";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 function noop(): void {}
 
@@ -72,6 +74,10 @@ export function ProviderProfileReauthPanel({
   onDone,
 }: ProviderProfileReauthPanelProps): ReactNode {
   const openLink = useOpenLink();
+  // The floor under every way in (Sign in, Switch account, a deep link's
+  // auto-reauth): on a sandbox no sign-in starts, not even the automatic one
+  // this panel runs on mount.
+  const credentialRefusal = useHostCredentialRefusal(null);
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
@@ -130,8 +136,9 @@ export function ProviderProfileReauthPanel({
   const showIdentityCard = showIdentity && !handingOff;
 
   const start = useCallback((): void => {
+    if (credentialRefusal !== null) return;
     flow.start({ label: null, shareSkillsAndPlugins: false });
-  }, [flow]);
+  }, [credentialRefusal, flow]);
 
   const cancel = (): void => {
     flow.cancel();
@@ -145,10 +152,12 @@ export function ProviderProfileReauthPanel({
   };
 
   useEffect(() => {
-    if (startedRef.current) return;
+    // Not latched while refused, so the automatic start is never spent on a
+    // sign-in that was not allowed to begin.
+    if (startedRef.current || credentialRefusal !== null) return;
     startedRef.current = true;
     start();
-  }, [start]);
+  }, [credentialRefusal, start]);
 
   // One-shot on its own ref, not on the dep list: the caller's handler is an
   // inline closure, so deps alone would re-fire this on every render the
@@ -165,6 +174,19 @@ export function ProviderProfileReauthPanel({
     handedOffRef.current = true;
     onSameAccountReconnected(flow.state.profile);
   }, [flow.state, handingOff, onSameAccountReconnected]);
+
+  if (credentialRefusal !== null) {
+    return (
+      <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+        <CredentialRefusalNote refusal={credentialRefusal} />
+        <div>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">

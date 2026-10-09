@@ -294,4 +294,80 @@ describe("wakeSandboxOnPick", () => {
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
     expect(findWakes()).toEqual([]);
   });
+
+  it("fails a wake whose lifecycle verb never answers once the 120 s budget is spent, then lets the next pick start afresh", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    // The verb's own request outlives the whole budget.
+    binding.auth.runSandboxVerb.mockImplementationOnce(
+      () => new Promise<never>(() => undefined),
+    );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    // A second pick while it is pending joins it: one verb, one outcome.
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(wakeMutations()).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      "Couldn't wake this sandbox",
+      { description: "Try again in a moment." },
+    );
+    expect(wakeMutations()).toBe(0);
+
+    // The timed-out wake no longer holds the host: a new pick sends a verb.
+    scriptListUntilVerb(binding, "suspended");
+    binding.auth.runSandboxVerb.mockClear();
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves no budget timer running once a wake has its answer", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    scriptListUntilVerb(binding, "suspended");
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    await settleWake();
+    // The one timer left is the mutation cache's own gc timer for the settled
+    // wake; an uncancelled 120 s budget would make it two.
+    expect(vi.getTimerCount()).toBe(1);
+    // Past the cache's gc window that one is gone too.
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("toasts why and sends nothing when the build cannot reach the sandbox control plane", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.sandboxControlUnavailableReason.mockReturnValue(
+      "Sandboxes aren't available in the staging build.",
+    );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false));
+    // Synchronous: no mutation was ever created.
+    expect(wakeMutations()).toBe(0);
+    await settleWake();
+
+    expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
+    expect(mocks.toastWarning).toHaveBeenCalledWith(
+      "Couldn't wake this sandbox",
+      { description: "Sandboxes aren't available in the staging build." },
+    );
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(binding.auth.listSandboxes).not.toHaveBeenCalled();
+    expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
+    expect(binding.directory.refresh).not.toHaveBeenCalled();
+  });
 });

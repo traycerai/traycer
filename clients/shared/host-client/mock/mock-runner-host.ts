@@ -181,6 +181,7 @@ export class MockRunnerHost implements IRunnerHost {
   // calls below go to the shared helpers, and no test points them at a server.
   private readonly serverBaseUrl: string = "https://server.test.invalid";
   readonly hasLocalHost: boolean;
+  readonly sandboxControlUnavailableReason: string | null = null;
   // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
   // images, so image-copy affordances render by default in tests.
   readonly canCopyImages: boolean = true;

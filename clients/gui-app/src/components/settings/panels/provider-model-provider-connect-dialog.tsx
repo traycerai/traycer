@@ -52,6 +52,8 @@ import {
   unansweredModelProviderPrompts,
   visibleModelProviderPrompts,
 } from "./model-provider-prompts";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 /**
  * How often the `auto` flow asks the host whether the browser round trip
@@ -112,6 +114,9 @@ export function ProviderModelProviderConnectDialog(props: {
     resumedAttempt,
     onDone,
   } = props;
+  // A sandbox never takes a model provider's key or sign-in: nothing is sent
+  // from this dialog while its host is one.
+  const credentialRefusal = useHostCredentialRefusal(hostId);
 
   const choices = useMemo(
     () => connectChoicesFor(entry, capabilities),
@@ -419,6 +424,7 @@ export function ProviderModelProviderConnectDialog(props: {
   );
   const needsSecret = choice !== null && choice.kind === "api";
   const submitDisabled =
+    credentialRefusal !== null ||
     choice === null ||
     choice.unavailableReason !== null ||
     auth.isPending ||
@@ -426,7 +432,13 @@ export function ProviderModelProviderConnectDialog(props: {
     (needsSecret && secret.trim().length === 0);
 
   const handleSubmit = useCallback(() => {
-    if (choice === null || choice.unavailableReason !== null) return;
+    if (
+      credentialRefusal !== null ||
+      choice === null ||
+      choice.unavailableReason !== null
+    ) {
+      return;
+    }
     setErrorMessage(null);
     setRestartNotice(null);
     const promptInputs = modelProviderPromptInputs(choice.prompts, answers);
@@ -469,6 +481,7 @@ export function ProviderModelProviderConnectDialog(props: {
     applyStartResult,
     auth,
     choice,
+    credentialRefusal,
     entry,
     providerId,
     secret,
@@ -480,7 +493,14 @@ export function ProviderModelProviderConnectDialog(props: {
     // consumes the first, so the second comes back as a failure against an
     // attempt that actually succeeded - the user is told their code was
     // rejected when it was not.
-    if (attempt === null || auth.isPending || code.trim().length === 0) return;
+    if (
+      credentialRefusal !== null ||
+      attempt === null ||
+      auth.isPending ||
+      code.trim().length === 0
+    ) {
+      return;
+    }
     setErrorMessage(null);
     auth.mutate(
       {
@@ -494,7 +514,15 @@ export function ProviderModelProviderConnectDialog(props: {
       },
       { onSuccess: (data) => applyResult(data.result, false) },
     );
-  }, [applyResult, attempt, auth, code, entry.id, providerId]);
+  }, [
+    applyResult,
+    attempt,
+    auth,
+    code,
+    credentialRefusal,
+    entry.id,
+    providerId,
+  ]);
 
   /**
    * "Stop waiting". Best-effort and LOCAL - upstream exposes no OAuth-cancel
@@ -617,6 +645,7 @@ export function ProviderModelProviderConnectDialog(props: {
             {providerLabel} will use this credential for {entry.name} models.
           </DialogDescription>
         </DialogHeader>
+        <CredentialRefusalNote refusal={credentialRefusal} />
         {body}
       </DialogContent>
     </Dialog>

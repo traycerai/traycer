@@ -69,4 +69,95 @@ describe("sandboxRefusalCopyFor", () => {
     expect(sandboxRefusalCopyFor("RUNTIME_THROWN", "boom")).toBeNull();
     expect(sandboxRefusalCopyFor(null, "boom")).toBeNull();
   });
+
+  it("gives SANDBOX_FROZEN no host detail, whatever the host's message says", () => {
+    expect(
+      sandboxRefusalCopyFor(
+        "SANDBOX_FROZEN",
+        "SANDBOX_FROZEN: sandbox host 'abc': out of credits",
+      )?.hostDetail,
+    ).toBeNull();
+  });
+
+  describe("SANDBOX_GUEST_NOT_CONFIGURED", () => {
+    const HEADLINE = "Waiting for this sandbox's setup to finish";
+    const MESSAGE =
+      "SANDBOX_GUEST_NOT_CONFIGURED: sandbox host 'abc': guest setup stopped at step 3 of 5";
+    const DETAIL = "sandbox host 'abc': guest setup stopped at step 3 of 5";
+
+    it("renders the setup-in-progress copy by its code, carrying the host's last status as detail", () => {
+      const copy = sandboxRefusalCopyFor(
+        "SANDBOX_GUEST_NOT_CONFIGURED",
+        MESSAGE,
+      );
+      expect(copy?.headline).toBe(HEADLINE);
+      expect(copy?.description).toContain("still being set up");
+      expect(copy?.hostDetail).toBe(DETAIL);
+    });
+
+    it("matches the message prefix when the block carries no code, with the same detail", () => {
+      const copy = sandboxRefusalCopyFor(null, MESSAGE);
+      expect(copy?.headline).toBe(HEADLINE);
+      expect(copy?.hostDetail).toBe(DETAIL);
+    });
+
+    it("takes the whole message as the detail when the code arrived without its prefix", () => {
+      expect(
+        sandboxRefusalCopyFor(
+          "SANDBOX_GUEST_NOT_CONFIGURED",
+          "guest setup stopped at step 3",
+        )?.hostDetail,
+      ).toBe("guest setup stopped at step 3");
+    });
+
+    it("has no detail when the host sent nothing past the code", () => {
+      for (const message of [
+        "SANDBOX_GUEST_NOT_CONFIGURED:",
+        "SANDBOX_GUEST_NOT_CONFIGURED:   \n ",
+        "",
+        "   ",
+      ]) {
+        expect(
+          sandboxRefusalCopyFor("SANDBOX_GUEST_NOT_CONFIGURED", message)
+            ?.hostDetail,
+        ).toBeNull();
+      }
+    });
+  });
+
+  describe("SANDBOX_HOST_REFUSES_CREDENTIALS", () => {
+    const HEADLINE = "Sandboxes don't take sign-ins";
+    const MESSAGE =
+      "SANDBOX_HOST_REFUSES_CREDENTIALS: sandbox host 'abc': refuses a provider key";
+
+    it("renders the no-credentials copy by its code and by its message prefix", () => {
+      const byCode = sandboxRefusalCopyFor(
+        "SANDBOX_HOST_REFUSES_CREDENTIALS",
+        MESSAGE,
+      );
+      expect(byCode?.headline).toBe(HEADLINE);
+      expect(byCode?.description).toContain("never holds your credentials");
+      expect(sandboxRefusalCopyFor(null, MESSAGE)?.headline).toBe(HEADLINE);
+    });
+
+    it("never surfaces the host's message as detail: the copy already says it", () => {
+      expect(
+        sandboxRefusalCopyFor("SANDBOX_HOST_REFUSES_CREDENTIALS", MESSAGE)
+          ?.hostDetail,
+      ).toBeNull();
+      expect(sandboxRefusalCopyFor(null, MESSAGE)?.hostDetail).toBeNull();
+    });
+  });
+
+  it("does not let one sandbox code's prefix pick another code's copy", () => {
+    expect(
+      sandboxRefusalCopyFor(null, "SANDBOX_GUEST_NOT_CONFIGURED_LATER: no"),
+    ).toBeNull();
+    expect(
+      sandboxRefusalCopyFor(
+        "SANDBOX_HOST_REFUSES_CREDENTIALS",
+        "SANDBOX_GUEST_NOT_CONFIGURED: x",
+      )?.headline,
+    ).toBe("Sandboxes don't take sign-ins");
+  });
 });

@@ -18,7 +18,10 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
   useRegisteredHostsPollLiveness: () => undefined,
 }));
 
-import { OnboardingHostPickerBar } from "@/components/onboarding/onboarding-host-picker";
+import {
+  OnboardingHostPickerBar,
+  OnboardingHostUnavailableNotice,
+} from "@/components/onboarding/onboarding-host-picker";
 
 afterEach(cleanup);
 
@@ -84,5 +87,80 @@ describe("<OnboardingHostPickerBar /> credential targets", () => {
       "Laptop",
     );
     expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
+  });
+});
+
+describe("<OnboardingHostPickerBar /> on a sandbox scope", () => {
+  it("never shows the sandbox as the tour's pick: the switcher reads as nothing selected", () => {
+    renderBar(pickerOver([LAPTOP, DESKTOP, SANDBOX], SANDBOX));
+
+    const trigger = screen.getByTestId("settings-host-switcher");
+    expect(trigger.textContent).toContain("Select a host");
+    expect(trigger.textContent).not.toContain("Build box");
+    expect(trigger.getAttribute("aria-label")).toContain("none selected");
+  });
+
+  it("control: a personal scope host is shown as the pick", () => {
+    renderBar(pickerOver([LAPTOP, DESKTOP, SANDBOX], DESKTOP));
+
+    const trigger = screen.getByTestId("settings-host-switcher");
+    expect(trigger.textContent).toContain("Desktop");
+    expect(trigger.textContent).not.toContain("Select a host");
+  });
+});
+
+describe("<OnboardingHostUnavailableNotice />", () => {
+  it("says sandboxes don't take sign-ins and asks for one of the user's own devices, for a sandbox scope", () => {
+    render(
+      <OnboardingHostUnavailableNotice
+        picker={pickerOver([LAPTOP, SANDBOX], SANDBOX)}
+        refusal={null}
+      />,
+    );
+
+    expect(screen.getByText("Sandboxes don't take sign-ins")).toBeDefined();
+    expect(
+      screen.getByText("Pick one of your own devices to continue."),
+    ).toBeDefined();
+    expect(screen.queryByText(/Reconnect this device/)).toBeNull();
+    expect(screen.queryByText(/Can't reach/)).toBeNull();
+  });
+
+  it("puts the sandbox line ahead of a stage's own refusal", () => {
+    render(
+      <OnboardingHostUnavailableNotice
+        picker={pickerOver([LAPTOP, SANDBOX], SANDBOX)}
+        refusal="This host is too old to scan."
+      />,
+    );
+
+    expect(screen.getByText("Sandboxes don't take sign-ins")).toBeDefined();
+    expect(screen.queryByText("This host is too old to scan.")).toBeNull();
+    expect(
+      screen.getByText("Pick one of your own devices to continue."),
+    ).toBeDefined();
+  });
+
+  it("control: a personal host's stage refusal keeps its own headline and next step", () => {
+    render(
+      <OnboardingHostUnavailableNotice
+        picker={{
+          ...pickerOver([LAPTOP, DESKTOP], DESKTOP),
+          hasExplicitPick: true,
+          scope: hostScopeFixture({
+            host: DESKTOP,
+            hosts: [LAPTOP, DESKTOP],
+            status: "unreachable",
+          }),
+        }}
+        refusal="This host is too old to scan."
+      />,
+    );
+
+    expect(screen.getByText("This host is too old to scan.")).toBeDefined();
+    expect(screen.queryByText("Sandboxes don't take sign-ins")).toBeNull();
+    expect(
+      screen.queryByText("Pick one of your own devices to continue."),
+    ).toBeNull();
   });
 });

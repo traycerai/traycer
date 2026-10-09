@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
 import { useProvidersClearApiKey } from "@/hooks/providers/use-providers-clear-api-key-mutation";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { useOpenLink } from "@/lib/links/open-link";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 
@@ -98,6 +100,9 @@ export function ProviderApiKeySection({
   const setApiKey = useProvidersSetApiKey();
   const clearApiKey = useProvidersClearApiKey();
   const openLink = useOpenLink();
+  // A sandbox never takes a key: the field is disabled and the save is never
+  // sent. Clearing a stored key sends nothing secret, so it stays.
+  const credentialRefusal = useHostCredentialRefusal(null);
 
   if (!state.apiKey.supported) return null;
 
@@ -105,7 +110,13 @@ export function ProviderApiKeySection({
   const dashboardUrl = API_KEY_DASHBOARD_URL[providerId];
   const onSave = (): void => {
     const trimmed = draft.trim();
-    if (trimmed.length === 0 || setApiKey.isPending) return;
+    if (
+      trimmed.length === 0 ||
+      setApiKey.isPending ||
+      credentialRefusal !== null
+    ) {
+      return;
+    }
     setApiKey.mutate(
       { providerId, apiKey: trimmed },
       { onSuccess: () => onDraftChange("") },
@@ -150,7 +161,7 @@ export function ProviderApiKeySection({
           }
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
-          disabled={setApiKey.isPending}
+          disabled={setApiKey.isPending || credentialRefusal !== null}
           onKeyDown={(e) => {
             if (e.key === "Enter") onSave();
           }}
@@ -161,7 +172,11 @@ export function ProviderApiKeySection({
           size="sm"
           variant="secondary"
           onClick={onSave}
-          disabled={setApiKey.isPending || draft.trim().length === 0}
+          disabled={
+            setApiKey.isPending ||
+            draft.trim().length === 0 ||
+            credentialRefusal !== null
+          }
         >
           {setApiKey.isPending ? <MutedAgentSpinner /> : null}
           Save
@@ -180,6 +195,7 @@ export function ProviderApiKeySection({
           </Button>
         ) : null}
       </div>
+      <CredentialRefusalNote refusal={credentialRefusal} />
       <p className="text-ui-xs text-muted-foreground">
         {state.apiKey.source === "env"
           ? `Using ${envNamePlaceholder(providerId)} from your shell environment. Save a key here to override it.`

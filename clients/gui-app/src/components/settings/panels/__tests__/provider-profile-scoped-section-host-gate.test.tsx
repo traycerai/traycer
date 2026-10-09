@@ -129,6 +129,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          credentialRefusal={null}
           onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
@@ -300,5 +301,49 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(screen.getByRole("button", { name: /Sync profiles/ })).toBeDefined();
     // Nothing to add a sign-in to from here: the profile controls stay absent.
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+  });
+
+  it("holds Sign in and Add profile with the credential refusal as the reason, and offers no CLI & Args link, when the host takes no credentials", () => {
+    const REFUSAL = "Sandboxes don't take sign-ins";
+    const profile = ambientProfile();
+    renderSection({
+      canAddProfile: false,
+      credentialRefusal: REFUSAL,
+      // A missing CLI would otherwise be the reason, with a link to fix it:
+      // on a sandbox no CLI setup helps, so the refusal must win.
+      state: opencodeState({
+        enabled: true,
+        loginCapability: OAUTH_CAP,
+        candidates: [],
+        profiles: [
+          {
+            ...profile,
+            auth: {
+              status: "unauthenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
+        ],
+      }),
+    });
+
+    const signIn = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sign in",
+    });
+    expect(signIn.disabled).toBe(true);
+    expect(tooltipTextNear(signIn)).toBe(REFUSAL);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Add profile" })
+        .disabled,
+    ).toBe(true);
+    expect(screen.getByText(REFUSAL)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
+    expect(
+      screen.queryByText("The OpenCode CLI is not installed on this host.", {
+        exact: false,
+      }),
+    ).toBeNull();
   });
 });
