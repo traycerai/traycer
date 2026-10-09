@@ -7,8 +7,13 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import {
   isRemoteHostDirectoryEntry,
   type RemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  createRemoteHostTransport,
+  remoteOpenAuthFor,
+  type RemoteOpenAuth,
+} from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -73,6 +78,26 @@ const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
   appVersion: null,
   lastSeenAt: null,
 };
+
+/**
+ * Inert placeholder for a fabricated sandbox entry, for the same reason as
+ * {@link PLACEHOLDER_REMOTE_STATUS}: transport construction reads only whether
+ * the entry HAS sandbox facts (it decides what `OPEN` presents), never them.
+ */
+const PLACEHOLDER_SANDBOX_FACTS: RemoteHostSandboxFacts = {
+  state: null,
+  frozen: false,
+  profile: null,
+};
+
+/** What a remote target's `OPEN` presents; `null` for a local target or none. */
+function openAuthOfTarget(
+  target: HostDirectoryEntry | null,
+): RemoteOpenAuth | null {
+  return target !== null && isRemoteHostDirectoryEntry(target)
+    ? remoteOpenAuthFor(target)
+    : null;
+}
 
 export interface HostStreamClientBinding {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -286,6 +311,7 @@ export function buildHostStreamClient(params: {
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      openAuth: remoteOpenAuthFor(params.target),
       cloudAuthorized: params.cloudAuthorized,
       // Same UNAUTHORIZED recovery the local branch wires below: an expired
       // bearer at a wake-time re-attach revalidates + redials instead of
@@ -428,6 +454,9 @@ export function useHostStreamClientBindingFor(
     target !== null && isRemoteHostDirectoryEntry(target)
       ? target.publicKey
       : null;
+  // A primitive, like the three above: what `OPEN` presents is fixed for a
+  // host id's life, and the entry object's identity must not churn the build.
+  const endpointOpenAuth = openAuthOfTarget(target);
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
   const [rebuildNonce, setRebuildNonce] = useState(0);
@@ -501,6 +530,13 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
+            // Only its PRESENCE is read here (`remoteOpenAuthFor`, so a
+            // sandbox's OPEN presents a session grant); the facts themselves
+            // are the real entry's business, not this fabricated one's.
+            sandbox:
+              endpointOpenAuth === "session-grant"
+                ? PLACEHOLDER_SANDBOX_FACTS
+                : null,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -589,6 +625,7 @@ export function useHostStreamClientBindingFor(
     authnBaseUrl,
     endpointHostId,
     endpointKind,
+    endpointOpenAuth,
     endpointPublicKey,
     endpointWebsocketUrl,
     globalClient,

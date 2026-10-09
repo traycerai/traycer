@@ -9,6 +9,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  isCredentialShapedEnvName,
+  urlCarriesCredentials,
+} from "@/components/providers/credential-bearing-values";
 import { cn } from "@/lib/utils";
 
 /**
@@ -126,9 +130,35 @@ function draftError(key: string, otherKeys: readonly string[]): string | null {
   return null;
 }
 
+/**
+ * Why a variable cannot be sent to a host that takes no credentials
+ * (`credentialRefusal` set): a name that looks like a credential's (the
+ * host's own rule, mirrored), or a SET value that is a URL carrying a
+ * sign-in. The typed name and value stay in the fields.
+ */
+function credentialError(
+  key: string,
+  value: string | null,
+  credentialRefusal: string | null,
+): string | null {
+  if (credentialRefusal === null) return null;
+  if (isCredentialShapedEnvName(key)) {
+    return `${credentialRefusal}: a variable whose name looks like a credential is not stored here.`;
+  }
+  if (value !== null && urlCarriesCredentials(value)) {
+    return `${credentialRefusal}: remove the sign-in from this URL.`;
+  }
+  return null;
+}
+
 export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
+  /**
+   * Set when the host takes no credentials: a value that is a URL with a
+   * sign-in is refused with this line instead of being committed.
+   */
+  readonly credentialRefusal: string | null;
   readonly namePlaceholder: string;
   readonly emptyLabel: string;
   readonly onCommit: (
@@ -141,6 +171,7 @@ export function EnvOverrideEditor(props: {
   const {
     overrides,
     disabled,
+    credentialRefusal,
     namePlaceholder,
     emptyLabel,
     onCommit,
@@ -181,6 +212,7 @@ export function EnvOverrideEditor(props: {
               entry={entry}
               otherKeys={keys.filter((k) => k !== entry.key)}
               disabled={disabled}
+              credentialRefusal={credentialRefusal}
               onCommit={onCommit}
               onDelete={onDelete}
             />
@@ -191,6 +223,7 @@ export function EnvOverrideEditor(props: {
         <EnvOverrideAddRow
           existingKeys={keys}
           disabled={disabled}
+          credentialRefusal={credentialRefusal}
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
             onCommit("", key, value);
@@ -220,6 +253,7 @@ function EnvOverrideRow(props: {
   readonly entry: EnvOverrideValue;
   readonly otherKeys: readonly string[];
   readonly disabled: boolean;
+  readonly credentialRefusal: string | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -227,7 +261,8 @@ function EnvOverrideRow(props: {
   ) => void;
   readonly onDelete: (key: string) => void;
 }) {
-  const { entry, otherKeys, disabled, onCommit, onDelete } = props;
+  const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
+    props;
   const [draft, setDraft] = useState<Draft>(() => ({
     key: entry.key,
     value: entry.value ?? "",
@@ -250,12 +285,21 @@ function EnvOverrideRow(props: {
   useEffect(() => {
     onCommitRef.current = onCommit;
   }, [onCommit]);
+  const credentialRefusalRef = useRef(credentialRefusal);
+  useEffect(() => {
+    credentialRefusalRef.current = credentialRefusal;
+  }, [credentialRefusal]);
 
   const commitValue = (nextValue: string | null): void => {
     const nextKey = draft.key.trim();
     const error = draftError(nextKey, otherKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, key: entry.key, error }));
+      return;
+    }
+    const refused = credentialError(nextKey, nextValue, credentialRefusal);
+    if (refused !== null) {
+      setDraft((current) => ({ ...current, error: refused }));
       return;
     }
     setDraft((current) => ({ ...current, error: null }));
@@ -281,6 +325,12 @@ function EnvOverrideRow(props: {
       const nextValue = current.mode === "unset" ? null : current.value;
       const error = draftError(nextKey, otherKeysRef.current);
       if (error !== null) return;
+      if (
+        credentialError(nextKey, nextValue, credentialRefusalRef.current) !==
+        null
+      ) {
+        return;
+      }
       if (nextKey !== currentEntry.key || nextValue !== currentEntry.value) {
         onCommitRef.current(currentEntry.key, nextKey, nextValue);
       }
@@ -341,11 +391,19 @@ function EnvOverrideRow(props: {
 function EnvOverrideAddRow(props: {
   readonly existingKeys: readonly string[];
   readonly disabled: boolean;
+  readonly credentialRefusal: string | null;
   readonly namePlaceholder: string;
   readonly onAdd: (key: string, value: string | null) => void;
   readonly onCancel: () => void;
 }) {
-  const { existingKeys, disabled, namePlaceholder, onAdd, onCancel } = props;
+  const {
+    existingKeys,
+    disabled,
+    credentialRefusal,
+    namePlaceholder,
+    onAdd,
+    onCancel,
+  } = props;
   const [draft, setDraft] = useState<Draft>(() => ({
     key: "",
     value: "",
@@ -355,12 +413,15 @@ function EnvOverrideAddRow(props: {
 
   const add = (): void => {
     const nextKey = draft.key.trim();
-    const error = draftError(nextKey, existingKeys);
+    const nextValue = draft.mode === "unset" ? null : draft.value;
+    const error =
+      draftError(nextKey, existingKeys) ??
+      credentialError(nextKey, nextValue, credentialRefusal);
     if (error !== null) {
       setDraft((current) => ({ ...current, error }));
       return;
     }
-    onAdd(nextKey, draft.mode === "unset" ? null : draft.value);
+    onAdd(nextKey, nextValue);
   };
 
   return (

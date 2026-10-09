@@ -43,6 +43,14 @@ export const HOST_CAPABILITY_MAINTENANCE_LEASE_V2 = "maintenance-lease-v2";
 export const HOST_CAPABILITY_LIFECYCLE_POLICY_V1 =
   SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1;
 
+/**
+ * This CLI's host build has the sandbox mode (`--host-kind sandbox`: boot-token
+ * enrollment, no refresh token, the session grant in `OPEN.authz` v2), so a
+ * control plane provisioning a sandbox image can refuse one whose host is too
+ * old to enroll as a sandbox (seam C2).
+ */
+export const HOST_CAPABILITY_SANDBOX_MODE = "sandbox-mode";
+
 /** Schema version of the `--json` document, not of the token set. */
 export const HOST_CAPABILITIES_VERSION = 1;
 
@@ -52,6 +60,7 @@ export const HOST_CAPABILITIES: readonly string[] = [
   HOST_CAPABILITY_MAINTENANCE_LEASE_V1,
   HOST_CAPABILITY_MAINTENANCE_LEASE_V2,
   HOST_CAPABILITY_LIFECYCLE_POLICY_V1,
+  HOST_CAPABILITY_SANDBOX_MODE,
 ];
 
 export type HostCapabilitiesRequest =

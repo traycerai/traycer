@@ -109,12 +109,33 @@ import {
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import {
+  createSandboxViaHttp,
+  destroySandboxViaHttp,
+  fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
+  listSandboxesViaHttp,
+  runSandboxVerbViaHttp,
+  type SandboxCatalogueFetchResult,
+  type SandboxCostsFetchResult,
+  type SandboxCreateFetchResult,
+  type SandboxListFetchResult,
+  type SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobilePushRegistration } from "./push-registration";
 
 export interface MobileRunnerHostOptions {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  /** traycer-server, which serves the sandbox control plane. */
+  readonly serverBaseUrl: string;
+  /** `IRunnerHost.sandboxControlUnavailableReason`. */
+  readonly sandboxControlUnavailableReason: string | null;
   readonly hostLabel: string;
   /** The relay's fixed WS attach endpoint (`IRunnerHost.relayBaseUrl`). */
   readonly relayBaseUrl: string;
@@ -224,6 +245,8 @@ interface RetainedStepUpCredential {
 export class MobileRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  private readonly serverBaseUrl: string;
+  readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
@@ -308,6 +331,9 @@ export class MobileRunnerHost implements IRunnerHost {
   constructor(options: MobileRunnerHostOptions) {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
+    this.serverBaseUrl = options.serverBaseUrl;
+    this.sandboxControlUnavailableReason =
+      options.sandboxControlUnavailableReason;
     this.relayBaseUrl = options.relayBaseUrl;
     this.fleetHostIds = options.fleetHostIds;
     this.linkCodeScanner = options.linkCodeScanner;
@@ -392,8 +418,8 @@ export class MobileRunnerHost implements IRunnerHost {
    */
   async refreshHostFleet(): Promise<void> {
     const identity = this.selectionIdentity.current();
-    const hostIds = await this.resolveFleetHostIds();
-    if (hostIds === null) {
+    const rows = await this.resolveFleetHostIds();
+    if (rows === null) {
       return;
     }
     if (this.selectionIdentity.current().generation !== identity.generation) {
@@ -402,7 +428,10 @@ export class MobileRunnerHost implements IRunnerHost {
     this.selectionFleet.publish(
       identity.generation,
       null,
-      hostIds.map((hostId) => ({ hostId, kind: "remote" as const })),
+      rows.map((row) => ({
+        hostId: row.hostId,
+        kind: row.sandbox ? ("sandbox" as const) : ("remote" as const),
+      })),
     );
   }
 
@@ -418,9 +447,16 @@ export class MobileRunnerHost implements IRunnerHost {
     return null;
   }
 
-  private async resolveFleetHostIds(): Promise<readonly string[] | null> {
+  private async resolveFleetHostIds(): Promise<ReadonlyArray<{
+    readonly hostId: string;
+    readonly sandbox: boolean;
+  }> | null> {
     if (this.fleetHostIds !== null) {
-      return this.fleetHostIds();
+      // The dev-slot source names loopback hosts only, never a sandbox.
+      const hostIds = await this.fleetHostIds();
+      return hostIds === null
+        ? null
+        : hostIds.map((hostId) => ({ hostId, sandbox: false }));
     }
     const stored = await this.tokenStore.get();
     if (stored === null) {
@@ -435,7 +471,10 @@ export class MobileRunnerHost implements IRunnerHost {
     if (result.kind !== "ok") {
       return null;
     }
-    return result.response.hosts.map((host) => host.hostId);
+    return result.response.hosts.map((host) => ({
+      hostId: host.hostId,
+      sandbox: host.kind === "sandbox",
+    }));
   }
 
   beginAuthAttempt(): void {
@@ -612,6 +651,51 @@ export class MobileRunnerHost implements IRunnerHost {
     // phone talks to authn directly (no Electron-main CORS detour) and can
     // remove any registered host by id.
     return deregisterHostViaHttp(this.authnBaseUrl, bearerToken, hostId);
+  }
+
+  // The sandbox control plane, from the phone directly: `fetch` is patched by
+  // CapacitorHttp, so traycer-server's CORS allow-list does not apply.
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
+    return listSandboxesViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    return createSandboxViaHttp(this.serverBaseUrl, bearerToken, request);
+  }
+
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
+  }
+
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    return runSandboxVerbViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      sandboxId,
+      verb,
+      timeoutMs,
+    );
   }
 
   async getLastKnownLocalHostId(): Promise<string | null> {

@@ -70,6 +70,7 @@ function EpicSetupTerminalButton(props: {
     <SetupTerminalButton
       guidance={props.guidance}
       isPending={login.isPending}
+      credentialRefusal={login.credentialRefusal}
       onStart={() => {
         props.onBeforeStart();
         login.start();
@@ -94,6 +95,7 @@ function LandingSetupTerminalButton(props: {
     <SetupTerminalButton
       guidance={props.guidance}
       isPending={login.isPending}
+      credentialRefusal={login.credentialRefusal}
       onStart={() => {
         // Binds the start page BEFORE the request: the panel this terminal
         // opens into is mounted per bound draft, so resolving after the host
@@ -113,6 +115,8 @@ function LandingSetupTerminalButton(props: {
 function SetupTerminalButton(props: {
   readonly guidance: ProviderSetupGuidance;
   readonly isPending: boolean;
+  /** A sandbox: the button is disabled and this replaces the hint. */
+  readonly credentialRefusal: string | null;
   readonly onStart: () => void;
 }): ReactNode {
   return (
@@ -121,14 +125,14 @@ function SetupTerminalButton(props: {
         type="button"
         size="sm"
         variant="secondary"
-        disabled={props.isPending}
+        disabled={props.isPending || props.credentialRefusal !== null}
         onClick={props.onStart}
       >
         {props.guidance.terminalActionLabel}
         {props.isPending ? <MutedAgentSpinner /> : null}
       </Button>
       <span className="text-left text-ui-xs text-muted-foreground">
-        {props.guidance.terminalHint}
+        {props.credentialRefusal ?? props.guidance.terminalHint}
       </span>
     </div>
   );

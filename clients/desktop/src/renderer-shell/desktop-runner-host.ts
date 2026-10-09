@@ -137,6 +137,18 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import {
+  SANDBOXES_UNAVAILABLE_IN_STAGING,
+  type SandboxCatalogueFetchResult,
+  type SandboxCreateFetchResult,
+  type SandboxListFetchResult,
+  type SandboxCostsFetchResult,
+  type SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -172,6 +184,7 @@ import type {
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import { config } from "../config";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -199,6 +212,25 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
@@ -725,6 +757,10 @@ export class DesktopRunnerHost implements IRunnerHost {
   // False for a launch booted in the `none` lifecycle mode: main runs no
   // local-host lanes, so nothing may wait on, provision or manage one.
   readonly hasLocalHost: boolean;
+  // Staging's traycer-server is fronted by IAP, which refuses the app's
+  // bearer, so a staging build offers no sandbox surfaces.
+  readonly sandboxControlUnavailableReason: string | null =
+    config.environment === "staging" ? SANDBOXES_UNAVAILABLE_IN_STAGING : null;
   // The renderer's own clipboard takes images, and where a MIME type defeats
   // it the main-process nativeImage bridge picks the write up.
   readonly canCopyImages: boolean = true;
@@ -1086,6 +1122,43 @@ export class DesktopRunnerHost implements IRunnerHost {
     hostId: string,
   ): Promise<DeregisterHostFetchResult> {
     return this.bridge.deregisterHostFromAccount(bearerToken, hostId);
+  }
+
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
+    return this.bridge.listSandboxes(bearerToken);
+  }
+
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return this.bridge.getSandboxCosts(bearerToken);
+  }
+
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return this.bridge.getSandboxCatalogue(bearerToken);
+  }
+
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    return this.bridge.createSandbox(bearerToken, request);
+  }
+
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.destroySandbox(bearerToken, sandboxId);
+  }
+
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
   }
 
   beginAuthAttempt(): void {

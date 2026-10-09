@@ -1,9 +1,17 @@
 import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
+import {
+  SANDBOX_REFUSAL_CODE_FROZEN,
+  sandboxRefusalBodySchema,
+} from "@traycer/protocol/host/sandbox-control";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   AttachGrant,
   AttachGrantFailure,
   AttachGrantProvider,
+  AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
+import { composeRequestAbort } from "../../auth/request-abort";
+import { SANDBOX_FROZEN_MESSAGE } from "../../host-client/sandbox-control";
 
 export type {
   AttachGrant,
@@ -41,6 +49,10 @@ const GRANT_FETCH_TIMEOUT_MS = 10_000;
  *  - `ok`              — the grant to present to the relay.
  *  - `unauthorized`    — the bearer was rejected OR the host is revoked / not
  *                        owned (401/403); the caller decides whether to revalidate.
+ *  - `sandbox-frozen`  — authn refused the mint because the target is a
+ *                        sandbox frozen for lack of credits (`402` with code
+ *                        `sandbox_frozen`): a verdict, not a transient, so
+ *                        the session ends on it instead of retrying.
  *  - `network-error`   — transient transport/timeout/5xx or a malformed body.
  *
  * Every non-`ok` result carries a human-readable `detail`. Not decoration: this mint is the first step of a silently
@@ -48,8 +60,19 @@ const GRANT_FETCH_TIMEOUT_MS = 10_000;
  * fault (DNS? 401? 500 body?) survives into the session's `DialFailureLog`.
  */
 export type AttachGrantResult =
-  | { readonly kind: "ok"; readonly grant: AttachGrant }
+  | {
+      readonly kind: "ok";
+      readonly grant: AttachGrant;
+      /**
+       * The host-bound session grant authn mints beside the attach grant for a
+       * `kind: sandbox` target, or `null` for every other target. Presented in
+       * `OPEN.authz` v2 instead of the user bearer; see
+       * {@link createSandboxAttachGrantProvider}.
+       */
+      readonly sessionGrant: string | null;
+    }
   | ({ readonly kind: "unauthorized" } & AttachGrantFailure)
+  | ({ readonly kind: "sandbox-frozen" } & AttachGrantFailure)
   | ({ readonly kind: "network-error" } & AttachGrantFailure);
 
 /**
@@ -227,6 +250,28 @@ export async function mintAttachGrantViaHttp(
   hostId: string,
   bearerToken: string,
 ): Promise<AttachGrantResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. Cleared once the body is read, which the timeout also
+  // bounds.
+  const abort = composeRequestAbort(null, GRANT_FETCH_TIMEOUT_MS);
+  try {
+    return await mintAttachGrantWithSignal(
+      authnBaseUrl,
+      hostId,
+      bearerToken,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function mintAttachGrantWithSignal(
+  authnBaseUrl: string,
+  hostId: string,
+  bearerToken: string,
+  signal: AbortSignal,
+): Promise<AttachGrantResult> {
   let response: Response;
   try {
     response = await fetch(attachGrantUrl(authnBaseUrl, hostId), {
@@ -237,7 +282,7 @@ export async function mintAttachGrantViaHttp(
         Accept: "application/json",
       },
       body: JSON.stringify({ role: "client" }),
-      signal: AbortSignal.timeout(GRANT_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch (error) {
     const failure = describeFetchFailure(error);
@@ -253,6 +298,21 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "unauthorized",
       detail: `authn rejected the mint with HTTP ${response.status}`,
+      context: authnSaid(bodyText),
+    };
+  }
+  if (response.status === 402) {
+    const bodyText = await readBodyText(response);
+    if (isSandboxFrozenRefusal(bodyText)) {
+      return {
+        kind: "sandbox-frozen",
+        detail: `authn refused the mint: the sandbox is frozen (HTTP 402 ${SANDBOX_REFUSAL_CODE_FROZEN})`,
+        context: authnSaid(bodyText),
+      };
+    }
+    return {
+      kind: "network-error",
+      detail: `authn answered HTTP ${response.status}`,
       context: authnSaid(bodyText),
     };
   }
@@ -291,14 +351,60 @@ export async function mintAttachGrantViaHttp(
       grant: parsed.data.grant,
       expiresInSeconds: parsed.data.expires_in,
     },
+    sessionGrant: parsed.data.session_grant ?? null,
+  };
+}
+
+/** Whether a `402` body is authn's typed frozen-sandbox refusal. */
+function isSandboxFrozenRefusal(bodyText: string): boolean {
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return false;
+  }
+  const parsed = sandboxRefusalBodySchema.safeParse(body);
+  return parsed.success && parsed.data.code === SANDBOX_REFUSAL_CODE_FROZEN;
+}
+
+/**
+ * The fatal a frozen sandbox's refused mint ends the session on: the same
+ * typed `SANDBOX_FROZEN` refusal, and copy, the host itself answers a frozen
+ * sandbox's calls with, so every surface renders it the same way.
+ */
+const SANDBOX_FROZEN_FATAL: FatalErrorDetails = {
+  code: "SANDBOX_FROZEN",
+  reason: SANDBOX_FROZEN_MESSAGE,
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+/** A failed mint as the session's provision: terminal only for a frozen sandbox. */
+function provisionOfFailedMint(
+  result: Exclude<AttachGrantResult, { readonly kind: "ok" }>,
+): AttachGrantProvision {
+  if (result.kind === "sandbox-frozen") {
+    return {
+      kind: "refused",
+      fatal: SANDBOX_FROZEN_FATAL,
+      detail: result.detail,
+      context: result.context,
+    };
+  }
+  return {
+    kind: "unavailable",
+    detail: result.detail,
+    context: result.context,
   };
 }
 
 /**
  * Builds an `AttachGrantProvider` bound to a host + bearer source. Every
- * non-`ok` mint collapses to `unavailable` (reconnect backoff — a transient CS
- * blip must not hard-fail the session; the re-auth bound still fail-closes a
- * genuinely revoked host at its next relay deadline).
+ * non-`ok` mint but one collapses to `unavailable` (reconnect backoff — a
+ * transient CS blip must not hard-fail the session; the re-auth bound still
+ * fail-closes a genuinely revoked host at its next relay deadline). The one is
+ * a frozen sandbox, which is `refused`: no retry can mint for it until its
+ * credits are topped up.
  */
 export function createAttachGrantProvider(deps: {
   readonly authnBaseUrl: string;
@@ -324,10 +430,75 @@ export function createAttachGrantProvider(deps: {
     if (result.kind === "ok") {
       return { kind: "ok", grant: result.grant };
     }
-    return {
-      kind: "unavailable",
-      detail: result.detail,
-      context: result.context,
-    };
+    return provisionOfFailedMint(result);
+  };
+}
+
+/** A sandbox target's grant provider plus the session grant it last minted. */
+export interface SandboxAttachGrantSource {
+  readonly provider: AttachGrantProvider;
+  /**
+   * The session grant minted with the most recent attach grant, or `null`
+   * before the first successful mint. The session calls the provider on every
+   * attach and resume and only then builds its `OPEN`, so the grant read here
+   * is always the one minted for the attach in progress.
+   */
+  readonly readSessionGrant: () => string | null;
+}
+
+/**
+ * The attach-grant provider for a `kind: sandbox` target (seam C1).
+ *
+ * Differs from {@link createAttachGrantProvider} in two ways, both about
+ * keeping the user's credential off a machine whose kernel the user does not
+ * own:
+ *
+ *  1. The mint must come back with a session grant. A 2xx without one fails
+ *     closed (`unavailable`) rather than falling back to the user bearer.
+ *  2. The session grant, not the user bearer, is what `OPEN` presents (see
+ *     `RemoteSessionOptions.sessionGrant`).
+ *
+ * Waking a suspended or stopped sandbox is NOT this provider's job: such a
+ * host reads `offline` in the directory and is never dialed, so the wake runs
+ * at tab open (`ensureSandboxAwake` in `host-client/sandbox-control.ts`) and
+ * the dial follows once the host list says `awake`. A reconnect loop that
+ * woke sandboxes would keep a forgotten tab's metered machine awake forever.
+ */
+export function createSandboxAttachGrantProvider(deps: {
+  readonly authnBaseUrl: string;
+  readonly hostId: string;
+  readonly getBearerToken: () => string | null;
+}): SandboxAttachGrantSource {
+  let latestSessionGrant: string | null = null;
+  const provider: AttachGrantProvider = async () => {
+    const bearerToken = deps.getBearerToken();
+    if (bearerToken === null) {
+      return {
+        kind: "unavailable",
+        detail: "no user bearer available (signed out?)",
+        context: "",
+      };
+    }
+    const result = await mintAttachGrantViaHttp(
+      deps.authnBaseUrl,
+      deps.hostId,
+      bearerToken,
+    );
+    if (result.kind !== "ok") {
+      return provisionOfFailedMint(result);
+    }
+    if (result.sessionGrant === null) {
+      return {
+        kind: "unavailable",
+        detail: "authn minted no session grant for a sandbox target",
+        context: "",
+      };
+    }
+    latestSessionGrant = result.sessionGrant;
+    return { kind: "ok", grant: result.grant };
+  };
+  return {
+    provider,
+    readSessionGrant: () => latestSessionGrant,
   };
 }

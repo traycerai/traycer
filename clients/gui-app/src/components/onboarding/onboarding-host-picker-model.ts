@@ -2,6 +2,7 @@ import {
   scopedHostReadiness,
   type ScopedHostReadiness,
 } from "@/components/settings/host-scope/scoped-host-readiness";
+import { hostTakesCredentials } from "@/components/settings/host-scope/host-option-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 // The picker's MODEL, apart from its components: fast refresh only keeps state
@@ -42,7 +43,20 @@ export interface OnboardingHostPicker {
 export function onboardingHostReadiness(
   picker: OnboardingHostPicker,
 ): ScopedHostReadiness {
+  // Before the shared rule, and whether or not the user picked it: the tour
+  // signs providers in on its host and imports onto it, and a sandbox takes
+  // no credential. A tour reopened while a sandbox is the active host would
+  // otherwise follow it straight into those stages.
+  if (onboardingHostIsSandbox(picker)) return "unavailable";
   return scopedHostReadiness(picker);
+}
+
+/**
+ * The tour's host is a sandbox (`hostTakesCredentials`). The page moves it to
+ * a personal host when there is one; until then the stages are held.
+ */
+export function onboardingHostIsSandbox(picker: OnboardingHostPicker): boolean {
+  return picker.scope.host !== null && !hostTakesCredentials(picker.scope.host);
 }
 
 /** Whether the stages may show their live content. */

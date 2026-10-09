@@ -30,6 +30,7 @@ import {
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
 import { AuthSession, MobileAuthSheet } from "../auth-sheet";
+import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { sentryInitOptions } from "../sentry";
 import { MobileDeviceDescriber } from "../device-describer";
@@ -285,6 +286,12 @@ async function mount(input: {
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
+    serverBaseUrl: config.serverBaseUrl,
+    // Staging's server is fronted by IAP, which refuses the app's bearer.
+    sandboxControlUnavailableReason:
+      config.environment === "staging"
+        ? SANDBOXES_UNAVAILABLE_IN_STAGING
+        : null,
     hostLabel: config.hostLabel,
     relayBaseUrl: config.relayBaseUrl,
     pushRegistration,

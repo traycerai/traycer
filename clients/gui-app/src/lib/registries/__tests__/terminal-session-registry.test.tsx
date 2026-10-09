@@ -92,6 +92,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
+    sandbox: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

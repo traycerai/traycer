@@ -8,6 +8,8 @@
  * no per-kind branching outside this table.
  */
 import type { ReactNode } from "react";
+import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
+import { SandboxWakeOnTileOpen } from "@/components/hosts/sandbox-wake-on-tile-open";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
@@ -208,6 +210,10 @@ function tileRenderer<K extends TileKindId>(
  * It is a no-op when the tile is on the canvas host, and coordinators are
  * refcounted, so N tiles on one host share one stream.
  *
+ * On a sandbox host the body sits in `<SandboxTileStateFrame>`, which greys
+ * the last screen under the sandbox's state while it is frozen, asleep or
+ * waking; a personal host's body is not wrapped.
+ *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
  * mounted - a lazy one would not be live at click time, so the first link
  * click would still fall out to the OS browser. A tile on a host that is
@@ -218,6 +224,10 @@ function tileRenderer<K extends TileKindId>(
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
+      <SandboxWakeOnTileOpen
+        hostId={args.node.hostId}
+        instanceId={args.node.instanceId}
+      />
       <BrowserSessionsHostBoundary
         hostId={args.node.hostId}
         scope={{ kind: "epic", epicId: args.epicId }}
@@ -235,7 +245,9 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
                 instanceId={args.node.instanceId}
                 resetKey={args.node.instanceId}
               >
-                {tileRenderer(args.node.type)(args)}
+                <SandboxTileStateFrame>
+                  {tileRenderer(args.node.type)(args)}
+                </SandboxTileStateFrame>
               </TileErrorBoundary>
             </TileMinimapScope>
           </TileFindScope>

@@ -2270,6 +2270,18 @@ export class RemoteSession<
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
     }
+    if (provision.kind === "refused") {
+      // Authn's verdict, not a transient: a retry would be refused the same
+      // way, so the loop ends here on the typed fatal. Still INDETERMINATE
+      // evidence - the host was never dialed, so this says nothing about
+      // whether it is alive (see the `unavailable` arm below).
+      this.reportEvidenceOutcome(
+        this.dialAttemptId(generation),
+        "indeterminate",
+      );
+      this.goTerminalFatal(provision.fatal);
+      return;
+    }
     if (provision.kind === "unavailable") {
       // No grant (signed out / revoked / transient CS failure): stay in backoff.
       // This attach attempt is over before it dialed, so parked `sendUnary`

@@ -1,3 +1,20 @@
+import {
+  createSandboxViaHttp,
+  destroySandboxViaHttp,
+  fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
+  listSandboxesViaHttp,
+  runSandboxVerbViaHttp,
+  type SandboxCatalogueFetchResult,
+  type SandboxCostsFetchResult,
+  type SandboxCreateFetchResult,
+  type SandboxListFetchResult,
+  type SandboxVerbFetchResult,
+} from "../sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "../../platform/uri-callback";
 import type { NotificationFeedOccurrence } from "../../notifications/feed-delivery";
 import type {
@@ -160,7 +177,11 @@ export class MockRunnerHost implements IRunnerHost {
   // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
+  // Fixed for the same reason as `relayBaseUrl`: the sandbox control-plane
+  // calls below go to the shared helpers, and no test points them at a server.
+  private readonly serverBaseUrl: string = "https://server.test.invalid";
   readonly hasLocalHost: boolean;
+  readonly sandboxControlUnavailableReason: string | null = null;
   // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
   // images, so image-copy affordances render by default in tests.
   readonly canCopyImages: boolean = true;
@@ -582,6 +603,50 @@ export class MockRunnerHost implements IRunnerHost {
   ): Promise<DeregisterHostFetchResult> {
     // Same no-CORS-boundary parity as `listRegisteredHosts` above.
     return deregisterHostViaHttp(this.authnBaseUrl, bearerToken, hostId);
+  }
+
+  // The sandbox control plane: same no-CORS-boundary parity as above.
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
+    return listSandboxesViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    return createSandboxViaHttp(this.serverBaseUrl, bearerToken, request);
+  }
+
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
+  }
+
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    return runSandboxVerbViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      sandboxId,
+      verb,
+      timeoutMs,
+    );
   }
 
   async openExternalLink(url: string): Promise<void> {

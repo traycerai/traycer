@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   HostControllerStatus,
   HostLifecycleSetRequest,
@@ -17,6 +17,7 @@ import type {
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
+import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import {
   DesktopRunnerHost,
@@ -33,6 +34,24 @@ function desktopQuit(host: DesktopRunnerHost): IHostQuitDecisionHost {
   if (quit === null) throw new Error("desktop must wire hostLifecycle.quit");
   return quit;
 }
+
+// The deployment config is baked per build; a test picks the environment the
+// runner host reads, defaulting to the dev slot every other test here ran in.
+const deployment = vi.hoisted(() => ({
+  environment: "dev" as "dev" | "staging" | "production",
+}));
+vi.mock("../../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config")>();
+  return {
+    ...actual,
+    config: {
+      ...actual.config,
+      get environment() {
+        return deployment.environment;
+      },
+    },
+  };
+});
 
 // In vitest's jsdom env the `encrypt-storage` UMD wrapper fails to pick up
 // `window.localStorage` correctly; we don't need to exercise the AES path
@@ -107,6 +126,30 @@ function buildFakeBridge(
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
+    listSandboxes: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxCosts: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxCatalogue: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    createSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    destroySandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    runSandboxVerb: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
@@ -792,6 +835,55 @@ function buildDroppedFile(name: string, type: string, content: string): File {
   });
   return file;
 }
+
+describe("DesktopRunnerHost.sandboxControlUnavailableReason", () => {
+  function hostFor(environment: "dev" | "staging" | "production") {
+    deployment.environment = environment;
+    return new DesktopRunnerHost({
+      bridge: buildFakeBridge(null).bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+  }
+
+  afterEach(() => {
+    deployment.environment = "dev";
+  });
+
+  it("is the staging line on a staging build, because staging's server only accepts calls from hosts", () => {
+    expect(hostFor("staging").sandboxControlUnavailableReason).toBe(
+      SANDBOXES_UNAVAILABLE_IN_STAGING,
+    );
+  });
+
+  it("is null on a production build and on the dev slot", () => {
+    expect(hostFor("production").sandboxControlUnavailableReason).toBeNull();
+    expect(hostFor("dev").sandboxControlUnavailableReason).toBeNull();
+  });
+});
+
+describe("DesktopRunnerHost.runSandboxVerb", () => {
+  it("hands the preload bridge the bearer, the sandbox, the verb and the timeout, and returns its answer", async () => {
+    const runSandboxVerb = vi.fn<DesktopPreloadBridge["runSandboxVerb"]>(
+      async () => ({ kind: "ok", settled: false }),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, runSandboxVerb },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.runSandboxVerb("bearer-1", "sbx_1", "start", 87_000),
+    ).resolves.toEqual({ kind: "ok", settled: false });
+
+    expect(runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(runSandboxVerb).toHaveBeenCalledWith(
+      "bearer-1",
+      "sbx_1",
+      "start",
+      87_000,
+    );
+  });
+});
 
 describe("DesktopRunnerHost.onLocalHostChange", () => {
   it("replays the initial snapshot synchronously to the first subscriber", () => {

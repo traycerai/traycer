@@ -44,6 +44,12 @@ const mocks = vi.hoisted(() => ({
   cancelCalls: [] as CancelCall[],
   openLink: vi.fn(),
   authIsPending: false,
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
@@ -226,6 +232,7 @@ beforeEach(() => {
   mocks.awaitCalls.length = 0;
   mocks.cancelCalls.length = 0;
   mocks.authIsPending = false;
+  mocks.credentialRefusal = null;
   mocks.openLink.mockReset();
   useModelProviderPendingAuthStore.setState({ entries: {} });
 });
@@ -353,6 +360,98 @@ describe("connect with an API key", () => {
         inputs: {},
       },
     });
+  });
+
+  it("disables Connect, shows the refusal and sends nothing when the host takes no credentials, even with a key typed", () => {
+    mocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-secret" },
+    });
+    const submit = screen.getByRole("button", { name: "Connect" });
+    expect(submit.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(submit);
+    fireEvent.submit(submit);
+
+    expect(mocks.authCalls).toHaveLength(0);
+  });
+
+  it("sends no startOauth on a host that takes no credentials: Continue is disabled and pressing it does nothing", () => {
+    mocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+
+    const cont = screen.getByRole("button", { name: "Continue" });
+    expect(cont.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(cont);
+    fireEvent.submit(cont);
+
+    expect(mocks.authCalls).toHaveLength(0);
+  });
+
+  it("sends no submitCode once the host stops taking credentials mid-attempt: the code is not submitted by the button or by Enter", () => {
+    const element = (): ReactNode => (
+      <ProviderModelProviderConnectDialog
+        open
+        onOpenChange={() => {}}
+        providerId="opencode"
+        providerLabel="OpenCode"
+        entry={OAUTH_ONLY}
+        capabilities={FULL_CAPS}
+        hostId="host-1"
+        resumedAttempt={null}
+        onDone={vi.fn()}
+      />
+    );
+    const { rerender } = render(element());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    settle(mocks.authCalls[0], {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/device",
+      method: "code",
+      instructions: null,
+    });
+    const field = screen.getByLabelText("Paste the code");
+    fireEvent.change(field, { target: { value: "pasted-code" } });
+    expect(mocks.authCalls).toHaveLength(1);
+
+    // The scoped host becomes a sandbox with the attempt still on screen.
+    mocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    rerender(element());
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.keyDown(screen.getByLabelText("Paste the code"), {
+      key: "Enter",
+    });
+
+    expect(mocks.authCalls).toHaveLength(1);
+  });
+
+  it("shows no refusal and connects when the host takes credentials", () => {
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(mocks.authCalls).toHaveLength(1);
   });
 
   it("keeps Connect disabled until a key is typed", () => {

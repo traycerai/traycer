@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -23,6 +23,31 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
  * wedges startup fails this suite with "startup never settled" plus the phase
  * it reached, instead of stalling the run.
  */
+
+/**
+ * The runtime's own messenger binding, wrapped so the suite can see the one
+ * thing the provider tells it about the host list. Everything else is real.
+ */
+const messengerSpy = vi.hoisted(() => ({ hostListChanged: 0 }));
+vi.mock("@/lib/host/host-messenger", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/host-messenger")>();
+  return {
+    ...actual,
+    buildRuntimeHostMessenger: (
+      params: Parameters<typeof actual.buildRuntimeHostMessenger>[0],
+    ) => {
+      const binding = actual.buildRuntimeHostMessenger(params);
+      return {
+        ...binding,
+        hostListChanged: () => {
+          messengerSpy.hostListChanged += 1;
+          binding.hostListChanged();
+        },
+      };
+    },
+  };
+});
 
 const REAL_TIMER_BUDGET_MS = 5_000;
 const POLL_MS = 10;
@@ -95,6 +120,9 @@ function renderProvider(runnerHost: MockRunnerHost): void {
   );
 }
 
+beforeEach(() => {
+  messengerSpy.hostListChanged = 0;
+});
 afterEach(() => {
   cleanup();
 });
@@ -131,5 +159,18 @@ describe("HostRuntimeProvider startup (real messenger path)", () => {
     // mobile app takes the other branch in `HostRuntimeBootFallback`, where the
     // same window is only a keychain read.
     expect(screen.queryByTestId("host-boot-open-settings")).not.toBeNull();
+  });
+
+  it("tells the runtime messenger about the host list from the directory's changes, so a thawed sandbox's verdict can end", async () => {
+    renderProvider(buildRunnerHost());
+
+    const settled = await settledWithin(
+      () => screen.queryByTestId("startup-complete") !== null,
+    );
+
+    expect(settled).toBe(true);
+    // The directory publishes its first list on start; that is a change the
+    // messenger must hear about.
+    expect(messengerSpy.hostListChanged).toBeGreaterThan(0);
   });
 });

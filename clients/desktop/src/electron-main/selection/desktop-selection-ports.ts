@@ -220,7 +220,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private readonly options: DesktopHostFleetSourceOptions;
   private currentSnapshot: HostFleetSnapshot;
   private revisionCounter = 0;
-  private rows: readonly string[] = [];
+  private rows: readonly FleetRow[] = [];
   private localHostId: string | null = null;
   /**
    * Monotonic refresh sequence (same-identity ordering). The generation stamp
@@ -661,7 +661,10 @@ export class DesktopHostFleetSource implements HostFleetSource {
       seq,
       identitySeq,
       localHostId,
-      response.hosts.map((row) => row.hostId),
+      response.hosts.map((row): FleetRow => ({
+        hostId: row.hostId,
+        sandbox: row.kind === "sandbox",
+      })),
       readAtMs,
     );
   }
@@ -771,7 +774,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     seq: number,
     identitySeq: number,
     localHostId: string | null,
-    rows: readonly string[],
+    rows: readonly FleetRow[],
     readAtMs: number,
   ): void {
     if (this.disposed) return;
@@ -832,7 +835,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private publishSnapshot(
     generation: number,
     localHostId: string | null,
-    rows: readonly string[],
+    rows: readonly FleetRow[],
   ): void {
     this.revisionCounter += 1;
     this.currentSnapshot = {
@@ -848,6 +851,16 @@ export class DesktopHostFleetSource implements HostFleetSource {
 }
 
 /**
+ * One registry row as the fleet needs it: the id, and whether the registry
+ * calls it a sandbox (a member the engine never auto-selects; see
+ * `HostFleetEntry`).
+ */
+interface FleetRow {
+  readonly hostId: string;
+  readonly sandbox: boolean;
+}
+
+/**
  * The atomic membership tuple. The local host is SYNTHESIZED when this machine
  * has a durable identity the registry response does not list: it is real and
  * dialable over the local socket whatever the cloud says, and omitting it
@@ -859,13 +872,14 @@ export class DesktopHostFleetSource implements HostFleetSource {
  */
 function composeFleetEntries(
   localHostId: string | null,
-  rows: readonly string[],
+  rows: readonly FleetRow[],
 ): readonly HostFleetEntry[] {
-  const entries: HostFleetEntry[] = rows.map((hostId) => ({
-    hostId,
-    kind: hostId === localHostId ? "local" : "remote",
+  const entries: HostFleetEntry[] = rows.map((row) => ({
+    hostId: row.hostId,
+    kind:
+      row.hostId === localHostId ? "local" : row.sandbox ? "sandbox" : "remote",
   }));
-  if (localHostId !== null && !rows.includes(localHostId)) {
+  if (localHostId !== null && !rows.some((row) => row.hostId === localHostId)) {
     entries.push({ hostId: localHostId, kind: "local" });
   }
   return entries.sort((left, right) =>

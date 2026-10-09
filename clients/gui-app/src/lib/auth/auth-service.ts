@@ -37,6 +37,18 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxControlFailure,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -2901,6 +2913,99 @@ export class AuthService {
       throw new Error("Sign in to remove this host.");
     }
     return this.runnerHost.deregisterHostFromAccount(bearer, hostId);
+  }
+
+  /**
+   * The sandbox control plane (`/api/sandboxes` on traycer-server) via the
+   * runner host, which runs it where {@link fetchRegisteredHosts} runs (Electron
+   * main on desktop, for CORS). The reads answer `unauthorized` with no cloud
+   * bearer, the way a list has an empty state to render; the writes throw, for
+   * the reason {@link updateHostVersionPolicy} gives.
+   */
+  /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
+  sandboxControlUnavailableReason(): string | null {
+    return this.runnerHost.sandboxControlUnavailableReason;
+  }
+
+  /**
+   * The floor under every sandbox call: a build that cannot reach the
+   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging)
+   * sends none of them, and each answers this failure instead.
+   */
+  private sandboxControlRefusal(): SandboxControlFailure | null {
+    const reason = this.sandboxControlUnavailableReason();
+    return reason === null ? null : { kind: "unavailable", reason };
+  }
+
+  async listSandboxes(): Promise<SandboxListFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.listSandboxes(bearer);
+  }
+
+  async getSandboxCosts(): Promise<SandboxCostsFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCosts(bearer);
+  }
+
+  async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCatalogue(bearer);
+  }
+
+  async createSandbox(
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to create a sandbox.");
+    }
+    return this.runnerHost.createSandbox(bearer, request);
+  }
+
+  async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to destroy this sandbox.");
+    }
+    return this.runnerHost.destroySandbox(bearer, sandboxId);
+  }
+
+  /**
+   * A lifecycle verb: the card's suspend / resume / stop / start, and the
+   * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
+   * than throwing, because the tab-open wake reads it as an outcome.
+   */
+  async runSandboxVerb(
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb, timeoutMs);
   }
 
   private async revalidateCurrentContextOnce(

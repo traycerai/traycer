@@ -117,7 +117,7 @@ const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
  * longer stubs `remoteFetcher`, so this is where the discriminating
  * absence/presence assertions below are made.
  */
-const HOSTS_URL = "http://localhost:5005/api/v3/hosts";
+const HOSTS_URL = "http://localhost:5005/api/v3/hosts?include=sandboxState";
 
 const localSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-1",

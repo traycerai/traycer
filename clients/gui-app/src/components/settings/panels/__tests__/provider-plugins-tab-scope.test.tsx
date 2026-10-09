@@ -45,6 +45,12 @@ const pluginMocks = vi.hoisted(() => ({
     suppressToast: boolean | undefined;
   }>,
   mutateIsPending: false,
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => pluginMocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -262,6 +268,7 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
     pluginMocks.mutate.mockReset();
     pluginMocks.mutateCalls = [];
     pluginMocks.mutateIsPending = false;
+    pluginMocks.credentialRefusal = null;
     resetNativeScopeTestMocks();
     seedWorkspace();
   });
@@ -372,6 +379,98 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
         suppressToast: true,
       },
     ]);
+  });
+
+  describe("on a host that takes no credentials", () => {
+    const REFUSAL = "Sandboxes don't take sign-ins";
+
+    function installFromSource(source: string): void {
+      render(
+        <ProviderPluginsTab
+          state={multiScopeCaps({
+            add: BOTH_SCOPES,
+            remove: undefined,
+            setEnabled: undefined,
+            addModes: ["cli-source"],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Add from source/ }));
+      fireEvent.change(screen.getByLabelText(/Source/), {
+        target: { value: source },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Install$/ }));
+    }
+
+    it("refuses an add whose source is a URL with a sign-in: the line shows and nothing is sent", () => {
+      pluginMocks.credentialRefusal = REFUSAL;
+
+      installFromSource("https://ghp_x@github.com/o/plugin");
+
+      expect(
+        screen.getByText(
+          `${REFUSAL}: remove the sign-in from the source URL to add it here.`,
+        ),
+      ).toBeDefined();
+      expect(pluginMocks.mutate).not.toHaveBeenCalled();
+      expect(pluginMocks.mutateCalls).toEqual([]);
+    });
+
+    it("still installs a plain source", () => {
+      pluginMocks.credentialRefusal = REFUSAL;
+
+      installFromSource("https://github.com/o/plugin");
+
+      expect(pluginMocks.mutateCalls).toEqual([
+        {
+          providerId: "codex",
+          scope: "global",
+          workspaceRoot: null,
+          mutation: { action: "add", source: "https://github.com/o/plugin" },
+          suppressToast: true,
+        },
+      ]);
+    });
+
+    it("control: on a host that takes credentials the sign-in source is installed", () => {
+      pluginMocks.credentialRefusal = null;
+
+      installFromSource("https://ghp_x@github.com/o/plugin");
+
+      expect(pluginMocks.mutateCalls).toEqual([
+        {
+          providerId: "codex",
+          scope: "global",
+          workspaceRoot: null,
+          mutation: {
+            action: "add",
+            source: "https://ghp_x@github.com/o/plugin",
+          },
+          suppressToast: true,
+        },
+      ]);
+    });
+
+    it("does not refuse a remove, which carries no source", () => {
+      pluginMocks.credentialRefusal = REFUSAL;
+      pluginMocks.plugins = [plugin({})];
+      render(
+        <ProviderPluginsTab
+          state={multiScopeCaps({
+            add: undefined,
+            remove: BOTH_SCOPES,
+            setEnabled: [],
+            addModes: undefined,
+          })}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Remove pdf/ }));
+      const confirm = screen.getByTestId("confirm-destructive-dialog");
+      fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
+
+      expect(pluginMocks.mutateCalls).toHaveLength(1);
+    });
   });
 
   it("shows project-needs-workspace empty state when project has no root", () => {

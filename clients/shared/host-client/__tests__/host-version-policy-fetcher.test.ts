@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   updateHostVersionPolicyViaHttp,
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "../../auth/__tests__/no-native-abort-helpers";
 
 const AUTHN = "https://authn.example.test";
 
@@ -147,5 +152,52 @@ describe("updateHostVersionPolicyViaHttp", () => {
       updateInput(),
     );
     expect(result.kind).toBe("network-error");
+  });
+});
+
+describe("updateHostVersionPolicyViaHttp on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("still makes the request and returns the applied policy", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(200, okBody()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await updateHostVersionPolicyViaHttp(
+      AUTHN,
+      "jwt-abc",
+      "host-1",
+      updateInput(),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("ok");
+  });
+
+  it("aborts a request that never answers once its 10 s timeout passes, and resolves to network-error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = updateHostVersionPolicyViaHttp(
+      AUTHN,
+      "jwt-abc",
+      "host-1",
+      updateInput(),
+    );
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
   });
 });

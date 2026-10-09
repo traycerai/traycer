@@ -422,6 +422,36 @@ describe("HostDangerZone", () => {
     ).toBeNull();
   });
 
+  it("leaves a sandbox's removal to its sandbox card: a status line, no control, and no deregister bound", () => {
+    // The server refuses to deregister a sandbox; its lifecycle belongs to the
+    // sandbox card, so the row names where to go instead of offering a button
+    // that could only fail.
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-sbx",
+            name: "host-sbx",
+            isLocalMachine: false,
+            sandbox: { state: "awake", frozen: false, summary: null },
+          }),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+    expect(
+      screen.queryByTestId("settings-remove-host-from-account"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("settings-remove-host-sandbox-managed").textContent,
+    ).toBe("Managed from its sandbox card.");
+    expect(removeFromAccountHostIds).not.toContain("host-sbx");
+    expect(screen.getByTestId("host-danger-zone").textContent).not.toContain(
+      "This host is a sandbox",
+    );
+  });
+
   it("tells the truth in the confirmation: nothing is uninstalled, and the host does NOT come back on its own", () => {
     // Pinned because the copy is a claim about behaviour two repos away, and
     // the first version of it was WRONG in the reassuring direction — it said a

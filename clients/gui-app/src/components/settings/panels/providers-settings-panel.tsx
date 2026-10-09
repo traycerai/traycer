@@ -104,6 +104,8 @@ import {
 } from "./provider-settings-tabs";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+
 type ProviderId = ProviderCliState["providerId"];
 type ProviderProfile = ProviderCliState["profiles"][number];
 type ProvidersListQuery = UseQueryResult<
@@ -1127,10 +1129,14 @@ function ProviderDetail({
   // choosing anything, which is why this gate used to read the sticky mode
   // instead of the effective flag.
   const detailPaneInert = !state.enabled;
-  const canAddProfile = providerCanStartProfileOauth(
-    state,
-    isSelectedHostLocal,
-  );
+  // A sandbox takes no sign-in: every control that would start one (Add
+  // profile, Retry, Sign in, Switch account, the deep link's auto-reauth)
+  // reads `canAddProfile`, so folding the refusal in here holds all of them
+  // and says why.
+  const credentialRefusal = useHostCredentialRefusal(null);
+  const canAddProfile =
+    credentialRefusal === null &&
+    providerCanStartProfileOauth(state, isSelectedHostLocal);
   // A focus intent names a profile by its wire `profileId`, while the selection
   // holds its commit id - `null` for the Terminal account, whose wire id is
   // the "ambient" sentinel. Comparing the two raw values made a sign-in link
@@ -1157,6 +1163,7 @@ function ProviderDetail({
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    credentialRefusal,
     startInReauth: shouldStartInReauth,
     failedAttempt: failedProfileAttempt,
     onAddProfile: () => setAddProfileOpen(true),
@@ -1383,6 +1390,8 @@ interface ProviderProfileTabProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  /** `useHostCredentialRefusal` for the scoped host; see `canAddProfile`. */
+  readonly credentialRefusal: string | null;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;

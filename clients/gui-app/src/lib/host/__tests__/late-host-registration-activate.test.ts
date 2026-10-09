@@ -47,6 +47,11 @@ function buildWorld() {
   // What the cloud registry currently says this account owns. The CLI
   // registering a host is a write to THIS, observed by whoever polls next.
   const registry: { current: readonly string[] } = { current: ["host-a"] };
+  // What the next directory poll comes back as: the listing, or the fetcher
+  // saying it had no bearer (`signed-out`) or could not ask (`failed`).
+  const fetchKind: { current: "hosts" | "signed-out" | "failed" } = {
+    current: "hosts",
+  };
 
   const fleet = new InMemoryHostFleetSource({
     revision: 0,
@@ -92,11 +97,18 @@ function buildWorld() {
 
   const directory = new HostDirectoryService({
     runnerHost,
-    remoteFetcher: () =>
-      Promise.resolve({
+    remoteFetcher: () => {
+      if (fetchKind.current === "signed-out") {
+        return Promise.resolve({ kind: "signed-out" as const });
+      }
+      if (fetchKind.current === "failed") {
+        return Promise.resolve({ kind: "failed" as const });
+      }
+      return Promise.resolve({
         kind: "hosts" as const,
         entries: registry.current.map(directoryEntry),
-      }),
+      });
+    },
     localHostIdSeeder: () => Promise.resolve(null),
     onRegistryPollTick: null,
     authContextId: () => IDENTITY_KEY,
@@ -105,6 +117,7 @@ function buildWorld() {
 
   return {
     registry,
+    fetchKind,
     fleet,
     engine,
     directory,
@@ -169,15 +182,61 @@ describe("a host registered late becomes activatable", () => {
     expect(world.fleetRefreshes()).toBe(2);
   });
 
-  it("does not announce when a host is only REMOVED - that is the deregister path", async () => {
+  it("announces when a host is REMOVED from the registry, so a sandbox that left the account stops being the selection's target", async () => {
     const world = buildWorld();
     world.registry.current = ["host-a", "host-b"];
     await world.directory.refresh();
     expect(world.fleetRefreshes()).toBe(1);
 
-    // A removal reaches main through the deregister mutation's own
-    // announcement. Firing here too would double-announce it.
+    // A sandbox leaves the registry on the server's own schedule (a destroy
+    // that answered 202, the day-30 freeze): nothing in this client asked,
+    // so the poll that sees it gone is the only thing that can tell main.
     world.registry.current = ["host-a"];
+    await world.directory.refresh();
+    expect(world.fleetRefreshes()).toBe(2);
+    // The refresh republished main's membership without the removed host.
+    expect(world.fleet.snapshot().hosts.map((host) => host.hostId)).toEqual([
+      "host-a",
+    ]);
+
+    // Same membership again: the removal is announced once, not every poll.
+    await world.directory.refresh();
+    expect(world.fleetRefreshes()).toBe(2);
+  });
+
+  it("a host added and another removed in the same poll announces once", async () => {
+    const world = buildWorld();
+    world.registry.current = ["host-a", "host-b"];
+    await world.directory.refresh();
+    expect(world.fleetRefreshes()).toBe(1);
+
+    world.registry.current = ["host-a", "host-c"];
+    await world.directory.refresh();
+    expect(world.fleetRefreshes()).toBe(2);
+  });
+
+  it("does not read a signed-out poll as every host removed", async () => {
+    const world = buildWorld();
+    world.registry.current = ["host-a", "host-b"];
+    await world.directory.refresh();
+    expect(world.fleetRefreshes()).toBe(1);
+
+    // `signed-out` commits an EMPTY set. Without the `hosts` check that
+    // would read as host-a and host-b both removed and refetch main's fleet
+    // on every sign-out the poll observes.
+    world.fetchKind.current = "signed-out";
+    const afterSignOut = await world.directory.refresh();
+    expect(afterSignOut).toEqual([]);
+    expect(world.fleetRefreshes()).toBe(1);
+  });
+
+  it("does not announce for a failed poll, which keeps the last-known hosts", async () => {
+    const world = buildWorld();
+    world.registry.current = ["host-a", "host-b"];
+    await world.directory.refresh();
+    expect(world.fleetRefreshes()).toBe(1);
+
+    world.fetchKind.current = "failed";
     await world.directory.refresh();
     expect(world.fleetRefreshes()).toBe(1);
   });

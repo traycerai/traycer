@@ -56,6 +56,8 @@ import {
 } from "./provider-list-search-filter";
 import { ProviderListSearchEmptyState } from "./provider-list-search";
 import { ProviderModelProviderConnectDialog } from "./provider-model-provider-connect-dialog";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 const EMPTY_ENTRIES: readonly ModelProviderEntry[] = [];
 
@@ -365,6 +367,7 @@ function useConfigWriteOwner(): ConfigWriteOwner {
 function useCustomProviderForm(
   providerId: ProviderId,
   configWrite: ConfigWriteOwner,
+  credentialRefusal: string | null,
 ): {
   /** The open form, or null. `initial` is what separates edit from declare. */
   readonly state: { readonly initial: CustomProviderValues | null } | null;
@@ -395,6 +398,9 @@ function useCustomProviderForm(
 
   const send = useCallback(
     (values: CustomProviderValues, declaring: boolean) => {
+      // A custom provider carries its key, headers and env: never to a
+      // sandbox. The buttons that reach here are disabled there already.
+      if (credentialRefusal !== null) return;
       // One config write at a time. Bare re-enable is a button on a row with no
       // form in front of it, so without this a second click - or a click on
       // another row, or a declared row's Disconnect - starts a competing write
@@ -447,7 +453,7 @@ function useCustomProviderForm(
         },
       );
     },
-    [auth, configWrite, providerId],
+    [auth, configWrite, credentialRefusal, providerId],
   );
 
   const submit = useCallback(
@@ -499,6 +505,9 @@ export function ProviderModelProvidersTab(props: {
   const activeHostId = useAddressableHostId();
   const binding = useHostBinding();
   const hostId = binding?.hostClient.getActiveHostId() ?? activeHostId;
+  // A sandbox never takes a model provider's key or sign-in: Connect, the
+  // custom provider form and Re-enable are disabled, Disconnect stays.
+  const credentialRefusal = useHostCredentialRefusal(hostId);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [methodFilter, setMethodFilter] = useState<ModelProviderMethodFilter>(
@@ -515,7 +524,11 @@ export function ProviderModelProvidersTab(props: {
   });
   const auth = useProvidersModelProviderAuth();
   const configWrite = useConfigWriteOwner();
-  const customForm = useCustomProviderForm(providerId, configWrite);
+  const customForm = useCustomProviderForm(
+    providerId,
+    configWrite,
+    credentialRefusal,
+  );
   const pendingAuthEntries = useModelProviderPendingAuthStore((s) => s.entries);
 
   const result: ModelProvidersListResult | undefined = listQuery.data?.result;
@@ -624,6 +637,8 @@ export function ProviderModelProvidersTab(props: {
         the same sign-ins.
       </p>
 
+      <CredentialRefusalNote refusal={credentialRefusal} />
+
       {entries.length > 0 ? (
         // An ORDINARY control in the header area, scrolling with the tab - the
         // Skills tab's shape, where `ProviderListSearch` is a plain sibling
@@ -694,6 +709,7 @@ export function ProviderModelProvidersTab(props: {
         // second instead of showing both.
         busyModelProviderIds={busyModelProviderIds}
         configWriteInFlight={configWrite.activeModelProviderId !== null}
+        credentialRefused={credentialRefusal !== null}
         onConnect={(entry) => {
           setRowError(null);
           setConnectTargetId(entry.id);
@@ -782,6 +798,8 @@ function ModelProvidersBody(props: {
   readonly canUpdateCustom: boolean;
   /** A config-file write is in flight somewhere on this surface. */
   readonly configWriteInFlight: boolean;
+  /** The host is a sandbox: nothing that carries a key or a sign-in is sent. */
+  readonly credentialRefused: boolean;
   readonly onEditCustom: (values: CustomProviderValues) => void;
   readonly onReenableCustom: (values: CustomProviderValues) => void;
   readonly rowError: {
@@ -854,6 +872,7 @@ function ModelProvidersBody(props: {
       <ModelProviderListShell
         canCreateCustom={props.canCreateCustom}
         configWriteInFlight={props.configWriteInFlight}
+        credentialRefused={props.credentialRefused}
         onAddCustom={props.onAddCustom}
         refreshing={props.refreshing}
       >
@@ -876,6 +895,7 @@ function ModelProvidersBody(props: {
       <ModelProviderListShell
         canCreateCustom={props.canCreateCustom}
         configWriteInFlight={props.configWriteInFlight}
+        credentialRefused={props.credentialRefused}
         onAddCustom={props.onAddCustom}
         refreshing={props.refreshing}
       >
@@ -895,6 +915,7 @@ function ModelProvidersBody(props: {
       <ModelProviderListShell
         canCreateCustom={props.canCreateCustom}
         configWriteInFlight={props.configWriteInFlight}
+        credentialRefused={props.credentialRefused}
         onAddCustom={props.onAddCustom}
         refreshing={props.refreshing}
       >
@@ -913,6 +934,7 @@ function ModelProvidersBody(props: {
     <ModelProviderListShell
       canCreateCustom={props.canCreateCustom}
       configWriteInFlight={props.configWriteInFlight}
+      credentialRefused={props.credentialRefused}
       onAddCustom={props.onAddCustom}
       refreshing={props.refreshing}
     >
@@ -925,6 +947,7 @@ function ModelProvidersBody(props: {
           connectable={props.connectable}
           canUpdateCustom={props.canUpdateCustom}
           configWriteInFlight={props.configWriteInFlight}
+          credentialRefused={props.credentialRefused}
           busy={props.busyModelProviderIds.includes(entry.id)}
           rowError={
             props.rowError !== null &&
@@ -976,6 +999,8 @@ function ModelProvidersBody(props: {
 function ModelProviderListShell(props: {
   readonly canCreateCustom: boolean;
   readonly configWriteInFlight: boolean;
+  /** The host is a sandbox: nothing that carries a key or a sign-in is sent. */
+  readonly credentialRefused: boolean;
   readonly onAddCustom: () => void;
   readonly refreshing: boolean;
   readonly children: ReactNode;
@@ -1009,7 +1034,7 @@ function ModelProviderListShell(props: {
               // Closed while a config write is in flight: declaring through
               // this would open a form whose Save the guard drops, and an older
               // completion would land on the newer dialog's state.
-              disabled={props.configWriteInFlight}
+              disabled={props.configWriteInFlight || props.credentialRefused}
               onClick={props.onAddCustom}
             >
               <Plus className="size-3.5" />
@@ -1071,6 +1096,30 @@ function RefreshingNotice(props: { readonly refreshing: boolean }): ReactNode {
   );
 }
 
+/** What holds a model provider row's buttons, read once for all of them. */
+function modelProviderRowHolds(props: {
+  readonly busy: boolean;
+  readonly configWriteInFlight: boolean;
+  readonly credentialRefused: boolean;
+}): {
+  readonly configBusy: boolean;
+  readonly customDisabled: boolean;
+  readonly connectDisabled: boolean;
+} {
+  // Every config-writing entry point closes while ANY of them is in flight, not
+  // just the acting row's. They all rewrite one file, and a completion that
+  // lands after the user started something else would apply its result to state
+  // that has moved on.
+  const configBusy = props.busy || props.configWriteInFlight;
+  // A custom provider's form and Connect both carry a key: never on a
+  // sandbox. Disconnect sends nothing secret, so it holds on `configBusy` only.
+  return {
+    configBusy,
+    customDisabled: configBusy || props.credentialRefused,
+    connectDisabled: props.busy || props.credentialRefused,
+  };
+}
+
 function ModelProviderRow(props: {
   readonly entry: ModelProviderEntry;
   readonly providerLabel: string;
@@ -1078,6 +1127,8 @@ function ModelProviderRow(props: {
   readonly connectable: boolean;
   readonly canUpdateCustom: boolean;
   readonly configWriteInFlight: boolean;
+  /** The host is a sandbox: nothing that carries a key or a sign-in is sent. */
+  readonly credentialRefused: boolean;
   readonly busy: boolean;
   readonly rowError: string | null;
   readonly onConnect: () => void;
@@ -1087,11 +1138,8 @@ function ModelProviderRow(props: {
 }): ReactNode {
   const { entry } = props;
   const custom = customRowActions(entry, props.canUpdateCustom);
-  // Every config-writing entry point closes while ANY of them is in flight, not
-  // just the acting row's. They all rewrite one file, and a completion that
-  // lands after the user started something else would apply its result to state
-  // that has moved on.
-  const configBusy = props.busy || props.configWriteInFlight;
+  const { configBusy, customDisabled, connectDisabled } =
+    modelProviderRowHolds(props);
   // The affordance is gated on `canDisconnect` ALONE. `hasStoredCredential`
   // answers a different question ("does Traycer hold a credential for this?")
   // and a later host may answer the two differently - reading either one for
@@ -1156,7 +1204,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={configBusy}
+              disabled={customDisabled}
               onClick={() => {
                 props.onEditCustom(custom.values);
               }}
@@ -1170,7 +1218,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={configBusy}
+              disabled={customDisabled}
               onClick={() => {
                 props.onReenableCustom(custom.values);
               }}
@@ -1184,7 +1232,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={props.busy}
+              disabled={connectDisabled}
               onClick={props.onConnect}
               // Row-specific, like its three siblings: "Connect" alone repeats
               // ~180 times in the accessibility tree with nothing saying which

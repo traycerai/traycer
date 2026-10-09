@@ -3,6 +3,12 @@ import { Monitor } from "lucide-react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
 import {
+  credentialTargetHostOptions,
+  hostTakesCredentials,
+  SANDBOX_CREDENTIALS_REFUSED,
+} from "@/components/settings/host-scope/host-option-model";
+import {
+  onboardingHostIsSandbox,
   onboardingHostReadiness,
   type OnboardingHostPicker,
 } from "@/components/onboarding/onboarding-host-picker-model";
@@ -16,17 +22,23 @@ export function OnboardingHostPickerBar(props: {
   readonly className: string;
 }): ReactNode {
   const { scope } = props.picker;
+  // The tour signs providers in on the picked host and imports onto it, and a
+  // sandbox refuses credentials: it is never offered here.
+  const hosts = useMemo(
+    () => credentialTargetHostOptions(scope.hosts),
+    [scope.hosts],
+  );
   // Every host the tour cannot reach, with the word its row would carry if
   // the status column were silent. The row's own status word ("offline",
   // "stopped") speaks first when it has one; this only makes the row inert.
   const refusalByHostId = useMemo(
     (): ReadonlyMap<string, string> =>
       new Map(
-        scope.hosts
+        hosts
           .filter((host) => !host.connectable)
           .map((host) => [host.hostId, "unreachable"]),
       ),
-    [scope.hosts],
+    [hosts],
   );
   // The host rows are served by a NON-polling observer; the Settings sidebar
   // is normally what opts a window into the liveness poll. During the tour
@@ -45,7 +57,7 @@ export function OnboardingHostPickerBar(props: {
         aria-hidden="true"
         className="pointer-events-none absolute left-2.5 size-3.5 shrink-0 text-muted-foreground"
       />
-      {scope.hosts.length === 1 && scope.hosts[0]?.hostId === scope.hostId ? (
+      {hosts.length === 1 && hosts[0]?.hostId === scope.hostId ? (
         <span
           data-testid="onboarding-host-name"
           className="min-w-0 break-words py-1.5 pl-8 pr-2.5 text-[0.8125rem]"
@@ -55,8 +67,15 @@ export function OnboardingHostPickerBar(props: {
       ) : (
         <div className="flex min-w-0 flex-1">
           <HostSwitcher
-            hosts={scope.hosts}
-            selected={scope.host}
+            hosts={hosts}
+            // A sandbox scope is never shown as the tour's pick: it is not one
+            // of the rows above, and the stages are held until a personal
+            // host is chosen.
+            selected={
+              scope.host !== null && hostTakesCredentials(scope.host)
+                ? scope.host
+                : null
+            }
             activeHostId={scope.activeHostId}
             onSelect={props.picker.onSelectHost}
             // The tour WRITES to the picked host - it imports sessions onto
@@ -111,18 +130,37 @@ export function OnboardingHostUnavailableNotice(props: {
           className="flex max-w-[40ch] flex-col items-center gap-2 text-center"
         >
           <p className="text-ui-sm font-medium text-foreground">
-            {props.refusal ??
-              (scope.status === "vanished"
-                ? `${scope.hostLabel} is no longer connected`
-                : `Can't reach ${scope.hostLabel}`)}
+            {onboardingNoticeHeadline(props.picker, props.refusal)}
           </p>
           <p className="text-ui-sm text-muted-foreground">
-            {props.refusal === null
-              ? "Reconnect this device to continue."
-              : `Update Traycer on ${scope.hostLabel}.`}
+            {onboardingNoticeNextStep(props.picker, props.refusal)}
           </p>
         </div>
       )}
     </div>
   );
+}
+
+function onboardingNoticeHeadline(
+  picker: OnboardingHostPicker,
+  refusal: string | null,
+): string {
+  const { scope } = picker;
+  if (onboardingHostIsSandbox(picker)) return SANDBOX_CREDENTIALS_REFUSED;
+  if (refusal !== null) return refusal;
+  return scope.status === "vanished"
+    ? `${scope.hostLabel} is no longer connected`
+    : `Can't reach ${scope.hostLabel}`;
+}
+
+function onboardingNoticeNextStep(
+  picker: OnboardingHostPicker,
+  refusal: string | null,
+): string {
+  if (onboardingHostIsSandbox(picker)) {
+    return "Pick one of your own devices to continue.";
+  }
+  return refusal === null
+    ? "Reconnect this device to continue."
+    : `Update Traycer on ${picker.scope.hostLabel}.`;
 }

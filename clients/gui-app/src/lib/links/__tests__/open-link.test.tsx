@@ -2,6 +2,9 @@ import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
   BrowserOpenedTab,
   BrowserSessionInfo,
@@ -35,6 +38,14 @@ const toastError = vi.hoisted(() =>
     (message: string, options: { action?: ToastAction } | undefined) => void
   >(),
 );
+const toastWarning = vi.hoisted(() =>
+  vi.fn<
+    (
+      message: string,
+      options: { description?: string; action?: ToastAction } | undefined,
+    ) => void
+  >(),
+);
 
 const harness = vi.hoisted<{
   sessions: BrowserSessionsState | null;
@@ -43,15 +54,28 @@ const harness = vi.hoisted<{
   /** Tab ids with an Electron control binding (headless tabs have none). */
   boundTabIds: string[];
   navigated: string[];
+  /** The directory's rows by host id; the binding answers `findById` from it. */
+  entries: Map<string, HostDirectoryEntry>;
 }>(() => ({
   sessions: null,
   bridged: [],
   intents: [],
   boundTabIds: [],
   navigated: [],
+  entries: new Map(),
 }));
 
-vi.mock("sonner", () => ({ toast: { error: toastError } }));
+vi.mock("sonner", () => ({
+  toast: { error: toastError, warning: toastWarning },
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({
+    directory: {
+      findById: (hostId: string) => harness.entries.get(hostId) ?? null,
+    },
+  }),
+}));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsSnapshot: () => ({ current: harness.sessions }),
 }));
@@ -183,6 +207,7 @@ beforeEach(() => {
   harness.intents = [];
   harness.boundTabIds = [];
   harness.navigated = [];
+  harness.entries = new Map();
   openViewTab();
   useSettingsStore.setState({
     linkOpen: {
@@ -484,6 +509,123 @@ describe("useOpenLink", () => {
     expect(toastError).toHaveBeenCalled();
     expect(harness.bridged).toEqual([]);
     expect(harness.intents).toEqual([]);
+  });
+});
+
+function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
+  const item: HostListItem = {
+    hostId: HOST_ID,
+    displayName: HOST_ID,
+    platform: "linux",
+    kind,
+    publicKey: "pk",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    ...(kind === "sandbox"
+      ? {
+          sandboxState: "awake" as const,
+          sandboxFrozen: false,
+          profile: "agent" as const,
+        }
+      : {}),
+  };
+  return hostListItemToDirectoryEntry(item, "wss://relay.example.test");
+}
+
+describe("useOpenLink on a host that does not take sign-ins", () => {
+  const CREDENTIALED = "https://alice:token@example.test/docs";
+
+  it("opens nothing for a credentialed URL on a sandbox host, and says why", () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+    expect(harness.navigated).toEqual([]);
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+    expect(toastWarning.mock.lastCall).toMatchObject([
+      "Sandboxes don't take sign-ins",
+      { description: "Remove the sign-in from this URL to open it here." },
+    ]);
+  });
+
+  it("offers the OS browser as the refusal's action, and only the user's click takes it", () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    expect(harness.bridged).toEqual([]);
+    const action = toastWarning.mock.lastCall?.[1]?.action;
+    expect(action?.label).toBe("Open in browser");
+    action?.onClick();
+    expect(harness.bridged).toEqual([CREDENTIALED]);
+  });
+
+  it("does not navigate a sandbox tab already showing that page on another fragment", () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    harness.sessions = liveSessions([
+      session([
+        tab({
+          tabId: "tab-open",
+          url: "https://alice:token@example.test/docs/",
+        }),
+      ]),
+    ]);
+    harness.boundTabIds = ["tab-open"];
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(
+      "https://alice:token@example.test/docs#section",
+      "markdown",
+      null,
+    );
+
+    expect(harness.navigated).toEqual([]);
+    expect(harness.intents).toEqual([]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a plain URL on a sandbox host as usual", async () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("passes the same credentialed URL through on a personal host", async () => {
+    harness.entries.set(HOST_ID, remoteEntry("personal"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, CREDENTIALED);
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("passes it through when the directory has no row for the host", async () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(toastWarning).not.toHaveBeenCalled();
   });
 });
 

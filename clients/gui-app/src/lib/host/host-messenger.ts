@@ -18,6 +18,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
+  remoteOpenAuthFor,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -132,6 +133,7 @@ export function buildRawHostMessengerForTarget<
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      openAuth: remoteOpenAuthFor(params.target),
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
       // MUST match what `buildHostStreamClient` passes, and this is not a
@@ -186,6 +188,12 @@ export interface RuntimeHostMessengerBinding<
   readonly messenger: IHostMessenger<Registry>;
   readonly reset: () => void;
   readonly dispose: () => void;
+  /**
+   * Called on every host list change. Drops a `SANDBOX_FROZEN` verdict once
+   * the list shows that sandbox thawed or gone, so a top-up inside the
+   * verdict's TTL is not still refused locally.
+   */
+  readonly hostListChanged: () => void;
 }
 
 export interface BuildRuntimeHostMessengerParams<
@@ -222,6 +230,16 @@ export interface BuildRuntimeHostMessengerParams<
    * `HostClient.notifyHostAvailabilityRecovered`.
    */
   readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
+  /**
+   * Called once when a host's remote session ends terminally, with the fatal
+   * it ended on. The one consumer acts on `SANDBOX_FROZEN` (an attach-grant
+   * mint refused for a frozen sandbox): the frozen tile frame and picker row
+   * read the host list, so it is refreshed to say so.
+   */
+  readonly onRemoteSessionTerminal: (
+    hostId: string,
+    fatal: FatalErrorDetails,
+  ) => void;
 }
 
 export function buildRuntimeHostMessenger<
@@ -234,7 +252,26 @@ export function buildRuntimeHostMessenger<
     messenger,
     reset: () => messenger.reset(),
     dispose: () => messenger.dispose(),
+    hostListChanged: () => messenger.dropThawedSandboxVerdicts(),
   };
+}
+
+/**
+ * What the host list says about a frozen-sandbox verdict's host: `frozen`
+ * while the sandbox is listed frozen; `thawed` when it is listed and not
+ * frozen; `gone` when the host or its sandbox is no longer listed.
+ */
+function sandboxFreezeOf(
+  entry: HostDirectoryEntry | null,
+): "frozen" | "thawed" | "gone" {
+  if (
+    entry === null ||
+    !isRemoteHostDirectoryEntry(entry) ||
+    entry.sandbox === null
+  ) {
+    return "gone";
+  }
+  return entry.sandbox.frozen ? "frozen" : "thawed";
 }
 
 class RuntimeHostMessenger<
@@ -246,6 +283,10 @@ class RuntimeHostMessenger<
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
   private readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
+  private readonly onRemoteSessionTerminal: (
+    hostId: string,
+    fatal: FatalErrorDetails,
+  ) => void;
   private readonly localMessenger: IHostMessenger<Registry>;
   private remoteBinding: RemoteBinding<Registry> | null = null;
   // The bearer of the request currently being dispatched. The cached remote
@@ -285,6 +326,14 @@ class RuntimeHostMessenger<
    * folds in version/publicKey/relay URL, so e.g. the host update that
    * resolves an INCOMPATIBLE fatal changes the key and proves the verdict
    * describes a session that can no longer even be built.
+   *
+   * One exception to the TTL: a `SANDBOX_FROZEN` verdict the host list has
+   * confirmed (`frozenConfirmed`) describes the HOST's billing state, which
+   * no amount of waiting changes, so it holds until the list shows the
+   * sandbox thawed or gone (`dropVerdictIfThawed`), the key moves, or a
+   * session reaches ready. Expiring it would let every stream owner's
+   * rebuild mint a grant authn refuses with 402, once per backoff, for as
+   * long as a frozen tile stays mounted.
    */
   private readonly terminalVerdictByHost = new Map<
     string,
@@ -292,6 +341,15 @@ class RuntimeHostMessenger<
       readonly fatal: FatalErrorDetails;
       readonly expiresAt: number;
       readonly key: string;
+      /**
+       * `SANDBOX_FROZEN` only: whether the host list has shown the sandbox
+       * frozen since the fatal. The list is usually stale when the fatal
+       * lands (the meter froze the row after the last poll), so "not frozen"
+       * means "thawed" only once the list has been seen to agree with the
+       * fatal first; otherwise every refetch before the refresh lands would
+       * drop the verdict and mint a doomed grant again.
+       */
+      frozenConfirmed: boolean;
     }
   >();
 
@@ -302,6 +360,7 @@ class RuntimeHostMessenger<
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
     this.onRemoteAvailabilityRecovered = params.onRemoteAvailabilityRecovered;
+    this.onRemoteSessionTerminal = params.onRemoteSessionTerminal;
     this.localMessenger = new WsRpcClient<Registry>({
       registry: params.registry,
       requestId: params.requestId,
@@ -620,8 +679,11 @@ class RuntimeHostMessenger<
           fatal,
           expiresAt: Date.now() + TERMINAL_VERDICT_TTL_MS,
           key: transportKey,
+          frozenConfirmed:
+            sandboxFreezeOf(this.resolveTarget(hostId)) === "frozen",
         });
         this.onRemoteAvailabilityRecovered(hostId);
+        this.onRemoteSessionTerminal(hostId, fatal);
       }
       detach();
     });
@@ -712,18 +774,26 @@ class RuntimeHostMessenger<
    * (non-retryable, so the retrying wrapper and the Providers panel's error
    * classification both read it as "waiting will not help") instead of
    * minting a grant and dialing a session that will end the same way. An
-   * expired verdict is dropped here, letting the next request dial fresh.
+   * expired verdict is dropped here, letting the next request dial fresh; a
+   * confirmed `SANDBOX_FROZEN` verdict does not expire (see
+   * {@link terminalVerdictByHost}).
    */
   private rejectIfTerminalVerdict(
     hostId: string,
     currentKey: string | null,
     method: string,
   ): Promise<never> | null {
+    this.dropVerdictIfThawed(hostId);
     const verdict = this.terminalVerdictByHost.get(hostId);
     if (verdict === undefined) {
       return null;
     }
-    if (verdict.key !== currentKey || Date.now() >= verdict.expiresAt) {
+    const outlivesTtl =
+      verdict.fatal.code === "SANDBOX_FROZEN" && verdict.frozenConfirmed;
+    if (
+      verdict.key !== currentKey ||
+      (!outlivesTtl && Date.now() >= verdict.expiresAt)
+    ) {
       // Key mismatch: the host's transport identity moved (version bump, key
       // rotation, relay move) since the fatal - the very session the verdict
       // condemned can no longer be built, so waiting out the TTL would
@@ -741,6 +811,35 @@ class RuntimeHostMessenger<
         fatalDetails: verdict.fatal,
       }),
     );
+  }
+
+  /** See {@link RuntimeHostMessengerBinding.hostListChanged}. */
+  dropThawedSandboxVerdicts(): void {
+    for (const hostId of [...this.terminalVerdictByHost.keys()]) {
+      this.dropVerdictIfThawed(hostId);
+    }
+  }
+
+  /**
+   * A `SANDBOX_FROZEN` verdict holds only while the sandbox is frozen: a
+   * top-up thaws it, and the user's next request must dial rather than wait
+   * out the TTL. The verdict is dropped when the list shows the sandbox gone,
+   * or shows it not frozen after first showing it frozen (`frozenConfirmed`).
+   * Every other fatal keeps its TTL.
+   */
+  private dropVerdictIfThawed(hostId: string): void {
+    const verdict = this.terminalVerdictByHost.get(hostId);
+    if (verdict === undefined || verdict.fatal.code !== "SANDBOX_FROZEN") {
+      return;
+    }
+    const freeze = sandboxFreezeOf(this.resolveTarget(hostId));
+    if (freeze === "frozen") {
+      verdict.frozenConfirmed = true;
+      return;
+    }
+    if (freeze === "gone" || verdict.frozenConfirmed) {
+      this.terminalVerdictByHost.delete(hostId);
+    }
   }
 
   private rejectIfDisposed(method: string): Promise<never> | null {
@@ -788,11 +887,15 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
+  // What `OPEN` presents IS included: a sandbox first projected as a personal
+  // host (a list read before the sandbox facts arrived) must rebuild once the
+  // entry is corrected, or its RPCs keep riding a user-bearer session.
   return [
     entry.hostId,
     entry.websocketUrl,
     entry.version ?? "",
     entry.publicKey,
+    remoteOpenAuthFor(entry),
   ].join(TRANSPORT_KEY_SEPARATOR);
 }
 

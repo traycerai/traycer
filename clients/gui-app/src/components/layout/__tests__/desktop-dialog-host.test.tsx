@@ -310,6 +310,7 @@ function createBaseRunnerHost(): IRunnerHost {
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
+    sandboxControlUnavailableReason: null,
     canCopyImages: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
@@ -337,6 +338,13 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCatalogue: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    createSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    destroySandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    runSandboxVerb: () => Promise.resolve({ kind: "unauthorized" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),

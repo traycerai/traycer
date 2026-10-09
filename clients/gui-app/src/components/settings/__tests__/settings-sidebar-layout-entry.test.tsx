@@ -61,6 +61,13 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
   return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
 });
 
+// The host picker's balance banner reads the sandbox list through a
+// `useQuery`, which needs a query client this navigation suite deliberately
+// does not mount. It is irrelevant to navigation, and has its own suite.
+vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
+  SandboxBalanceBanner: () => null,
+}));
+
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => (

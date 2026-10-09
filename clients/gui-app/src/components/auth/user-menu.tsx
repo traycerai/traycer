@@ -19,6 +19,7 @@ import {
   ACTIVATE_HOST_HINT,
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   isHostOptionSelectable,
+  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-scope";
@@ -33,7 +34,13 @@ import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { ExternalLink, LayersPlus, LogOut, Settings } from "lucide-react";
+import {
+  ExternalLink,
+  LayersPlus,
+  LogOut,
+  RotateCcw,
+  Settings,
+} from "lucide-react";
 import { useState, type ReactElement, type ReactNode } from "react";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -328,9 +335,24 @@ function UserMenuHostSection(props: {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   useRegisteredHostsPollLiveness();
-  const { hosts, activeHostId } = useHostOptions();
+  const {
+    hosts: allHosts,
+    activeHostId,
+    isLoading,
+    listsFailed,
+    retryLists,
+  } = useHostOptions();
+  // A picker: no burst sandbox, and no sandbox the control plane has not yet
+  // confirmed is not one. The active host always keeps its row.
+  const hosts = pickableHostOptions(allHosts, activeHostId);
   const { makeActive, activatingHostId } = useMakeActiveHost(hosts);
-  if (hosts.length === 0) return null;
+  // A failed list (a sandbox list included, which hides every sandbox here)
+  // is said, with the retry, rather than shown as the whole account.
+  const showsRetry = listsFailed && !isLoading;
+  // Rows listed while a list is still on its first read (a sandbox list
+  // withholds its rows until it answers) are not the whole account.
+  const showsLoadingMore = isLoading && hosts.length > 0;
+  if (hosts.length === 0 && !showsRetry) return null;
   return (
     <>
       <DropdownMenuLabel>Host</DropdownMenuLabel>
@@ -360,6 +382,41 @@ function UserMenuHostSection(props: {
           />
         ))}
       </DropdownMenuRadioGroup>
+      {showsLoadingMore ? (
+        <DropdownMenuItem disabled data-testid="user-menu-host-loading-more">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+            tone="muted"
+          />
+          Loading more hosts…
+        </DropdownMenuItem>
+      ) : null}
+      {showsRetry ? (
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            retryLists();
+          }}
+          data-testid="user-menu-host-retry-lists"
+        >
+          <RotateCcw className="size-4" aria-hidden />
+          {/* The label is the action; with hosts still listed, the line under
+              it says why the action is offered. */}
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span>Try loading hosts again</span>
+            {hosts.length === 0 ? null : (
+              <span
+                className="text-ui-xs text-muted-foreground"
+                data-testid="user-menu-host-retry-lists-reason"
+              >
+                Some hosts may be missing
+              </span>
+            )}
+          </span>
+        </DropdownMenuItem>
+      ) : null}
       <DropdownMenuSeparator />
     </>
   );

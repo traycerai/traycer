@@ -2430,15 +2430,29 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   ): string | null {
     for (const hostId of this.mruEffectiveHostIds) {
       if (hostId === localHostId) continue;
+      if (this.isSandbox(hostId)) continue;
       if (!admits(hostId)) continue;
       if (this.isUsable(hostId, leases)) return hostId;
     }
     for (const lease of leases) {
       if (lease.hostId === localHostId) continue;
+      if (this.isSandbox(lease.hostId)) continue;
       if (!admits(lease.hostId)) continue;
       if (isUsableForSelection(lease)) return lease.hostId;
     }
     return null;
+  }
+
+  /**
+   * Whether the fleet lists this host as a sandbox, which the engine's own
+   * choice never lands on (see `HostFleetEntry`). Skipped in the MRU pass too:
+   * a sandbox only reaches the MRU list by being preferred, and preference is
+   * the user's arm, not this one.
+   */
+  private isSandbox(hostId: string): boolean {
+    return this.fleet.hosts.some(
+      (entry) => entry.hostId === hostId && entry.kind === "sandbox",
+    );
   }
 
   /**

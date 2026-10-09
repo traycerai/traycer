@@ -127,6 +127,7 @@ import {
   usePaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -525,6 +526,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const createProfileHostIsLocal =
     useCreateProfileHostIsLocal(createProfileHostId);
+  const createProfileCredentialRefusal =
+    useHostCredentialRefusal(createProfileHostId);
   // Not gated on `activityEnabled`: the query's own `enabled`/`subscribed`
   // already release the observer, and `enabled:false` keeps the cache. Blanking
   // this list on blur only blanked the trigger a background split pane still
@@ -750,6 +753,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
   // resolved from `createProfileHostId`), never the renderer-default host.
   const createProfileGate = resolveCreateProfileGate(
+    createProfileCredentialRefusal,
     createProfileHostIsLocal,
     createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );

@@ -71,6 +71,8 @@ import {
   ProviderLoginRefusalMessage,
 } from "@/components/providers/provider-login-refusal";
 import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 function noop(): void {}
 
@@ -145,6 +147,11 @@ function ProfileUnavailableBanner({
       ? `This agent's ${providerLabel} profile is no longer available.`
       : `"${profileLabel ?? providerLabel}" is signed out.`;
   const { openSettings } = useSystemTabModalActions();
+  // On a sandbox tab the sign-in is refused; Manage in Settings and the
+  // Terminal-account fallback stay.
+  const credentialRefusal = useHostCredentialRefusal(hostId);
+  const signInRefused =
+    reason === "profile_unauthenticated" && credentialRefusal !== null;
   const openProviderSettings = (): void => {
     if (profileId !== null) {
       useProvidersFocusStore.getState().setProfileFocus({
@@ -173,12 +180,20 @@ function ProfileUnavailableBanner({
         <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
           Continue on Terminal account
         </Button>
-        <Button size="sm" variant="ghost" onClick={openProviderSettings}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={signInRefused}
+          onClick={openProviderSettings}
+        >
           {reason === "profile_unauthenticated"
             ? "Sign in"
             : "Manage in Settings"}
         </Button>
       </div>
+      {signInRefused ? (
+        <CredentialRefusalNote refusal={credentialRefusal} />
+      ) : null}
     </ReauthBannerShell>
   );
 }
@@ -383,6 +398,9 @@ export function ProviderReauthBanner({
   const directory = useHostDirectoryList();
   const tabClient = useTabHostClient();
   const realBinding = useHostBinding();
+  // The tab's host is a sandbox: no reconnect form (OAuth, terminal, key) is
+  // offered, because each one would send a credential to it.
+  const credentialRefusal = useHostCredentialRefusal(tabHostId);
 
   const tabEntry = useMemo(
     () =>
@@ -433,6 +451,15 @@ export function ProviderReauthBanner({
         hostId={tabHostId}
         onContinueOnAmbient={onContinueOnAmbient}
       />
+    );
+  }
+
+  if (credentialRefusal !== null) {
+    return (
+      <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
+        <span className="text-foreground/90">{message}</span>
+        <CredentialRefusalNote refusal={credentialRefusal} />
+      </ReauthBannerShell>
     );
   }
 

@@ -209,6 +209,8 @@ const providerMocks = vi.hoisted(() => ({
   } | null,
   refreshUsageLimits: vi.fn(() => Promise.resolve()),
   openLink: vi.fn(),
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
+  credentialRefusal: null as string | null,
 }));
 
 // The auto-judge row the panel now renders reaches TanStack Query for the
@@ -719,6 +721,12 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
+}));
+
+// The real hook reads the host binding's directory, which this suite's bare
+// ambient binding does not carry; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => providerMocks.credentialRefusal,
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -1620,6 +1628,7 @@ describe("<ProvidersSettingsPanel />", () => {
     hostScopeMocks.status = undefined;
     providerMocks.refreshedHostIds.length = 0;
     providerMocks.ambientBinding = null;
+    providerMocks.credentialRefusal = null;
     hostScopeMocks.client = null;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
@@ -3201,6 +3210,56 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
+  it("holds Add profile and says why when the scoped host takes no credentials, whatever the CLI state", () => {
+    providerMocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    const addProfile = screen.getByRole("button", { name: "Add profile" });
+    expect(addProfile.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Sandboxes don't take sign-ins")).toBeDefined();
+    // The reason is the refusal, not a CLI-setup problem to go and fix.
+    expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
+  });
+
   it("uses the shared profile switcher and combined refresh when only the terminal profile exists", async () => {
     providerMocks.listResult.data = {
       providers: [
@@ -3645,6 +3704,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          credentialRefusal={null}
           onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
@@ -4072,6 +4132,81 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
+  });
+
+  it("disables Link account and shows the refusal in the Add profile dialog when the host takes no credentials, and starts no login", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    openProfilesTab();
+
+    // The panel's own gate keeps the Add profile button shut on a sandbox, so
+    // the dialog is opened while the host still takes credentials; the dialog
+    // is the floor under every entry point, and re-reads the answer.
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Link account" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    providerMocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work" },
+    });
+
+    const link = screen.getByRole("button", { name: "Link account" });
+    expect(link.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    fireEvent.click(link);
+    expect(providerMocks.startLoginMutate).not.toHaveBeenCalled();
   });
 
   it("does not render the paste field until the flow reaches waiting (fixup review finding 2)", async () => {

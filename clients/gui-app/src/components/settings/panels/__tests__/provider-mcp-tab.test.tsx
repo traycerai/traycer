@@ -53,6 +53,8 @@ const mcpMocks = vi.hoisted(() => ({
   discoverMutate: vi.fn(),
   authMutate: vi.fn(),
   openLink: vi.fn(),
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
+  credentialRefusal: null as string | null,
   listCalls: [] as Array<{
     providerId: string;
     scope: string;
@@ -113,6 +115,10 @@ vi.mock("@/lib/reportable-error-toast", () => ({
     toastMocks.errors.push(message);
     return 0;
   },
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mcpMocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -414,6 +420,7 @@ describe("<ProviderMcpTab />", () => {
     mcpMocks.discoverMutate.mockReset();
     mcpMocks.authMutate.mockReset();
     mcpMocks.openLink.mockReset();
+    mcpMocks.credentialRefusal = null;
     mcpMocks.mutateIsPending = false;
     mcpMocks.listCalls = [];
     worktreeMocks.workspaces = [];
@@ -1248,6 +1255,55 @@ describe("<ProviderMcpTab />", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /Add server/ }));
     expect(screen.getByText(/valid http\(s\) URL/)).toBeDefined();
     expect(mcpMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("renders no Sign in or Re-authenticate control, and shows the refusal, when the host takes no credentials", () => {
+    mcpMocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({
+          name: "needs-login",
+          status: "needs_auth",
+          tools: [],
+        }),
+        connectedServer({ name: "broken", status: "error", tools: [] }),
+      ],
+    };
+    renderTab(
+      { ...FULL_CAPS, authActions: ["login", "logout", "forceReauth"] },
+      "codex",
+    );
+
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Re-authenticate" }),
+    ).toBeNull();
+    expect(mcpMocks.authMutate).not.toHaveBeenCalled();
+  });
+
+  it("control: on a host that takes sign-ins the same servers offer Sign in and Re-authenticate, with no refusal", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({
+          name: "needs-login",
+          status: "needs_auth",
+          tools: [],
+        }),
+      ],
+    };
+    renderTab(
+      { ...FULL_CAPS, authActions: ["login", "logout", "forceReauth"] },
+      "codex",
+    );
+
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Re-authenticate" }),
+    ).toBeDefined();
   });
 
   it("starts auth login and opens authorizationUrl via openLink", () => {

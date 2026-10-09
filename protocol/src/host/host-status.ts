@@ -144,6 +144,39 @@ export type HostCommandInterpreter =
  */
 export type HostUpdatePolicy = "manual" | "auto";
 
+/**
+ * The lifecycle state of a `kind: sandbox` host, as traycer-server's
+ * `sandboxes` row holds it and authn mirrors it on `Host.sandboxState`. Only
+ * `awake` is dialable; `suspended` and `stopped` are woken by the control
+ * plane before a dial; `released` is the Automations row's idle state.
+ *
+ * Mirrors `HOST_SANDBOX_STATES` in `@traycerai/common/types/host`.
+ */
+export const HOST_SANDBOX_STATES = [
+  "creating",
+  "awake",
+  "suspending",
+  "suspended",
+  "resuming",
+  "stopping",
+  "stopped",
+  "starting",
+  "destroying",
+  "destroyed",
+  "failed",
+  "released",
+] as const;
+
+export type HostSandboxState = (typeof HOST_SANDBOX_STATES)[number];
+
+/**
+ * The runtime profile a host reported at registration: `agent` is the full
+ * host (sandbox mode included), `automation` the slim Automations pod. It
+ * arrives on the host list, never on `host capabilities` (no CLI runs in a
+ * pod). Mirrors `HOST_PROFILES` in `@traycerai/common/types/host`.
+ */
+export type HostProfile = "agent" | "automation";
+
 // -----------------------------------------------------------------------------
 // Status DTO — the single render source (Architecture §7)
 // -----------------------------------------------------------------------------
@@ -189,6 +222,24 @@ export type HostListItem = {
    * and says nothing about an already-persisted managed command.
    */
   commandInterpreter?: HostCommandInterpreter | null;
+  /**
+   * Present only with `?include=sandboxState`, which is also the only way a
+   * caller receives `kind: sandbox` rows at all, so a released client (which
+   * never sends it) sees neither the field nor the rows. `null` on a personal
+   * host, and on a sandbox before the control plane's first state post.
+   */
+  sandboxState?: HostSandboxState | null;
+  /**
+   * With `?include=sandboxState`: the stored out-of-credits flag, sent for
+   * every state and meaningful on a row at rest; a destroyed row keeps its
+   * last value. `null` on a personal host.
+   */
+  sandboxFrozen?: boolean | null;
+  /**
+   * With `?include=sandboxState`: the runtime profile the host reported, or
+   * `null` when it reported none (every host that predates the field).
+   */
+  profile?: HostProfile | null;
   /**
    * This host's configured update policy (Architecture §13, T16): `manual`
    * (default) surfaces "Update now" as an explicit action; `auto` means the
@@ -246,6 +297,14 @@ export const hostCommandInterpreterSchema = lazySchema(() =>
   z.enum(["posix-shell", "git-bash", "powershell", "cmd"]),
 );
 
+export const hostSandboxStateSchema = lazySchema(() =>
+  z.enum(HOST_SANDBOX_STATES),
+);
+
+export const hostProfileSchema = lazySchema(() =>
+  z.enum(["agent", "automation"]),
+);
+
 // `.strict()` on every level (S5 / fix #5): a non-strict `z.object` silently
 // STRIPS a field the server adds, so a contract addition would render with a
 // piece quietly missing instead of failing loud. `.strict()` is not deep, so
@@ -282,9 +341,45 @@ export const hostListItemSchema: z.ZodType<HostListItem> = lazySchema(() =>
       // frozen copy of this schema and would reject the extra key — which is
       // exactly why the server keeps it behind an explicit `?include=`.
       commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
+      // The same opt-in as `commandInterpreter`, behind `?include=sandboxState`.
+      // `host.hostInventory.subscribe@1.0` frames do NOT carry these: that line
+      // is frozen on `hostListItemSchemaV10` below and the serving host strips
+      // them (and drops `kind: sandbox` rows) for a 1.0 subscriber.
+      sandboxState: hostSandboxStateSchema.nullable().optional(),
+      sandboxFrozen: z.boolean().nullable().optional(),
+      profile: hostProfileSchema.nullable().optional(),
       updatePolicy: hostUpdatePolicySchema,
     })
     .strict(),
+);
+
+/**
+ * A registry row as `host.hostInventory.subscribe@1.0` carries it: the row
+ * before the sandbox fields existed. FROZEN, a hand-copy rather than an
+ * `.omit()` of the live schema, so growing the live row never grows a released
+ * line. A 1.0 frame carrying `sandboxState`, `sandboxFrozen` or `profile` fails
+ * this parse, which is exactly what a released client's own frozen copy does.
+ */
+export type HostListItemV10 = Omit<
+  HostListItem,
+  "sandboxState" | "sandboxFrozen" | "profile"
+>;
+
+export const hostListItemSchemaV10: z.ZodType<HostListItemV10> = lazySchema(
+  () =>
+    z
+      .object({
+        hostId: z.string(),
+        displayName: z.string().nullable(),
+        platform: z.string().nullable(),
+        kind: hostRegistryKindSchema,
+        publicKey: z.string(),
+        createdAt: z.string(),
+        status: hostStatusDtoSchema,
+        commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
+        updatePolicy: hostUpdatePolicySchema,
+      })
+      .strict(),
 );
 
 export const hostListResponseSchema: z.ZodType<HostListResponse> = lazySchema(

@@ -48,6 +48,7 @@ import type {
   AuthIdentityValidationResult,
   AuthServerTimeObservation,
 } from "./auth-validation-types";
+import { composeRequestAbort } from "./request-abort";
 
 export type {
   AuthIdentityValidationResult,
@@ -153,7 +154,8 @@ function resolveServedRecordVersion(
  * Per-attempt ceiling and bounded exponential-backoff retry for the auth
  * boundary's HTTP calls (the identity routes, `/api/v3/auth/refresh`).
  *
- * Every attempt is time-boxed with `AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)`
+ * Every attempt is time-boxed with `composeRequestAbort(…, AUTH_FETCH_TIMEOUT_MS)`
+ * (not `AbortSignal.timeout`, which the iOS WebView floor lacks)
  * so a stalled/half-open socket can no longer hang the caller indefinitely -
  * previously an un-timed-out `fetch` here could block `auth.start()` (and, through
  * it, the renderer's "Loading Traycer…" gate) until the OS TCP timeout,
@@ -205,7 +207,7 @@ function delayFor(ms: number): Promise<void> {
 
 /**
  * True for an abort/timeout thrown while reading a response body *after* the
- * headers arrived - the per-attempt `AbortSignal.timeout` (a `TimeoutError`) or
+ * headers arrived - the per-attempt timeout (a `TimeoutError`) or
  * a caller abort (`AbortError`) firing during `response.json()`. Such a failure
  * is transient/retriable and must surface as `network-error`, NOT be collapsed
  * into a terminal `rejected`/invalid body the way a genuine parse failure is.
@@ -256,11 +258,17 @@ export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
   readonly token: string;
   readonly signal: AbortSignal | null;
 }): Promise<AuthIdentityValidationResult> {
-  const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
-  const signal =
-    args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
-  const result = await fetchIdentityOnce(args.authnBaseUrl, args.token, signal);
-  return toIdentityValidationResult(result);
+  const abort = composeRequestAbort(args.signal, AUTH_FETCH_TIMEOUT_MS);
+  try {
+    const result = await fetchIdentityOnce(
+      args.authnBaseUrl,
+      args.token,
+      abort.signal,
+    );
+    return toIdentityValidationResult(result);
+  } finally {
+    abort.clear();
+  }
 }
 
 async function validateAuthTokenIdentityFetch(
@@ -381,15 +389,14 @@ async function fetchUserResponse(
   authnBaseUrl: string,
   token: string,
 ): Promise<UserFetchResult> {
-  return withAuthNetworkRetry(
-    () =>
-      fetchIdentityOnce(
-        authnBaseUrl,
-        token,
-        AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
-      ),
-    isUserFetchTransient,
-  );
+  return withAuthNetworkRetry(async () => {
+    const abort = composeRequestAbort(null, AUTH_FETCH_TIMEOUT_MS);
+    try {
+      return await fetchIdentityOnce(authnBaseUrl, token, abort.signal);
+    } finally {
+      abort.clear();
+    }
+  }, isUserFetchTransient);
 }
 
 function isUserFetchTransient(result: UserFetchResult): boolean {
@@ -542,7 +549,7 @@ async function fetchUserRouteOnce(
     });
   } catch {
     // A thrown `fetch` - a transport failure OR the per-attempt
-    // `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and
+    // timeout firing (a `TimeoutError`) - is transient and
     // retriable, so both collapse to `network-error`.
     return { kind: "network-error", serverTime: null };
   }
@@ -619,16 +626,18 @@ export async function refreshOnceAbortable(args: {
   readonly clientKind: "cli" | "desktop" | null;
   readonly signal: AbortSignal | null;
 }): Promise<AuthTokenRefreshResult> {
-  const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
-  const signal =
-    args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
-  return refreshAuthTokenOnceViaHttp(
-    args.authnBaseUrl,
-    args.token,
-    args.refreshToken,
-    args.clientKind,
-    signal,
-  );
+  const abort = composeRequestAbort(args.signal, AUTH_FETCH_TIMEOUT_MS);
+  try {
+    return await refreshAuthTokenOnceViaHttp(
+      args.authnBaseUrl,
+      args.token,
+      args.refreshToken,
+      args.clientKind,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
 }
 
 /**
@@ -800,7 +809,7 @@ export type AuthCodeExchangeResult =
  *
  * A `4xx` is a terminal `rejected` (bad/expired/used code, or a PKCE mismatch);
  * any other non-2xx or a transport failure is a transient `network-error`. The
- * request is time-boxed by `AbortSignal.timeout` (a fired timeout surfaces as
+ * request is time-boxed by `composeRequestAbort` (a fired timeout surfaces as
  * `network-error` via the `catch`); unlike validation/refresh it is deliberately
  * NOT retried, because the `code` is single-use - replaying it after a lost
  * response would be rejected as already-consumed. The sign-in callback surfaces
@@ -810,6 +819,25 @@ export async function exchangeCodeForTokens(
   authnBaseUrl: string,
   code: string,
   codeVerifier: string,
+): Promise<AuthCodeExchangeResult> {
+  const abort = composeRequestAbort(null, AUTH_FETCH_TIMEOUT_MS);
+  try {
+    return await exchangeCodeForTokensWithSignal(
+      authnBaseUrl,
+      code,
+      codeVerifier,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function exchangeCodeForTokensWithSignal(
+  authnBaseUrl: string,
+  code: string,
+  codeVerifier: string,
+  signal: AbortSignal,
 ): Promise<AuthCodeExchangeResult> {
   let response: Response;
   try {
@@ -822,7 +850,7 @@ export async function exchangeCodeForTokens(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
-        signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
+        signal,
       },
     );
   } catch {

@@ -21,7 +21,12 @@ import {
   buildHostScopeOptions,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import { hostListReadiness } from "@/components/settings/host-scope/host-scope-status";
+import {
+  hostListReadiness,
+  sandboxSummariesPending,
+  sandboxSummariesUnread,
+} from "@/components/settings/host-scope/host-scope-status";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 
 /** The cadence relative-time labels in the host pickers refresh at. */
 const HOST_OPTION_LABEL_TICK_MS = 60_000;
@@ -46,6 +51,10 @@ export interface HostOptions {
   readonly hosts: readonly HostScopeOption[];
   /** The app-wide active host — where new work lands and the bell reads from. */
   readonly activeHostId: string | null;
+  /**
+   * A host list is still on its first read, or the sandbox list is and is
+   * withholding a sandbox row from the pickers (`sandboxSummariesPending`).
+   */
   readonly isLoading: boolean;
   /**
    * The DIRECTORY has answered (an error is an answer) — i.e. we know which
@@ -66,15 +75,18 @@ export interface HostOptions {
   /**
    * Both lists have ANSWERED (an error is an answer). Callers that decide a
    * host is gone must wait for this, or a slow request reads as a removal.
+   * Also waits on a sandbox list whose first read withholds a sandbox row.
    */
   readonly listsResolved: boolean;
   /**
    * A host list came back as an ERROR, so an empty `hosts` means "we could not
    * find out", not "you own no machines". The difference is the whole message:
-   * one is recoverable by retrying, the other by installing a host.
+   * one is recoverable by retrying, the other by installing a host. Includes a
+   * sandbox list whose failed first read is hiding sandboxes from the pickers
+   * (`sandboxSummariesUnread`).
    */
   readonly listsFailed: boolean;
-  /** Re-request both host lists after a failure. */
+  /** Re-request the host lists and the sandbox list after a failure. */
   readonly retryLists: () => void;
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
@@ -243,6 +255,11 @@ export function useHostOptions(): HostOptions {
   // the fleet on every cold start.
   const leases = useHostLeases();
   const authorityAttached = useSelectionAuthorityAttached();
+  // `null` until the control plane answers, and kept at the last good answer
+  // through a failed refetch: a picker must never learn "not burst" from a
+  // list that did not come back.
+  const sandboxListQuery = useSandboxList();
+  const sandboxes = sandboxListQuery.data?.sandboxes ?? null;
 
   const hosts = useMemo(
     () =>
@@ -256,6 +273,7 @@ export function useHostOptions(): HostOptions {
         leases,
         authorityAttached,
         localHostSettingUp,
+        sandboxes,
         nowMs,
       }),
     [
@@ -268,6 +286,7 @@ export function useHostOptions(): HostOptions {
       leases,
       authorityAttached,
       localHostSettingUp,
+      sandboxes,
       nowMs,
     ],
   );
@@ -280,18 +299,34 @@ export function useHostOptions(): HostOptions {
     { hasData: directory !== undefined, isError: directoryQuery.isError },
     { hasData: registry !== undefined, isError: registryQuery.isError },
   );
+  // A sandbox list that failed before its first answer hides every sandbox
+  // from the pickers, so it fails the lists too: the pickers then say hosts
+  // may be missing and offer the retry, instead of looking complete.
+  const sandboxListOutcome = {
+    hasData: sandboxListQuery.data !== undefined,
+    isError: sandboxListQuery.isError,
+    // `isLoading`, not `isPending`: a disabled query (signed out) is pending
+    // forever, and only a first read actually in flight is worth waiting on.
+    isPending: sandboxListQuery.isLoading,
+  };
+  const sandboxesUnread = sandboxSummariesUnread(hosts, sandboxListOutcome);
+  // Its first read still in flight withholds the same rows, so the lists are
+  // still loading: the pickers say so rather than look complete without them.
+  const sandboxesPending = sandboxSummariesPending(hosts, sandboxListOutcome);
 
   return {
     hosts,
     activeHostId,
-    isLoading: directoryQuery.isLoading || registryQuery.isLoading,
+    isLoading:
+      directoryQuery.isLoading || registryQuery.isLoading || sandboxesPending,
     directoryResolved: directory !== undefined || directoryQuery.isError,
     directoryFailed: directoryQuery.isError,
-    listsResolved: lists.resolved,
-    listsFailed: lists.failed,
+    listsResolved: lists.resolved && !sandboxesPending,
+    listsFailed: lists.failed || sandboxesUnread,
     retryLists: () => {
       void directoryQuery.refetch();
       void registryQuery.refetch();
+      void sandboxListQuery.refetch();
     },
     nowMs,
   };

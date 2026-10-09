@@ -1011,7 +1011,10 @@ import {
   hostCommunicationGraphCloudFeedSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
-import { hostInventorySubscribeV10 } from "@traycer/protocol/host/host-inventory";
+import {
+  hostInventorySubscribeV10,
+  hostInventorySubscribeV11,
+} from "@traycer/protocol/host/host-inventory";
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
@@ -13006,12 +13009,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // that the app's 60s `GET /api/v3/hosts` poll remains the directory's only
   // refresh - one extra read per window, never a missing fleet. Never add it
   // to the unary released floor - that list is fail-closed on the name set.
+  // @1.1 carries the live registry row (the sandbox fields, and `kind:
+  // sandbox` rows). @1.0 stays installed and FROZEN on the pre-sandbox row;
+  // the host strips the fields and drops sandbox rows for a 1.0 subscriber.
   "host.hostInventory.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostInventorySubscribeV10,
+        },
+        1: {
+          contract: hostInventorySubscribeV11,
         },
       },
     },

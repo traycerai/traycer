@@ -15,7 +15,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// The wake is the sandbox suite's concern; here only that it is asked for.
+vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
+  wakeSandboxOnPick: vi.fn(),
+}));
+
 import { toast } from "sonner";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 const NO_SUB: SelectionSubscription = { dispose: () => undefined };
 
@@ -78,6 +84,39 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
       source: "direct_ui",
       host_kind: "remote",
     });
+  });
+
+  it("ok:true wakes the option it activated, and a refusal wakes nothing", async () => {
+    const option = hostScopeOptionFixture({
+      hostId: "sbx-1",
+      kind: "sandbox",
+      sandbox: { state: "suspended", frozen: false, summary: null },
+    });
+
+    await requestActivate(
+      fakeAuthority((): Promise<ActivateResult> =>
+        Promise.resolve({ ok: true }),
+      ),
+      "sbx-1",
+      option,
+    );
+    expect(wakeSandboxOnPick).toHaveBeenCalledTimes(1);
+    expect(wakeSandboxOnPick).toHaveBeenCalledWith(option);
+
+    vi.mocked(wakeSandboxOnPick).mockClear();
+    await requestActivate(
+      fakeAuthority((): Promise<ActivateResult> =>
+        Promise.resolve({ ok: false, reason: "unknown-host" }),
+      ),
+      "sbx-1",
+      option,
+    );
+    await requestActivate(
+      fakeAuthority(() => Promise.reject(new Error("transport exploded"))),
+      "sbx-1",
+      option,
+    );
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
   it("reason unknown-host: no analytics, toasts that the host is no longer registered", async () => {

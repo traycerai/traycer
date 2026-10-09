@@ -6683,7 +6683,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
   - **Danger zone** (`host-scope/host-danger-zone.tsx`) contains only removal:
     Remove Traycer (local CLI bridge, local host only, never gated on
     reachability), or **Remove from account** (an account write, remote +
-    registered only). Without an available removal action, the group is absent.
+    registered only). A sandbox host is never removed here: the row keeps its
+    label, shows "Managed from its sandbox card." and offers no control, since
+    its membership follows the sandbox's lifecycle and the account refuses the
+    removal. Without an available removal action, the group is absent.
     The account removal action is NEVER called "deregister" in copy - this app
     already uses that word for OS-SERVICE deregistration on the same tab,
     and two destructive controls sharing a verb is how someone reaches for the

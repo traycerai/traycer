@@ -1,5 +1,17 @@
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useState, type ReactNode } from "react";
-import { ChevronDown, Plus, Settings, type LucideIcon } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Settings,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Command,
   CommandEmpty,
@@ -17,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
+  groupHostOptions,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
@@ -33,6 +46,7 @@ import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-ope
 import { useHostBinding } from "@/lib/host";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 /**
  * Search stops being decoration and starts being necessary somewhere around a
@@ -266,7 +280,15 @@ export function HostSwitcher(props: {
    */
   readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  const [search, setSearch] = useState("");
+  // The search lives outside the popover's content, so it outlives a close:
+  // cleared on every close (dismiss, pick or action), or reopening would
+  // restore the old filter and greet the user with "No hosts match".
+  const setOpen = (next: boolean): void => {
+    setOpenState(next);
+    if (!next) setSearch("");
+  };
   const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
     useCoarsePointerOpenAutoFocus();
   const binding = useHostBinding();
@@ -380,12 +402,19 @@ export function HostSwitcher(props: {
       >
         <Command>
           {hosts.length >= SEARCH_THRESHOLD ? (
-            <CommandInput placeholder="Search hosts…" />
+            <CommandInput
+              placeholder="Search hosts…"
+              value={search}
+              onValueChange={setSearch}
+            />
           ) : null}
           <CommandList>
             <CommandEmpty>No hosts match.</CommandEmpty>
-            <CommandGroup heading="Host">
-              {hosts.map((host) => (
+            <HostSwitcherGroups
+              hosts={hosts}
+              action={props.action}
+              searching={search.length > 0}
+              renderRow={(host) => (
                 <HostSwitcherRow
                   key={host.hostId}
                   host={host}
@@ -401,12 +430,15 @@ export function HostSwitcher(props: {
                   }
                   updateView={props.updateViewForHost?.(host.hostId) ?? null}
                   onSelect={() => {
+                    // A `pin` or `bind` pick of a sleeping sandbox wakes it.
+                    if (props.intent !== "view") wakeSandboxOnPick(host);
                     props.onSelect(host.hostId);
                     setOpen(false);
                   }}
                 />
-              ))}
-            </CommandGroup>
+              )}
+              selected={selected}
+            />
             {trailingAction === null ? null : (
               <CommandGroup>
                 <CommandItem
@@ -433,6 +465,25 @@ export function HostSwitcher(props: {
             branch above never runs and nothing said the picture was partial:
             the sidebar presented half an account as all of it. The rows stay
             usable; this footer says what is missing and offers the retry. */}
+        {/* Rows can be listed while a list is still on its first read (a
+            sandbox list withholds its rows until it answers): say more are
+            coming, so the rows shown do not read as the whole account. */}
+        {props.isLoading ? (
+          <div
+            className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
+            data-testid="settings-host-switcher-loading-more"
+          >
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+              tone="muted"
+            />
+            <span className="text-ui-xs text-muted-foreground">
+              Loading more hosts…
+            </span>
+          </div>
+        ) : null}
         {props.listsFailed && !props.isLoading ? (
           <div
             className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
@@ -453,6 +504,100 @@ export function HostSwitcher(props: {
         ) : null}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The list's host groups: personal hosts under "Host", then the user's
+ * sandboxes in a collapsible group below them, then (host list only) the
+ * agent-created burst sandboxes in a sub-group that starts collapsed. A search
+ * opens every group, so a match is never hidden behind a closed one.
+ */
+function HostSwitcherGroups(props: {
+  readonly hosts: readonly HostScopeOption[];
+  readonly action: HostSwitcherAction | null;
+  readonly searching: boolean;
+  readonly selected: HostScopeOption | null;
+  readonly renderRow: (host: HostScopeOption) => ReactNode;
+}): ReactNode {
+  const groups = groupHostOptions(
+    props.hosts,
+    // Settings' list is the account's HOST LIST, and the only switcher that
+    // owns Add host: it shows every sandbox, burst ones included, under their
+    // own collapsed group. Every other surface is a picker and offers no burst
+    // sandbox.
+    props.action?.kind === "add-host",
+    props.selected?.hostId ?? null,
+  );
+  return (
+    <>
+      {groups.personal.length === 0 ? null : (
+        <CommandGroup heading="Host">
+          {groups.personal.map(props.renderRow)}
+        </CommandGroup>
+      )}
+      {groups.sandboxes.length === 0 ? null : (
+        <HostSwitcherSandboxGroup
+          title="Sandboxes"
+          count={groups.sandboxes.length}
+          defaultOpen
+          forceOpen={props.searching}
+          testId="settings-host-switcher-sandboxes"
+        >
+          {groups.sandboxes.map(props.renderRow)}
+        </HostSwitcherSandboxGroup>
+      )}
+      {groups.agentSandboxes.length === 0 ? null : (
+        <HostSwitcherSandboxGroup
+          title="Agent sandboxes"
+          count={groups.agentSandboxes.length}
+          defaultOpen={false}
+          forceOpen={props.searching}
+          testId="settings-host-switcher-agent-sandboxes"
+        >
+          {groups.agentSandboxes.map(props.renderRow)}
+        </HostSwitcherSandboxGroup>
+      )}
+    </>
+  );
+}
+
+function HostSwitcherSandboxGroup(props: {
+  readonly title: string;
+  readonly count: number;
+  readonly defaultOpen: boolean;
+  readonly forceOpen: boolean;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const [open, setOpen] = useState(props.defaultOpen);
+  const expanded = open || props.forceOpen;
+  return (
+    <CommandGroup>
+      <Collapsible
+        open={expanded}
+        onOpenChange={setOpen}
+        className="flex flex-col"
+        data-testid={props.testId}
+      >
+        <CollapsibleTrigger
+          variant="quiet"
+          className="flex w-full items-center text-ui-xs font-medium"
+          data-testid={`${props.testId}-toggle`}
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0" aria-hidden />
+          )}
+          <span className="min-w-0 flex-1 truncate text-start">
+            {props.title}
+          </span>
+          <span className="shrink-0 tabular-nums">{props.count}</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent>{props.children}</CollapsibleContent>
+      </Collapsible>
+    </CommandGroup>
   );
 }
 

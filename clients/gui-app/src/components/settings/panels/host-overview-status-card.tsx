@@ -338,7 +338,8 @@ function HostOverviewInlineActivate(props: {
   readonly connectable: boolean;
   readonly activateBusy: boolean;
   readonly reason: string;
-  readonly onMakeActive: () => void;
+  /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
+  readonly onMakeActive: (() => void) | null;
 }): ReactNode {
   if (props.isActive) {
     return (
@@ -351,6 +352,9 @@ function HostOverviewInlineActivate(props: {
       </span>
     );
   }
+  // A management-only row is never offered as the window's host.
+  const onMakeActive = props.onMakeActive;
+  if (onMakeActive === null) return null;
   // The asymmetry has to be said out loud somewhere, and the row that used to
   // say it is gone. A person who expects this to move their work would
   // otherwise watch nothing happen and conclude it is broken — so the sentence
@@ -373,7 +377,7 @@ function HostOverviewInlineActivate(props: {
           variant="outline"
           size="sm"
           disabled={!props.connectable || props.activateBusy}
-          onClick={props.onMakeActive}
+          onClick={onMakeActive}
           data-testid="host-make-active"
         >
           Activate
@@ -398,7 +402,8 @@ function HostOverviewMenuActivate(props: {
   readonly connectable: boolean;
   readonly activateBusy: boolean;
   readonly reason: string;
-  readonly onMakeActive: () => void;
+  /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
+  readonly onMakeActive: (() => void) | null;
 }): ReactNode {
   if (props.isActive) {
     return (
@@ -408,6 +413,8 @@ function HostOverviewMenuActivate(props: {
       </DropdownMenuItem>
     );
   }
+  const onMakeActive = props.onMakeActive;
+  if (onMakeActive === null) return null;
   return (
     <DropdownMenuItem
       disabled={props.activateBusy}
@@ -419,7 +426,7 @@ function HostOverviewMenuActivate(props: {
           event.preventDefault();
           return;
         }
-        props.onMakeActive();
+        onMakeActive();
       }}
       data-testid="host-make-active"
       className="flex-col items-start gap-0.5"
@@ -489,7 +496,8 @@ export function HostOverviewHeaderActions(props: {
   readonly resetNameDegrade: OverviewDegradeReason | null;
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
-  readonly onMakeActive: () => void;
+  /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
+  readonly onMakeActive: (() => void) | null;
   /** An Activate is already in flight - see `HostScope.isActivating`. */
   readonly activateBusy: boolean;
   readonly onCopyHostId: () => void;
@@ -533,7 +541,8 @@ export function HostOverviewHeaderActions(props: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-56">
-          {props.activateInMenu ? (
+          {props.activateInMenu &&
+          (props.isActive || props.onMakeActive !== null) ? (
             <>
               <HostOverviewMenuActivate
                 isActive={props.isActive}

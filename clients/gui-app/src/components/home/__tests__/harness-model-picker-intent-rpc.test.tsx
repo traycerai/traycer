@@ -102,6 +102,12 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null ? (hostBindingMock.current?.hostClient ?? null) : hostId,
 }));
 
+// This suite's host binding is a bare fake with no directory, which the real
+// hook reads; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "local",
 }));

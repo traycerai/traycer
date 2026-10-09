@@ -25,13 +25,15 @@ import {
 /**
  * A drivable double for one `host.hostInventory.subscribe` session.
  *
- * `getNegotiatedSchemaVersion()` answers `{ major: 1, minor: 0 }` rather than
- * `null` - either is legal per `HostInventoryStreamClient`'s own guard (a
- * `null` negotiated version skips the minor check entirely), but pinning the
- * real value here is what a healthy handshake actually reports.
+ * `getNegotiatedSchemaVersion()` answers `negotiated`, `{ major: 1, minor: 1 }`
+ * by default: the line whose rows are the whole registry, sandbox rows
+ * included, and the only one this module adopts. A test that needs the
+ * `@1.0` line (a host that predates sandboxes, whose rows are the personal
+ * hosts alone) sets it on the session.
  */
 class FakeInventorySession implements IStreamSession {
   closed = false;
+  negotiated: SchemaVersion | null = { major: 1, minor: 1 };
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
 
@@ -51,7 +53,7 @@ class FakeInventorySession implements IStreamSession {
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return { major: 1, minor: 0 };
+    return this.negotiated;
   }
 
   close(): void {
@@ -382,6 +384,43 @@ describe("startLocalHostInventorySubscription", () => {
       },
     ]);
     expect(harness.pushActiveCalls).toEqual([true]);
+
+    subscription.dispose();
+  });
+
+  it("A3b: a @1.0 snapshot (a host that predates sandboxes) is never adopted and never arms push coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+    session.negotiated = { major: 1, minor: 0 };
+
+    // Fresh, with personal rows: on @1.1 this would be adopted and arm push.
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+
+    expect(harness.rowsCalls).toEqual([]);
+    expect(harness.pushActiveCalls).not.toContain(true);
+
+    subscription.dispose();
+  });
+
+  it("A3c: a @1.0 snapshot after push was armed on @1.1 withdraws coverage, and adopts nothing", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+    expect(harness.rowsCalls).toHaveLength(1);
+
+    // The session renegotiated down (a host downgrade across a reconnect).
+    session.negotiated = { major: 1, minor: 0 };
+    session.emitSnapshot([buildRow("host-1")], false, 2_000);
+
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    expect(harness.rowsCalls).toHaveLength(1);
 
     subscription.dispose();
   });

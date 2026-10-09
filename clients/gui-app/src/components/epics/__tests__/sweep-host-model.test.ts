@@ -33,6 +33,8 @@ function hostOption(hostId: string): HostScopeOption {
     updateState: null,
     entry: null,
     item: null,
+    kind: "personal",
+    sandbox: null,
   };
 }
 

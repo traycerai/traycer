@@ -12,6 +12,7 @@ import {
   type RoutingSettledNotice,
 } from "@/components/chat/fallback/routing-settled-card";
 import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
+import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import {
@@ -267,15 +268,25 @@ export function ErrorSegment({
   // setup look like something broke. See `agent-failure-presentation.ts` for
   // why this classification is its own question rather than routing eligibility
   // reused for colour.
-  const { presentation, headline } = errorRowPresentation(
-    failure?.reason ?? null,
-    code,
-  );
+  //
+  // A turn a sandbox refused or paused (frozen for lack of credits, and the
+  // secrets track's codes) is an interruption with its own words from
+  // `sandbox-refusal-copy.ts`, in place of the host's message; the report
+  // still carries the raw message and code.
+  const sandboxRefusal = sandboxRefusalCopyFor(code, message);
+  const { presentation, headline } =
+    sandboxRefusal === null
+      ? errorRowPresentation(failure?.reason ?? null, code)
+      : {
+          presentation: "interrupted" as const,
+          headline: sandboxRefusal.headline,
+        };
   const interrupted = presentation === "interrupted";
   return (
     <div
       data-chat-find-unit={findUnitId ?? undefined}
       data-failure-presentation={presentation}
+      data-sandbox-refusal={sandboxRefusal === null ? undefined : "true"}
       className={cn(
         "flex w-full flex-col gap-2 rounded-md border px-3 py-2 text-ui-sm",
         // The status recipe (AGENTS.md "Status colors"), one class per role.
@@ -299,8 +310,17 @@ export function ErrorSegment({
             code={code}
           />
           <span className="whitespace-pre-wrap break-words text-foreground/90">
-            {message}
+            {sandboxRefusal === null ? message : sandboxRefusal.description}
           </span>
+          {sandboxRefusal === null ||
+          sandboxRefusal.hostDetail === null ? null : (
+            <span
+              data-testid="sandbox-refusal-host-detail"
+              className="whitespace-pre-wrap break-words text-muted-foreground"
+            >
+              Last setup status: {sandboxRefusal.hostDetail}
+            </span>
+          )}
           {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
             <EnvCredentialSettingsAction harnessId={harnessId} />
           ) : null}

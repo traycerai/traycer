@@ -18,6 +18,11 @@ const hostBindingMock = vi.hoisted(
     current: null,
   }),
 );
+// The bare host binding below has no directory to answer the sandbox refusal.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };

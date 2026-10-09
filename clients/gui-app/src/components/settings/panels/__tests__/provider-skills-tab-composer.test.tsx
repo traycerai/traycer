@@ -3,7 +3,14 @@ import type {
   ProviderSkill,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 
@@ -12,6 +19,13 @@ const skillMocks = vi.hoisted(() => ({
   createScopes: [] as string[],
   importScopes: [] as string[],
   inspectScopes: [] as string[],
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
+  credentialRefusal: null as string | null,
+  mutateAsync: vi.fn(),
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => skillMocks.credentialRefusal,
 }));
 
 // Entry-button suite never switches scope; stub shared hook so F5 workspace
@@ -38,7 +52,7 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: vi.fn<() => void>(),
-    mutateAsync: vi.fn(),
+    mutateAsync: skillMocks.mutateAsync,
     isPending: false,
   }),
 }));
@@ -120,6 +134,8 @@ describe("<ProviderSkillsTab /> entry points", () => {
     skillMocks.createScopes = [];
     skillMocks.importScopes = [];
     skillMocks.inspectScopes = [];
+    skillMocks.credentialRefusal = null;
+    skillMocks.mutateAsync.mockReset();
   });
 
   afterEach(() => {
@@ -202,5 +218,79 @@ describe("<ProviderSkillsTab /> entry points", () => {
     expect(screen.getByRole("dialog")).toBeDefined();
     expect(screen.getByLabelText("Name")).toBeDefined();
     expect(screen.queryByLabelText("Skill source")).toBeNull();
+  });
+});
+
+describe("<ProviderSkillsTab /> composer on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const REFUSED_LINE = `${REFUSAL}: remove the sign-in from the source URL to import it here.`;
+
+  beforeEach(() => {
+    skillMocks.skills = [SOME_SKILL];
+    skillMocks.createScopes = ["global"];
+    skillMocks.importScopes = ["global"];
+    skillMocks.inspectScopes = [];
+    skillMocks.credentialRefusal = REFUSAL;
+    skillMocks.mutateAsync.mockReset();
+    skillMocks.mutateAsync.mockResolvedValue({
+      kind: "skills",
+      skills: [],
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function submitSource(source: string, submitName: RegExp): void {
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: /^Add skill/ }));
+    fireEvent.change(screen.getByLabelText("Skill source"), {
+      target: { value: source },
+    });
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: submitName }));
+  }
+
+  it("refuses an import whose source is a URL with a sign-in, shows the line in the composer, and sends nothing", async () => {
+    submitSource("https://ghp_x@github.com/o/skills", /Import skill/);
+
+    expect(await screen.findByText(REFUSED_LINE)).toBeDefined();
+    expect(skillMocks.mutateAsync).not.toHaveBeenCalled();
+    // The dialog stays open on the source, so the person can fix it.
+    expect(screen.getByRole("dialog")).toBeDefined();
+  });
+
+  it("refuses an inspect of such a source the same way, when the host can inspect", async () => {
+    skillMocks.inspectScopes = ["global"];
+
+    submitSource("https://alice:token@github.com/o/skills", /Add skill/);
+
+    expect(await screen.findByText(REFUSED_LINE)).toBeDefined();
+    expect(skillMocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("still imports a plain source", async () => {
+    submitSource("https://github.com/o/skills", /Import skill/);
+
+    await waitFor(() =>
+      expect(skillMocks.mutateAsync).toHaveBeenCalledTimes(1),
+    );
+    const sent: unknown = skillMocks.mutateAsync.mock.lastCall?.[0];
+    expect(sent).toMatchObject({
+      mutation: { action: "import", source: "https://github.com/o/skills" },
+    });
+    expect(screen.queryByText(REFUSED_LINE)).toBeNull();
+  });
+
+  it("control: on a host that takes credentials the sign-in source is imported", async () => {
+    skillMocks.credentialRefusal = null;
+
+    submitSource("https://ghp_x@github.com/o/skills", /Import skill/);
+
+    await waitFor(() =>
+      expect(skillMocks.mutateAsync).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.queryByText(REFUSED_LINE)).toBeNull();
   });
 });

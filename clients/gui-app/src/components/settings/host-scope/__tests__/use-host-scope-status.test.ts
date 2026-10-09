@@ -7,10 +7,13 @@ import {
   deriveHostScopeStatus,
   hostListReadiness,
   isHostScopeUsable,
+  sandboxSummariesPending,
+  sandboxSummariesUnread,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
  * The status machine is the safety contract of the whole settings host scope:
@@ -178,5 +181,129 @@ describe("deriveHostScopeStatus", () => {
         .filter(isHostScopeUsable)
         .slice(),
     ).toEqual(["following", "ready"]);
+  });
+});
+
+describe("sandboxSummariesUnread", () => {
+  const FAILED_FIRST_READ = { hasData: false, isError: true };
+  const sandboxHost = (hasSummary: boolean): HostScopeOption =>
+    hostScopeOptionFixture({
+      hostId: "sbx-host",
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: hasSummary
+          ? sandboxSummaryFixture({ hostId: "sbx-host" })
+          : null,
+      },
+    });
+  const personalHost = hostScopeOptionFixture({ hostId: "laptop" });
+
+  it("is true when the first sandbox read failed and a sandbox has no summary row", () => {
+    expect(
+      sandboxSummariesUnread(
+        [personalHost, sandboxHost(false)],
+        FAILED_FIRST_READ,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false once the list has answered, even if the query is now in error: the last good rows are kept", () => {
+    expect(
+      sandboxSummariesUnread([sandboxHost(false)], {
+        hasData: true,
+        isError: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false while the first read is still loading", () => {
+    expect(
+      sandboxSummariesUnread([sandboxHost(false)], {
+        hasData: false,
+        isError: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when no host is a sandbox", () => {
+    expect(sandboxSummariesUnread([personalHost], FAILED_FIRST_READ)).toBe(
+      false,
+    );
+    expect(sandboxSummariesUnread([], FAILED_FIRST_READ)).toBe(false);
+  });
+
+  it("is false when every sandbox has its summary row", () => {
+    expect(sandboxSummariesUnread([sandboxHost(true)], FAILED_FIRST_READ)).toBe(
+      false,
+    );
+  });
+});
+
+describe("sandboxSummariesPending", () => {
+  const PENDING_FIRST_READ = {
+    hasData: false,
+    isError: false,
+    isPending: true,
+  };
+  const sandboxHost = (hasSummary: boolean): HostScopeOption =>
+    hostScopeOptionFixture({
+      hostId: "sbx-host",
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: hasSummary
+          ? sandboxSummaryFixture({ hostId: "sbx-host" })
+          : null,
+      },
+    });
+  const personalHost = hostScopeOptionFixture({ hostId: "laptop" });
+
+  it("is true while the first read is in flight and a sandbox has no summary row", () => {
+    expect(
+      sandboxSummariesPending(
+        [personalHost, sandboxHost(false)],
+        PENDING_FIRST_READ,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false once the list has answered", () => {
+    expect(
+      sandboxSummariesPending([sandboxHost(false)], {
+        ...PENDING_FIRST_READ,
+        hasData: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false once the read failed: that is the unread verdict, not a wait", () => {
+    expect(
+      sandboxSummariesPending([sandboxHost(false)], {
+        ...PENDING_FIRST_READ,
+        isError: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when no read is in flight, as for a disabled query", () => {
+    expect(
+      sandboxSummariesPending([sandboxHost(false)], {
+        hasData: false,
+        isError: false,
+        isPending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when no host is a sandbox, or every sandbox has its summary", () => {
+    expect(sandboxSummariesPending([personalHost], PENDING_FIRST_READ)).toBe(
+      false,
+    );
+    expect(
+      sandboxSummariesPending([sandboxHost(true)], PENDING_FIRST_READ),
+    ).toBe(false);
   });
 });

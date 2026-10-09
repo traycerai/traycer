@@ -24,6 +24,8 @@ import {
   transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
 
 export interface HostScope {
   /** Every host this account owns or this client can dial, merged and sorted. */
@@ -292,6 +294,14 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
     (hostId: string) => {
       if (pendingActivations.has(authority)) return;
       const option = findHostOption(hosts, hostId);
+      // Defence for every caller, not only the Overview that hides the
+      // button: a management-only row is never made the window's host.
+      if (option !== null && !hostOptionCanActivate(option)) {
+        appLogger.debug("[host-scope] activate refused: management-only host", {
+          hostId,
+        });
+        return;
+      }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
       void requestActivate(authority, hostId, option).finally(() => {
@@ -344,6 +354,9 @@ export async function requestActivate(
     return;
   }
   if (result.ok) {
+    // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
+    // so it is woken, and derivation serves a fallback until it is up.
+    if (option !== null) wakeSandboxOnPick(option);
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",

@@ -41,6 +41,12 @@ const hostMocks = vi.hoisted(() => ({
   awaitMutate: vi.fn(),
   cancelMutate: vi.fn(),
   openLink: vi.fn(),
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => hostMocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -150,6 +156,7 @@ beforeEach(() => {
   hostMocks.awaitMutate.mockReset();
   hostMocks.cancelMutate.mockReset();
   hostMocks.openLink.mockReset();
+  hostMocks.credentialRefusal = null;
   useModelProviderPendingAuthStore.setState({ entries: {} });
 });
 
@@ -1688,5 +1695,124 @@ describe("ProviderModelProvidersTab layout", () => {
     // Inside, so it scrolls with the content rather than pinning above it.
     expect(list.contains(add)).toBe(true);
     expect(list.firstElementChild?.contains(add)).toBe(true);
+  });
+});
+
+describe("ProviderModelProvidersTab on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const ALL_ACTIONS: ProviderModelProvidersCapabilities = {
+    actions: ["connect", "oauth", "disconnect", "createCustom", "updateCustom"],
+  };
+
+  function renderMixedList() {
+    return renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({ id: "groq", name: "Groq" }),
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: "api",
+            canDisconnect: true,
+          }),
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
+          }),
+        ],
+      },
+      capabilities: ALL_ACTIONS,
+    });
+  }
+
+  function isDisabled(name: string): boolean {
+    return screen
+      .getByRole<HTMLButtonElement>("button", { name })
+      .hasAttribute("disabled");
+  }
+
+  it("shows the refusal and disables Connect, Edit, Re-enable and Add custom provider, but not Disconnect", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    expect(isDisabled("Connect Groq")).toBe(true);
+    expect(isDisabled("Edit My gateway")).toBe(true);
+    expect(isDisabled("Re-enable My gateway")).toBe(true);
+    expect(isDisabled("Add custom provider")).toBe(true);
+    expect(isDisabled("Disconnect OpenAI")).toBe(false);
+  });
+
+  it("sends nothing when the disabled Re-enable or Connect is pressed", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable My gateway" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Connect Groq" }));
+
+    expect(hostMocks.authMutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("sends no createCustom: pressing Add custom provider opens no form and sends nothing", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add custom provider" }),
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(hostMocks.authMutate).not.toHaveBeenCalled();
+  });
+
+  it("sends no updateCustom: pressing Edit on a declared provider opens no form and sends nothing", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(hostMocks.authMutate).not.toHaveBeenCalled();
+  });
+
+  it("lets Disconnect through: removing a credential sends none", () => {
+    hostMocks.credentialRefusal = REFUSAL;
+    renderMixedList();
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect OpenAI" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    expect(hostMocks.authMutate).toHaveBeenCalledTimes(1);
+    expect(hostMocks.authMutate).toHaveBeenCalledWith(
+      {
+        providerId: "opencode",
+        action: { action: "disconnect", modelProviderId: "openai" },
+      },
+      expect.anything(),
+    );
+  });
+
+  it("control: on a host that takes credentials every one of those is enabled and no refusal is shown", () => {
+    renderMixedList();
+
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(isDisabled("Connect Groq")).toBe(false);
+    expect(isDisabled("Edit My gateway")).toBe(false);
+    expect(isDisabled("Re-enable My gateway")).toBe(false);
+    expect(isDisabled("Add custom provider")).toBe(false);
   });
 });

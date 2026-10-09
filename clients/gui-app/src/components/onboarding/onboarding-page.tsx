@@ -30,6 +30,7 @@ import { OnboardingField } from "@/components/onboarding/onboarding-field";
 import { OnboardingProviderPrefetch } from "@/components/onboarding/onboarding-provider-discovery";
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
 import {
+  onboardingHostIsSandbox,
   onboardingHostIsUsable,
   type OnboardingHostPicker,
 } from "@/components/onboarding/onboarding-host-picker-model";
@@ -79,6 +80,7 @@ import {
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import "@/styles/auth-arrival.css";
 import "./onboarding.css";
+import { credentialTargetHostOptions } from "@/components/settings/host-scope/host-option-model";
 
 type CubicBezier = [number, number, number, number];
 
@@ -357,6 +359,20 @@ function OnboardingTour(props: {
     }),
     [scope, setScopedHostId, scopedHostId, streamBinding],
   );
+  // A tour that opens (or is replayed) while a sandbox is the active host
+  // moves itself to the first personal host it can reach: its stages sign
+  // providers in and import onto their host, and a sandbox takes neither.
+  // With none, the stages stay held (`onboardingHostReadiness`) until one is
+  // picked.
+  const personalFallbackHostId = onboardingHostIsSandbox(hostPicker)
+    ? (credentialTargetHostOptions(scope.hosts).find((host) => host.connectable)
+        ?.hostId ?? null)
+    : null;
+  useEffect(() => {
+    if (personalFallbackHostId !== null) {
+      setScopedHostId(personalFallbackHostId);
+    }
+  }, [personalFallbackHostId, setScopedHostId]);
 
   useLayoutEffect(() => {
     restart();

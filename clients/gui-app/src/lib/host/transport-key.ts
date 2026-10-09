@@ -4,7 +4,10 @@ import {
   isConfirmedTransportRefusal,
   isRemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  hasReadyRemoteSession,
+  remoteOpenAuthFor,
+} from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
 // NUL byte: a separator that cannot appear inside any host field value, so
@@ -80,6 +83,10 @@ export function hostTransportKeyFor(
     entry.kind,
     entry.version ?? "",
     entry.websocketUrl,
+    // What `OPEN` presents is identity, not a gate: a sandbox first projected
+    // as a personal host must rebuild its stream once the entry is corrected,
+    // never keep a user-bearer session.
+    isRemoteHostDirectoryEntry(entry) ? remoteOpenAuthFor(entry) : "",
   ].join(SEPARATOR);
 }
 

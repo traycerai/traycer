@@ -211,4 +211,35 @@ describe("surface pin auto-follow / sticky return", () => {
       useSurfaceHostSelectionStore.getState().selections["surface-1"],
     ).toBe("host-original");
   });
+
+  it("13. a pin to a sleeping sandbox shows the fallback until its lease is live, then resolves to the sandbox itself", () => {
+    // A `pin` pick of a suspended sandbox stores the pin at once and wakes it
+    // (`wakeSandboxOnPick`); the sandbox's lease reads dead while it sleeps.
+    const surfaceKey = "sleeping-sandbox-pick";
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, "sbx-host");
+    const selection = (): string | null =>
+      useSurfaceHostSelectionStore.getState().selections[surfaceKey] ?? null;
+
+    // Asleep: the chip shows the fallback, the pin is kept.
+    expect(
+      resolvedSurfaceHostId(
+        selection(),
+        "host-laptop",
+        fleet(true, [readyLease("host-laptop"), deadLease("sbx-host")]),
+      ),
+    ).toBe("host-laptop");
+    expect(selection()).toBe("sbx-host");
+
+    // Awake: the same pin answers itself, with no second pick.
+    expect(
+      resolvedSurfaceHostId(
+        selection(),
+        "host-laptop",
+        fleet(true, [readyLease("host-laptop"), readyLease("sbx-host")]),
+      ),
+    ).toBe("sbx-host");
+    expect(selection()).toBe("sbx-host");
+  });
 });

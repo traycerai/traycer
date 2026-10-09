@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type AuthorityIdentitySource,
+  type HostFleetEntry,
   type HostLeaseSnapshot,
   type LiveSessionAnnouncement,
   type LocalHostEnsurePort,
@@ -3672,7 +3673,10 @@ describe("SelectionAuthorityEngineImpl - P1.3 F14 clear on identity adopt (H)", 
     readonly bPreference: string;
     readonly bFleet: {
       readonly localHostId: string | null;
-      readonly hosts: readonly { hostId: string; kind: "local" | "remote" }[];
+      readonly hosts: readonly {
+        hostId: string;
+        kind: "local" | "remote" | "sandbox";
+      }[];
     };
   }): {
     engine: SelectionAuthorityEngineImpl;
@@ -5809,6 +5813,113 @@ describe("SelectionAuthorityEngineImpl - cold-start hold is LOCAL-target-only", 
     // expected.
     expect(engine.snapshot().effectiveHostId).toBe("R");
 
+    authority.dispose();
+  });
+});
+
+describe("SelectionAuthorityEngineImpl - sandboxes are fleet members the engine never chooses", () => {
+  // `fleetHost` is typed to the two kinds the harness predates; a sandbox
+  // entry is built from the contract's own type.
+  const sandboxHost = (hostId: string): HostFleetEntry => ({
+    hostId,
+    kind: "sandbox",
+  });
+
+  it("failover skips a sandbox that precedes a healthy remote in fleet order", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [
+          fleetHost("P", "remote"),
+          sandboxHost("S"),
+          fleetHost("Y", "remote"),
+        ],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+
+    killHostWithRefusals(engine, "A", incarnation, "P");
+    clock.advance(0);
+
+    expect(engine.snapshot().effectiveHostId).toBe("Y");
+    authority.dispose();
+  });
+
+  it("lands on nothing, rather than a metered sandbox, when a sandbox is the only host left", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("P", "remote"), sandboxHost("S")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+
+    killHostWithRefusals(engine, "A", incarnation, "P");
+    clock.advance(0);
+
+    expect(findLease(engine.snapshot().leases, "S")).toBeDefined();
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+    authority.dispose();
+  });
+
+  it("keeps a sandbox that the user chose as the preferred host, with a lease of its own", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("P", "remote"), sandboxHost("S")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    expect(await engine.activate("A", incarnation, "S")).toEqual({ ok: true });
+    expect(engine.snapshot().preferredHostId).toBe("S");
+    expect(engine.snapshot().effectiveHostId).toBe("S");
+    authority.dispose();
+  });
+
+  it("does not fall back to a sandbox the user once used when the host they moved to dies", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("P", "remote"), sandboxHost("S")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+    // S enters the recently-used list by being the user's own choice...
+    expect(await engine.activate("A", incarnation, "S")).toEqual({ ok: true });
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // ...but when P dies the engine's own choice is not a metered machine,
+    // even a live, recently used one.
+    killHostWithRefusals(engine, "A", incarnation, "P");
+    clock.advance(0);
+    const sandboxLease = findLease(engine.snapshot().leases, "S");
+    if (sandboxLease === undefined) throw new Error("expected a lease for S");
+    expect(sandboxLease.status).not.toBe("dead");
+    expect(engine.snapshot().effectiveHostId).toBeNull();
     authority.dispose();
   });
 });

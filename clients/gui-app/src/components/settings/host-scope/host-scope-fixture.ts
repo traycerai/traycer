@@ -59,6 +59,8 @@ export function hostScopeOptionFixture(
     updateState: "current",
     entry: null,
     item: null,
+    kind: "personal",
+    sandbox: null,
     ...overrides,
   };
 }

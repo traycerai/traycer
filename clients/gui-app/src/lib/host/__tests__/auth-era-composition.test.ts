@@ -38,7 +38,7 @@ const AUTHN_BASE_URL = "http://localhost:5005";
 // The identity route `validateAuthTokenIdentity*` calls FIRST (see
 // `auth-validation.ts`); every fixture in this file answers this one.
 const VALIDATION_URL = `${AUTHN_BASE_URL}/api/v3/user/negotiated`;
-const HOSTS_URL = `${AUTHN_BASE_URL}/api/v3/hosts`;
+const HOSTS_URL = `${AUTHN_BASE_URL}/api/v3/hosts?include=sandboxState`;
 
 const TOKEN_A = "token-a";
 const TOKEN_A_ROTATED = "token-a2";

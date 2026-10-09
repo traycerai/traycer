@@ -2,6 +2,7 @@ import {
   hostVersionPolicyResponseSchema,
   type HostUpdatePolicy,
 } from "@traycer/protocol/host/host-status";
+import { composeRequestAbort } from "../auth/request-abort";
 
 /**
  * "Update now" / auto-policy toggle / "Apply now — ends N sessions"
@@ -91,6 +92,30 @@ export async function updateHostVersionPolicyViaHttp(
   hostId: string,
   input: UpdateHostVersionPolicyInput,
 ): Promise<UpdateHostVersionPolicyFetchResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. Cleared once the body is read, which the timeout also
+  // bounds.
+  const abort = composeRequestAbort(null, HOST_VERSION_POLICY_FETCH_TIMEOUT_MS);
+  try {
+    return await updateHostVersionPolicyWithSignal(
+      authnBaseUrl,
+      bearerToken,
+      hostId,
+      input,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function updateHostVersionPolicyWithSignal(
+  authnBaseUrl: string,
+  bearerToken: string,
+  hostId: string,
+  input: UpdateHostVersionPolicyInput,
+  signal: AbortSignal,
+): Promise<UpdateHostVersionPolicyFetchResult> {
   let response: Response;
   try {
     response = await fetch(hostPatchUrl(authnBaseUrl, hostId), {
@@ -108,7 +133,7 @@ export async function updateHostVersionPolicyViaHttp(
         desiredVersion: input.desiredVersion,
         force: input.force,
       }),
-      signal: AbortSignal.timeout(HOST_VERSION_POLICY_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch {
     // A thrown `fetch` — transport failure or the per-attempt timeout — is

@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostListItem,
   HostListResponse,
   HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "../../auth/__tests__/no-native-abort-helpers";
 import type { AuthEra } from "../../auth/request-context-provider";
 import {
   createRemoteHostFetcher,
@@ -12,6 +17,7 @@ import {
   hostUnavailability,
   isConfirmedHostDeath,
   isConfirmedTransportRefusal,
+  isSandboxHostDirectoryEntry,
   isWithinRelayFuseGrace,
   RELAY_FUSE_MAX_ATTACH_MS,
   RELAY_FUSE_MAX_CLOCK_SKEW_MS,
@@ -80,7 +86,9 @@ describe("fetchRegisteredHostsViaHttp", () => {
       expect(result.response.hosts[0].hostId).toBe("host-1");
     }
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://authn.example.test/api/v3/hosts");
+    expect(url).toBe(
+      "https://authn.example.test/api/v3/hosts?include=sandboxState",
+    );
     expect(init?.method).toBe("GET");
     expect((init?.headers as Record<string, string>).Authorization).toBe(
       "Bearer jwt-abc",
@@ -139,6 +147,43 @@ describe("fetchRegisteredHostsViaHttp", () => {
   });
 });
 
+describe("fetchRegisteredHostsViaHttp on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("still makes the request and returns the parsed envelope", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(200, envelope()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegisteredHostsViaHttp(AUTHN, "jwt-abc");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("ok");
+  });
+
+  it("aborts a list that never answers once its 10 s timeout passes, and resolves to network-error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = fetchRegisteredHostsViaHttp(AUTHN, "jwt-abc");
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+});
+
 const RELAY_BASE_URL = "wss://relay.example.test/attach";
 
 describe("hostListItemToDirectoryEntry", () => {
@@ -192,6 +237,62 @@ describe("hostListItemToDirectoryEntry", () => {
     expect(hostListItemToDirectoryEntry(item, RELAY_BASE_URL).label).toBe(
       "host-1",
     );
+  });
+
+  it("projects a sandbox row's frozen flag folded with its state: a terminal row never reads frozen", () => {
+    // The registry keeps a destroyed row's last `sandboxFrozen`.
+    const sandboxItem = (
+      sandboxState: HostListItem["sandboxState"],
+    ): HostListItem => ({
+      ...onlineItem(),
+      kind: "sandbox",
+      sandboxState,
+      sandboxFrozen: true,
+      profile: "agent",
+    });
+
+    expect(
+      hostListItemToDirectoryEntry(sandboxItem("destroyed"), RELAY_BASE_URL)
+        .sandbox?.frozen,
+    ).toBe(false);
+    expect(
+      hostListItemToDirectoryEntry(sandboxItem("suspended"), RELAY_BASE_URL)
+        .sandbox?.frozen,
+    ).toBe(true);
+  });
+});
+
+describe("isSandboxHostDirectoryEntry", () => {
+  it("is true for a remote entry carrying sandbox facts", () => {
+    const entry = hostListItemToDirectoryEntry(
+      {
+        ...onlineItem(),
+        kind: "sandbox",
+        sandboxState: "awake",
+        sandboxFrozen: false,
+        profile: "agent",
+      },
+      RELAY_BASE_URL,
+    );
+    expect(isSandboxHostDirectoryEntry(entry)).toBe(true);
+  });
+
+  it("is false for a remote personal entry and for a local one", () => {
+    expect(
+      isSandboxHostDirectoryEntry(
+        hostListItemToDirectoryEntry(onlineItem(), RELAY_BASE_URL),
+      ),
+    ).toBe(false);
+    expect(
+      isSandboxHostDirectoryEntry({
+        hostId: "local-1",
+        label: "This machine",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:9/stream",
+        version: "1.2.3",
+        transportDialability: "dialable",
+      }),
+    ).toBe(false);
   });
 });
 

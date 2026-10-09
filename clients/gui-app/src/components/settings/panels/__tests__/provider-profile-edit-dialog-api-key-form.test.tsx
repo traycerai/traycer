@@ -102,6 +102,14 @@ vi.mock(
   }),
 );
 
+// What `useHostCredentialRefusal` answers; `null` is a host that takes keys.
+const credentialHost = vi.hoisted(() => ({
+  refusal: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => credentialHost.refusal,
+}));
+
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
@@ -220,6 +228,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  credentialHost.refusal = null;
 });
 
 /**
@@ -506,5 +515,56 @@ describe("<ProfileEditDialog /> API-key submission", () => {
       name: "Add key",
     });
     expect(save.disabled).toBe(true);
+  });
+});
+
+describe("<ProfileEditDialog /> API-key form on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+
+  it("disables the field and Add key, shows the refusal, and sends no key by click or Enter", () => {
+    credentialHost.refusal = REFUSAL;
+    renderDialog(profileWithApiKey({ supported: true, configured: false }));
+
+    const field = keyField();
+    expect(field?.hasAttribute("disabled")).toBe(true);
+    const add = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Add key",
+    });
+    expect(add.disabled).toBe(true);
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+
+    if (field === null) return;
+    fireEvent.change(field, { target: { value: "sk-live-abc" } });
+    fireEvent.click(add);
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    expect(apiKeyMutation.set.mutate).not.toHaveBeenCalled();
+  });
+
+  it("disables Replace key too, and leaves Remove key enabled: removing sends nothing secret", () => {
+    credentialHost.refusal = REFUSAL;
+    renderDialog(profileWithApiKey({ supported: true, configured: true }));
+
+    expect(
+      screen
+        .getByRole<HTMLButtonElement>("button", { name: "Replace key" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    const remove = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Remove key",
+    });
+    expect(remove.disabled).toBe(false);
+
+    fireEvent.click(remove);
+
+    expect(apiKeyMutation.clear.mutate).toHaveBeenCalledTimes(1);
+    expect(apiKeyMutation.set.mutate).not.toHaveBeenCalled();
+  });
+
+  it("control: on a host that takes keys the field is live and no refusal is shown", () => {
+    renderDialog(profileWithApiKey({ supported: true, configured: false }));
+
+    expect(keyField()?.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
   });
 });

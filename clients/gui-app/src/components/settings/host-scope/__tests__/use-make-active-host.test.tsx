@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { ActivateResult } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { hostScopeOptionFixture } from "../host-scope-fixture";
 
 /**
@@ -147,5 +149,75 @@ describe("useMakeActiveHost", () => {
     });
     expect(activateCalls).toEqual(["host-a"]);
     expect(settings.result.current.isActivating).toBe(true);
+  });
+
+  describe("a management-only row", () => {
+    const withSummary = (hostId: string, summary: SandboxSummary | null) =>
+      hostScopeOptionFixture({
+        hostId,
+        kind: "sandbox",
+        isActive: false,
+        sandbox: { state: "awake", frozen: false, summary },
+      });
+    const rows = [
+      hostScopeOptionFixture({ hostId: "host-a" }),
+      withSummary(
+        "host-burst",
+        sandboxSummaryFixture({ hostId: "host-burst", burst: true }),
+      ),
+      withSummary(
+        "host-pod",
+        sandboxSummaryFixture({ hostId: "host-pod", kind: "automation" }),
+      ),
+      withSummary("host-unconfirmed", null),
+      withSummary(
+        "host-sandbox",
+        sandboxSummaryFixture({ hostId: "host-sandbox", burst: false }),
+      ),
+    ];
+
+    it.each(["host-burst", "host-pod", "host-unconfirmed"])(
+      "writes nothing when %s is made active, and holds no latch",
+      (hostId) => {
+        const { result } = renderHook(() => useMakeActiveHost(rows));
+
+        act(() => {
+          result.current.makeActive(hostId);
+        });
+
+        expect(activateCalls).toEqual([]);
+        expect(result.current.isActivating).toBe(false);
+        expect(result.current.activatingHostId).toBeNull();
+      },
+    );
+
+    it("does not let a refused pick block the next legal one", () => {
+      const { result } = renderHook(() => useMakeActiveHost(rows));
+
+      act(() => {
+        result.current.makeActive("host-burst");
+        result.current.makeActive("host-a");
+      });
+
+      expect(activateCalls).toEqual(["host-a"]);
+    });
+
+    it("still writes for a personal host and for an ordinary confirmed sandbox", async () => {
+      const { result } = renderHook(() => useMakeActiveHost(rows));
+
+      act(() => {
+        result.current.makeActive("host-sandbox");
+      });
+      expect(activateCalls).toEqual(["host-sandbox"]);
+
+      await act(async () => {
+        resolveActivate?.({ ok: true });
+        await Promise.resolve();
+      });
+      act(() => {
+        result.current.makeActive("host-a");
+      });
+      expect(activateCalls).toEqual(["host-sandbox", "host-a"]);
+    });
   });
 });

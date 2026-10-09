@@ -29,6 +29,7 @@ vi.mock(
 
 import {
   hostTransportKey,
+  hostTransportKeyFor,
   dialableHostEndpoint,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
@@ -61,6 +62,7 @@ function remoteEntry(
     transportDialability: "dialable",
     publicKey: "pubkey-a",
     relayFuseGrace: false,
+    sandbox: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -177,6 +179,45 @@ describe("the transport's refusal gate", () => {
     const dead = remoteWithConnectivity("offline");
     expect(hostTransportKey(dead)).toBeNull();
     expect(dialableHostEndpoint(dead)).toBeNull();
+  });
+});
+
+describe("hostTransportKeyFor - what OPEN presents is identity", () => {
+  const personal = remoteEntry({ sandbox: null });
+  const sandbox = remoteEntry({
+    sandbox: { state: "suspended", frozen: false, profile: null },
+  });
+
+  it("keys a sandbox row apart from the same host projected as a personal one, so a stale read rebuilds the stream", () => {
+    const asPersonal = hostTransportKeyFor(personal, false);
+    const asSandbox = hostTransportKeyFor(sandbox, false);
+    expect(asPersonal).not.toBeNull();
+    expect(asSandbox).not.toBeNull();
+    expect(asSandbox).not.toBe(asPersonal);
+  });
+
+  it("keeps one key across a same-content re-emit, and across a sandbox's state change", () => {
+    expect(hostTransportKeyFor(remoteEntry({ sandbox: null }), false)).toBe(
+      hostTransportKeyFor(personal, false),
+    );
+    expect(
+      hostTransportKeyFor(
+        remoteEntry({
+          sandbox: { state: "suspended", frozen: false, profile: null },
+        }),
+        false,
+      ),
+    ).toBe(hostTransportKeyFor(sandbox, false));
+    // The lifecycle word is not part of what OPEN presents: waking it must
+    // not tear the stream down.
+    expect(
+      hostTransportKeyFor(
+        remoteEntry({
+          sandbox: { state: "awake", frozen: false, profile: null },
+        }),
+        false,
+      ),
+    ).toBe(hostTransportKeyFor(sandbox, false));
   });
 });
 

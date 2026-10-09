@@ -20,6 +20,7 @@ import type {
 } from "@traycer/protocol/host/profile-sync-link-schemas";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -46,6 +47,12 @@ const testState = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
   hosts: [] as HostScopeOption[],
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
+  /** What `useHostCredentialRefusal` answers for the source; `null` is a host that syncs. */
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => testState.credentialRefusal,
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
@@ -270,6 +277,7 @@ describe("<ProfileSyncModalHost />", () => {
     testState.request.mockReset();
     testState.hosts = [sourceHost(), officeHost()];
     testState.openSettings.mockReset();
+    testState.credentialRefusal = null;
     useProfileSyncModalStore.getState().close();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
@@ -295,6 +303,38 @@ describe("<ProfileSyncModalHost />", () => {
 
     expect(screen.getByRole("heading", { name: "Sync profiles" })).toBeTruthy();
     expect(await screen.findByText("From MacBook · 3 profiles")).toBeTruthy();
+  });
+
+  it("renders the refusal and no device rows when the source host takes no credentials", async () => {
+    testState.credentialRefusal = "Sandboxes don't take sign-ins";
+    answerOverview(officeWithItems());
+    renderHost(makeQueryClient());
+    const dialog = await openDialog();
+
+    expect(within(dialog).getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+    expect(screen.queryByRole("region", { name: "Office Linux" })).toBeNull();
+    expect(within(dialog).queryByText("Loading devices")).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "Sync now" }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("switch", {
+        name: "Keep Office Linux in sync",
+      }),
+    ).toBeNull();
+  });
+
+  it("control: the same overview on a source that takes credentials shows the device and no refusal", async () => {
+    answerOverview(officeWithItems());
+    renderHost(makeQueryClient());
+    const dialog = await openDialog();
+
+    expect(
+      await screen.findByRole("region", { name: "Office Linux" }),
+    ).toBeTruthy();
+    expect(within(dialog).queryByTestId("credential-refusal")).toBeNull();
   });
 
   it("reads Not synced yet for a device with no overview entry, with Sync now and an off Keep in sync switch", async () => {
@@ -773,6 +813,51 @@ describe("<ProfileSyncModalHost />", () => {
     expect(screen.queryByRole("region", { name: "Old desktop" })).toBeNull();
     expect(screen.queryByRole("region", { name: "MacBook" })).toBeNull();
     expect(screen.getByRole("region", { name: "Unknown device" })).toBeTruthy();
+  });
+
+  it("never lists a sandbox as a destination, by name or as an unknown device, though the source holds a record for it", async () => {
+    const SANDBOX_HOST_ID = "host-sandbox";
+    testState.hosts = [
+      sourceHost(),
+      officeHost(),
+      hostScopeOptionFixture({
+        hostId: SANDBOX_HOST_ID,
+        name: "Build box",
+        isLocalMachine: false,
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({
+            hostId: SANDBOX_HOST_ID,
+            burst: false,
+          }),
+        },
+      }),
+    ];
+    answerOverview(
+      overview({
+        sourceHostId: SOURCE_HOST_ID,
+        profileCount: 1,
+        devices: [
+          { hostId: OFFICE_HOST_ID, keepInSync: false, items: [] },
+          { hostId: SANDBOX_HOST_ID, keepInSync: false, items: [] },
+          { hostId: UNKNOWN_HOST_ID, keepInSync: false, items: [] },
+        ],
+      }),
+    );
+    renderHost(makeQueryClient());
+    await openDialog();
+
+    expect(
+      await screen.findByRole("region", { name: "Office Linux" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Build box" })).toBeNull();
+    // The one unknown device is the record for UNKNOWN_HOST_ID; the sandbox's
+    // record did not come back as a second.
+    expect(
+      screen.getAllByRole("region", { name: "Unknown device" }),
+    ).toHaveLength(1);
   });
 
   it("lists a cannot-sync row without an action before expanding, with no button", async () => {

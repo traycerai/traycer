@@ -8,6 +8,7 @@ import {
   type SessionLivenessProbe,
 } from "@traycer/protocol/host-transport/remote/session";
 import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
+import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -156,6 +157,14 @@ export interface RemoteSessionOptions<
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator | null;
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * `null` for a personal host: `OPEN` presents the user bearer. For a
+   * `kind: sandbox` host, the reader of the session grant minted with the
+   * current attach grant: `OPEN` presents it in `authz` v2 with an EMPTY
+   * bearer, and the session never sends a `CREDENTIAL_UPDATE` - no user
+   * credential reaches a sandbox (seams C1 and H3).
+   */
+  readonly sessionGrant: (() => string | null) | null;
 }
 
 /**
@@ -170,10 +179,13 @@ export class RemoteSession<
     import("@traycer/protocol/framework/versioned-stream-rpc").VersionedStreamRpcRegistry,
 > extends ProtocolRemoteSession<RpcRegistry, StreamRegistry> {
   constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
-    const { bearer, auth, ...coreOptions } = options;
+    const { bearer, auth, sessionGrant, ...coreOptions } = options;
     super({
       ...coreOptions,
-      auth: createClientRemoteSessionAuth(bearer, auth),
+      auth:
+        sessionGrant === null
+          ? createClientRemoteSessionAuth(bearer, auth)
+          : createSessionGrantRemoteSessionAuth(sessionGrant, auth),
       onNegotiatedMethods: recordNegotiatedHostManifest,
       // The stream sibling of the line above, and installed here for the same
       // reason: BOTH transports must publish, or every per-host gate built on
@@ -226,5 +238,37 @@ function createClientRemoteSessionAuth(
       auth === null || auth === undefined
         ? null
         : () => auth.revalidateForReconnect(),
+  };
+}
+
+function createSessionGrantRemoteSessionAuth(
+  readSessionGrant: () => string | null,
+  auth: StreamAuthRevalidator | null,
+): RemoteSessionAuth {
+  return {
+    missingOpenAuthCause: "missing-session-grant",
+    readOpenAuth: () => {
+      const grant = readSessionGrant();
+      if (grant === null) {
+        return null;
+      }
+      return {
+        bearer: "",
+        authz: { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant },
+        fingerprint: grant,
+      };
+    },
+    readCredentialUpdateBearer: () => null,
+    // Unknown until the next attach mints one: the reader still holds the
+    // grant that was just refused, because only the next attach replaces it.
+    // A grant refusal is therefore never evidence of no progress. The loop
+    // stays bounded the way a rotating bearer's is (the reconnect backoff),
+    // and the `local-plane-retained` bound is untouched.
+    currentFingerprint: () => null,
+    // A refused session grant is recovered the way a refused bearer is: the
+    // user bearer that mints the next pair is revalidated, then the session
+    // redials and the provider mints a fresh attach and session grant.
+    revalidateForReconnect:
+      auth === null ? null : () => auth.revalidateForReconnect(),
   };
 }

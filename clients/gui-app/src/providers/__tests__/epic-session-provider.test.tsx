@@ -781,6 +781,7 @@ function ownerIdentityRemoteTarget(
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
+    sandbox: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
