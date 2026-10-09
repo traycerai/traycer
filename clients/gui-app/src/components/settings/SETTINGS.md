@@ -2724,8 +2724,11 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     with `null` so the host resolves the current saved value itself.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
-    command lists (the `catalog` block of `~/.traycer/cli/config.json` on that
-    machine, over `config.catalog.get` / `set` at 1.1). Two `SettingsRow`s and
+    command lists (`~/.traycer/cli/config.json` on that machine: the shared
+    value in `catalog.probeTimeoutSeconds`, each provider's own in the
+    top-level `catalogOverrides` block, over `config.catalog.get` / `set` at
+    1.1; top-level because a #2450-era binary strips unknown keys INSIDE
+    `catalog` on its next write but carries an unknown top-level block). Two `SettingsRow`s and
     no other copy. **Timeout** ("How long to wait for the model list.") is a
     `SettingsSegmentedControl` of 60 / 90 / 120 / 180 s filtered to the
     `bounds` the host returns, plus the shown value as its own segment when a
@@ -2742,13 +2745,18 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     scope) plus `resolveAutoCleanupGate` (reachable host, BOTH methods
     negotiated at 1.1 - `catalogTimeoutRowsSupported`); anything short of
     `ready` renders nothing, so a 1.0 host (shared value only) has no rows.
-    Controls are disabled while a write is in flight; a failed read
-    (malformed config file) replaces the Timeout row's description with the
-    repair sentence. Search: the `modelList` region group (anchor `null`, like
-    every Providers region) with both rows contributing to it. amp and cursor
-    advertise no CLI & Args tab, so they have no rows and follow the shared
-    value. The host reads the value at every catalog probe, so a change applies
-    to the next read without a restart.
+    Writes go through `useConfigCatalogSetMutation`, which cancels any
+    in-flight read, files the host's answer (the re-read state) into the
+    `config.catalog.get` cache and only then settles; the controls are
+    disabled while it is pending, so the next write is never built on the
+    state before the last one (switch off, then a pick, must go out as
+    `scope: "harness"`). A failed first read (malformed config file) replaces
+    the Timeout row's description with the repair sentence; a failed RE-read
+    behind a known value keeps that value. Search: the `modelList` region group
+    (anchor `null`, like every Providers region) with both rows contributing
+    to it. Every provider that advertises CLI & Args (all of them today, amp
+    and cursor included) has the rows. The host reads the value at every
+    catalog probe, so a change applies to the next read without a restart.
   - **Who reviews &lt;provider&gt;'s commands**
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
     tab (icon `ShieldCheck`, since the Account tab already uses `KeyRound`,

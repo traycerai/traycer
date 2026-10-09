@@ -34,6 +34,7 @@ import { cliConfigPath } from "../paths";
 import {
   EMPTY_CLI_CONFIG,
   catalogProbeTimeoutSecondsFor,
+  cliConfigSchema,
   type CliConfig,
 } from "../schema";
 import {
@@ -111,7 +112,8 @@ describe("cli config store", () => {
       features: { agentRoles: false, artifactVersioning: false },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" as const },
-      catalog: { probeTimeoutSeconds: 60, overrides: {} },
+      catalog: { probeTimeoutSeconds: 60 },
+      catalogOverrides: {},
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
@@ -474,7 +476,8 @@ describe("cli config store", () => {
       features: { agentRoles: false, artifactVersioning: false },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" },
-      catalog: { probeTimeoutSeconds: 60, overrides: {} },
+      catalog: { probeTimeoutSeconds: 60 },
+      catalogOverrides: {},
     });
   });
 
@@ -809,7 +812,7 @@ describe("catalog probe timeout", () => {
     });
   });
 
-  it("reads a file written by the previous release (no overrides) with empty overrides, and keeps it through an unrelated write", async () => {
+  it("reads a file written by the previous release (no catalogOverrides) with empty overrides, and keeps it through an unrelated write", async () => {
     await writeRaw(
       JSON.stringify({ ...BASE, catalog: { probeTimeoutSeconds: 90 } }),
     );
@@ -830,7 +833,24 @@ describe("catalog probe timeout", () => {
     });
   });
 
-  it("stores a provider's own value and leaves the shared value and other overrides intact", async () => {
+  it("ignores a nested catalog.overrides, which is what an earlier draft wrote", async () => {
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        catalog: { probeTimeoutSeconds: 90, overrides: { opencode: 120 } },
+      }),
+    );
+    expect(await readCatalogConfig()).toEqual({
+      probeTimeoutSeconds: 90,
+      overrides: {},
+    });
+    expect(readCatalogConfigSync()).toEqual({
+      probeTimeoutSeconds: 90,
+      overrides: {},
+    });
+  });
+
+  it("stores a provider's own value in catalogOverrides and leaves the shared value and other overrides intact", async () => {
     await setCatalogProbeTimeoutSeconds(90);
     await setCatalogProbeTimeoutOverride("codex", 150);
 
@@ -842,6 +862,10 @@ describe("catalog probe timeout", () => {
     };
     expect(await readCatalogConfig()).toEqual(expected);
     expect(readCatalogConfigSync()).toEqual(expected);
+    const cfg = await readCliConfig();
+    expect(cfg.catalogOverrides).toEqual({ codex: 150, opencode: 120 });
+    // The `catalog` block keeps exactly the shape #2450 shipped.
+    expect(cfg.catalog).toEqual({ probeTimeoutSeconds: 90 });
   });
 
   it("clears only the named provider's value with null", async () => {
@@ -857,30 +881,30 @@ describe("catalog probe timeout", () => {
     };
     expect(await readCatalogConfig()).toEqual(expected);
     expect(readCatalogConfigSync()).toEqual(expected);
-    expect(
-      Object.hasOwn((await readCatalogConfig()).overrides, "opencode"),
-    ).toBe(false);
+    expect((await readCliConfig()).catalogOverrides).toEqual({ codex: 150 });
   });
 
-  it("setting the shared value leaves providers' own values intact", async () => {
+  it("setting the shared value leaves catalogOverrides intact, and setting an override leaves catalog intact", async () => {
     await setCatalogProbeTimeoutOverride("opencode", 120);
-
     await setCatalogProbeTimeoutSeconds(90);
 
-    expect(await readCatalogConfig()).toEqual({
-      probeTimeoutSeconds: 90,
-      overrides: { opencode: 120 },
-    });
+    let cfg = await readCliConfig();
+    expect(cfg.catalog).toEqual({ probeTimeoutSeconds: 90 });
+    expect(cfg.catalogOverrides).toEqual({ opencode: 120 });
+
+    await setCatalogProbeTimeoutOverride("codex", 150);
+
+    cfg = await readCliConfig();
+    expect(cfg.catalog).toEqual({ probeTimeoutSeconds: 90 });
+    expect(cfg.catalogOverrides).toEqual({ opencode: 120, codex: 150 });
   });
 
   it("clamps stored override values into [60, 180] on read, in both readers", async () => {
     await writeRaw(
       JSON.stringify({
         ...BASE,
-        catalog: {
-          probeTimeoutSeconds: 75,
-          overrides: { low: 30, high: 600, ok: 120 },
-        },
+        catalog: { probeTimeoutSeconds: 75 },
+        catalogOverrides: { low: 30, high: 600, ok: 120 },
       }),
     );
     const expected = {
@@ -891,35 +915,99 @@ describe("catalog probe timeout", () => {
     expect(readCatalogConfigSync()).toEqual(expected);
   });
 
-  it("sync read returns the default when an override value is not a positive whole number", async () => {
-    for (const value of [90.5, -5, 0, "120", null]) {
+  it("sync read: a malformed catalogOverrides still yields the file's shared value with empty overrides", async () => {
+    for (const catalogOverrides of [
+      { opencode: "x" },
+      { opencode: 90.5 },
+      { opencode: 0 },
+      { opencode: -5 },
+      "120",
+      ["120"],
+      null,
+    ]) {
       await writeRaw(
         JSON.stringify({
           ...BASE,
-          catalog: { probeTimeoutSeconds: 120, overrides: { claude: value } },
+          catalog: { probeTimeoutSeconds: 120 },
+          catalogOverrides,
         }),
       );
       expect(readCatalogConfigSync()).toEqual({
-        probeTimeoutSeconds: 60,
+        probeTimeoutSeconds: 120,
         overrides: {},
       });
     }
   });
 
+  it("sync read: a malformed catalog still yields the file's overrides with shared 60", async () => {
+    for (const catalog of [{ probeTimeoutSeconds: "soon" }, "120", null]) {
+      await writeRaw(
+        JSON.stringify({
+          ...BASE,
+          catalog,
+          catalogOverrides: { opencode: 120 },
+        }),
+      );
+      expect(readCatalogConfigSync()).toEqual({
+        probeTimeoutSeconds: 60,
+        overrides: { opencode: 120 },
+      });
+    }
+  });
+
+  it("survives a read-modify-write by a #2450-era writer that does not know catalogOverrides", async () => {
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        catalog: { probeTimeoutSeconds: 90 },
+        catalogOverrides: { opencode: 120 },
+      }),
+    );
+
+    // #2450's schema is the current one minus this block. First prove the
+    // emulation is faithful: that schema must keep an unknown top-level key,
+    // which is the passthrough the whole design leans on.
+    const oldSchema = cliConfigSchema.omit({ catalogOverrides: true });
+    const probe = oldSchema.parse({ ...BASE, someFutureBlock: { a: 1 } });
+    expect(probe).toMatchObject({ someFutureBlock: { a: 1 } });
+    // And that it strips a key nested inside `catalog`, which is why the
+    // per-provider values cannot live there.
+    expect(
+      oldSchema.parse({
+        ...BASE,
+        catalog: { probeTimeoutSeconds: 90, overrides: { opencode: 120 } },
+      }).catalog,
+    ).toEqual({ probeTimeoutSeconds: 90 });
+
+    const parsed = oldSchema.parse(
+      JSON.parse(await readFile(cliConfigPath(), "utf8")),
+    );
+    const rewritten = {
+      ...parsed,
+      browser: { ...parsed.browser, agentAccess: false },
+    };
+    await writeRaw(JSON.stringify(rewritten));
+
+    expect((await readCliConfig()).browser.agentAccess).toBe(false);
+    const expected = { probeTimeoutSeconds: 90, overrides: { opencode: 120 } };
+    expect(await readCatalogConfig()).toEqual(expected);
+    expect(readCatalogConfigSync()).toEqual(expected);
+  });
+
   it("catalogProbeTimeoutSecondsFor returns the override, else the shared value", () => {
-    const catalog = {
+    const settings = {
       probeTimeoutSeconds: 75,
       overrides: { opencode: 120 },
     };
-    expect(catalogProbeTimeoutSecondsFor(catalog, "opencode")).toBe(120);
-    expect(catalogProbeTimeoutSecondsFor(catalog, "codex")).toBe(75);
+    expect(catalogProbeTimeoutSecondsFor(settings, "opencode")).toBe(120);
+    expect(catalogProbeTimeoutSecondsFor(settings, "codex")).toBe(75);
   });
 
   it("catalogProbeTimeoutSecondsFor never reads through to Object.prototype", () => {
-    const catalog = { probeTimeoutSeconds: 75, overrides: {} };
-    expect(catalogProbeTimeoutSecondsFor(catalog, "constructor")).toBe(75);
-    expect(catalogProbeTimeoutSecondsFor(catalog, "__proto__")).toBe(75);
-    expect(catalogProbeTimeoutSecondsFor(catalog, "toString")).toBe(75);
+    const settings = { probeTimeoutSeconds: 75, overrides: {} };
+    expect(catalogProbeTimeoutSecondsFor(settings, "constructor")).toBe(75);
+    expect(catalogProbeTimeoutSecondsFor(settings, "__proto__")).toBe(75);
+    expect(catalogProbeTimeoutSecondsFor(settings, "toString")).toBe(75);
   });
 
   it("async read throws on a malformed file", async () => {

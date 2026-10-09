@@ -80,10 +80,28 @@ interface Harness {
   readonly gets: () => number;
 }
 
+interface Deferred {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+}
+
+function deferred(): Deferred {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 interface HarnessOptions {
   readonly shared: number;
   readonly overrides: Record<string, number>;
+  /** Every read fails, the first included: no value is ever known. */
   readonly failReads: boolean;
+  /** What each read AFTER the first does: answer, never answer, or reject. */
+  readonly laterReads: "answer" | "hang" | "reject";
+  /** While non-null, `config.catalog.set` does not answer until it settles. */
+  readonly holdSet: Deferred | null;
 }
 
 function mountHarness(options: HarnessOptions): {
@@ -112,23 +130,31 @@ function mountHarness(options: HarnessOptions): {
           if (options.failReads) {
             return Promise.reject(new Error("config.json is garbage"));
           }
+          if (getCount > 1 && options.laterReads === "hang") {
+            return new Promise<ConfigCatalogResponse>(() => undefined);
+          }
+          if (getCount > 1 && options.laterReads === "reject") {
+            return Promise.reject(new Error("config.json is garbage"));
+          }
           return Promise.resolve(read());
         },
         "config.catalog.set": (params) => {
           sets.push(params);
-          if (params.scope === "all") {
-            shared = params.probeTimeoutSeconds;
-          } else {
-            const next: Record<string, number> = {};
-            for (const [key, value] of Object.entries(overrides)) {
-              if (key !== params.harnessId) next[key] = value;
+          return (options.holdSet?.promise ?? Promise.resolve()).then(() => {
+            if (params.scope === "all") {
+              shared = params.probeTimeoutSeconds;
+            } else {
+              const next: Record<string, number> = {};
+              for (const [key, value] of Object.entries(overrides)) {
+                if (key !== params.harnessId) next[key] = value;
+              }
+              if (params.probeTimeoutSeconds !== null) {
+                next[params.harnessId] = params.probeTimeoutSeconds;
+              }
+              overrides = next;
             }
-            if (params.probeTimeoutSeconds !== null) {
-              next[params.harnessId] = params.probeTimeoutSeconds;
-            }
-            overrides = next;
-          }
-          return Promise.resolve(read());
+            return read();
+          });
         },
       },
     });
@@ -150,7 +176,13 @@ function defaults(
   shared: number,
   overrides: Record<string, number>,
 ): HarnessOptions {
-  return { shared, overrides, failReads: false };
+  return {
+    shared,
+    overrides,
+    failReads: false,
+    laterReads: "answer",
+    holdSet: null,
+  };
 }
 
 function renderGroup(queryClient: QueryClient): RenderResult {
@@ -399,6 +431,124 @@ describe("ProviderCatalogTimeoutGroup rows", () => {
     expect(sameForAllSwitch().hasAttribute("disabled")).toBe(true);
     expect(segment("120 s").hasAttribute("disabled")).toBe(true);
     expect(harness.sets).toEqual([]);
+  });
+});
+
+describe("ProviderCatalogTimeoutGroup write path", () => {
+  it("builds the next write on the set answer, not on a read-back that never lands", async () => {
+    const holdSet = deferred();
+    const { harness, queryClient } = mountHarness({
+      ...defaults(60, {}),
+      laterReads: "hang",
+      holdSet,
+    });
+    renderGroup(queryClient);
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["60 s"]);
+    });
+
+    fireEvent.click(sameForAllSwitch());
+
+    // In flight: nothing can be built on the stale state.
+    await waitFor(() => {
+      expect(harness.sets).toHaveLength(1);
+    });
+    expect(sameForAllSwitch().hasAttribute("disabled")).toBe(true);
+    for (const label of ["60 s", "90 s", "120 s", "180 s"]) {
+      expect(segment(label).hasAttribute("disabled")).toBe(true);
+    }
+    fireEvent.click(segment("120 s"));
+    await settled();
+    expect(harness.sets).toHaveLength(1);
+
+    holdSet.resolve();
+    // Unchecked from the set answer: every read after the first hangs.
+    await waitFor(() => {
+      expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+    });
+    await waitFor(() => {
+      expect(segment("120 s").hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(segment("120 s"));
+
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["120 s"]);
+    });
+    expect(harness.sets).toEqual([
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 60 },
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 120 },
+    ]);
+  });
+
+  it("keeps the answered value, shows no alert and stays usable when the re-read fails", async () => {
+    const { harness, queryClient } = mountHarness({
+      ...defaults(60, {}),
+      laterReads: "reject",
+    });
+    renderGroup(queryClient);
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["60 s"]);
+    });
+
+    fireEvent.click(sameForAllSwitch());
+
+    await waitFor(() => {
+      expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+    });
+    // Let the failing re-read land.
+    await waitFor(() => {
+      expect(harness.gets()).toBeGreaterThan(1);
+    });
+    await settled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(pressedLabels()).toEqual(["60 s"]);
+    expect(sameForAllSwitch().hasAttribute("disabled")).toBe(false);
+    expect(segment("120 s").hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(segment("120 s"));
+
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["120 s"]);
+    });
+    expect(harness.sets).toEqual([
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 60 },
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 120 },
+    ]);
+  });
+
+  it("a shared value of 75: turning the switch off stores 75 for this provider and keeps 75 s pressed", async () => {
+    const harness = renderReady(defaults(75, {}));
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["75 s"]);
+    });
+
+    fireEvent.click(sameForAllSwitch());
+
+    await waitFor(() => {
+      expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+    });
+    expect(harness.sets).toEqual([
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 75 },
+    ]);
+    expect(pressedLabels()).toEqual(["75 s"]);
+  });
+
+  it("an own value of 75: picking 120 s replaces it and the 75 s segment goes away", async () => {
+    const harness = renderReady(defaults(60, { claude: 75 }));
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["75 s"]);
+    });
+    expect(segmentLabels()).toEqual(["60 s", "75 s", "90 s", "120 s", "180 s"]);
+
+    fireEvent.click(segment("120 s"));
+
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["120 s"]);
+    });
+    expect(harness.sets).toEqual([
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 120 },
+    ]);
+    expect(segmentLabels()).toEqual(["60 s", "90 s", "120 s", "180 s"]);
   });
 });
 

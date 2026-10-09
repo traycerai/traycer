@@ -21,10 +21,9 @@ import { Switch } from "@/components/ui/switch";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { useConfigCatalogSetMutation } from "@/hooks/config/use-config-catalog-set-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { configMutationKeys } from "@/lib/query-keys";
 
 const CATALOG_GET = "config.catalog.get";
 const CATALOG_SET = "config.catalog.set";
@@ -94,12 +93,9 @@ function CatalogTimeoutRows(props: {
     params: {},
     options: { enabled: true },
   });
-  const setCatalogTimeout = useHostScopedMutationForClient(client, {
-    method: CATALOG_SET,
-    mutationKey: configMutationKeys.catalogSet(),
-    errorMessage: "Couldn't update the model list timeout",
-    invalidateMethods: [CATALOG_GET],
-  });
+  // Files the host's answer into the read before it settles, so the rows never
+  // re-enable on the state before a write (see the hook).
+  const setCatalogTimeout = useConfigCatalogSetMutation(client);
   const state = query.data ?? null;
   const ownSeconds =
     state !== null && Object.hasOwn(state.overrides, harnessId)
@@ -128,8 +124,12 @@ function CatalogTimeoutRows(props: {
     >
       <SettingsRow
         row={PROVIDERS.definitions.modelListTimeout}
+        // The repair sentence only when there is no value to show: the read
+        // failed before anything was known. A failed RE-read behind a value
+        // (the last read, or a write's answer) keeps that value, and the next
+        // write reports its own failure.
         status={
-          query.isError ? (
+          query.isError && state === null ? (
             <div className="flex flex-col gap-1">
               <p>{PROVIDERS.definitions.modelListTimeout.description}</p>
               <p role="alert">{READ_ERROR_STATUS}</p>

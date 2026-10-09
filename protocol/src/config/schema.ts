@@ -155,19 +155,17 @@ export function clampCatalogProbeTimeoutSeconds(seconds: number): number {
 
 /**
  * The `catalog` block in `~/.traycer/cli/config.json`: how long the host waits
- * for a provider to list its models or commands. Additive and `.default()`-ed
- * like every other block, so older config files keep validating without a
- * `CLI_CONFIG_VERSION` bump. Any positive whole number parses; the range is
- * applied by `clampCatalogProbeTimeoutSeconds` on read and enforced by the
- * host on write.
+ * for a provider to list its models or commands - the value every provider
+ * shares unless it has its own in `catalogOverrides`. Additive and
+ * `.default()`-ed like every other block, so older config files keep
+ * validating without a `CLI_CONFIG_VERSION` bump. Any positive whole number
+ * parses; the range is applied by `clampCatalogProbeTimeoutSeconds` on read
+ * and enforced by the host on write.
  *
- * `probeTimeoutSeconds` is the value shared by every provider; `overrides`
- * holds a provider's own value, keyed by harness id, for the providers whose
- * "Same for all providers" switch is off. A provider without an entry follows
- * the shared value. Keys are open strings, not the harness enum: the file is
- * shared by binaries of different ages, and a key a newer one wrote must not
- * fail an older one's read of the whole block. `overrides` defaults to `{}`, so
- * a block written before it existed (traycer#2450) still validates.
+ * Frozen at the shape traycer#2450 shipped. A binary built at that schema
+ * knows this block, so it STRIPS any key added inside it on its next write;
+ * per-provider values therefore live in their own top-level block, which the
+ * file's top-level passthrough carries through that binary's writes.
  */
 export const catalogConfigSchema = lazySchema(() =>
   z
@@ -177,24 +175,49 @@ export const catalogConfigSchema = lazySchema(() =>
         .int()
         .positive()
         .default(CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS),
-      overrides: z
-        .record(z.string().min(1), z.number().int().positive())
-        .default({}),
     })
-    .default({
-      probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
-      overrides: {},
-    }),
+    .default({ probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS }),
 );
 export type CatalogConfig = z.infer<typeof catalogConfigSchema>;
 
 /**
- * Clamps every stored value of a catalog block into the supported range, on
- * read - the shared value and each provider's own alike.
+ * The `catalogOverrides` block: a provider's own catalog probe timeout, keyed
+ * by harness id, for each provider whose "Same for all providers" switch is
+ * off. A provider without an entry follows `catalog.probeTimeoutSeconds`.
+ *
+ * A TOP-LEVEL block, not a key inside `catalog`, so that a binary which knows
+ * `catalog` but not this block (traycer#2450) preserves it on a
+ * read-modify-write instead of stripping it. Keys are open strings, not the
+ * harness enum, for the same reason: a key a newer binary wrote must not fail
+ * an older one's read. Values are clamped on read like the shared value.
  */
-export function clampCatalogConfig(catalog: CatalogConfig): CatalogConfig {
+export const catalogOverridesConfigSchema = lazySchema(() =>
+  z.record(z.string().min(1), z.number().int().positive()).default({}),
+);
+export type CatalogOverridesConfig = z.infer<
+  typeof catalogOverridesConfigSchema
+>;
+
+/**
+ * The catalog settings as the host and the `config.catalog.*` RPCs use them:
+ * the shared value from `catalog` and the per-provider values from
+ * `catalogOverrides`, read together.
+ */
+export interface CatalogSettings {
+  readonly probeTimeoutSeconds: number;
+  readonly overrides: Readonly<Record<string, number>>;
+}
+
+/**
+ * Builds the clamped settings from the two blocks, on read - the shared value
+ * and each provider's own alike.
+ */
+export function catalogSettingsFrom(
+  catalog: CatalogConfig,
+  catalogOverrides: CatalogOverridesConfig,
+): CatalogSettings {
   const overrides: Record<string, number> = {};
-  for (const [harnessId, seconds] of Object.entries(catalog.overrides)) {
+  for (const [harnessId, seconds] of Object.entries(catalogOverrides)) {
     overrides[harnessId] = clampCatalogProbeTimeoutSeconds(seconds);
   }
   return {
@@ -211,12 +234,12 @@ export function clampCatalogConfig(catalog: CatalogConfig): CatalogConfig {
  * an `Object.prototype` member can never read through to it.
  */
 export function catalogProbeTimeoutSecondsFor(
-  catalog: CatalogConfig,
+  settings: CatalogSettings,
   harnessId: string,
 ): number {
-  return Object.hasOwn(catalog.overrides, harnessId)
-    ? catalog.overrides[harnessId]
-    : catalog.probeTimeoutSeconds;
+  return Object.hasOwn(settings.overrides, harnessId)
+    ? settings.overrides[harnessId]
+    : settings.probeTimeoutSeconds;
 }
 
 /**
@@ -227,6 +250,16 @@ export function catalogProbeTimeoutSecondsFor(
 export const catalogOnlyConfigSchema = lazySchema(() =>
   z.object({
     catalog: catalogConfigSchema,
+  }),
+);
+
+/**
+ * The `catalogOverrides` block read on its own, for the same reason - and
+ * separately from `catalog`, so a defect in one block never hides the other.
+ */
+export const catalogOverridesOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    catalogOverrides: catalogOverridesConfigSchema,
   }),
 );
 
@@ -310,6 +343,7 @@ export const cliConfigSchema = lazySchema(() =>
       browser: browserConfigSchema,
       worktrees: worktreesConfigSchema,
       catalog: catalogConfigSchema,
+      catalogOverrides: catalogOverridesConfigSchema,
     })
     // Top-level only: an unknown BLOCK survives a read-modify-write instead of
     // being stripped. Two binaries share this file - an older CLI or host that
@@ -380,8 +414,6 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
   worktrees: { agentCreate: "allow" },
-  catalog: {
-    probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
-    overrides: {},
-  },
+  catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
+  catalogOverrides: {},
 };

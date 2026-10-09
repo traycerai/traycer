@@ -30,9 +30,10 @@ import {
   type AgentWorktreeCreatePolicy,
   type WorktreesConfig,
   catalogOnlyConfigSchema,
-  clampCatalogConfig,
+  catalogOverridesOnlyConfigSchema,
+  catalogSettingsFrom,
   CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
-  type CatalogConfig,
+  type CatalogSettings,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
 import { annotateWslHealth, probeWslHealthCached } from "./wsl-health";
@@ -1084,44 +1085,48 @@ export async function setAgentWorktreeCreatePolicy(
 }
 
 /**
- * The catalog probe timeouts - the shared value and every provider's own -
- * clamped into their supported range. Throws on an unreadable or malformed
- * file like every `readCliConfig` caller, so a Settings control shows an error
- * rather than a value the file does not hold.
+ * The catalog probe timeouts - the shared value (`catalog`) and every
+ * provider's own (`catalogOverrides`) - clamped into their supported range.
+ * Throws on an unreadable or malformed file like every `readCliConfig`
+ * caller, so a Settings control shows an error rather than a value the file
+ * does not hold.
  */
-export async function readCatalogConfig(): Promise<CatalogConfig> {
-  const { catalog } = await readCliConfig();
-  return clampCatalogConfig(catalog);
+export async function readCatalogConfig(): Promise<CatalogSettings> {
+  const { catalog, catalogOverrides } = await readCliConfig();
+  return catalogSettingsFrom(catalog, catalogOverrides);
 }
 
 /**
  * Best-effort synchronous read for the host's catalog probes, which read it
  * at every probe start so a change applies without a restart. Falls back to
  * the default on an unreadable file: the setting only lengthens a wait, and a
- * corrupt config must not fail a model or command list. It validates
- * `catalogOnlyConfigSchema`, so a valid `catalog` block still governs beside
- * an unrelated defect elsewhere in the file.
+ * corrupt config must not fail a model or command list. Each block is
+ * validated on its own (`catalogOnlyConfigSchema`,
+ * `catalogOverridesOnlyConfigSchema`), so a valid block still governs beside a
+ * defect anywhere else in the file, the other catalog block included.
  */
-export function readCatalogConfigSync(): CatalogConfig {
+export function readCatalogConfigSync(): CatalogSettings {
+  let parsed: unknown = null;
   try {
-    const raw = readFileSync(cliConfigPath(), "utf8");
-    const result = catalogOnlyConfigSchema.safeParse(JSON.parse(raw));
-    if (result.success) {
-      return clampCatalogConfig(result.data.catalog);
-    }
+    parsed = JSON.parse(readFileSync(cliConfigPath(), "utf8"));
   } catch {
-    // Missing or unreadable: the default below.
+    // Missing or unreadable: both blocks fall back below.
   }
-  return {
-    probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS,
-    overrides: {},
-  };
+  const catalog = catalogOnlyConfigSchema.safeParse(parsed);
+  const overrides = catalogOverridesOnlyConfigSchema.safeParse(parsed);
+  return catalogSettingsFrom(
+    catalog.success
+      ? catalog.data.catalog
+      : { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
+    overrides.success ? overrides.data.catalogOverrides : {},
+  );
 }
 
 /**
  * Sets the shared catalog probe timeout while preserving the rest of the
- * config, providers' own values included: a provider with its own value keeps
- * it. The caller owns the range check (the host refuses a value outside it).
+ * config, providers' own values (`catalogOverrides`) included: a provider with
+ * its own value keeps it. The caller owns the range check (the host refuses a
+ * value outside it).
  */
 export async function setCatalogProbeTimeoutSeconds(
   seconds: number,
@@ -1134,24 +1139,22 @@ export async function setCatalogProbeTimeoutSeconds(
 }
 
 /**
- * Sets one provider's own catalog probe timeout, keyed by harness id, or
- * clears it with `null` so the provider follows the shared value again. The
- * rest of the config is preserved. The caller owns the range check.
+ * Sets one provider's own catalog probe timeout in `catalogOverrides`, keyed
+ * by harness id, or clears it with `null` so the provider follows the shared
+ * value again. The rest of the config is preserved. The caller owns the range
+ * check.
  */
 export async function setCatalogProbeTimeoutOverride(
   harnessId: string,
   seconds: number | null,
 ): Promise<void> {
   const current = await readCliConfig();
-  const overrides: Record<string, number> = {};
-  for (const [key, value] of Object.entries(current.catalog.overrides)) {
-    if (key !== harnessId) overrides[key] = value;
+  const catalogOverrides: Record<string, number> = {};
+  for (const [key, value] of Object.entries(current.catalogOverrides)) {
+    if (key !== harnessId) catalogOverrides[key] = value;
   }
-  if (seconds !== null) overrides[harnessId] = seconds;
-  await writeCliConfig({
-    ...current,
-    catalog: { ...current.catalog, overrides },
-  });
+  if (seconds !== null) catalogOverrides[harnessId] = seconds;
+  await writeCliConfig({ ...current, catalogOverrides });
 }
 
 export async function listEnvOverrides(): Promise<
