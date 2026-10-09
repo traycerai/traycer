@@ -2722,6 +2722,47 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
+    CLI & Args: how long the scoped host waits for this provider's model and
+    command lists (`~/.traycer/cli/config.json` on that machine: the shared
+    value in `catalog.probeTimeoutSeconds`, each provider's own in the
+    top-level `catalogOverrides` block, over `config.catalog.get` / `set` at
+    1.1; top-level because a #2450-era binary strips unknown keys INSIDE
+    `catalog` on its next write but carries an unknown top-level block). Two `SettingsRow`s and
+    no other copy. **Timeout** ("How long to wait for the model list.") is a
+    `SettingsSegmentedControl` of 60 / 90 / 120 / 180 s filtered to the
+    `bounds` the host returns, plus the shown value as its own segment when a
+    hand-edited file holds another. **Same for all providers** is a switch.
+    On (the default: no `overrides[harnessId]`), the picker shows and edits the
+    SHARED value (`scope: "all"`), which every provider whose switch is on
+    follows; it never touches another provider's own value. Off, the provider
+    has its own value (`scope: "harness"`) and the picker edits only that.
+    Turning it off writes the shared value as the provider's own, so nothing
+    changes until the picker moves; turning it on clears it (`null`). The
+    override map is keyed by HARNESS id (`GUI_HARNESS_BY_PROVIDER_ID`, so
+    `claude-code` stores under `claude`), because the host reads it per catalog
+    probe, which is keyed by harness. Gate: the panel's `HostScopeGate` (usable
+    scope) plus `resolveAutoCleanupGate` (reachable host, BOTH methods
+    negotiated at 1.1 - `catalogTimeoutRowsSupported`); anything short of
+    `ready` renders nothing, so a 1.0 host (shared value only) has no rows.
+    Writes go through `useConfigCatalogSetMutation`, which cancels any
+    in-flight read, files the host's answer (the re-read state) into the
+    `config.catalog.get` cache and only then settles. The controls are
+    disabled while ANY write is outstanding on the host
+    (`useConfigCatalogSetOutstanding`, `useIsMutating` on the host-keyed
+    `configMutationKeys.catalogSet(hostId)`), including one whose rows have
+    since unmounted, so the next write is never built on the state before the
+    last one (switch off, then a pick, must go out as `scope: "harness"`). The
+    write carries a dispatch-time floor of `config.catalog.set@1.1`
+    (`requiredHostMethodVersion`): a host rolled back to 1.0 after the rows
+    rendered refuses it instead of taking the 1.1 body through the same-major
+    downgrade, which would strip `scope` and move the shared value. A failed first read (malformed config file) replaces
+    the Timeout row's description with the repair sentence; a failed RE-read
+    behind a known value keeps that value. Search: the `modelList` region group
+    (anchor `null`, like every Providers region) with both rows contributing
+    to it. Every provider that advertises CLI & Args (all of them today, amp
+    and cursor included) has the rows. The host reads the value at every
+    catalog probe, so a change applies to the next read without a restart.
   - **Who reviews &lt;provider&gt;'s commands**
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
     tab (icon `ShieldCheck`, since the Account tab already uses `KeyRound`,
@@ -3393,24 +3434,12 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       that instead of the generic sentence. The fallback stays TRUE for a bare
       code rather than becoming a wrong-bug answer: a config the parser rejects
       is a server that failed to start.
-    - **Model list timeout** (`providers-catalog-timeout-chip.tsx`) — a chip
-      on the heading row, left of "All providers · Refresh": how long the
-      scoped host waits for a provider's model or command list
-      (`catalog.probeTimeoutSeconds` in `~/.traycer/cli/config.json` on that
-      machine, read over `config.catalog.get` / `set`). Host-wide, like the
-      status beside it, which is why it is on the heading row and not in the
-      selected provider's card. It mounts under the same
-      `isHostScopeUsable` guard and also resolves the Worktrees chips' gate
-      (`resolveAutoCleanupGate`, both methods advertised); anything short of
-      `ready` renders nothing, so a host without the methods has no control.
-      A radio menu of 60 / 90 / 120 / 180 s filtered to the `bounds` the
-      host returns, plus the stored value as "N s (custom)" when a
-      hand-edited file holds another; picking the current value writes
-      nothing. A failed read (malformed config file) replaces the items with
-      the Worktrees chip's repair sentence. The host reads the value at every
-      catalog probe, so a change applies to the next read without a restart.
     - **The global "All providers" status lives on the panel HEADING row**, and
-      renders only when `isHostScopeUsable(scope.status)`.
+      renders only when `isHostScopeUsable(scope.status)`. The heading row
+      carries STATUS ONLY: a setting is a row in the tab it belongs to. The
+      Model list timeout sat there as a chip for one staging build
+      (traycer#2450) and was moved to each provider's CLI & Args tab, below,
+      because a knob on a status line has no label hierarchy around it.
       `latestProviderCheckedAt` is a max over every provider and Refresh
       re-probes all of them; at the card's top-right it sat inches from the
       selected provider's Enabled toggle and read as that provider's own.
