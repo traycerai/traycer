@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -54,16 +54,20 @@ export function useSwitcherNewChat(
   const recordPlacement = placement.pin.setSelection;
   const createChat = useEpicCreateChatForHostClient(submitTarget.client);
   const navigateNestedFocus = useEpicNestedFocusNavigation();
+  // `isPending` only flips on the next render, so a fast double tap would read
+  // `false` twice and file two creates.
+  const inFlight = useRef(false);
 
   const start = useCallback(
     (parentId: string | null) => {
-      if (createChat.isPending) return;
+      if (inFlight.current || createChat.isPending) return;
       const verdict = resolveLandingPlacement(submitTarget);
       if (verdict.kind === "refused") {
         toast.error(verdict.message);
         return;
       }
       recordPlacement(verdict.hostId);
+      inFlight.current = true;
       openNewChatInActiveTile({
         epicId,
         tabId,
@@ -81,13 +85,19 @@ export function useSwitcherNewChat(
           // outlives the component. A refusal RESOLVES (its `chatId` names a
           // chat the host did not make) and the mutation's own `onSuccess`
           // already reported it, so it is never opened.
-          createChat.mutateAsync(request).then(
-            (response) => {
-              if (response.refusal === undefined) callbacks.onSuccess(response);
-            },
-            // The mutation's own `onError` already toasts.
-            () => undefined,
-          );
+          createChat
+            .mutateAsync(request)
+            .then(
+              (response) => {
+                if (response.refusal === undefined)
+                  callbacks.onSuccess(response);
+              },
+              // The mutation's own `onError` already toasts.
+              () => undefined,
+            )
+            .finally(() => {
+              inFlight.current = false;
+            });
         },
         onCreateError: () => undefined,
         openWhenProjected: (intent) => {

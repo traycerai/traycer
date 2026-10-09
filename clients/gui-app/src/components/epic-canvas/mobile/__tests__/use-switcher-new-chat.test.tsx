@@ -185,6 +185,20 @@ describe("useSwitcherNewChat", () => {
     expect(spies.openWhenProjected).toHaveBeenCalledTimes(1);
   });
 
+  it("files one create for two starts before the pending state renders", async () => {
+    const { result } = renderHook(() =>
+      useSwitcherNewChat(EPIC_ID, TAB_ID, vi.fn()),
+    );
+    act(() => {
+      result.current.start(null);
+      result.current.start(null);
+    });
+    expect(spies.mutate).toHaveBeenCalledTimes(1);
+    await answer({ chatId: "chat-1" });
+    act(() => result.current.start(null));
+    expect(spies.mutate).toHaveBeenCalledTimes(2);
+  });
+
   it("creates a child when given a parent id", () => {
     const { result } = renderHook(() =>
       useSwitcherNewChat(EPIC_ID, TAB_ID, vi.fn()),
