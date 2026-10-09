@@ -204,6 +204,7 @@ export function cloneChatOnHostSwitch(
       epicId: args.epicId,
       tabId: args.tabId,
       hostId: args.targetHostId,
+      parentId: null,
       worktreeIntent: null,
       title,
       settings,

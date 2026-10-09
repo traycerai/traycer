@@ -12,8 +12,6 @@ import {
 import { useSwitcherCreateArtifact } from "@/components/epic-canvas/mobile/use-switcher-create-artifact";
 import { MobileNewTerminalDialog } from "@/components/epic-canvas/mobile/mobile-new-terminal-dialog";
 import { SwitcherNewItemRow } from "@/components/epic-canvas/mobile/switcher-list-row";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
-import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
   EPIC_NODE_ICONS,
   EPIC_NODE_LABELS,
@@ -37,26 +35,14 @@ interface SwitcherCreateProps {
  * Artifacts category carries, so both tabs put creating in one place rather
  * than each teaching its own.
  *
- * Opens the shared New Conversation modal through the desktop funnel (force
- * chat mode, then request the modal with no explicit placement, so the
- * conversation tile-placement setting decides); the modal's
- * Chat/Terminal interface switcher covers both a GUI chat and a TUI
- * terminal-agent, so one control serves the whole category. The modal replaces
- * the sheet, so the sheet closes as it opens.
+ * Creates an empty agent and opens it (`useSwitcherNewChat`, owned by the
+ * agents list so the tree's "New child agent" shares it); the first message is
+ * typed in the chat itself. The phone has no New Conversation modal.
  */
-export function SwitcherNewChatAction(props: SwitcherCreateProps) {
-  const { epicId, tabId, onClose } = props;
-  const handleSelect = () => {
-    useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
-    useNewConversationModalOpenStore.getState().open({
-      epicId,
-      tabId,
-      placement: null,
-      parentId: null,
-      hostId: null,
-    });
-    onClose();
-  };
+export function SwitcherNewChatAction(props: {
+  readonly onSelect: () => void;
+  readonly isPending: boolean;
+}) {
   return (
     <Button
       type="button"
@@ -64,9 +50,18 @@ export function SwitcherNewChatAction(props: SwitcherCreateProps) {
       size="icon-sm"
       aria-label="New chat"
       data-testid="switcher-new-chat"
-      onClick={handleSelect}
+      disabled={props.isPending}
+      onClick={props.onSelect}
     >
-      <Plus className="size-4" />
+      {props.isPending ? (
+        <AgentSpinningDots
+          className="size-4"
+          testId="switcher-new-chat-pending"
+          variant="dots2"
+        />
+      ) : (
+        <Plus className="size-4" />
+      )}
     </Button>
   );
 }

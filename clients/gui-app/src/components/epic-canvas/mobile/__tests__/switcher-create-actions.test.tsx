@@ -7,21 +7,9 @@ import {
 } from "@/components/epic-canvas/mobile/switcher-create-actions";
 
 const spies = vi.hoisted(() => ({
-  setComposerMode: vi.fn(),
-  openModal: vi.fn(),
   createArtifact: vi.fn(),
 }));
 
-vi.mock("@/stores/epics/new-conversation-modal-store", () => ({
-  useNewConversationModalStore: {
-    getState: () => ({ setComposerMode: spies.setComposerMode }),
-  },
-}));
-vi.mock("@/stores/epics/new-conversation-modal-open-store", () => ({
-  useNewConversationModalOpenStore: {
-    getState: () => ({ open: spies.openModal }),
-  },
-}));
 vi.mock("@/components/epic-canvas/mobile/use-switcher-create-artifact", () => ({
   useSwitcherCreateArtifact: () => ({
     create: spies.createArtifact,
@@ -46,28 +34,27 @@ vi.mock("@/components/epic-canvas/mobile/mobile-new-terminal-dialog", () => ({
 }));
 
 beforeEach(() => {
-  spies.setComposerMode.mockClear();
-  spies.openModal.mockClear();
   spies.createArtifact.mockClear();
 });
 afterEach(cleanup);
 
 describe("<SwitcherNewChatAction />", () => {
-  it("sets chat composer mode, opens the New Conversation modal for this epic/tab, and closes the sheet", () => {
-    const onClose = vi.fn();
-    render(
-      <SwitcherNewChatAction epicId="epic-1" tabId="tab-1" onClose={onClose} />,
-    );
+  it("calls onSelect when tapped", () => {
+    const onSelect = vi.fn();
+    render(<SwitcherNewChatAction onSelect={onSelect} isPending={false} />);
     fireEvent.click(screen.getByTestId("switcher-new-chat"));
-    expect(spies.setComposerMode).toHaveBeenCalledWith("epic-1", "chat");
-    expect(spies.openModal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        epicId: "epic-1",
-        tabId: "tab-1",
-        parentId: null,
-      }),
-    );
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("switcher-new-chat-pending")).toBeNull();
+  });
+
+  it("is disabled and shows a spinner while a create is pending", () => {
+    const onSelect = vi.fn();
+    render(<SwitcherNewChatAction onSelect={onSelect} isPending />);
+    const button = screen.getByTestId("switcher-new-chat");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("switcher-new-chat-pending")).not.toBeNull();
+    fireEvent.click(button);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 

@@ -5547,6 +5547,7 @@ describe("chat tree on a mounting surface", () => {
       onRowActivated: () => undefined,
       revealRowControls: true,
       searchQuery: null,
+      startNewChat: () => undefined,
       ...overrides,
     };
   }
@@ -5582,17 +5583,22 @@ describe("chat tree on a mounting surface", () => {
     expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
   });
 
-  it("dismisses the surface when a row's child create is chosen", () => {
-    // Root create already dismissed. An action that dismisses from one control
-    // and not another is the asymmetry this case exists to catch.
+  it("hands a row's child create to the surface instead of the modal", () => {
+    // The phone sheet creates the child itself, like its root "+". The modal
+    // it replaces mounts only on a matching route, which a phone cold launch
+    // does not have.
     seedChatTree();
-    let dismissed = 0;
-    renderOnSurface(mountedSurface({ onRowActivated: () => (dismissed += 1) }));
+    useNewConversationModalOpenStore.getState().close();
+    const started: Array<string | null> = [];
+    renderOnSurface(
+      mountedSurface({ startNewChat: (parentId) => started.push(parentId) }),
+    );
 
     fireEvent.click(screen.getByTestId("epic-sidebar-more-chat-root"));
     fireEvent.click(dropdownItem("new-child-chat-root"));
 
-    expect(dismissed).toBe(1);
+    expect(started).toEqual(["chat-root"]);
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
   });
 
   it("narrows by the SURFACE's query when it owns one", () => {
