@@ -51,6 +51,7 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const CLAUDE_HARNESS_ID = providerIdToGuiHarnessId("claude-code");
 const CLAUDE_MODEL_SLUG = "claude-sonnet";
@@ -307,6 +308,8 @@ function createFixture() {
 
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    // The app's real policy: catalog reads carry its response allowance.
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
