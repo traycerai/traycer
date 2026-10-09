@@ -468,6 +468,17 @@ class FakeRelayHost {
     return this.hostKeys.publicKey;
   }
 
+  /**
+   * Sockets the client has closed. A failed attach closes its socket inside
+   * the session's loss funnel, which arms the next backoff in the same call,
+   * so a count of N means the backoff after the Nth failure is armed.
+   * `openBearers` grows when the open ARRIVES, while that attempt is still in
+   * flight.
+   */
+  closedConnectionCount(): number {
+    return this.connections.filter((connection) => connection.closed).length;
+  }
+
   readonly factory: IStreamWebSocketFactory = {
     create: (): StreamWebSocketLike => {
       const connection: FakeConnection = {
@@ -4229,11 +4240,16 @@ describe("RemoteSession wake", () => {
     try {
       session.start();
       // Park while the second failure's backoff is armed, so this caller
-      // rides the third attempt and sees it fail.
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+      // rides the third attempt and sees it fail. Wait for the second socket
+      // to CLOSE, not for the second open to arrive: parking while that
+      // attempt is still in flight rides the second attempt instead, the wake
+      // then hurries the third (scripted to fail), and the fourth lands on the
+      // escalated 2-4s tier.
+      await vi.waitFor(() => expect(relay.closedConnectionCount()).toBe(2), {
         timeout: 6_000,
         interval: 50,
       });
+      expect(relay.openBearers).toHaveLength(2);
       await expect(
         session.sendUnary(
           "host.status",
