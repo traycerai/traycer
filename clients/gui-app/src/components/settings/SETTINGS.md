@@ -2747,10 +2747,16 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     `ready` renders nothing, so a 1.0 host (shared value only) has no rows.
     Writes go through `useConfigCatalogSetMutation`, which cancels any
     in-flight read, files the host's answer (the re-read state) into the
-    `config.catalog.get` cache and only then settles; the controls are
-    disabled while it is pending, so the next write is never built on the
-    state before the last one (switch off, then a pick, must go out as
-    `scope: "harness"`). A failed first read (malformed config file) replaces
+    `config.catalog.get` cache and only then settles. The controls are
+    disabled while ANY write is outstanding on the host
+    (`useConfigCatalogSetOutstanding`, `useIsMutating` on the host-keyed
+    `configMutationKeys.catalogSet(hostId)`), including one whose rows have
+    since unmounted, so the next write is never built on the state before the
+    last one (switch off, then a pick, must go out as `scope: "harness"`). The
+    write carries a dispatch-time floor of `config.catalog.set@1.1`
+    (`requiredHostMethodVersion`): a host rolled back to 1.0 after the rows
+    rendered refuses it instead of taking the 1.1 body through the same-major
+    downgrade, which would strip `scope` and move the shared value. A failed first read (malformed config file) replaces
     the Timeout row's description with the repair sentence; a failed RE-read
     behind a known value keeps that value. Search: the `modelList` region group
     (anchor `null`, like every Providers region) with both rows contributing

@@ -216,10 +216,15 @@ export function catalogSettingsFrom(
   catalog: CatalogConfig,
   catalogOverrides: CatalogOverridesConfig,
 ): CatalogSettings {
-  const overrides: Record<string, number> = {};
-  for (const [harnessId, seconds] of Object.entries(catalogOverrides)) {
-    overrides[harnessId] = clampCatalogProbeTimeoutSeconds(seconds);
-  }
+  // `Object.fromEntries` DEFINES own properties, so a hand-edited key such as
+  // `__proto__` stays an entry; an assignment into a `{}` literal would hit
+  // the prototype setter and drop it.
+  const overrides: Record<string, number> = Object.fromEntries(
+    Object.entries(catalogOverrides).map(([harnessId, seconds]) => [
+      harnessId,
+      clampCatalogProbeTimeoutSeconds(seconds),
+    ]),
+  );
   return {
     probeTimeoutSeconds: clampCatalogProbeTimeoutSeconds(
       catalog.probeTimeoutSeconds,

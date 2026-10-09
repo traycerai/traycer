@@ -21,7 +21,10 @@ import { Switch } from "@/components/ui/switch";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useConfigCatalogSetMutation } from "@/hooks/config/use-config-catalog-set-mutation";
+import {
+  useConfigCatalogSetMutation,
+  useConfigCatalogSetOutstanding,
+} from "@/hooks/config/use-config-catalog-set-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
@@ -76,6 +79,7 @@ export function ProviderCatalogTimeoutGroup(props: {
     <CatalogTimeoutRows
       key={hostId}
       client={client}
+      hostId={hostId}
       harnessId={GUI_HARNESS_BY_PROVIDER_ID[providerId]}
     />
   );
@@ -83,9 +87,10 @@ export function ProviderCatalogTimeoutGroup(props: {
 
 function CatalogTimeoutRows(props: {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
   readonly harnessId: string;
 }): ReactNode {
-  const { client, harnessId } = props;
+  const { client, hostId, harnessId } = props;
   const query = useHostQuery<HostRpcRegistry, "config.catalog.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -95,7 +100,10 @@ function CatalogTimeoutRows(props: {
   });
   // Files the host's answer into the read before it settles, so the rows never
   // re-enable on the state before a write (see the hook).
-  const setCatalogTimeout = useConfigCatalogSetMutation(client);
+  const setCatalogTimeout = useConfigCatalogSetMutation(client, hostId);
+  // Every outstanding write on this host, including one sent by rows that
+  // have since unmounted - not just this observer's own.
+  const writeOutstanding = useConfigCatalogSetOutstanding(hostId);
   const state = query.data ?? null;
   const ownSeconds =
     state !== null && Object.hasOwn(state.overrides, harnessId)
@@ -103,7 +111,7 @@ function CatalogTimeoutRows(props: {
       : null;
   const sameForAll = ownSeconds === null;
   const shownSeconds = ownSeconds ?? state?.probeTimeoutSeconds ?? null;
-  const disabled = state === null || setCatalogTimeout.isPending;
+  const disabled = state === null || writeOutstanding;
   const options = catalogTimeoutOptions(state?.bounds ?? null, shownSeconds);
 
   const write = (
@@ -138,7 +146,7 @@ function CatalogTimeoutRows(props: {
         }
         control={
           <div className="flex items-center gap-2">
-            {setCatalogTimeout.isPending ? (
+            {writeOutstanding ? (
               <AgentSpinningDots
                 className={undefined}
                 testId="provider-catalog-timeout-saving"

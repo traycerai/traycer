@@ -34,6 +34,7 @@ import { cliConfigPath } from "../paths";
 import {
   EMPTY_CLI_CONFIG,
   catalogProbeTimeoutSecondsFor,
+  catalogSettingsFrom,
   cliConfigSchema,
   type CliConfig,
 } from "../schema";
@@ -1008,6 +1009,24 @@ describe("catalog probe timeout", () => {
     expect(catalogProbeTimeoutSecondsFor(settings, "constructor")).toBe(75);
     expect(catalogProbeTimeoutSecondsFor(settings, "__proto__")).toBe(75);
     expect(catalogProbeTimeoutSecondsFor(settings, "toString")).toBe(75);
+  });
+
+  it("catalogSettingsFrom keeps an own __proto__ key as an entry, clamped, instead of hitting the prototype setter", () => {
+    // JSON.parse defines `__proto__` as an OWN key; an assignment into a `{}`
+    // literal would call the setter and drop it.
+    const overrides: Record<string, number> = JSON.parse(
+      '{"__proto__": 600, "opencode": 30}',
+    );
+    const settings = catalogSettingsFrom(
+      { probeTimeoutSeconds: 90 },
+      overrides,
+    );
+    expect(Object.hasOwn(settings.overrides, "__proto__")).toBe(true);
+    expect(
+      Object.getOwnPropertyDescriptor(settings.overrides, "__proto__"),
+    ).toMatchObject({ value: 180 });
+    expect(settings.overrides["opencode"]).toBe(60);
+    expect(Object.getPrototypeOf(settings.overrides)).toBe(Object.prototype);
   });
 
   it("async read throws on a malformed file", async () => {

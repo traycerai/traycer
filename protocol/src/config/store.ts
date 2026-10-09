@@ -1149,11 +1149,14 @@ export async function setCatalogProbeTimeoutOverride(
   seconds: number | null,
 ): Promise<void> {
   const current = await readCliConfig();
-  const catalogOverrides: Record<string, number> = {};
-  for (const [key, value] of Object.entries(current.catalogOverrides)) {
-    if (key !== harnessId) catalogOverrides[key] = value;
-  }
-  if (seconds !== null) catalogOverrides[harnessId] = seconds;
+  // `Object.fromEntries` defines own properties, so no key - `__proto__`
+  // included - reaches the prototype setter and is dropped from the copy.
+  const kept = Object.entries(current.catalogOverrides).filter(
+    ([key]) => key !== harnessId,
+  );
+  const catalogOverrides: Record<string, number> = Object.fromEntries(
+    seconds === null ? kept : [...kept, [harnessId, seconds]],
+  );
   await writeCliConfig({ ...current, catalogOverrides });
 }
 

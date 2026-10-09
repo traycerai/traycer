@@ -11,12 +11,14 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
   ConfigCatalogResponse,
   ConfigCatalogSetRequest,
 } from "@traycer/protocol/host/config/schemas";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -42,6 +44,15 @@ const state = vi.hoisted(
   }),
 );
 const tracked = vi.hoisted(() => vi.fn());
+const toasted = vi.hoisted(() =>
+  vi.fn<(error: unknown, message: string) => void>(),
+);
+
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: (error: unknown, message: string) => {
+    toasted(error, message);
+  },
+}));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => state.reachability,
@@ -102,6 +113,12 @@ interface HarnessOptions {
   readonly laterReads: "answer" | "hang" | "reject";
   /** While non-null, `config.catalog.set` does not answer until it settles. */
   readonly holdSet: Deferred | null;
+  /**
+   * The version the connection CARRYING THE WRITE negotiated for
+   * `config.catalog.set`, which can differ from the render gate's (mocked at
+   * 1.1) when the host is rolled back after the rows rendered.
+   */
+  readonly negotiatedSet: SchemaVersion;
 }
 
 function mountHarness(options: HarnessOptions): {
@@ -120,44 +137,47 @@ function mountHarness(options: HarnessOptions): {
     overrides: { ...overrides },
     bounds: DEFAULT_BOUNDS,
   });
-  const messenger: MockHostMessenger<HostRpcRegistry> =
-    new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${Math.random().toString(36).slice(2)}`,
-      handlers: {
-        "config.catalog.get": () => {
-          getCount += 1;
-          if (options.failReads) {
-            return Promise.reject(new Error("config.json is garbage"));
-          }
-          if (getCount > 1 && options.laterReads === "hang") {
-            return new Promise<ConfigCatalogResponse>(() => undefined);
-          }
-          if (getCount > 1 && options.laterReads === "reject") {
-            return Promise.reject(new Error("config.json is garbage"));
-          }
-          return Promise.resolve(read());
-        },
-        "config.catalog.set": (params) => {
-          sets.push(params);
-          return (options.holdSet?.promise ?? Promise.resolve()).then(() => {
-            if (params.scope === "all") {
-              shared = params.probeTimeoutSeconds;
-            } else {
-              const next: Record<string, number> = {};
-              for (const [key, value] of Object.entries(overrides)) {
-                if (key !== params.harnessId) next[key] = value;
-              }
-              if (params.probeTimeoutSeconds !== null) {
-                next[params.harnessId] = params.probeTimeoutSeconds;
-              }
-              overrides = next;
+  const messenger: FloorEnforcingMessenger<HostRpcRegistry> =
+    new FloorEnforcingMessenger<HostRpcRegistry>(
+      {
+        registry: hostRpcRegistry,
+        requestId: () => `req-${Math.random().toString(36).slice(2)}`,
+        handlers: {
+          "config.catalog.get": () => {
+            getCount += 1;
+            if (options.failReads) {
+              return Promise.reject(new Error("config.json is garbage"));
             }
-            return read();
-          });
+            if (getCount > 1 && options.laterReads === "hang") {
+              return new Promise<ConfigCatalogResponse>(() => undefined);
+            }
+            if (getCount > 1 && options.laterReads === "reject") {
+              return Promise.reject(new Error("config.json is garbage"));
+            }
+            return Promise.resolve(read());
+          },
+          "config.catalog.set": (params) => {
+            sets.push(params);
+            return (options.holdSet?.promise ?? Promise.resolve()).then(() => {
+              if (params.scope === "all") {
+                shared = params.probeTimeoutSeconds;
+              } else {
+                const next: Record<string, number> = {};
+                for (const [key, value] of Object.entries(overrides)) {
+                  if (key !== params.harnessId) next[key] = value;
+                }
+                if (params.probeTimeoutSeconds !== null) {
+                  next[params.harnessId] = params.probeTimeoutSeconds;
+                }
+                overrides = next;
+              }
+              return read();
+            });
+          },
         },
       },
-    });
+      new Map([["config.catalog.set", options.negotiatedSet]]),
+    );
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -182,6 +202,7 @@ function defaults(
     failReads: false,
     laterReads: "answer",
     holdSet: null,
+    negotiatedSet: V11,
   };
 }
 
@@ -243,6 +264,7 @@ beforeEach(() => {
   state.setVersion = V11;
   state.client = null;
   tracked.mockClear();
+  toasted.mockClear();
 });
 
 afterEach(() => {
@@ -549,6 +571,124 @@ describe("ProviderCatalogTimeoutGroup write path", () => {
       { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 120 },
     ]);
     expect(segmentLabels()).toEqual(["60 s", "90 s", "120 s", "180 s"]);
+  });
+});
+
+describe("ProviderCatalogTimeoutGroup when the rows remount while a write is outstanding", () => {
+  it("stays disabled until the write answers, then builds the next write on the answer", async () => {
+    // The write outlives the rows that sent it: leaving the tab or switching
+    // provider unmounts them. Rows mounted while it is in flight must not
+    // enable on the read from before it, or the pick goes out as scope "all".
+    const holdSet = deferred();
+    const { harness, queryClient } = mountHarness({
+      ...defaults(60, {}),
+      laterReads: "hang",
+      holdSet,
+    });
+    const first = renderGroup(queryClient);
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["60 s"]);
+    });
+    fireEvent.click(sameForAllSwitch());
+    await waitFor(() => {
+      expect(harness.sets).toHaveLength(1);
+    });
+
+    first.unmount();
+    renderGroup(queryClient);
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["60 s"]);
+    });
+
+    // Remounted on the pre-write read, with the write still held.
+    expect(sameForAllSwitch().hasAttribute("disabled")).toBe(true);
+    for (const label of ["60 s", "90 s", "120 s", "180 s"]) {
+      expect(segment(label).hasAttribute("disabled")).toBe(true);
+    }
+    fireEvent.click(segment("120 s"));
+    await settled();
+    expect(harness.sets).toHaveLength(1);
+
+    holdSet.resolve();
+    await waitFor(() => {
+      expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+    });
+    await waitFor(() => {
+      expect(segment("120 s").hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(segment("120 s"));
+
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["120 s"]);
+    });
+    expect(harness.sets).toEqual([
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 60 },
+      { scope: "harness", harnessId: "claude", probeTimeoutSeconds: 120 },
+    ]);
+  });
+});
+
+describe("ProviderCatalogTimeoutGroup on a host rolled back to 1.0 after the rows rendered", () => {
+  it("refuses the pick before it reaches the host, toasts the refusal, and keeps the previous value", async () => {
+    // The render gate (mocked) still says 1.1, but the connection carrying the
+    // write negotiated 1.0: its same-major downgrade would re-parse the scoped
+    // body with the 1.0 schema, strip scope and harnessId, and move the SHARED
+    // value.
+    const { harness, queryClient } = mountHarness({
+      ...defaults(60, { claude: 90 }),
+      negotiatedSet: V10,
+    });
+    renderGroup(queryClient);
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["90 s"]);
+    });
+    expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(segment("120 s"));
+
+    await waitFor(() => {
+      expect(toasted).toHaveBeenCalledTimes(1);
+    });
+    // The host's set handler never ran: no body of any shape reached it.
+    expect(harness.sets).toEqual([]);
+    // `toHaveBeenCalledTimes(1)` above proves the first call exists.
+    const [error, message] = toasted.mock.calls[0];
+    expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(error).toMatchObject({
+      requirement: {
+        method: "config.catalog.set",
+        version: { major: 1, minor: 1 },
+      },
+      negotiated: { major: 1, minor: 0 },
+    });
+    expect(message).toBe("Couldn't update the model list timeout");
+    // Still on the previous value, own-value mode intact, controls usable.
+    await waitFor(() => {
+      expect(segment("120 s").hasAttribute("disabled")).toBe(false);
+    });
+    expect(pressedLabels()).toEqual(["90 s"]);
+    expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(sameForAllSwitch().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("refuses the switch the same way", async () => {
+    const { harness, queryClient } = mountHarness({
+      ...defaults(60, { claude: 90 }),
+      negotiatedSet: V10,
+    });
+    renderGroup(queryClient);
+    await waitFor(() => {
+      expect(pressedLabels()).toEqual(["90 s"]);
+    });
+
+    fireEvent.click(sameForAllSwitch());
+
+    await waitFor(() => {
+      expect(toasted).toHaveBeenCalledTimes(1);
+    });
+    expect(harness.sets).toEqual([]);
+    expect(sameForAllSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(pressedLabels()).toEqual(["90 s"]);
   });
 });
 
