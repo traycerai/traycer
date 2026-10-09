@@ -9,6 +9,8 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HOST_SANDBOX_STATES } from "@traycer/protocol/host/host-status";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
   SandboxCatalogue,
   SandboxCost,
@@ -70,7 +72,10 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 }));
 
 import { SandboxCard } from "@/components/hosts/sandbox-card";
-import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
+import {
+  buildHostScopeOptions,
+  type HostScopeSandbox,
+} from "@/components/settings/host-scope/host-scope-model";
 
 const NAME = "build-box";
 
@@ -318,6 +323,139 @@ describe("<SandboxCard /> per state", () => {
     const warning = screen.getByTestId("sandbox-balance-warning");
     expect(warning.getAttribute("data-level")).toBe("critical");
     expect(warning.textContent).toContain("20 min");
+  });
+});
+
+/**
+ * The card's `sandbox` prop as the scope builder resolves it, for the cases
+ * that are about WHICH answer the card shows: the host list's facts (registry
+ * row, then directory entry) when it has them, the sandbox list's summary
+ * otherwise. `listed` is what `GET /api/v3/hosts?include=sandboxState` said;
+ * `null` is a registry row that carried no sandbox facts (and no directory
+ * entry to copy them from).
+ */
+function resolvedSandbox(input: {
+  readonly listed: {
+    readonly state: HostScopeSandbox["state"];
+    readonly frozen: boolean;
+  } | null;
+  readonly summaryFrozen: boolean;
+}): HostScopeSandbox {
+  const item: HostListItem = {
+    hostId: "sbx-host",
+    displayName: "Build box",
+    platform: "linux",
+    kind: "sandbox",
+    publicKey: "pk",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: "2026-01-01T00:00:00Z",
+    },
+    profile: "agent",
+    ...(input.listed === null
+      ? {}
+      : {
+          sandboxState: input.listed.state,
+          sandboxFrozen: input.listed.frozen,
+        }),
+  };
+  const options = buildHostScopeOptions({
+    leases: [],
+    authorityAttached: false,
+    directory:
+      input.listed === null
+        ? []
+        : [hostListItemToDirectoryEntry(item, "wss://relay.example.test")],
+    registry: [item],
+    localHostId: null,
+    activeHostId: null,
+    localService: undefined,
+    hasLiveSession: () => false,
+    localHostSettingUp: false,
+    sandboxes: [
+      sandboxSummaryFixture({
+        id: "sbx_1",
+        hostId: "sbx-host",
+        displayName: NAME,
+        state: "suspended",
+        frozen: input.summaryFrozen,
+      }),
+    ],
+    nowMs: 0,
+  });
+  const sandbox = options.find(
+    (option) => option.hostId === "sbx-host",
+  )?.sandbox;
+  if (sandbox === undefined || sandbox === null) {
+    throw new Error("the builder produced no sandbox facts for the row");
+  }
+  return sandbox;
+}
+
+describe("<SandboxCard /> facts as the scope resolves them", () => {
+  it("shows the host list's thaw, not the stale summary's frozen flag", () => {
+    const sandbox = resolvedSandbox({
+      listed: { state: "suspended", frozen: false },
+      summaryFrozen: true,
+    });
+    // The builder prefers the host list: thawed.
+    expect(sandbox.frozen).toBe(false);
+
+    renderCard(sandbox);
+
+    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
+      "false",
+    );
+    expect(screen.getByTestId("sandbox-card-state").textContent).not.toBe(
+      "Frozen",
+    );
+    expect(
+      screen.getByTestId("sandbox-card-state-line").textContent,
+    ).not.toMatch(/^Frozen/);
+    expect(actionTestIds()).toEqual([
+      "sandbox-card-resume",
+      "sandbox-card-destroy",
+    ]);
+  });
+
+  it("control: shows a frozen row when the host list says frozen, whatever the summary says", () => {
+    const sandbox = resolvedSandbox({
+      listed: { state: "suspended", frozen: true },
+      summaryFrozen: false,
+    });
+    expect(sandbox.frozen).toBe(true);
+
+    renderCard(sandbox);
+
+    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
+      "true",
+    );
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
+      /^Frozen: out of credits/,
+    );
+    expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
+  });
+
+  it("control: falls back to the summary's frozen flag when the host list carries no sandbox facts", () => {
+    const sandbox = resolvedSandbox({ listed: null, summaryFrozen: true });
+    // The builder's fallback, not a hand-written prop.
+    expect(sandbox.frozen).toBe(true);
+    expect(sandbox.state).toBe("suspended");
+
+    renderCard(sandbox);
+
+    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
+      "true",
+    );
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 });
 

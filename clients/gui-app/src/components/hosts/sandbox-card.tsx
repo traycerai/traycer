@@ -7,7 +7,6 @@ import type {
   SandboxLifecycleVerb,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
-import { isSandboxFrozenInEffect } from "@traycer-clients/shared/host-client/sandbox-control";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,13 +67,11 @@ export function SandboxCard(props: {
   readonly hostName: string;
   readonly sandbox: HostScopeSandbox;
 }): ReactNode {
-  const { summary } = props.sandbox;
-  const state = props.sandbox.state ?? summary?.state ?? null;
-  const frozen = isSandboxFrozenInEffect(
-    state,
-    props.sandbox.frozen || summary?.frozen === true,
-  );
-  const word = sandboxStateWord({ ...props.sandbox, state, frozen });
+  // Taken as resolved. The builder (`sandboxFactsOf`) already prefers the
+  // host list's facts and falls back to the sandbox-list summary, so a second
+  // fallback here would let a stale summary's `frozen` undo a resolved thaw.
+  const { summary, state, frozen } = props.sandbox;
+  const word = sandboxStateWord(props.sandbox);
   const actions = summary === null ? [] : sandboxCardActions(state, frozen);
   return (
     <Card
