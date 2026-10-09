@@ -22,6 +22,7 @@ import {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
@@ -433,6 +434,7 @@ describe("<SandboxCard /> verbs", () => {
     expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "suspend",
+      SANDBOX_VERB_FETCH_TIMEOUT_MS,
     );
     expect(mocks.toastInfo).not.toHaveBeenCalled();
   });

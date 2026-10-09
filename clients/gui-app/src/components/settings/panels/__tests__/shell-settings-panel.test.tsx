@@ -27,6 +27,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
+// What `useHostCredentialRefusal` answers for the scoped host: `null` is a
+// host that takes credentials, a string is a sandbox's refusal line. Mocked
+// because the bare binding above carries no host directory to read it from.
+const credentialRefusal = vi.hoisted(() => ({
+  current: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => credentialRefusal.current,
+}));
+
 import {
   act,
   cleanup,
@@ -67,6 +77,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  credentialRefusal.current = null;
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -1159,4 +1170,139 @@ describe("<ShellSettingsPanel /> partially failed rename refreshes the editor", 
   // settlement, for symmetry with the RPC twin above and because the failure
   // mode is identical; it is simply not pinned here rather than pinned by a
   // test that cannot fail. Do not re-add one in this shape.
+});
+
+describe("<ShellSettingsPanel /> host environment on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const SIGN_IN_URL = "https://ghp_x@github.com/o/r";
+
+  function envCli(): MockTraycerCli {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    return cli;
+  }
+
+  function envSetSpy(cli: MockTraycerCli) {
+    return vi.fn(async (request: { key: string; value: string | null }) => {
+      await cli.envOverrideSet(request);
+      return { key: request.key, value: request.value };
+    });
+  }
+
+  async function addVariable(
+    placeholder: string,
+    name: string,
+    value: string,
+  ): Promise<void> {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add environment variable" }),
+    );
+    fireEvent.change(screen.getByPlaceholderText(placeholder), {
+      target: { value: name },
+    });
+    fireEvent.change(screen.getByLabelText("New environment variable value"), {
+      target: { value },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply environment variable" }),
+    );
+  }
+
+  it("refuses a value that is a URL with a sign-in: the line shows, the value stays, and config.env.set is never sent", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("NODE_ENV", "REPO_URL", SIGN_IN_URL);
+
+    expect(
+      await screen.findByText(`${REFUSAL}: remove the sign-in from this URL.`),
+    ).toBeTruthy();
+    const valueField = screen.getByLabelText("New environment variable value");
+    expect((valueField as HTMLInputElement).value).toBe(SIGN_IN_URL);
+    expect(set).not.toHaveBeenCalled();
+    expect(cli.envOverrides).toEqual([]);
+  });
+
+  it("still saves a plain value", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("NODE_ENV", "NODE_ENV", "production");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ key: "NODE_ENV", value: "production" });
+  });
+
+  it("refuses a sign-in URL typed into an existing variable on blur, and sends nothing", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "REPO_URL", value: "https://github.com/o/r" }];
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    const field = await screen.findByLabelText("Value for REPO_URL");
+    fireEvent.change(field, { target: { value: SIGN_IN_URL } });
+    fireEvent.blur(field);
+
+    expect(
+      await screen.findByText(`${REFUSAL}: remove the sign-in from this URL.`),
+    ).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("hints NODE_ENV on the add row, not a key-shaped name", async () => {
+    credentialRefusal.current = REFUSAL;
+    renderShellPanelOverRpc({ cli: envCli() });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add environment variable" }),
+    );
+
+    expect(screen.getByPlaceholderText("NODE_ENV")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("OPENAI_API_KEY")).toBeNull();
+  });
+
+  it("control: on a host that takes credentials the sign-in URL is saved and the hint is OPENAI_API_KEY", async () => {
+    credentialRefusal.current = null;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add environment variable" }),
+    );
+    expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("OPENAI_API_KEY"), {
+      target: { value: "REPO_URL" },
+    });
+    fireEvent.change(screen.getByLabelText("New environment variable value"), {
+      target: { value: SIGN_IN_URL },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply environment variable" }),
+    );
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ key: "REPO_URL", value: SIGN_IN_URL });
+  });
 });

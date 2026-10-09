@@ -12,7 +12,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCost,
+  SandboxListResponse,
+  UserSandboxCost,
+} from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "./sandbox-fixtures";
 
 interface TurnCompletion {
@@ -40,10 +44,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: list.current }),
 }));
 
-// The cost view's answer, whose awake burn sets the credits poll.
-const costs = vi.hoisted<{
-  current: { readonly awakeBurnMillicreditsPerHour: number } | undefined;
-}>(() => ({ current: undefined }));
+// The cost view's answer, whose rows' rates set the credits poll.
+const costs = vi.hoisted<{ current: UserSandboxCost | undefined }>(() => ({
+  current: undefined,
+}));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-costs-query",
   async (importOriginal) => ({
@@ -75,6 +79,32 @@ function listOf(
   ...rows: readonly Parameters<typeof sandboxSummaryFixture>[0][]
 ): SandboxListResponse {
   return { sandboxes: rows.map(sandboxSummaryFixture) };
+}
+
+function costRow(
+  state: SandboxCost["state"],
+  currentRateMillicreditsPerHour: number,
+): SandboxCost {
+  return {
+    sandboxId: "sbx_1",
+    currentRateMillicreditsPerHour,
+    state,
+    frozen: false,
+    charged: {
+      computeMillicredits: 0,
+      storageMillicredits: 0,
+      sinceCreatedAt: 1_791_000_000_000,
+    },
+    pendingMillicredits: 0,
+    segments: [],
+  };
+}
+
+function costsOf(
+  awakeBurnMillicreditsPerHour: number,
+  ...sandboxes: readonly SandboxCost[]
+): UserSandboxCost {
+  return { sandboxes, awakeBurnMillicreditsPerHour };
 }
 
 function fireTurn(harnessId: GuiHarnessId): void {
@@ -222,7 +252,7 @@ describe("useRefreshSandboxCosts", () => {
 
     it("polls the credits every minute, only while foregrounded, while an awake sandbox burns", () => {
       useAuthStore.setState({ status: "signed-in" });
-      costs.current = { awakeBurnMillicreditsPerHour: 120 };
+      costs.current = costsOf(120, costRow("awake", 120));
       const { wrapper, queryClient } = setup();
       renderHook(() => useRefreshSandboxCosts(), { wrapper });
 
@@ -236,11 +266,28 @@ describe("useRefreshSandboxCosts", () => {
       ).toBe(true);
     });
 
-    it("sets no poll when nothing burns, or when the cost view has not answered", () => {
+    it("keeps polling the credits for a suspended sandbox that accrues only its storage", () => {
+      useAuthStore.setState({ status: "signed-in" });
+      // Nothing is awake, so the awake burn is zero; the disk still bills.
+      costs.current = costsOf(0, costRow("suspended", 4));
+      const { wrapper, queryClient } = setup();
+      renderHook(() => useRefreshSandboxCosts(), { wrapper });
+
+      const observers = creditsObservers(queryClient);
+      expect(observers.length).toBeGreaterThan(0);
+      expect(observers.some((o) => o.options.refetchInterval === 60_000)).toBe(
+        true,
+      );
+      expect(
+        observers.every((o) => o.options.refetchIntervalInBackground === false),
+      ).toBe(true);
+    });
+
+    it("sets no poll when nothing accrues, or when the cost view has not answered", () => {
       useAuthStore.setState({ status: "signed-in" });
       const { wrapper, queryClient } = setup();
 
-      costs.current = { awakeBurnMillicreditsPerHour: 0 };
+      costs.current = costsOf(0, costRow("suspended", 0));
       const idle = renderHook(() => useRefreshSandboxCosts(), { wrapper });
       expect(creditsObservers(queryClient).length).toBeGreaterThan(0);
       expect(
@@ -259,7 +306,7 @@ describe("useRefreshSandboxCosts", () => {
     });
 
     it("does not fetch the credits for a signed-out user, whatever the burn", () => {
-      costs.current = { awakeBurnMillicreditsPerHour: 120 };
+      costs.current = costsOf(120, costRow("awake", 120));
       const { wrapper } = setup();
       renderHook(() => useRefreshSandboxCosts(), { wrapper });
 

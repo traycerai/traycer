@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+  type MockInstance,
+} from "vitest";
 import {
   SANDBOX_FROZEN_MESSAGE,
   createSandboxViaHttp,
@@ -10,6 +18,7 @@ import {
   isSandboxFrozenInEffect,
   listSandboxesViaHttp,
   runSandboxVerbViaHttp,
+  SANDBOX_VERB_FETCH_TIMEOUT_MS,
   type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
   type SandboxVerbFetchResult,
@@ -18,6 +27,8 @@ import {
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
+/** A request timeout the tests that do not examine it pass. */
+const VERB_TIMEOUT_MS = 60_000;
 /** A real-shaped sandbox id: the server mints lowercase ULIDs. */
 const ULID = "01jbz8k3m4n5p6q7r8s9t0vwxy";
 /** Ids that are not one plain path segment, so no URL is built from them. */
@@ -87,7 +98,7 @@ describe("runSandboxVerbViaHttp", () => {
       jsonResponse(200, { sandbox: SUMMARY }),
     );
 
-    await runSandboxVerbViaHttp(BASE, BEARER, ULID, "resume");
+    await runSandboxVerbViaHttp(BASE, BEARER, ULID, "resume", VERB_TIMEOUT_MS);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
@@ -103,9 +114,15 @@ describe("runSandboxVerbViaHttp", () => {
       jsonResponse(200, { sandbox: SUMMARY }),
     );
     for (const id of UNSAFE_IDS) {
-      expect(await runSandboxVerbViaHttp(BASE, BEARER, id, "resume")).toEqual(
-        INVALID_ID_RESULT,
-      );
+      expect(
+        await runSandboxVerbViaHttp(
+          BASE,
+          BEARER,
+          id,
+          "resume",
+          VERB_TIMEOUT_MS,
+        ),
+      ).toEqual(INVALID_ID_RESULT);
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -113,21 +130,39 @@ describe("runSandboxVerbViaHttp", () => {
   it("reads 200 as settled", async () => {
     stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
     expect(
-      await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "suspend"),
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "suspend",
+        VERB_TIMEOUT_MS,
+      ),
     ).toEqual({ kind: "ok", settled: true });
   });
 
   it("reads 202 as ok but not settled", async () => {
     stubFetch(async () => jsonResponse(202, { sandbox: SUMMARY }));
     expect(
-      await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "suspend"),
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "suspend",
+        VERB_TIMEOUT_MS,
+      ),
     ).toEqual({ kind: "ok", settled: false });
   });
 
   it("reads 402 sandbox_frozen as a typed refusal carrying the code and status", async () => {
     stubFetch(async () => jsonResponse(402, { code: "sandbox_frozen" }));
     expect(
-      await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume"),
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "resume",
+        VERB_TIMEOUT_MS,
+      ),
     ).toEqual({
       kind: "refused",
       status: 402,
@@ -146,6 +181,7 @@ describe("runSandboxVerbViaHttp", () => {
       BEARER,
       "sbx_1",
       "suspend",
+      VERB_TIMEOUT_MS,
     );
     expect(result).toMatchObject({
       kind: "refused",
@@ -164,24 +200,36 @@ describe("runSandboxVerbViaHttp", () => {
         currentAwakeBurnMcPerHour: 60,
       }),
     );
-    expect(await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "start")).toEqual(
-      {
-        kind: "refused",
-        status: 402,
-        code: "insufficient_credit",
-        reason: "denied",
-        shortfallMc: 70,
-        newRateMcPerHour: 120,
-        currentAwakeBurnMcPerHour: 60,
-      },
-    );
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "start",
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({
+      kind: "refused",
+      status: 402,
+      code: "insufficient_credit",
+      reason: "denied",
+      shortfallMc: 70,
+      newRateMcPerHour: 120,
+      currentAwakeBurnMcPerHour: 60,
+    });
   });
 
   it("reads 401 and 403 as unauthorized, whatever the body says", async () => {
     for (const status of [401, 403]) {
       stubFetch(async () => jsonResponse(status, { code: "sandbox_busy" }));
       expect(
-        await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "stop"),
+        await runSandboxVerbViaHttp(
+          BASE,
+          BEARER,
+          "sbx_1",
+          "stop",
+          VERB_TIMEOUT_MS,
+        ),
       ).toEqual({ kind: "unauthorized" });
     }
   });
@@ -191,7 +239,13 @@ describe("runSandboxVerbViaHttp", () => {
       async () =>
         new Response("<html>secret upstream page</html>", { status: 502 }),
     );
-    const result = await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "stop");
+    const result = await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      "sbx_1",
+      "stop",
+      VERB_TIMEOUT_MS,
+    );
     expect(result).toEqual({
       kind: "network-error",
       detail: "the control plane answered HTTP 502 without a typed refusal",
@@ -202,11 +256,97 @@ describe("runSandboxVerbViaHttp", () => {
     stubFetch(async () => {
       throw new TypeError("connect ECONNREFUSED 10.0.0.1");
     });
-    const result = await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "stop");
+    const result = await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      "sbx_1",
+      "stop",
+      VERB_TIMEOUT_MS,
+    );
     expect(result).toEqual({
       kind: "network-error",
       detail: "the request never completed (TypeError)",
     });
+  });
+});
+
+describe("runSandboxVerbViaHttp request deadline", () => {
+  /** The signal timeout each request is built with, observed on the platform call. */
+  function watchTimeouts(): MockInstance<typeof AbortSignal.timeout> {
+    return vi.spyOn(AbortSignal, "timeout");
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("exports the ceiling at the 370 s the card's verbs wait", () => {
+    expect(SANDBOX_VERB_FETCH_TIMEOUT_MS).toBe(370_000);
+  });
+
+  it("aborts the request at the timeout it was passed", async () => {
+    stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
+    const timeout = watchTimeouts();
+
+    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 120_000);
+
+    expect(timeout).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledWith(120_000);
+  });
+
+  it("keeps a timeout that is exactly the ceiling, and caps one above it", async () => {
+    stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
+    const timeout = watchTimeouts();
+
+    await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      "sbx_1",
+      "resume",
+      SANDBOX_VERB_FETCH_TIMEOUT_MS,
+    );
+    expect(timeout).toHaveBeenLastCalledWith(370_000);
+
+    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 370_001);
+    expect(timeout).toHaveBeenLastCalledWith(370_000);
+
+    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 1_000_000);
+    expect(timeout).toHaveBeenLastCalledWith(370_000);
+  });
+
+  it("treats a negative timeout as already spent rather than throwing", async () => {
+    stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
+    const timeout = watchTimeouts();
+
+    await expect(
+      runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", -5_000),
+    ).resolves.toEqual({ kind: "ok", settled: true });
+    expect(timeout).toHaveBeenCalledWith(0);
+  });
+
+  it("hands fetch a signal that fires at that timeout, and reads the abort as a network error", async () => {
+    const seen: { signal: AbortSignal | null } = { signal: null };
+    stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          seen.signal = init.signal ?? null;
+          init.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason);
+          });
+        }),
+    );
+
+    const pending = runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 30);
+    await Promise.resolve();
+    // A signal exists and has not fired yet.
+    expect(seen.signal).not.toBeNull();
+    expect(seen.signal?.aborted).toBe(false);
+
+    expect(await pending).toEqual({
+      kind: "network-error",
+      detail: "the request never completed (TimeoutError)",
+    });
+    expect(seen.signal?.aborted).toBe(true);
   });
 });
 
@@ -543,7 +683,7 @@ describe("ensureSandboxAwake", () => {
       }),
     );
     expect(resumed).toEqual({ kind: "awake" });
-    expect(wake).toHaveBeenLastCalledWith("sbx_1", "resume");
+    expect(wake).toHaveBeenLastCalledWith("sbx_1", "resume", 5_000);
 
     const started = await ensureSandboxAwake(
       deps({
@@ -553,7 +693,39 @@ describe("ensureSandboxAwake", () => {
       }),
     );
     expect(started).toEqual({ kind: "awake" });
-    expect(wake).toHaveBeenLastCalledWith("sbx_1", "start");
+    expect(wake).toHaveBeenLastCalledWith("sbx_1", "start", 5_000);
+  });
+
+  it("passes the wake what is left of its budget: the timeout minus the time already spent", async () => {
+    const wake = vi.fn(async () => ok);
+    const base = deps({ initial: suspended, wake, reads: [awake] });
+    // Every read of the clock costs 700 ms of fake time, so the deadline is
+    // taken at t = 0 and the verb is sent at t = 700.
+    const ticking = {
+      ...base,
+      now: () => {
+        const t = base.clock.t;
+        base.clock.t += 700;
+        return t;
+      },
+    };
+
+    const outcome = await ensureSandboxAwake(ticking);
+
+    expect(outcome).toEqual({ kind: "awake" });
+    // timeoutMs 5_000 - 700.
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith("sbx_1", "resume", 4_300);
+  });
+
+  it("passes the whole budget to a wake sent the moment it starts", async () => {
+    const wake = vi.fn(async () => ok);
+
+    await ensureSandboxAwake(
+      deps({ initial: suspended, wake, reads: [awake] }),
+    );
+
+    expect(wake).toHaveBeenCalledWith("sbx_1", "resume", 5_000);
   });
 
   it("sends no verb to a row already coming up", async () => {

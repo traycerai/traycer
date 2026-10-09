@@ -34,6 +34,8 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import type { runSandboxVerbViaHttp } from "@traycer-clients/shared/host-client/sandbox-control";
+import { config } from "../../../config";
 import { FakeHostController } from "./fake-host-controller";
 import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
@@ -43,6 +45,22 @@ import {
 } from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+/** The control-plane call the `runSandboxVerb` handler makes, observed. */
+const runSandboxVerbViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
+    kind: "ok",
+    settled: true,
+  })),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/sandbox-control",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/sandbox-control")
+    >()),
+    runSandboxVerbViaHttp: runSandboxVerbViaHttpMock,
+  }),
+);
 /**
  * `app`-level event listeners, recorded rather than discarded so a test can
  * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
@@ -890,6 +908,49 @@ describe("RunnerIpcBridge", () => {
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("forwards the runSandboxVerb timeout to the control-plane call, and rejects a timeout that is not a number before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.runSandboxVerb);
+    if (handler === undefined) {
+      throw new Error("runSandboxVerb handler missing");
+    }
+
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
+    ).resolves.toEqual({ kind: "ok", settled: true });
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "sbx_1",
+      "resume",
+      119_000,
+    );
+
+    for (const bad of ["119000", null, undefined, {}]) {
+      await expect(
+        handler(bareEvent(), "bearer-1", "sbx_1", "resume", bad),
+      ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    }
+    // The old four-argument call, from a renderer that predates the field.
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume"),
+    ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 

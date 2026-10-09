@@ -229,6 +229,7 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    timeoutMs: number,
   ): Promise<SandboxVerbFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
@@ -1155,8 +1156,9 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    timeoutMs: number,
   ): Promise<SandboxVerbFetchResult> {
-    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb);
+    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
   }
 
   beginAuthAttempt(): void {

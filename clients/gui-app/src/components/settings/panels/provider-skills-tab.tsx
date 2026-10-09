@@ -27,6 +27,8 @@ import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
@@ -130,6 +132,9 @@ function ProviderSkillsTabBody({
     enabled: canList,
   });
   const mutate = useProvidersSkillsMutate();
+  // A git or tree URL with a token in it is a credential: a sandbox is not
+  // sent one.
+  const credentialRefusal = useHostCredentialRefusal(null);
 
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
@@ -276,6 +281,15 @@ function ProviderSkillsTabBody({
   async function onComposerMutate(
     mutation: ProvidersSkillsMutateAction,
   ): Promise<SkillsMutateData> {
+    if (
+      credentialRefusal !== null &&
+      (mutation.action === "inspect" || mutation.action === "import") &&
+      urlCarriesCredentials(mutation.source)
+    ) {
+      throw new Error(
+        `${credentialRefusal}: remove the sign-in from the source URL to import it here.`,
+      );
+    }
     setPendingKey(`composer:${mutation.action}`);
     try {
       return await mutate.mutateAsync({

@@ -17,6 +17,7 @@ type CreateSandbox = (
 type RunSandboxVerb = (
   sandboxId: string,
   verb: SandboxLifecycleVerb,
+  timeoutMs: number,
 ) => Promise<SandboxVerbFetchResult>;
 type DestroySandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
 

@@ -2,6 +2,7 @@ import type {
   HostNotificationSeverity,
   NotificationHookConfig,
 } from "@traycer/protocol/host/notifications/host-notifications";
+import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 
 /**
  * The severities a notification can actually carry, in the same order and
@@ -134,15 +135,30 @@ export function draftToHook(draft: HookDraft): NotificationHookConfig {
       };
 }
 
-/** Human-readable reason the draft can't be saved yet, or null when valid. */
-export function draftProblem(draft: HookDraft): string | null {
+/**
+ * Human-readable reason the draft can't be saved yet, or null when valid.
+ * With `credentialRefusal` (the host takes no credentials), a draft that
+ * carries one - a header value, or a URL with a sign-in in the executable or
+ * an argument - is refused with that line.
+ */
+export function draftProblem(
+  draft: HookDraft,
+  credentialRefusal: string | null,
+): string | null {
   if (draft.severities.length === 0) {
     return "Pick at least one severity.";
   }
   if (draft.actionType === "command") {
-    return draft.command.trim().length === 0
-      ? "Enter the executable to run."
-      : null;
+    if (draft.command.trim().length === 0) {
+      return "Enter the executable to run.";
+    }
+    if (
+      credentialRefusal !== null &&
+      [draft.command, ...splitLines(draft.argsText)].some(urlCarriesCredentials)
+    ) {
+      return `${credentialRefusal}: remove the sign-in from its URLs to save this hook here.`;
+    }
+    return null;
   }
   const url = draft.url.trim();
   if (url.length === 0) return "Enter a URL.";
@@ -156,7 +172,17 @@ export function draftProblem(draft: HookDraft): string | null {
     return "The URL must be http(s).";
   }
   if (parsed.username !== "" || parsed.password !== "") {
-    return "Put credentials in a header, not the URL.";
+    return credentialRefusal === null
+      ? "Put credentials in a header, not the URL."
+      : `${credentialRefusal}: remove the sign-in from the URL to save this hook here.`;
+  }
+  if (
+    credentialRefusal !== null &&
+    Object.values(parseHeaders(draft.headersText)).some(
+      (value) => value.length > 0,
+    )
+  ) {
+    return `${credentialRefusal}: remove the header values to save this hook here.`;
   }
   return null;
 }

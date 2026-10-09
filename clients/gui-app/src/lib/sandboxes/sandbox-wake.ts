@@ -5,6 +5,7 @@ import {
 import { toast } from "sonner";
 import {
   ensureSandboxAwake,
+  type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
   type SandboxWakeBudget,
   type SandboxWakeOutcome,
@@ -29,9 +30,21 @@ const WAKE_TIMEOUT_MS = 120_000;
 /**
  * One wake per host at a time, across every caller: two tabs opened together
  * on one suspended sandbox, or a pick followed by the tab it opens, must not
- * resume it twice.
+ * resume it twice. A host leaves the map when its wake's lifecycle request has
+ * settled, not when the wake answered: a wake that timed out has its request
+ * aborted, and until that abort lands a retry joins the timed-out wake rather
+ * than sending a second verb into the first one's transition.
  */
 const wakesInFlight = new Map<string, Promise<SandboxWakeOutcome>>();
+
+/**
+ * A started wake: its `outcome`, and `settled`, which resolves once the
+ * outcome is known AND the lifecycle request it sent (if any) has settled.
+ */
+interface SandboxWakeAttempt {
+  readonly outcome: Promise<SandboxWakeOutcome>;
+  readonly settled: Promise<void>;
+}
 
 /**
  * A wake's outcome, and whether this call joined a wake another caller
@@ -67,9 +80,33 @@ async function readSandboxFacts(
   };
 }
 
+function startWakeAttempt(
+  auth: AuthService,
+  hostId: string,
+): SandboxWakeAttempt {
+  let verbRequest: Promise<unknown> = Promise.resolve();
+  const outcome = wakeSandboxHost(
+    auth,
+    hostId,
+    (sandboxId, verb, timeoutMs) => {
+      const request = auth.runSandboxVerb(sandboxId, verb, timeoutMs);
+      verbRequest = request;
+      return request;
+    },
+  );
+  const settled = outcome
+    .then(() => verbRequest)
+    .then(
+      () => undefined,
+      () => undefined,
+    );
+  return { outcome, settled };
+}
+
 async function wakeSandboxHost(
   auth: AuthService,
   hostId: string,
+  wake: EnsureSandboxAwakeDeps["wake"],
 ): Promise<SandboxWakeOutcome> {
   const first = await readSandboxFacts(auth, hostId);
   // The directory already said this host is a sandbox, so a failed first
@@ -83,7 +120,7 @@ async function wakeSandboxHost(
   let last: SandboxDialFacts = first.facts;
   return ensureSandboxAwake({
     initial: first.facts,
-    wake: (sandboxId, verb) => auth.runSandboxVerb(sandboxId, verb),
+    wake,
     readFacts: async () => {
       const read = await readSandboxFacts(auth, hostId);
       // A failed poll says nothing about the sandbox: keep waiting on what
@@ -121,13 +158,14 @@ async function runSharedWake(
   if (running !== undefined) {
     return { outcome: await running, joined: true };
   }
-  const started = wakeSandboxHost(auth, hostId);
-  wakesInFlight.set(hostId, started);
-  try {
-    return { outcome: await started, joined: false };
-  } finally {
-    wakesInFlight.delete(hostId);
-  }
+  const attempt = startWakeAttempt(auth, hostId);
+  wakesInFlight.set(hostId, attempt.outcome);
+  void attempt.settled.then(() => {
+    if (wakesInFlight.get(hostId) === attempt.outcome) {
+      wakesInFlight.delete(hostId);
+    }
+  });
+  return { outcome: await attempt.outcome, joined: false };
 }
 
 function toastWakeOutcome(outcome: SandboxWakeOutcome): void {

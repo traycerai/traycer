@@ -7,6 +7,7 @@ import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
+import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
@@ -71,7 +72,11 @@ export function useSandboxVerb(
       if (binding === null) {
         throw new Error("Sign in to change this sandbox.");
       }
-      const result = await binding.auth.runSandboxVerb(sandboxId, verb);
+      const result = await binding.auth.runSandboxVerb(
+        sandboxId,
+        verb,
+        SANDBOX_VERB_FETCH_TIMEOUT_MS,
+      );
       if (result.kind === "ok") return result.settled ? "settled" : "moving";
       if (
         result.kind === "refused" &&

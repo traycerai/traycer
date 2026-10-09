@@ -46,9 +46,11 @@ const SANDBOX_DESTROY_FETCH_TIMEOUT_MS = 190_000;
 /**
  * The lifecycle verbs run on the server's 360 s `transfer` tier and answer
  * `202` at their own 300 s deadline; same margin as a create, so the server's
- * answer is what the client reads.
+ * answer is what the client reads. The ceiling of every verb request: the
+ * card's verbs wait this long, and a wake passes what is left of its own
+ * budget instead (see {@link runSandboxVerbViaHttp}).
  */
-const SANDBOX_VERB_FETCH_TIMEOUT_MS = 370_000;
+export const SANDBOX_VERB_FETCH_TIMEOUT_MS = 370_000;
 
 /**
  * A non-`ok` answer:
@@ -342,12 +344,18 @@ export async function destroySandboxViaHttp(
  * is at rest, `202` when it is still moving at the server's deadline (both
  * `ok`: the sandbox list shows the rest); a wake's caller then waits for the
  * host list to say `awake` (see {@link ensureSandboxAwake}).
+ *
+ * `timeoutMs` is when the request is aborted, capped at
+ * {@link SANDBOX_VERB_FETCH_TIMEOUT_MS}: a wake passes what is left of its
+ * budget, so a request that outlives the wake is aborted with it rather than
+ * left to land a verb in a transition a retry has started.
  */
 export async function runSandboxVerbViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   sandboxId: string,
   verb: SandboxLifecycleVerb,
+  timeoutMs: number,
 ): Promise<SandboxVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
@@ -355,7 +363,10 @@ export async function runSandboxVerbViaHttp(
     {
       method: "POST",
       body: null,
-      timeoutMs: SANDBOX_VERB_FETCH_TIMEOUT_MS,
+      timeoutMs: Math.min(
+        Math.max(timeoutMs, 0),
+        SANDBOX_VERB_FETCH_TIMEOUT_MS,
+      ),
     },
     bearerToken,
   );
@@ -429,10 +440,15 @@ export type SandboxWakeOutcome =
 export interface EnsureSandboxAwakeDeps {
   /** The facts the caller dialed from (its host list row joined to the sandbox id). */
   readonly initial: SandboxDialFacts;
-  /** Calls the wake verb; the runner host's `runSandboxVerb`. */
+  /**
+   * Calls the wake verb; the runner host's `runSandboxVerb`. `timeoutMs` is
+   * what is left of the wake's budget, and the request is aborted once it is
+   * spent.
+   */
   readonly wake: (
     sandboxId: string,
     verb: SandboxWakeVerb,
+    timeoutMs: number,
   ) => Promise<SandboxVerbFetchResult>;
   /** Re-reads the facts (a fresh host list read); `null` when the row is gone. */
   readonly readFacts: () => Promise<SandboxDialFacts | null>;
@@ -513,7 +529,7 @@ export async function ensureSandboxAwake(
     const verb = wakeVerbFor(deps.initial.state);
     if (verb !== null) {
       const result = await withinBudget(
-        deps.wake(deps.initial.sandboxId, verb),
+        deps.wake(deps.initial.sandboxId, verb, deadline - deps.now()),
         budget,
       );
       if (result === BUDGET_SPENT) return WAKE_TIMED_OUT;

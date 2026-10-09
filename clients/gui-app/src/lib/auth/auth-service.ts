@@ -2997,6 +2997,7 @@ export class AuthService {
   async runSandboxVerb(
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    timeoutMs: number,
   ): Promise<SandboxVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
@@ -3004,7 +3005,7 @@ export class AuthService {
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb);
+    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb, timeoutMs);
   }
 
   private async revalidateCurrentContextOnce(

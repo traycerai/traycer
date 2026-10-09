@@ -10,6 +10,7 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   createFakeSandboxBinding,
   refusal,
@@ -80,6 +81,7 @@ describe("useSandboxVerb", () => {
     expect(state.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "suspend",
+      SANDBOX_VERB_FETCH_TIMEOUT_MS,
     );
     expect(outcome).toBe("settled");
   });

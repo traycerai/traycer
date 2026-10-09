@@ -41,6 +41,7 @@ import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutat
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { cn } from "@/lib/utils";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { mcpTransportCarriesSecret } from "@/components/providers/credential-bearing-values";
 
 type TransportKind = "remote" | "local";
 type RemoteTransportType = "http" | "sse";
@@ -461,7 +462,7 @@ export function ProviderMcpAddDialog(props: {
       mcpTransportCarriesSecret(submission.transport)
     ) {
       setFormError(
-        `${credentialRefusal}: remove the header or environment values to add this server here.`,
+        `${credentialRefusal}: remove the header values, environment values and any sign-in in its URLs to add this server here.`,
       );
       return;
     }
@@ -1081,18 +1082,6 @@ function splitArgs(text: string): string[] {
   const trimmed = text.trim();
   if (trimmed.length === 0) return [];
   return trimmed.split(/\s+/);
-}
-
-/**
- * Whether a server definition carries a secret VALUE: an auth header's value,
- * or a stdio env value. An OAuth server's client id and an env-auth server's
- * variable NAME are not secrets.
- */
-function mcpTransportCarriesSecret(
-  transport: ProviderMcpServerTransportWrite,
-): boolean {
-  if (transport.type === "stdio") return transport.env !== null;
-  return transport.auth !== null && transport.auth.type === "header";
 }
 
 function buildRemoteAuth(

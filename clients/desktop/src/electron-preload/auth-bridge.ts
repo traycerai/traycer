@@ -129,6 +129,7 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    timeoutMs: number,
   ): Promise<SandboxVerbFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
@@ -235,12 +236,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         sandboxId,
       ) as Promise<SandboxVerbFetchResult>,
 
-    runSandboxVerb: (bearerToken, sandboxId, verb) =>
+    runSandboxVerb: (bearerToken, sandboxId, verb, timeoutMs) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.runSandboxVerb,
         bearerToken,
         sandboxId,
         verb,
+        timeoutMs,
       ) as Promise<SandboxVerbFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the

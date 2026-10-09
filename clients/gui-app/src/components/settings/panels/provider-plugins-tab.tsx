@@ -19,6 +19,8 @@ import { useProvidersPluginIcon } from "@/hooks/providers/use-providers-plugin-i
 import { useProvidersPluginsList } from "@/hooks/providers/use-providers-plugins-list-query";
 import { useProvidersPluginsMutate } from "@/hooks/providers/use-providers-plugins-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 import { cn } from "@/lib/utils";
 import { ProviderEntryIcon } from "./provider-entry-icon";
 import {
@@ -209,6 +211,8 @@ function ProviderPluginsTabBody({
     workspacesLoading,
   } = scopeState;
   const { isReadOnly, canAdd } = pluginCapabilityFlags(caps, effectiveScope);
+  // A git URL with a token in it is a credential: a sandbox is not sent one.
+  const credentialRefusal = useHostCredentialRefusal(null);
 
   const listQuery = useProvidersPluginsList({
     providerId,
@@ -269,6 +273,16 @@ function ProviderPluginsTabBody({
 
   const runMutation = useCallback(
     (mutation: ProvidersPluginsMutateAction, trackId: string | null): void => {
+      if (
+        credentialRefusal !== null &&
+        mutation.action === "add" &&
+        urlCarriesCredentials(mutation.source)
+      ) {
+        setLocalError(
+          `${credentialRefusal}: remove the sign-in from the source URL to add it here.`,
+        );
+        return;
+      }
       setLocalError(null);
       if (trackId !== null) markPending(trackId, true);
       mutate.mutate(
@@ -296,7 +310,14 @@ function ProviderPluginsTabBody({
         },
       );
     },
-    [effectiveScope, listWorkspaceRoot, markPending, mutate, providerId],
+    [
+      credentialRefusal,
+      effectiveScope,
+      listWorkspaceRoot,
+      markPending,
+      mutate,
+      providerId,
+    ],
   );
 
   return (

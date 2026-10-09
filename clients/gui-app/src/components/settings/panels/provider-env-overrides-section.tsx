@@ -80,6 +80,7 @@ export function ProviderEnvOverridesSection({
       </div>
       <CredentialRefusalNote refusal={credentialRefusal} />
       <EnvOverrideEditor
+        credentialRefusal={credentialRefusal}
         overrides={overrides}
         disabled={disabled}
         namePlaceholder={envNamePlaceholder(providerId)}

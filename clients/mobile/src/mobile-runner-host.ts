@@ -687,12 +687,14 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    timeoutMs: number,
   ): Promise<SandboxVerbFetchResult> {
     return runSandboxVerbViaHttp(
       this.serverBaseUrl,
       bearerToken,
       sandboxId,
       verb,
+      timeoutMs,
     );
   }
 

@@ -31,6 +31,7 @@ import type {
 import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
 import { log } from "../app/logger";
 import {
+  assertNumber,
   assertString,
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
@@ -267,14 +268,22 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.runSandboxVerb,
-    async (_event, bearerToken: unknown, sandboxId: unknown, verb: unknown) => {
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      verb: unknown,
+      timeoutMs: unknown,
+    ) => {
       assertString(bearerToken, "runSandboxVerb.bearerToken");
       assertString(sandboxId, "runSandboxVerb.sandboxId");
+      assertNumber(timeoutMs, "runSandboxVerb.timeoutMs");
       return runSandboxVerbViaHttp(
         config.serverBaseUrl,
         bearerToken,
         sandboxId,
         parseSandboxLifecycleVerb(verb),
+        timeoutMs,
       );
     },
   );

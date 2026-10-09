@@ -14,6 +14,7 @@ function renderEditor(input: {
     readonly key: string;
     readonly value: string | null;
   }[];
+  readonly credentialRefusal: string | null;
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
 }) {
@@ -21,6 +22,7 @@ function renderEditor(input: {
     <EnvOverrideEditor
       overrides={input.overrides}
       disabled={false}
+      credentialRefusal={input.credentialRefusal}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel="No environment variables."
       onCommit={input.onCommit}
@@ -34,7 +36,12 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>();
     const onDelete = vi.fn<EnvDelete>();
 
-    renderEditor({ overrides: [], onCommit, onDelete });
+    renderEditor({
+      overrides: [],
+      credentialRefusal: null,
+      onCommit,
+      onDelete,
+    });
 
     expect(screen.queryByLabelText("New environment variable name")).toBeNull();
 
@@ -63,7 +70,12 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>();
     const onDelete = vi.fn<EnvDelete>();
 
-    renderEditor({ overrides: [], onCommit, onDelete });
+    renderEditor({
+      overrides: [],
+      credentialRefusal: null,
+      onCommit,
+      onDelete,
+    });
 
     fireEvent.click(
       screen.getByRole("button", { name: "Add environment variable" }),
@@ -85,6 +97,7 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "OPENAI_API_KEY", value: "token" }],
+      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -102,6 +115,7 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "KIMI_CODE_HOME", value: " /workspace/kimi " }],
+      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -130,6 +144,7 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "KIMI_CODE_HOME", value: "/workspace/kimi" }],
+      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -143,7 +158,12 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>();
     const onDelete = vi.fn<EnvDelete>();
 
-    renderEditor({ overrides: [], onCommit, onDelete });
+    renderEditor({
+      overrides: [],
+      credentialRefusal: null,
+      onCommit,
+      onDelete,
+    });
 
     fireEvent.click(
       screen.getByRole("button", { name: "Add environment variable" }),
@@ -170,5 +190,161 @@ describe("EnvOverrideEditor", () => {
       "COPILOT_HOME",
       "/workspace/copilot",
     );
+  });
+
+  describe("on a host that takes no credentials", () => {
+    const REFUSAL = "Sandboxes don't take sign-ins";
+    const REFUSED_LINE = `${REFUSAL}: remove the sign-in from this URL.`;
+    const SIGN_IN_URL = "https://ghp_x@github.com/o/r";
+
+    function addRow(
+      refusal: string | null,
+      onCommit: EnvCommit,
+      value: string,
+    ): void {
+      renderEditor({
+        overrides: [],
+        credentialRefusal: refusal,
+        onCommit,
+        onDelete: vi.fn<EnvDelete>(),
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Add environment variable" }),
+      );
+      fireEvent.change(screen.getByLabelText("New environment variable name"), {
+        target: { value: "REPO_URL" },
+      });
+      fireEvent.change(
+        screen.getByLabelText("New environment variable value"),
+        {
+          target: { value },
+        },
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Apply environment variable" }),
+      );
+    }
+
+    it("refuses a staged value that is a URL with a sign-in: no commit, the line shown, the value kept", () => {
+      const onCommit = vi.fn<EnvCommit>();
+
+      addRow(REFUSAL, onCommit, SIGN_IN_URL);
+
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.getByText(REFUSED_LINE)).toBeDefined();
+      const valueField = screen.getByLabelText(
+        "New environment variable value",
+      );
+      expect((valueField as HTMLInputElement).value).toBe(SIGN_IN_URL);
+    });
+
+    it("applies a staged value that is a plain URL or text", () => {
+      for (const value of ["https://github.com/o/r", "production"]) {
+        const onCommit = vi.fn<EnvCommit>();
+        addRow(REFUSAL, onCommit, value);
+        expect(onCommit).toHaveBeenCalledWith("", "REPO_URL", value);
+        cleanup();
+      }
+    });
+
+    it("applies a staged sign-in URL when the host takes credentials (null refusal)", () => {
+      const onCommit = vi.fn<EnvCommit>();
+
+      addRow(null, onCommit, SIGN_IN_URL);
+
+      expect(onCommit).toHaveBeenCalledWith("", "REPO_URL", SIGN_IN_URL);
+      expect(screen.queryByText(REFUSED_LINE)).toBeNull();
+    });
+
+    function renderRow(refusal: string | null, onCommit: EnvCommit) {
+      return render(
+        <EnvOverrideEditor
+          overrides={[{ key: "REPO_URL", value: "https://github.com/o/r" }]}
+          disabled={false}
+          credentialRefusal={refusal}
+          namePlaceholder="NODE_ENV"
+          emptyLabel="No environment variables."
+          onCommit={onCommit}
+          onDelete={vi.fn<EnvDelete>()}
+        />,
+      );
+    }
+
+    it("refuses a row edited into a sign-in URL on blur, shows the line and keeps the value", () => {
+      const onCommit = vi.fn<EnvCommit>();
+      renderRow(REFUSAL, onCommit);
+
+      const field = screen.getByLabelText("Value for REPO_URL");
+      fireEvent.change(field, { target: { value: SIGN_IN_URL } });
+      fireEvent.blur(field);
+
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.getByText(REFUSED_LINE)).toBeDefined();
+      expect((field as HTMLInputElement).value).toBe(SIGN_IN_URL);
+    });
+
+    it("commits a row edited into a plain value on blur", () => {
+      const onCommit = vi.fn<EnvCommit>();
+      renderRow(REFUSAL, onCommit);
+
+      const field = screen.getByLabelText("Value for REPO_URL");
+      fireEvent.change(field, { target: { value: "https://github.com/o/s" } });
+      fireEvent.blur(field);
+
+      expect(onCommit).toHaveBeenCalledWith(
+        "REPO_URL",
+        "REPO_URL",
+        "https://github.com/o/s",
+      );
+    });
+
+    it("commits a row edited into a sign-in URL on blur when the host takes credentials", () => {
+      const onCommit = vi.fn<EnvCommit>();
+      renderRow(null, onCommit);
+
+      const field = screen.getByLabelText("Value for REPO_URL");
+      fireEvent.change(field, { target: { value: SIGN_IN_URL } });
+      fireEvent.blur(field);
+
+      expect(onCommit).toHaveBeenCalledWith(
+        "REPO_URL",
+        "REPO_URL",
+        SIGN_IN_URL,
+      );
+    });
+
+    it("does not commit a sign-in URL when the row unmounts with it still in the field", () => {
+      const onCommit = vi.fn<EnvCommit>();
+      const view = renderRow(REFUSAL, onCommit);
+
+      fireEvent.change(screen.getByLabelText("Value for REPO_URL"), {
+        target: { value: SIGN_IN_URL },
+      });
+      view.unmount();
+
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("commits a plain edit when the row unmounts, and a sign-in URL when the host takes credentials", () => {
+      const refused = vi.fn<EnvCommit>();
+      const plain = renderRow(REFUSAL, refused);
+      fireEvent.change(screen.getByLabelText("Value for REPO_URL"), {
+        target: { value: "https://github.com/o/s" },
+      });
+      plain.unmount();
+      expect(refused).toHaveBeenCalledWith(
+        "REPO_URL",
+        "REPO_URL",
+        "https://github.com/o/s",
+      );
+
+      const allowed = vi.fn<EnvCommit>();
+      const personal = renderRow(null, allowed);
+      fireEvent.change(screen.getByLabelText("Value for REPO_URL"), {
+        target: { value: SIGN_IN_URL },
+      });
+      personal.unmount();
+      expect(allowed).toHaveBeenCalledWith("REPO_URL", "REPO_URL", SIGN_IN_URL);
+    });
   });
 });

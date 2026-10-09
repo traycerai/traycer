@@ -50,6 +50,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
@@ -310,6 +312,10 @@ function ShellSettingsPanelBody(props: {
 
   const shellPending = controller.shellPending;
   const envPending = controller.envPending;
+  // A sandbox takes no credentials. Its host variables are runtime settings
+  // and stay editable, but a value that is a URL with a sign-in is refused
+  // here and never sent (provider keys live in Providers, which refuses them).
+  const credentialRefusal = useHostCredentialRefusal(null);
   const [shellSaveTarget, setShellSaveTarget] =
     useState<ShellSaveTarget | null>(null);
   const [shellSavedTarget, setShellSavedTarget] =
@@ -430,6 +436,13 @@ function ShellSettingsPanelBody(props: {
     value: string | null,
   ): void => {
     if (envPending) return;
+    if (
+      credentialRefusal !== null &&
+      value !== null &&
+      urlCarriesCredentials(value)
+    ) {
+      return;
+    }
     beginEnvSave();
     if (oldKey === newKey) {
       controller.setEnv({ key: newKey, value }, envSaveCallbacks);
@@ -480,6 +493,7 @@ function ShellSettingsPanelBody(props: {
         pending={envPending}
         saveActive={envSaveActive}
         justSaved={envJustSaved}
+        credentialRefusal={credentialRefusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
       />
@@ -866,6 +880,7 @@ function HostEnvironmentGroup(props: {
   readonly pending: boolean;
   readonly saveActive: boolean;
   readonly justSaved: boolean;
+  readonly credentialRefusal: string | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -907,7 +922,11 @@ function HostEnvironmentGroup(props: {
           <EnvOverrideEditor
             overrides={props.overrides}
             disabled={props.pending}
-            namePlaceholder="OPENAI_API_KEY"
+            credentialRefusal={props.credentialRefusal}
+            // No key-shaped hint on a host that takes no credentials.
+            namePlaceholder={
+              props.credentialRefusal === null ? "OPENAI_API_KEY" : "NODE_ENV"
+            }
             emptyLabel="No host environment variables. The host starts with the environment your shell produces."
             onCommit={props.onCommit}
             onDelete={props.onDelete}

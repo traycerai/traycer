@@ -383,6 +383,7 @@ export interface IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    timeoutMs: number,
   ): Promise<SandboxVerbFetchResult>;
 
   openExternalLink(url: string): Promise<void>;

@@ -626,6 +626,7 @@ describe("<ProviderMcpAddDialog />", () => {
 
 describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
   const REFUSAL = "Sandboxes don't take sign-ins";
+  const REFUSAL_TEXT = `${REFUSAL}: remove the header values, environment values and any sign-in in its URLs to add this server here.`;
 
   beforeEach(() => {
     mcpMocks.mutate.mockReset();
@@ -668,11 +669,7 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
-    expect(
-      await within(dialog).findByText(
-        `${REFUSAL}: remove the header or environment values to add this server here.`,
-      ),
-    ).toBeDefined();
+    expect(await within(dialog).findByText(REFUSAL_TEXT)).toBeDefined();
     expect(mcpMocks.mutate).not.toHaveBeenCalled();
   });
 
@@ -698,11 +695,7 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
-    expect(
-      await within(dialog).findByText(
-        `${REFUSAL}: remove the header or environment values to add this server here.`,
-      ),
-    ).toBeDefined();
+    expect(await within(dialog).findByText(REFUSAL_TEXT)).toBeDefined();
     expect(mcpMocks.mutate).not.toHaveBeenCalled();
   });
 
@@ -723,7 +716,9 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
 
     await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
     expect(
-      screen.queryByText(/remove the header or environment values/),
+      screen.queryByText(
+        /remove the header values, environment values and any sign-in in its URLs/,
+      ),
     ).toBeNull();
   });
 
@@ -751,6 +746,76 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
     await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
+  });
+
+  it("refuses an http server whose URL carries a sign-in, with auth None, and calls no mutate", async () => {
+    renderDialog({
+      capabilities: FULL_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://alice:token@host/mcp" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    expect(await within(dialog).findByText(REFUSAL_TEXT)).toBeDefined();
+    expect(mcpMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stdio server that passes a URL with a sign-in as an argument", async () => {
+    renderDialog({
+      capabilities: STDIO_ONLY_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Command" }), {
+      target: { value: "npx" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Args" }), {
+      target: { value: "mcp-remote https://alice:token@host/mcp" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    expect(await within(dialog).findByText(REFUSAL_TEXT)).toBeDefined();
+    expect(mcpMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("control: on a host that takes credentials the same sign-in URL is submitted with that transport", async () => {
+    mcpMocks.credentialRefusal = null;
+    renderDialog({
+      capabilities: FULL_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fillName(dialog);
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://alice:token@host/mcp" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(mcpMocks.mutate.mock.lastCall?.[0].mutation).toMatchObject({
+      action: "add",
+      transport: {
+        type: "http",
+        url: "https://alice:token@host/mcp",
+        auth: null,
+      },
+    });
   });
 
   it("control: on a host that takes credentials the same header server is submitted", async () => {

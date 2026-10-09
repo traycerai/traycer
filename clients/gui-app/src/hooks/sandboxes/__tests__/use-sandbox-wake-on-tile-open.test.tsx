@@ -133,7 +133,11 @@ describe("useSandboxWakeForOpenedTile", () => {
     await settleWake();
 
     expect(auth?.runSandboxVerb).toHaveBeenCalledTimes(1);
-    expect(auth?.runSandboxVerb).toHaveBeenCalledWith("sbx_1", "resume");
+    expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
+      "sbx_1",
+      "resume",
+      expect.any(Number),
+    );
     expect(mocks.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.toastWarning).not.toHaveBeenCalled();
     expect(mocks.toastError).not.toHaveBeenCalled();
@@ -151,7 +155,11 @@ describe("useSandboxWakeForOpenedTile", () => {
     });
     await settleWake();
 
-    expect(auth?.runSandboxVerb).toHaveBeenCalledWith("sbx_1", "start");
+    expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
+      "sbx_1",
+      "start",
+      expect.any(Number),
+    );
   });
 
   it("refuses a frozen sandbox at once with the frozen toast and sends no verb, awake or asleep", async () => {
@@ -259,7 +267,11 @@ describe("useSandboxWakeForOpenedTile", () => {
     await settleWake();
 
     expect(auth?.runSandboxVerb).toHaveBeenCalledTimes(1);
-    expect(auth?.runSandboxVerb).toHaveBeenCalledWith("sbx_1", "resume");
+    expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
+      "sbx_1",
+      "resume",
+      expect.any(Number),
+    );
   });
 
   it("wakes once for a first entry that is asleep, and not again when the entry later reads awake and then suspended", async () => {

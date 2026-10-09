@@ -11,23 +11,35 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
-/** How often the balance and the cost view refresh while something burns. */
-const AWAKE_BURN_REFRESH_MS = 60_000;
+/** How often the balance and the cost view refresh while something accrues. */
+const ACCRUING_REFRESH_MS = 60_000;
 
 /**
- * The poll for the balance and the cost view: every minute while an awake
- * sandbox is burning credits, none otherwise. With the app focused on one
- * screen and nothing changing state, no event would ever refresh the two, and
- * the runway warning could cross both thresholds unseen. Paused while the app
- * is in the background (`refetchIntervalInBackground: false` at each use);
- * focus refetches on return.
+ * What the user's sandboxes accrue now, all rows together: compute while
+ * awake, and storage while suspended or stopped. The awake burn alone is not
+ * it - a sleeping sandbox burns nothing yet still bills its disk, so its
+ * storage figure, pending charges and the balance would go stale.
+ */
+function accruingMillicreditsPerHour(costs: UserSandboxCost): number {
+  return costs.sandboxes.reduce(
+    (sum, row) => sum + row.currentRateMillicreditsPerHour,
+    0,
+  );
+}
+
+/**
+ * The poll for the balance and the cost view: every minute while any sandbox
+ * accrues credits, none otherwise. With the app focused on one screen and
+ * nothing changing state, no event would ever refresh the two, and the
+ * runway warning could cross both thresholds unseen. Paused while the app is
+ * in the background (`refetchIntervalInBackground: false` at each use); focus
+ * refetches on return.
  */
 export function sandboxCostsRefetchInterval(
-  awakeBurnMillicreditsPerHour: number | null,
+  costs: UserSandboxCost | null,
 ): number | false {
-  return awakeBurnMillicreditsPerHour !== null &&
-    awakeBurnMillicreditsPerHour > 0
-    ? AWAKE_BURN_REFRESH_MS
+  return costs !== null && accruingMillicreditsPerHour(costs) > 0
+    ? ACCRUING_REFRESH_MS
     : false;
 }
 
@@ -56,13 +68,11 @@ function sandboxCostsQueryOptions(
     },
     enabled,
     // On focus, on the events `useRefreshSandboxCosts` invalidates on, and
-    // every minute while its own answer says a sandbox is burning (the
-    // balance it is divided into polls on the same rule there).
+    // every minute while its own answer says a sandbox accrues (the balance
+    // it is divided into polls on the same rule there).
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
-      sandboxCostsRefetchInterval(
-        query.state.data?.awakeBurnMillicreditsPerHour ?? null,
-      ),
+      sandboxCostsRefetchInterval(query.state.data ?? null),
     refetchIntervalInBackground: false,
   });
 }

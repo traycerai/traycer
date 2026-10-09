@@ -49,9 +49,9 @@ function notifyOwnerChanged(): void {
 /**
  * While mounted, keeps the sandbox cost view and the balance it is divided
  * into live, on the pattern of `useRefreshCreditsOnTraycerTurn`: invalidation
- * on events, plus a one-minute poll of both while an awake sandbox burns
- * (`sandboxCostsRefetchInterval`), since a burn moves the balance with no
- * event at all.
+ * on events, plus a one-minute poll of both while any sandbox accrues, awake
+ * or only its storage (`sandboxCostsRefetchInterval`), since accrual moves the
+ * balance with no event at all.
  *
  * The events: a Traycer turn completing (it spent credits), and a sandbox
  * changing state or freezing (the burn moved), seen through the sandbox list
@@ -80,15 +80,15 @@ export function useRefreshSandboxCosts(): void {
   const signature = burnSignature(useSandboxList().data);
   const previousRef = useRef<string | null>(null);
 
-  // The balance polls on the cost view's rule while a sandbox burns: with
+  // The balance polls on the cost view's rule while a sandbox accrues: with
   // nothing changing state and no turn completing, no event above would
   // refresh it. An observer of the shared credits query, from the owner only,
   // so one poll however many surfaces mount this.
   const signedIn = useAuthStore((s) => s.status === "signed-in");
-  const burn = useSandboxCosts().data?.awakeBurnMillicreditsPerHour ?? null;
+  const costs = useSandboxCosts().data ?? null;
   useQuery({
     ...authUserQueryOptions(auth, signedIn && isOwner),
-    refetchInterval: sandboxCostsRefetchInterval(burn),
+    refetchInterval: sandboxCostsRefetchInterval(costs),
     refetchIntervalInBackground: false,
   });
 

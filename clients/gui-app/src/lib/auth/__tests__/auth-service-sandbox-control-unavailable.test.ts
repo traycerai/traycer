@@ -12,6 +12,8 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
+/** What the card's verbs wait; the value is not under test here. */
+const VERB_TIMEOUT_MS = 370_000;
 const REASON = "Sandboxes aren't available in staging builds.";
 
 const CREATE_REQUEST: SandboxCreateRequest = {
@@ -90,9 +92,9 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(await service.getSandboxCatalogue()).toEqual(unavailable);
     expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
     expect(await service.destroySandbox("sbx_1")).toEqual(unavailable);
-    expect(await service.runSandboxVerb("sbx_1", "resume")).toEqual(
-      unavailable,
-    );
+    expect(
+      await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
+    ).toEqual(unavailable);
 
     expect(spies.listSandboxes).not.toHaveBeenCalled();
     expect(spies.getSandboxCosts).not.toHaveBeenCalled();
@@ -127,7 +129,9 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(await service.getSandboxCatalogue()).toEqual({
       kind: "unauthorized",
     });
-    expect(await service.runSandboxVerb("sbx_1", "resume")).toEqual({
+    expect(
+      await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
+    ).toEqual({
       kind: "unauthorized",
     });
     await expect(service.createSandbox(CREATE_REQUEST)).rejects.toThrow(
