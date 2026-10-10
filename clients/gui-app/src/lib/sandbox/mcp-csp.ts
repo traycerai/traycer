@@ -17,8 +17,12 @@ export type SandboxNetworkPolicy = "open" | "https-only";
  * An `open` page reaches the web, localhost and the LAN. It names its schemes
  * rather than relying on the base policy's `*`, which also admits the
  * document's own scheme (`capacitor:`, `traycer-sandbox:`). A page shown to
- * someone who did not author it reaches https only, so it cannot touch the
- * viewer's localhost or LAN.
+ * someone who did not author it reaches https only, so it cannot reach a plain
+ * `http://` server on the viewer's localhost or LAN. That is all it closes: a
+ * scheme source cannot say "public hosts only", so `https://localhost`,
+ * `https://127.0.0.1` and `https://192.168.x.x` stay reachable. Closing that
+ * needs the browser's local-network-access gating or a proxy for such pages
+ * (open item D15a).
  */
 export function pageContentPolicy(networkPolicy: SandboxNetworkPolicy): string {
   if (networkPolicy === "open") {
