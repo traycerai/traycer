@@ -1992,13 +1992,17 @@ describe("W3-I1: an in-process OS timezone change reaches a warmed cache", () =>
     const janLabel = renderHook(() => useMessageTime(janMessage));
     const julLabel = renderHook(() => useMessageTime(julMessage));
 
-    const expectedMessage = (timestamp: number): string =>
-      `${new Date(timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${new Date(timestamp).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    // The short date carries its year once it is not "now"'s year, as the
+    // product's `formatShortDate` does: July 2025 is read in January 2026.
     const expectedShortDate = (timestamp: number): string =>
-      new Date(timestamp).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      });
+      new Date(timestamp).toLocaleDateString(
+        undefined,
+        new Date(timestamp).getFullYear() === new Date(now0).getFullYear()
+          ? { month: "short", day: "numeric" }
+          : { month: "short", day: "numeric", year: "numeric" },
+      );
+    const expectedMessage = (timestamp: number): string =>
+      `${expectedShortDate(timestamp)}, ${new Date(timestamp).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
 
     // Warm cache: the initial render under Berlin already matches a fresh
     // native call - this is not a cold, empty-cache case.
