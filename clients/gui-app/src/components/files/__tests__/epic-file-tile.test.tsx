@@ -7,7 +7,15 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type {
   EpicReadFileRequest,
   EpicReadFileResponse,
@@ -321,6 +329,54 @@ describe("<EpicFileTile /> Download", () => {
     expect(rangeReads(rpc)).toBe(1);
     expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
   });
+});
+
+describe("<EpicFileTile /> Download of an HTML file", () => {
+  const DOCUMENT =
+    '<!doctype html><html lang="en"><head><title>Report</title></head>' +
+    "<body><h1>Report</h1></body></html>";
+  const html = (text: string): EpicReadFileResponse => ({
+    kind: "text",
+    text,
+    mediaType: "text/html",
+    networkPolicy: "open",
+  });
+
+  async function downloadedText(path: string): Promise<string> {
+    renderTile(
+      path,
+      makeRpc(() => html(DOCUMENT)),
+    );
+    await screen.findByTestId("sandbox-frame");
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(mocks.downloadBlobToDevice).toHaveBeenCalled());
+    const [blob] = mocks.downloadBlobToDevice.mock.calls[0];
+    return blob.text();
+  }
+
+  it("saves an agent page with the reader's live theme first in its head and its body unchanged", async () => {
+    document.documentElement.style.setProperty("--background", "rgb(1, 2, 3)");
+    onTestFinished(() => {
+      document.documentElement.style.removeProperty("--background");
+    });
+
+    const text = await downloadedText("files/pages/report.html");
+
+    const head = '<!doctype html><html lang="en"><head>';
+    expect(text.startsWith(`${head}<style>:root{color-scheme:`)).toBe(true);
+    expect(text).toContain("background:rgb(1, 2, 3);");
+    expect(text).toContain("--color-background-primary:rgb(1, 2, 3);");
+    expect(text.slice(text.indexOf("</style>"))).toBe(
+      `</style>${DOCUMENT.slice(head.length)}`,
+    );
+  });
+
+  it.each(["files/mcp-apps/weather-1.html", "files/report.html"])(
+    "saves %s byte-identical: only an agent page is themed",
+    async (path) => {
+      expect(await downloadedText(path)).toBe(DOCUMENT);
+    },
+  );
 });
 
 describe("<EpicFileTile /> availability is the tile host's", () => {

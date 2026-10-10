@@ -120,3 +120,35 @@ export function sandboxTheme(
     variables,
   };
 }
+
+const HEAD_OPEN = /<head(?:\s[^>]*)?>/i;
+const HTML_OPEN = /<html(?:\s[^>]*)?>/i;
+const INITIAL_DOCTYPE = /^\s*<!doctype(?:\s+[^>]*)?>/i;
+
+/** `<` is the only character that can end a `<style>` element early. */
+export function escapeStyleText(text: string): string {
+  return text.replace(/</g, "\\3c ");
+}
+
+/**
+ * A page as a standalone document that paints like its frame: the `:root`
+ * rule the sandbox loader writes, as the first thing in the page's `<head>`
+ * (else after `<html>`, else after the doctype, so standards mode is kept,
+ * else in front). What a downloaded page carries, so it opens styled in any
+ * browser. The loader cannot import this - it is built alone into a classic
+ * script - so it writes the same rule itself; keep the two in step.
+ */
+export function themedPageDocument(html: string, theme: SandboxTheme): string {
+  const declarations = [`color-scheme:${theme.colorScheme}`];
+  if (theme.background !== null) {
+    declarations.push(`background:${theme.background}`);
+  }
+  for (const [name, value] of Object.entries(theme.variables)) {
+    declarations.push(`${name}:${value}`);
+  }
+  const style = `<style>${escapeStyleText(`:root{${declarations.join(";")}}`)}</style>`;
+  const anchor =
+    HEAD_OPEN.exec(html) ?? HTML_OPEN.exec(html) ?? INITIAL_DOCTYPE.exec(html);
+  const at = anchor === null ? 0 : anchor.index + anchor[0].length;
+  return html.slice(0, at) + style + html.slice(at);
+}

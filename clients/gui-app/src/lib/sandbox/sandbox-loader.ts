@@ -397,6 +397,8 @@ function runLoader(): void {
       .replace(/\u2028/g, "\\u2028")
       .replace(/\u2029/g, "\\u2029");
 
+  // `themedPageDocument` (`theme-map.ts`) writes the same `:root` rule into a
+  // downloaded page; this file cannot import it, so keep the two in step.
   const themeStyle = (theme: LoaderTheme): string => {
     const font =
       "@font-face{font-family:'Figtree Variable';font-style:normal;" +

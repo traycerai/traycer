@@ -14,6 +14,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -558,7 +559,11 @@ describe("<PageRow /> when the page crashes", () => {
 });
 
 describe("<PageRow /> hover bar", () => {
-  it("Download HTML saves the page it already read, named after the file", async () => {
+  it("Download HTML saves the page it already read, themed and named after the file", async () => {
+    document.documentElement.style.setProperty("--background", "rgb(1, 2, 3)");
+    onTestFinished(() => {
+      document.documentElement.style.removeProperty("--background");
+    });
     const rpc = makeRpc(textResponse("open"));
     renderRow(rpc, SHOWN, null);
     await screen.findByTestId("sandbox-frame");
@@ -573,7 +578,12 @@ describe("<PageRow /> hover bar", () => {
     });
     const [blob, name] = mocks.downloadBlobToDevice.mock.calls[0] ?? [];
     expect(name).toBe("report-1.html");
-    expect(await readBlobText(blob)).toBe(PAGE_HTML);
+    // No `<head>` to open: the reader's theme goes in front of the page.
+    const text = await readBlobText(blob);
+    expect(text).toMatch(
+      /^<style>:root\{color-scheme:(light|dark);background:rgb\(1, 2, 3\);/,
+    );
+    expect(text.endsWith(`</style>${PAGE_HTML}`)).toBe(true);
     expect(rpc.readFile).toHaveBeenCalledTimes(1);
   });
 

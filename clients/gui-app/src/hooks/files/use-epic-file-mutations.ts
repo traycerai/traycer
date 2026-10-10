@@ -9,7 +9,9 @@ import type {
   EpicCancelFetchFileResponse,
   EpicFetchFileResponse,
 } from "@traycer/protocol/host/epic/files";
+import { EPIC_FILE_PAGES_PREFIX } from "@traycer/protocol/persistence/epic/files";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { readCssVar } from "@/lib/css-color";
 import { readFileBlob, readSignedUrl } from "@/lib/files/byte-source";
 import { useEpicFileRpc } from "@/lib/files/epic-file-rpc";
 import {
@@ -21,6 +23,8 @@ import {
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { isMobileApp } from "@/lib/mobile-app";
+import { sandboxTheme, themedPageDocument } from "@/lib/sandbox/theme-map";
+import { getResolvedTheme } from "@/lib/theme-applier";
 import { epicFileViewer } from "@/lib/files/viewer-registry";
 import { epicFileMutationKeys } from "@/lib/query-keys";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
@@ -96,7 +100,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
  * Saves a file to the device, whatever its preview kind and whether or not its
  * bytes are on the tile's host yet.
  *
- * - An HTML file reuses the text the row or tile already read.
+ * - An HTML file reuses the text the row or tile already read; an agent page
+ *   is saved with the reader's theme added (D45).
  * - A published file, on a shell with a native downloader, goes by its signed
  *   URL straight to disk: the bytes never pass through the app.
  * - Anything else is read in spans through the tile's host, up to
@@ -139,7 +144,18 @@ export function useEpicFileDownload(
     if (response.kind !== "text") {
       throw new Error(`${name} is not a text file`);
     }
-    return new Blob([response.text], { type: response.mediaType });
+    // An agent page carries the reader's live theme, as its frame gives it,
+    // so the file opens styled anywhere. An MCP App themes itself (D43), and
+    // a dropped file is the user's own: both save as they are.
+    const text = address.path.startsWith(EPIC_FILE_PAGES_PREFIX)
+      ? themedPageDocument(
+          response.text,
+          sandboxTheme("page", getResolvedTheme(), (token) =>
+            readCssVar(document, token),
+          ),
+        )
+      : response.text;
+    return new Blob([text], { type: response.mediaType });
   }
 
   /** Copies the file onto the tile's host and waits for it to land. */

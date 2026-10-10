@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { sandboxTheme, sandboxThemeVariables } from "../theme-map";
+import {
+  escapeStyleText,
+  sandboxTheme,
+  sandboxThemeVariables,
+  themedPageDocument,
+  type SandboxTheme,
+} from "../theme-map";
 
 const read = (token: string): string => `<${token}>`;
 
@@ -94,5 +100,48 @@ describe("sandboxTheme", () => {
       expect(theme.background).toBeNull();
       expect(theme.variables["--color-text-primary"]).toBe("<--foreground>");
     }
+  });
+});
+
+describe("themedPageDocument", () => {
+  const theme: SandboxTheme = {
+    appliesToRoot: true,
+    colorScheme: "dark",
+    background: "#111",
+    variables: { "--color-text-primary": "#eee" },
+  };
+  const STYLE =
+    "<style>:root{color-scheme:dark;background:#111;--color-text-primary:#eee}</style>";
+
+  it.each([
+    [
+      "first in a head with attributes",
+      '<!DOCTYPE html><html><head data-x="1"><title>T</title></head><header>h</header></html>',
+      `<!DOCTYPE html><html><head data-x="1">${STYLE}<title>T</title></head><header>h</header></html>`,
+    ],
+    [
+      "after <html> when there is no head, never inside a <header>",
+      "<!doctype html><html lang=en><header>h</header><p>x</p></html>",
+      `<!doctype html><html lang=en>${STYLE}<header>h</header><p>x</p></html>`,
+    ],
+    [
+      "after the doctype when there is no html, keeping standards mode",
+      "  <!doctype html><p>x</p>",
+      `  <!doctype html>${STYLE}<p>x</p>`,
+    ],
+    ["in front of a bare fragment", "<p>x</p>", `${STYLE}<p>x</p>`],
+  ])("puts the theme %s", (_where, html, expected) => {
+    expect(themedPageDocument(html, theme)).toBe(expected);
+  });
+
+  it("escapes a < in a theme value so it cannot close the style early", () => {
+    const hostile: SandboxTheme = {
+      ...theme,
+      background: "red</style><script>alert(1)</script>",
+    };
+    const text = themedPageDocument("<p>x</p>", hostile);
+    expect(text.match(/<\/style>/g)).toHaveLength(1);
+    expect(text).not.toContain("<script>");
+    expect(escapeStyleText("a<b")).toBe("a\\3c b");
   });
 });
