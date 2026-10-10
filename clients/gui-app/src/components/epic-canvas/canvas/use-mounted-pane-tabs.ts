@@ -240,14 +240,18 @@ export function useMountedPaneTabs(
     [pane, tileByInstanceId, demand],
   );
 
+  // A previewed active tab is not retained: mounting a page loads it (its
+  // file read, its sandbox frame), which a held tab cycle's preview must not
+  // do, and a preview would also push a page the reader really viewed out of
+  // the cap. The pages already in the history keep their slots.
   const retainedPageIds = useMemo(
     () =>
       retainedPanePageInstanceIds(
-        activeTabId,
+        demand === "settled" ? activeTabId : null,
         pane.activationHistory,
         tileByInstanceId,
       ),
-    [activeTabId, pane.activationHistory, tileByInstanceId],
+    [activeTabId, demand, pane.activationHistory, tileByInstanceId],
   );
 
   const [committedLru, setCommittedLru] =

@@ -1,5 +1,10 @@
+import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
+import {
+  SurfaceDemandContext,
+  type ActiveSurfaceDemand,
+} from "@/stores/tabs/surface-demand";
 import {
   MOUNTED_PANE_TAB_LRU_CAP,
   RETAINED_PANE_PAGE_CAP,
@@ -438,6 +443,47 @@ describe("useMountedPaneTabs", () => {
       expect(result.current.has("inst-file-1")).toBe(true);
       expect(result.current.has("inst-file-2")).toBe(true);
     });
+
+    it.each([
+      { demand: "settled", mounted: true },
+      { demand: "preview", mounted: false },
+    ] as const)(
+      "mounts the shown page tab only when its surface is $demand",
+      ({ demand, mounted }) => {
+        const page = epicFileTab(1, "html");
+        const spec = specTab(1);
+        const wrapper = ({
+          children,
+        }: {
+          readonly children: ReactNode;
+        }): ReactNode =>
+          createElement(
+            SurfaceDemandContext,
+            { value: demand satisfies ActiveSurfaceDemand },
+            children,
+          );
+        // The page is shown but not yet activated: a held tab cycle's preview.
+        const { result } = renderHook(
+          () =>
+            useMountedPaneTabs({
+              activeTabId: page.instanceId,
+              pane: {
+                kind: "pane",
+                id: "pane-1",
+                tabInstanceIds: [page.instanceId, spec.instanceId],
+                activeTabId: spec.instanceId,
+                previewTabId: null,
+                activationHistory: [spec.instanceId],
+              },
+              tabs: [page, spec],
+              paneVisible: true,
+            }),
+          { wrapper },
+        );
+
+        expect(result.current.has(page.instanceId)).toBe(mounted);
+      },
+    );
 
     it("leaves a non-HTML epic file to the ordinary LRU", () => {
       const tabs = [epicFileTab(1, "png"), specTab(1), specTab(2), specTab(3)];
