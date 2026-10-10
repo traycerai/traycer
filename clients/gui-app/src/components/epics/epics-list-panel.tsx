@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 import { Link } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import { Check, Paintbrush, Pencil, Search, Trash2, X } from "lucide-react";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -36,6 +38,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  readPendingDeleteEpicIds,
   useEpicBatchDelete,
   useIsEpicDeleteInFlight,
   usePendingDeleteEpicIds,
@@ -132,6 +135,29 @@ const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
   string,
   readonly WorktreeHostEntryV12[]
 > = new Map();
+interface SelectAllControllerSlot {
+  current: AbortController | null;
+}
+
+function abortSelectAllController(slot: SelectAllControllerSlot): void {
+  slot.current?.abort();
+  slot.current = null;
+}
+
+function setSelectAllController(
+  slot: SelectAllControllerSlot,
+  controller: AbortController,
+): void {
+  slot.current = controller;
+}
+
+function clearSelectAllController(
+  slot: SelectAllControllerSlot,
+  controller: AbortController,
+): void {
+  if (slot.current === controller) slot.current = null;
+}
+
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
@@ -369,11 +395,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     refetch,
     refetchTasks,
     fetchNextPage,
+    fetchAllItems,
     hasNextPage,
+    hasUnloadedItems = hasNextPage,
     isFetchingNextPage,
     cloudPagePending,
     isCountPending,
     currentUserId,
+    localContextMatchKey,
     activityRefreshScope,
   } = useHistoryQuery({
     search,
@@ -384,10 +413,17 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // rather than re-attaching a non-passive touch handler whenever the query
   // hands back a fresh `refetch`.
   const refetchRef = useRef(refetch);
+  const selectAllController = useRef<AbortController | null>(null);
+  const abortSelectAll = useCallback(() => {
+    abortSelectAllController(selectAllController);
+  }, []);
   useEffect(() => {
     refetchRef.current = refetch;
   });
-  const refreshHistory = useCallback(() => refetchRef.current(), []);
+  const refreshHistory = useCallback(() => {
+    abortSelectAll();
+    return refetchRef.current();
+  }, [abortSelectAll]);
 
   // One read of the fetch result rather than six independent `data?.x ?? d`
   // sites: the empty-state defaults belong together (they all describe "no
@@ -436,6 +472,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     () => new Set(),
   );
   const [selectionMode, setSelectionMode] = useState(false);
+  useEffect(
+    () => abortSelectAll,
+    [abortSelectAll, search, hostId, currentUserId, localContextMatchKey],
+  );
+  useEffect(() => {
+    if (isFetching) abortSelectAll();
+  }, [abortSelectAll, isFetching]);
   const [pendingDeleteIds, setPendingDeleteIds] =
     useState<ReadonlyArray<string> | null>(null);
   // Explicit user overrides of the per-worktree checkbox. Absent entries fall
@@ -535,6 +578,21 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // candidate.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
+  const previousScope = useRef({ search, hostId, currentUserId });
+  useEffect(() => {
+    if (
+      previousScope.current.search === search &&
+      previousScope.current.hostId === hostId &&
+      previousScope.current.currentUserId === currentUserId
+    )
+      return;
+    previousScope.current = { search, hostId, currentUserId };
+    abortSelectAll();
+    setSelectedIds(new Set());
+    setSelectionMode(false);
+    closeDeleteDialog();
+    setSweepEpicIds(null);
+  }, [abortSelectAll, closeDeleteDialog, currentUserId, hostId, search]);
   const sweepHostClient = useHostClientForHostId(null);
   const requestSweep = useCallback(
     (epicId: string) => {
@@ -556,6 +614,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // `epic.batchDelete` for the same id. Excluded here so the row action, the
   // bulk selection and the confirm re-filter all refuse it from one set.
   const pendingDeleteEpicIds = usePendingDeleteEpicIds();
+  const queryClient = useQueryClient();
   const selectableItemIds = useMemo(
     () =>
       items
@@ -571,14 +630,39 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     () => new Set(selectableItemIds),
     [selectableItemIds],
   );
+  const selectAllMutation = useMutation({
+    mutationFn: (controller: AbortController) =>
+      fetchAllItems(controller.signal),
+    onSuccess: (loadedItems, controller) => {
+      if (loadedItems === null || controller.signal.aborted) return;
+      const currentPendingDeleteEpicIds = readPendingDeleteEpicIds(queryClient);
+      setSelectedIds(
+        new Set(
+          loadedItems
+            .filter(
+              (item) =>
+                canDeleteHistoryItem(item, cloudAuthorized) &&
+                !currentPendingDeleteEpicIds.has(item.epicId),
+            )
+            .map((item) => item.epicId),
+        ),
+      );
+    },
+    onSettled: (_data, _error, controller) => {
+      clearSelectAllController(selectAllController, controller);
+    },
+  });
+  const selectAllPending = selectAllMutation.isPending;
+  const selectAll = selectAllMutation.mutate;
 
   const toggleSelection = useCallback(
     (id: string) => {
       if (!selectionEnabled || !selectableIdSet.has(id)) return;
+      abortSelectAll();
       setSelectedIds((prev) => withMemberToggled(prev, id));
       setSelectionMode(true);
     },
-    [selectableIdSet, selectionEnabled],
+    [abortSelectAll, selectableIdSet, selectionEnabled],
   );
 
   const requestDelete = useCallback(
@@ -625,17 +709,45 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setSelectionMode(true);
   }, [selectionEnabled]);
   const selectAllVisible = useCallback(() => {
-    setSelectedIds(new Set(selectableItemIds));
-  }, [selectableItemIds]);
+    if (
+      selectAllPending ||
+      isFetchingNextPage ||
+      isCountPending ||
+      cloudPagePending
+    )
+      return;
+    if (selectAllController.current !== null) return;
+    // Bulk selection requires every retained page to be fetchable.
+    // Individual loaded rows remain selectable when paging is blocked.
+    if (hasUnloadedItems && !hasNextPage) return;
+    if (!hasUnloadedItems) {
+      setSelectedIds(new Set(selectableItemIds));
+      return;
+    }
+    const controller = new AbortController();
+    setSelectAllController(selectAllController, controller);
+    selectAll(controller);
+  }, [
+    selectAll,
+    hasUnloadedItems,
+    hasNextPage,
+    isFetchingNextPage,
+    isCountPending,
+    cloudPagePending,
+    selectAllPending,
+    selectableItemIds,
+  ]);
   const deselectAllVisible = useCallback(() => {
     // Clear every check but stay in selection mode so "Deselect all" is a pure
     // toggle back to "Select all" rather than exiting the selection chrome.
     setSelectedIds(new Set());
-  }, []);
+    abortSelectAll();
+  }, [abortSelectAll]);
   const cancelSelection = useCallback(() => {
     setSelectedIds(new Set());
+    abortSelectAll();
     setSelectionMode(false);
-  }, []);
+  }, [abortSelectAll]);
 
   const handleConfirmDelete = () => {
     if (pendingDeleteIds === null) return;
@@ -709,7 +821,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     clearSearch();
   };
   const handleRetry = () => {
-    void refetch();
+    void refreshHistory();
   };
 
   const showPageSearch = variant === "page";
@@ -762,9 +874,19 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     selection: selectionMode
       ? {
           kind: "active",
-          canSelect: selectableItemIds.length > 0,
+          canSelect:
+            (selectableItemIds.length > 0 || hasUnloadedItems) &&
+            (!hasUnloadedItems || hasNextPage) &&
+            ![
+              isFetching,
+              isCountPending,
+              cloudPagePending,
+              isFetchingNextPage,
+            ].some(Boolean),
           selectedCount,
+          isSelectAllPending: selectAllPending,
           allVisibleSelected:
+            !hasUnloadedItems &&
             selectableItemIds.length > 0 &&
             selectedCount === selectableItemIds.length,
           isDeletePending: deleteMutation.isPending,
@@ -785,7 +907,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         }
       : {
           kind: "idle",
-          canSelect: selectableItemIds.length > 0,
+          canSelect:
+            (selectableItemIds.length > 0 ||
+              (hasUnloadedItems && hasNextPage)) &&
+            !isFetching,
           onStart: enterSelectionMode,
         },
     sort: search.sort,
@@ -798,7 +923,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     onSearchChange: updateSearch,
     facets: facets,
     chatHostFilterSupported: chatHostFilterSupported,
-    refresh: { isFetching, hostId, onRefetch: refetch },
+    refresh: { isFetching, hostId, onRefetch: refreshHistory },
   };
 
   return (
@@ -816,6 +941,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           <HistoryListBody
             sort={search.sort}
             isCountPending={isCountPending}
+            isBulkSelectionPending={selectAllPending}
             scope={selectionMode ? "tasks" : props.scope}
             onScopeChange={selectionMode ? () => {} : props.onScopeChange}
             pageSearch={pageSearch}
@@ -1203,6 +1329,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
           pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
           hasNextPage={props.hasNextPage}
           isFetchingNextPage={props.isFetchingNextPage}
+          isBulkSelectionPending={props.isBulkSelectionPending}
           onLoadMore={props.onLoadMore}
           onOpenItem={openHistoryItem}
           onRefresh={props.onRefresh}
@@ -1236,6 +1363,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
       pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
       hasNextPage={props.hasNextPage}
       isFetchingNextPage={props.isFetchingNextPage}
+      isBulkSelectionPending={props.isBulkSelectionPending}
       onLoadMore={props.onLoadMore}
       onSelectEpic={props.onSelectEpic}
       onOpenItem={props.onOpenItem}
@@ -1320,6 +1448,7 @@ interface EpicsListBodyProps {
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending: boolean;
   readonly onLoadMore: () => void;
   readonly onSelectEpic: ((epicId: string) => void) | null;
   readonly onOpenItem: ((item: HistoryItem) => void) | null;
@@ -1364,6 +1493,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     pendingSetPinnedEpicIds,
     hasNextPage,
     isFetchingNextPage,
+    isBulkSelectionPending,
     onLoadMore,
     onSelectEpic,
     onOpenItem,
@@ -1420,6 +1550,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         onRetry={onRetry}
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
+        isBulkSelectionPending={isBulkSelectionPending}
         onLoadMore={onLoadMore}
       />
     );
@@ -1506,6 +1637,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
       <EpicsListShowMore
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
+        isBulkSelectionPending={isBulkSelectionPending}
         onLoadMore={onLoadMore}
       />
     </>

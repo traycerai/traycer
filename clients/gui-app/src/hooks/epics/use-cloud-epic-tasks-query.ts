@@ -64,6 +64,8 @@ interface NextPageVariables {
   readonly request: ListCloudTasksRequest;
   readonly cursor: string;
   readonly scope: CloudEpicTasksRequestScope;
+  readonly signal: AbortSignal | undefined;
+  readonly visitedCursors: ReadonlySet<string> | null;
 }
 
 /** Captured History authority for a page request and its cache destination. */
@@ -95,7 +97,13 @@ export interface CloudEpicTasksQueryResult {
   readonly tasks: readonly ListTaskLight[];
   readonly query: CloudEpicTasksFirstPageQuery;
   readonly fetchNextPage: () => void;
+  /** Fetch every remaining cursor page for an explicit bulk-selection action. */
+  readonly fetchAllPages: (
+    signal: AbortSignal,
+  ) => Promise<readonly ListTaskLight[] | null>;
   readonly hasNextPage: boolean;
+  /** Rows remain even if their cursor is unusable or cloud access is refused. */
+  readonly hasUnloadedItems: boolean;
   readonly isFetchingNextPage: boolean;
   /**
    * The manual refresh (refresh button, pull-to-refresh, retry). Consult THIS,
@@ -357,20 +365,43 @@ export function useCloudEpicTasksQuery(
     unknown,
     NextPageVariables
   >({
-    mutationFn: (variables) =>
-      fetchCloudEpicTasksCursorPageByHostId(
+    mutationFn: async (variables) => {
+      const page = await fetchCloudEpicTasksCursorPageByHostId(
         variables.scope.hostId,
         variables.scope.userId,
         {
           request: variables.request,
           cursor: variables.cursor,
-          abortSignal: undefined,
+          abortSignal: variables.signal,
         },
-      ),
+      );
+      const cursor = resolveNextCursor(page);
+      if (
+        variables.visitedCursors !== null &&
+        page.hasMore &&
+        (cursor === null || variables.visitedCursors.has(cursor))
+      ) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "History pagination did not return a new cursor.",
+          requestId: "history-select-all",
+          method: "epic.listTasks",
+          fatalDetails: null,
+        });
+      }
+      return page;
+    },
     onSuccess: (page, variables) => {
+      if (
+        variables.signal?.aborted ||
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       appendPage(variables.identity, variables.generation, page);
     },
-    onError: (error) => {
+    onError: (error, variables) => {
+      if (variables.signal?.aborted) return;
       // A stale RequestContext is expected during an identity transition. It
       // failed before any host dispatch, so it must not surface as a user
       // gesture failure; actual host errors retain the established toast.
@@ -387,6 +418,7 @@ export function useCloudEpicTasksQuery(
     nextPageMutation.isPending &&
     nextPageMutation.variables.identity === identity;
   const mutateNextPage = nextPageMutation.mutate;
+  const mutateNextPageAsync = nextPageMutation.mutateAsync;
 
   const startLocalFirstRevalidation = useCallback(
     (variables: LocalFirstRevalidationVariables): void => {
@@ -545,16 +577,7 @@ export function useCloudEpicTasksQuery(
     // after a pin lands, a refetched first page or a still-in-flight tail
     // can both carry a row the other already has. A task with no id (neither
     // epic nor phase) is always retained.
-    const seenTaskIds = new Set<string>();
-    return [queryData, ...extraPages]
-      .flatMap((page) => page.tasks)
-      .filter((task) => {
-        const taskId = task.epic?.light?.id ?? task.phase?.light?.id;
-        if (taskId === undefined) return true;
-        if (seenTaskIds.has(taskId)) return false;
-        seenTaskIds.add(taskId);
-        return true;
-      });
+    return collectPageTasks([queryData, ...extraPages]);
   }, [queryData, extraPages]);
 
   // The union's own statement, over exactly the pages `tasks` was assembled
@@ -608,6 +631,8 @@ export function useCloudEpicTasksQuery(
       request: effectiveRequest,
       cursor: lastNextCursor,
       scope: { hostId, userId },
+      signal: undefined,
+      visitedCursors: null,
     });
   }, [
     authorizesCloudLeg,
@@ -619,6 +644,64 @@ export function useCloudEpicTasksQuery(
     mutateNextPage,
     userId,
   ]);
+
+  const fetchAllPages = useCallback(
+    async (signal: AbortSignal): Promise<readonly ListTaskLight[] | null> => {
+      if (
+        isFetchingNextPage ||
+        isPlaceholderData ||
+        queryData === undefined ||
+        hostId === null ||
+        userId === null
+      )
+        return null;
+      registerCloudEpicTasksPageIdentity(identity);
+      const generation = cloudEpicTasksPageGeneration(identity);
+      const isCurrent = () =>
+        !signal.aborted &&
+        cloudEpicTasksPageGeneration(identity) === generation &&
+        authorizesCloudCapability(useAuthStore.getState().status);
+      let page = lastPage;
+      const seenCursors = new Set<string>();
+      while (page?.hasMore) {
+        const cursor = resolveNextCursor(page);
+        if (!isCurrent() || cursor === null || seenCursors.has(cursor)) {
+          return null;
+        }
+        seenCursors.add(cursor);
+        try {
+          page = await mutateNextPageAsync({
+            identity,
+            generation,
+            request: effectiveRequest,
+            cursor,
+            scope: { hostId, userId },
+            signal,
+            visitedCursors: seenCursors,
+          });
+        } catch {
+          return null;
+        }
+      }
+      if (!isCurrent()) return null;
+      return collectPageTasks([
+        queryData,
+        ...(useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity] ??
+          []),
+      ]);
+    },
+    [
+      effectiveRequest,
+      hostId,
+      identity,
+      isFetchingNextPage,
+      isPlaceholderData,
+      lastPage,
+      mutateNextPageAsync,
+      queryData,
+      userId,
+    ],
+  );
 
   const refetch = useCallback(() => {
     // `refetch()` is a caller OVERRIDE of `enabled` in TanStack v5 -
@@ -647,7 +730,9 @@ export function useCloudEpicTasksQuery(
     tasks,
     query,
     fetchNextPage,
+    fetchAllPages,
     hasNextPage,
+    hasUnloadedItems: lastPage?.hasMore === true,
     isFetchingNextPage,
     refetch,
     isCloudPagePending:
@@ -655,6 +740,21 @@ export function useCloudEpicTasksQuery(
     completeness,
     initialLegRefused,
   };
+}
+
+function collectPageTasks(
+  pages: readonly ListTasksResponse[],
+): readonly ListTaskLight[] {
+  const seen = new Set<string>();
+  return pages
+    .flatMap((page) => page.tasks)
+    .filter((task) => {
+      const id = task.epic?.light?.id ?? task.phase?.light?.id;
+      if (id === undefined) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
 }
 
 /**

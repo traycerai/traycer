@@ -1,7 +1,9 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -69,6 +71,10 @@ const testState = vi.hoisted(() => {
     // this one out.
     rawRefetch: vi.fn(),
     fetchNextPage: vi.fn(),
+    fetchAllPages:
+      vi.fn<
+        (signal: AbortSignal) => Promise<readonly ListTaskLight[] | null>
+      >(),
     // T5a/T5b: `isCloudPagePending` and `completeness` are the two NEW
     // fields `useCloudEpicTasksQuery` exposes so `useHistoryQuery` can pass
     // them through as `cloudPagePending` / the union `data.completeness`.
@@ -139,6 +145,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
       },
       refetch: testState.refetch,
       fetchNextPage: testState.fetchNextPage,
+      fetchAllPages: testState.fetchAllPages,
       hasNextPage: testState.hasNextPage,
       isFetchingNextPage: false,
       initialLegRefused: testState.initialLegRefused,
@@ -262,6 +269,7 @@ describe("useHistoryQuery", () => {
     testState.refetch.mockReset();
     testState.rawRefetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.fetchAllPages.mockReset();
     testState.isCloudPagePending = false;
     testState.completenessOverride = null;
     testState.initialLegRefused = false;
@@ -292,6 +300,59 @@ describe("useHistoryQuery", () => {
     // Zustand stores are module scope, so a status staged here outlives this
     // file inside the same worker.
     useAuthStore.setState({ status: "signed-out" });
+  });
+
+  it("maps every loaded page and includes locally matched tasks for bulk selection", async () => {
+    testState.worktreeIndex = [
+      {
+        ...worktreeWithPullRequest(84),
+        owners: [
+          {
+            epicId: "local",
+            ownerKind: "chat",
+            ownerId: "local-chat",
+            updatedAt: 1,
+          },
+          {
+            epicId: "epic-alpha",
+            ownerKind: "chat",
+            ownerId: "alpha-chat",
+            updatedAt: 1,
+          },
+        ],
+      },
+    ];
+    testState.taskContexts = new Map([
+      ["local", taskLight("local", "Local match", "traycer/gui-app")],
+      [
+        "epic-alpha",
+        taskLight("epic-alpha", "Local duplicate", "traycer/gui-app"),
+      ],
+    ]);
+    testState.fetchAllPages.mockResolvedValue([
+      ...testState.tasks,
+      taskLight("later-page", "Later page", "traycer/gui-app"),
+    ]);
+    const { result } = renderHook(() =>
+      useHistoryQuery({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "task-history",
+        }),
+        nowMs: Date.now(),
+      }),
+    );
+    expect(result.current.localContextMatchKey).toBe('["epic-alpha","local"]');
+    const controller = new AbortController();
+    await act(async () => {
+      const items = await result.current.fetchAllItems(controller.signal);
+      expect(items?.map((item) => item.epicId)).toEqual([
+        "epic-alpha",
+        "epic-beta",
+        "later-page",
+        "local",
+      ]);
+    });
+    expect(testState.fetchAllPages).toHaveBeenCalledWith(controller.signal);
   });
 
   it("exposes the cloud hook's guarded refetch, never the raw query's", () => {
