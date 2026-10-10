@@ -115,6 +115,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
   "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
+  // Enter and Space activate a folded agent row's `role="button"` text (#2441):
+  // a button's own activation keys, named, not a registered chord.
+  "gui-app/src/components/chat/queued-message-surface.tsx": 2,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,

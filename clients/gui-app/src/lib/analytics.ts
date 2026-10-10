@@ -316,6 +316,8 @@ export type AnalyticsSetting =
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
   | "artifactIconColors"
+  | "catalogProbeTimeout"
+  | "catalogProbeTimeoutSameForAll"
   | "chatAutoArchive"
   | "codeFontFamily"
   | "codeFontSize"
@@ -1409,6 +1411,8 @@ const ANALYTICS_SETTINGS = new Set<string>(
     allowPrereleaseUpdates: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
+    catalogProbeTimeout: true,
+    catalogProbeTimeoutSameForAll: true,
     chatAutoArchive: true,
     codeFontFamily: true,
     codeFontSize: true,

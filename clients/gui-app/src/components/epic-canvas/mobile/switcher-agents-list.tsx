@@ -3,6 +3,7 @@ import { SwitcherListHeader } from "@/components/epic-canvas/mobile/switcher-lis
 import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
+import { useSwitcherNewChat } from "@/components/epic-canvas/mobile/use-switcher-new-chat";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import {
@@ -53,19 +54,25 @@ interface SwitcherListProps {
  * and sort the view menu drives, the paired archive-hiding rule, the filtered
  * empty states, and a row menu carrying New child agent, Rename, Archive, Share
  * with task and Delete.
+ *
+ * - **Creating.** "+" and New child agent both create an empty agent and open
+ *   it (`useSwitcherNewChat`) instead of the desktop's New Conversation modal.
  */
 export function SwitcherAgentsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
   const coarsePointer = useCoarsePointer();
   const canMutate = isEditableRole(useEpicPermissionRole());
   const [searchQuery, setSearchQuery] = useState("");
+  const newChat = useSwitcherNewChat(epicId, tabId, onClose);
+  const startNewChat = newChat.start;
   const surface = useMemo<ChatTreeSurface>(
     () => ({
       onRowActivated: onClose,
       revealRowControls: coarsePointer,
       searchQuery,
+      startNewChat,
     }),
-    [onClose, coarsePointer, searchQuery],
+    [onClose, coarsePointer, searchQuery, startNewChat],
   );
   return (
     <ChatTreeSurfaceContext.Provider value={surface}>
@@ -86,9 +93,8 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
           action={
             canMutate ? (
               <SwitcherNewChatAction
-                epicId={epicId}
-                tabId={tabId}
-                onClose={onClose}
+                onSelect={() => startNewChat(null)}
+                isPending={newChat.isPending}
               />
             ) : null
           }

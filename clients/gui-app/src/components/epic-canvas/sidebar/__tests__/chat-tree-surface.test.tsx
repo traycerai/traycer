@@ -18,6 +18,7 @@ function surface(revealRowControls: boolean): ChatTreeSurface {
     onRowActivated: () => undefined,
     revealRowControls,
     searchQuery: null,
+    startNewChat: () => undefined,
   };
 }
 

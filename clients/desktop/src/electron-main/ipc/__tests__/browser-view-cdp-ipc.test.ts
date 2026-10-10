@@ -86,11 +86,9 @@ vi.mock("electron", () => {
     },
     BrowserWindow,
     dialog: {
-      showSaveDialogSync: () => undefined,
       // The destructive handlers ask asynchronously; nothing here raises one.
       showMessageBox: (): Promise<{ readonly response: number }> =>
         Promise.resolve({ response: 0 }),
-      showMessageBoxSync: () => 0,
     },
     session: {
       fromPartition: () => ({
@@ -207,6 +205,8 @@ vi.mock("../../browser-view/browser-session", () => ({
     return { request };
   }),
   cancelBrowserViewDownload: vi.fn(),
+  setBrowserViewOnScreenProbe: vi.fn(),
+  discardHeldBrowserViewDownloads: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
   ensureBrowserViewSessionForPartition: vi.fn(),

@@ -152,6 +152,14 @@ Traycer does not manage the Amp, Hermes Agent, or Command Code CLIs; install the
 
 For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps its own permissions, so Traycer leaves those flags out.
 
+### Model List Timeout
+
+The **Model list** group on the **CLI & Args** tab sets how long Traycer waits for the provider to list its models: when you open the model picker, and when an agent creates another agent. **Timeout** offers **60 s** (the default), **90 s**, **120 s**, and **180 s**. Pick a longer one on a slow or heavily loaded machine, where a provider can take more than a minute to answer.
+
+With **Same for all providers** on, the timeout is shared: changing it changes every provider whose switch is also on. Turn the switch off to give this provider its own timeout, which starts at the shared value; turn it back on to follow the shared value again.
+
+A change applies from the next model list the host reads, and a model list that arrives after the wait is still kept for the next request. The group is hidden on a host running a version without per-provider timeouts.
+
 ## Environment Variables
 
 The **Env** tab sets environment variables for one provider. Each row has a name and either **Set** with a value, or **Unset** to drop a variable inherited from your shell. They apply when Traycer starts that provider.

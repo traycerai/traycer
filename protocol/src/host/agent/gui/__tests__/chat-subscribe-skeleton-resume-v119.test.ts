@@ -12,6 +12,7 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   SKELETON_RESUME_BLOCK_SIZE,
@@ -51,9 +52,10 @@ function skeletonChunkFrame(extra: Record<string, number>) {
 }
 
 describe("chat.subscribe registry: 1.19 installed below the 1.20 head, 1.18 still installed", () => {
-  it("binds 1.19 and the lines around it - the head has since moved to 1.22", () => {
+  it("binds 1.19 and the lines around it - the head has since moved to 1.23", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(22);
+    expect(line.latestMinor).toBe(23);
+    expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
     expect(line.versions[20].contract).toBe(chatSubscribeV120);

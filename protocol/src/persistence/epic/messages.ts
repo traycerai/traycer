@@ -839,7 +839,7 @@ export const messageSchemaPreReceipt = lazySchema(() =>
 // ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
 // Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
 // complete live shape with `blocks` swapped for `contentBlockSchemaPrePage`, so
-// a tool call's `page` / `mcpApp` stamps (`1.22`) cannot reach them. Same key
+// a tool call's `page` / `mcpApp` stamps (`1.23`) cannot reach them. Same key
 // order as the live `.extend()` result, because the order is part of the
 // captured digest.
 export const assistantMessageSchemaPrePage = lazySchema(() =>

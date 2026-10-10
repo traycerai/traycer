@@ -13,8 +13,10 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
+  openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
@@ -45,10 +47,11 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 installed below the 1.18, 1.19 and 1.20 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.22", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.23", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(22);
+    expect(line.latestMinor).toBe(23);
+    expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
     expect(line.versions[20].contract).toBe(chatSubscribeV120);
@@ -84,16 +87,20 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18, 1.19 and 1.20 
     expect(chatSubscribeV117.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    // 1.20 froze when 1.21 opened above it, and 1.21 when 1.22 did; 1.22 is
-    // the live windowed schema.
+    // 1.20 froze when 1.21 opened above it; 1.21 and 1.22 froze when 1.23
+    // opened above them, with pre-page bodies (1.22 keeps its open harness
+    // leaves); 1.23 binds the open twin a client parses.
     expect(chatSubscribeV120.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV121.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV122.serverFrameSchema).toBe(
+    expect(chatSubscribeV122.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV123.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
     );
   });
 

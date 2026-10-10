@@ -10,6 +10,7 @@ import {
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
 import { subagentCardPath } from "@/components/chat/segments/subagent-display";
+import { knownHarnessId } from "@/lib/chat/sender-display";
 import type { SubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { useEpicContinueSubagent } from "@/hooks/epic/use-epic-continue-subagent-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -43,13 +44,28 @@ function openSubagentCard(
   openId: string | null,
 ): {
   readonly card: SubagentSegment;
+  /** The harness that ran the turn, as this build knows it. */
   readonly provider: GuiHarnessId | null;
+  /**
+   * The turn RECORDED a provider, known to this build or not. A recorded
+   * provider is the answer even when it is `null` (a harness this build
+   * predates): the settings answer only for a turn that recorded none.
+   */
+  readonly providerRecorded: boolean;
 } | null {
   if (openId === null) return null;
   for (const message of messages) {
     const card = subagentCardPath([message], openId)?.at(-1);
     if (card === undefined) continue;
-    return { card, provider: message.assistantMeta?.provider ?? null };
+    // A heard-from id off a `1.22` row may name a harness this build cannot
+    // continue a subagent on; `null` with `providerRecorded` is the "not
+    // offered" branch below, never a fall-through to the settings.
+    const meta = message.assistantMeta;
+    return {
+      card,
+      provider: meta === null ? null : knownHarnessId(meta.provider),
+      providerRecorded: meta !== null,
+    };
   }
   return null;
 }
@@ -103,8 +119,13 @@ export function useSubagentContinueAsChat(
   // change harness between turns, and its settings name the next turn's - so
   // they would hide the control on a finished Codex card after a switch away
   // and offer it on a card the host then refuses. The settings answer only
-  // for a turn that recorded no provider.
-  const harnessId = owner?.provider ?? args.settings?.harnessId ?? null;
+  // for a turn that recorded no provider - not for one that recorded a
+  // provider this build does not know, which is a card nobody here can
+  // continue.
+  const harnessId =
+    owner !== null && owner.providerRecorded
+      ? owner.provider
+      : (args.settings?.harnessId ?? null);
   // A value, not the card: it is a new object on every streamed token.
   const isStreaming = card?.isStreaming === true;
   // A workflow run rides a subagent card and is a fleet, not a conversation.

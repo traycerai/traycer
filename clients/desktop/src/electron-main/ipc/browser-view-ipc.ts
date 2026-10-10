@@ -32,6 +32,7 @@ import {
   createBrowserViewWebPreferences,
   cancelBrowserViewDownload,
   clearBrowserViewPendingCertificateError,
+  discardHeldBrowserViewDownloads,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
   forgetBrowserPrimaryProfileAppliedKeys,
@@ -43,6 +44,7 @@ import {
   readBrowserViewPendingCertificateError,
   registerBrowserViewWebContents,
   releaseBrowserViewSession,
+  setBrowserViewOnScreenProbe,
   suppressAllBrowserPrimaryProfileDeltas,
   type BrowserSessionProfileRequest,
 } from "../browser-view/browser-session";
@@ -359,6 +361,25 @@ export function registerBrowserViewIpc(
         bridge.windowRegistry.off("change", listener);
       };
     },
+    isWindowShown: (windowId) => {
+      const window = bridge.windowRegistry.getRecordById(windowId)?.window;
+      return (
+        isElectronBrowserWindow(window) &&
+        !window.isDestroyed() &&
+        window.isVisible() &&
+        !window.isMinimized()
+      );
+    },
+    // The registry reports show and hide as `change`, minimize and restore as
+    // `geometry`.
+    onWindowShownChange: (listener) => {
+      bridge.windowRegistry.on("change", listener);
+      bridge.windowRegistry.on("geometry", listener);
+      return () => {
+        bridge.windowRegistry.off("change", listener);
+        bridge.windowRegistry.off("geometry", listener);
+      };
+    },
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
       // The renderer's tab bindings die with it, so the host-side rebind is
@@ -476,6 +497,11 @@ export function registerBrowserViewIpc(
     },
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
+  // A dangerous download is asked about only where a person is looking; the
+  // manager owns that reading.
+  setBrowserViewOnScreenProbe((webContentsId) =>
+    manager.isWebContentsOnScreen(webContentsId),
+  );
 
   /**
    * Forgets this machine recorded but never finished clearing, re-run at
@@ -1242,6 +1268,10 @@ export function registerBrowserViewIpc(
   );
 
   bridge.disposeFns.push(() => {
+    // Before the manager goes: no answer can arrive once the plane is down,
+    // and an unanswered dangerous download must not stay on disk.
+    discardHeldBrowserViewDownloads();
+    setBrowserViewOnScreenProbe(() => false);
     desktopControl.dispose();
     sessions.dispose();
     manager.dispose();

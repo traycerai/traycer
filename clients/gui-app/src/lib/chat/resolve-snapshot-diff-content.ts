@@ -1,9 +1,5 @@
 import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
-  ContentBlock,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
-import type {
   SnapshotCumulativeBundleDiffTilePayload,
   SnapshotCumulativeDiffTilePayload,
   SnapshotDiffTilePayload,
@@ -14,7 +10,12 @@ import {
   lastSnapshotSourceBlockId,
 } from "@/lib/chat/snapshot-source-block-ids";
 
-type FileChangeBlock = Extract<ContentBlock, { type: "file_change" }>;
+import type {
+  OpenContentBlock,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
+type FileChangeBlock = Extract<OpenContentBlock, { type: "file_change" }>;
 
 export interface ResolvedSnapshotDiff {
   readonly filePath: string;
@@ -40,8 +41,8 @@ export interface ResolvedSnapshotSegmentHashes {
  * resolves while it streams.
  */
 export interface SnapshotDiffSource {
-  readonly messages: ReadonlyArray<Message>;
-  readonly liveAssistantBlocks: ReadonlyArray<ContentBlock> | null;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly liveAssistantBlocks: ReadonlyArray<OpenContentBlock> | null;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
 }
 
@@ -227,7 +228,7 @@ function fileChangeBlocksById(
   source: SnapshotDiffSource,
 ): ReadonlyMap<string, FileChangeBlock> {
   const byId = new Map<string, FileChangeBlock>();
-  const record = (block: ContentBlock): void => {
+  const record = (block: OpenContentBlock): void => {
     if (block.type === "file_change") byId.set(block.blockId, block);
   };
   for (const message of source.messages) {

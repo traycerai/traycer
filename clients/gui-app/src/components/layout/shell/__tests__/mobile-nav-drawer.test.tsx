@@ -84,6 +84,7 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 
 const trackMock = vi.hoisted(() => vi.fn());
 
+const refetch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/hooks/home/use-history-query", () => ({
   useHistoryQuery: () => {
     const hasMountedQuery = useRef(false);
@@ -101,7 +102,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       cloudPagePending: testState.cloudPagePending,
       isFetching: false,
       error: null,
-      refetch: () => Promise.resolve(),
+      refetch,
       refetchTasks: () => Promise.resolve(),
       fetchNextPage: () => undefined,
       hasNextPage: false,
@@ -351,6 +352,7 @@ describe("MobileNavDrawer", () => {
     testState.cloudPagePending = false;
     testState.hostRequiresCloudToList = false;
     openLink.mockClear();
+    refetch.mockClear();
     trackMock.mockClear();
     useMobileNavStore.setState({ open: true });
     useAuthStore.setState({
@@ -1548,4 +1550,39 @@ describe("MobileNavDrawer", () => {
       expect(screen.queryByText("No tasks yet")).toBeNull();
     });
   });
+
+  // The installed app is the shell that has a finger to pull with; the drawer
+  // shares History's gesture, so the same drag past the trigger refetches.
+  it("refetches the task list on a pull down from the top of the drawer list", async () => {
+    setMobileApp(true);
+    renderDrawer();
+    const scroller = await screen.findByTestId("mobile-nav-task-scroller");
+
+    fireTouch(scroller, "touchstart", [{ clientX: 100, clientY: 100 }]);
+    fireTouch(scroller, "touchmove", [{ clientX: 100, clientY: 130 }]);
+    fireTouch(scroller, "touchmove", [{ clientX: 100, clientY: 164 }]);
+    fireTouch(scroller, "touchend", []);
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
 });
+
+/**
+ * jsdom has no usable `Touch`/`TouchList` constructor, so a touch is a plain
+ * `Event` wearing the `touches` shape the pull listener reads (indexable and
+ * `.item()`), as in the History pull tests.
+ */
+function fireTouch(
+  target: Element,
+  type: "touchstart" | "touchmove" | "touchend",
+  points: ReadonlyArray<{ readonly clientX: number; readonly clientY: number }>,
+): void {
+  const touches = points.map((point) => ({ identifier: 1, ...point }));
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "touches", {
+    value: Object.assign(touches, {
+      item: (index: number) => touches[index] ?? null,
+    }),
+  });
+  target.dispatchEvent(event);
+}

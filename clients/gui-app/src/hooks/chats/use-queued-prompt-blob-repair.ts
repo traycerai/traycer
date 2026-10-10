@@ -1,13 +1,14 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import { queuedPreparationFailureFromEventMetadata } from "@traycer/protocol/persistence/epic/chat-events";
-import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpenChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   currentDraftBlobOwnerId,
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { repairQueuedPromptBlobs } from "@/lib/drafts/queued-prompt-blob-repair";
+import type { OpenChatEvent } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 /**
  * What this arm reads of the queue, and nothing more: whether it is paused, and
  * which items are still in it.
@@ -18,7 +19,7 @@ import { repairQueuedPromptBlobs } from "@/lib/drafts/queued-prompt-blob-repair"
  * standing up a full `ChatQueuedItem` it would then have to keep in sync.
  */
 export interface QueueRepairView {
-  readonly status: ChatQueueState["status"];
+  readonly status: OpenChatQueueState["status"];
   readonly items: ReadonlyArray<{ readonly queueItemId: string }>;
 }
 
@@ -139,7 +140,7 @@ function repairKey(eventId: string, queueItemId: string): string {
 export function useQueuedPromptBlobRepair(input: {
   readonly hostId: string;
   readonly client: DraftBlobClient | null;
-  readonly events: ReadonlyArray<ChatEvent>;
+  readonly events: ReadonlyArray<OpenChatEvent>;
   readonly queue: QueueRepairView;
   /**
    * Whether this viewer may act on this chat at all - the tile's own

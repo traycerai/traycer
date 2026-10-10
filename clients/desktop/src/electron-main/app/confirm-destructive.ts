@@ -28,25 +28,19 @@ export interface MainConfirmation {
  * dropped every jar stream on the machine. Nothing runs between the answer and
  * the action because the caller awaits it and mutates next, not because the
  * loop was frozen.
+ *
+ * There is no synchronous form, on purpose. The download path had one, on the
+ * belief that a save path must be chosen by a dialog inside `will-download`;
+ * it is chosen from the Downloads folder there instead
+ * (`browser-view/browser-download.ts`), and
+ * `browser-view/__tests__/no-sync-dialog.test.ts` fails on a synchronous
+ * dialog anywhere on the browser plane.
  */
 export async function confirmDestructiveInMain(
   confirmation: MainConfirmation,
 ): Promise<boolean> {
   const answer = await dialog.showMessageBox(messageBoxOptions(confirmation));
   return answer.response === 1;
-}
-
-/**
- * The same dialog for the one caller that cannot await: Electron requires
- * `DownloadItem.setSavePath` in the same turn as `will-download`, so a download
- * confirmed asynchronously would already be on Electron's own save path by the
- * time the answer arrived. It blocks main for the length of the dialog, which
- * is why every other caller uses the async form.
- */
-export function confirmDestructiveInMainSync(
-  confirmation: MainConfirmation,
-): boolean {
-  return dialog.showMessageBoxSync(messageBoxOptions(confirmation)) === 1;
 }
 
 function messageBoxOptions(confirmation: MainConfirmation): MessageBoxOptions {

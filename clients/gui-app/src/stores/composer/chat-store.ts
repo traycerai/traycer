@@ -26,14 +26,12 @@ import type {
   ArtifactOperationAction,
   BackgroundTaskOutput,
   BrowserSessionReference,
-  ContentBlock,
   DiffSource,
   FileEditReason,
   PlanAction,
   PlanContentRef,
   AutonomousResumeTrigger,
   AutonomousResumeDeliveryPlacement,
-  PlanSource,
   PlanStatus,
   PlanStep,
   AgentFailure,
@@ -65,6 +63,11 @@ import type {
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 
+import type {
+  OpenContentBlock,
+  OpenPlanSource,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 export type ChatMessageRole = "user" | "assistant" | "system";
 
 // Terminal outcome for an action segment whose turn ended before its own
@@ -75,7 +78,7 @@ export type ChatMessageRole = "user" | "assistant" | "system";
 // Extract) so it stays in lockstep with it - a renamed/removed status fails to
 // compile here rather than silently dropping a badge.
 export type SegmentEndState = Extract<
-  ContentBlock["status"],
+  OpenContentBlock["status"],
   "interrupted" | "superseded"
 > | null;
 
@@ -363,7 +366,7 @@ export interface PlanSegmentModel {
   planId: string;
   planStatus: PlanStatus;
   harnessId: string;
-  source: PlanSource;
+  source: OpenPlanSource;
   title: string | null;
   summary: string | null;
   markdownPreview: string;
@@ -641,8 +644,13 @@ export interface ChatMessageSteerBadge {
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
 export interface AssistantTurnMeta {
-  /** Raw harness id, used to pick the provider's mono icon for the footer. */
-  readonly provider: GuiHarnessId;
+  /**
+   * Raw harness id, used to pick the provider's mono icon for the footer. An
+   * open string: a transcript row's sender may name a harness this build does
+   * not know (`chat.subscribe@1.22`), and `HarnessIcon` draws a neutral square
+   * for one.
+   */
+  readonly provider: string;
   readonly providerLabel: string;
   /** Profile label snapshotted when the turn's provider session was minted. */
   readonly profileLabel: string | null;

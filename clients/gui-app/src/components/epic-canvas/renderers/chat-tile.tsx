@@ -17,14 +17,11 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
-import type {
-  InterviewAnswer,
-  UserMessageSender,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
   BackgroundItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -142,12 +139,18 @@ import {
   dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
   projectQueueWithPendingCancellations,
+  unconfirmedSendActionIdsOf,
   withdrawnMessageDeliveryId,
   type ChatSessionState,
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
 import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
+import { queueItemsInFlight } from "@/stores/chats/queue-edit-custody";
+import {
+  QueuedMessageStagesContext,
+  type QueuedMessageStages,
+} from "@/components/chat/queued-message-stages";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -336,6 +339,8 @@ import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -1631,34 +1636,38 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                             // directory-query subscription for the same answer.
                             client={attachmentHostClient}
                           />
-                          <ChatLowerInteractionSurfaces
-                            epicId={view.currentEpicId}
-                            viewTabId={view.viewTabId}
-                            chatId={view.node.id}
-                            hostId={hostId}
-                            runtime={view.lower.runtime}
-                            access={view.lower.access}
-                            turn={view.lower.turn}
-                            interview={view.lower.interview}
-                            approvals={view.lower.approvals}
-                            queue={view.lower.queue}
-                            composer={view.lower.composer}
-                            todo={view.todo}
-                            restoreContext={view.restoreContext}
-                            providerFallback={view.lower.fallback}
-                            backgroundItems={view.lower.backgroundItems}
-                            backgroundStopPendingTaskIds={
-                              view.lower.backgroundStopPendingTaskIds
-                            }
-                            backgroundStopAllPending={
-                              view.lower.backgroundStopAllPending
-                            }
-                            backgroundSessionStopPending={
-                              view.lower.backgroundSessionStopPending
-                            }
-                            onBackgroundItemClick={scrollToBackgroundItem}
-                            subagentView={subagentDockView}
-                          />
+                          <QueuedMessageStagesContext
+                            value={view.lower.queueStages}
+                          >
+                            <ChatLowerInteractionSurfaces
+                              epicId={view.currentEpicId}
+                              viewTabId={view.viewTabId}
+                              chatId={view.node.id}
+                              hostId={hostId}
+                              runtime={view.lower.runtime}
+                              access={view.lower.access}
+                              turn={view.lower.turn}
+                              interview={view.lower.interview}
+                              approvals={view.lower.approvals}
+                              queue={view.lower.queue}
+                              composer={view.lower.composer}
+                              todo={view.todo}
+                              restoreContext={view.restoreContext}
+                              providerFallback={view.lower.fallback}
+                              backgroundItems={view.lower.backgroundItems}
+                              backgroundStopPendingTaskIds={
+                                view.lower.backgroundStopPendingTaskIds
+                              }
+                              backgroundStopAllPending={
+                                view.lower.backgroundStopAllPending
+                              }
+                              backgroundSessionStopPending={
+                                view.lower.backgroundSessionStopPending
+                              }
+                              onBackgroundItemClick={scrollToBackgroundItem}
+                              subagentView={subagentDockView}
+                            />
+                          </QueuedMessageStagesContext>
                         </SurfaceActivityProvider>
                       </div>
                     </div>
@@ -1918,6 +1927,7 @@ function useChatTileSessionViewModel(
       pendingBackgroundSessionStop: s.pendingBackgroundSessionStop,
       restore: s.restore,
       pendingActions: s.pendingActions,
+      unconfirmedSendActionIds: s.unconfirmedSendActionIds,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
       currentComposerSettings: s.currentComposerSettings,
@@ -2152,7 +2162,7 @@ function useChatTileSessionViewModel(
   // could supply.
   const editingQueueItem =
     projectedQueue.items.find(
-      (item): item is ChatQueuedPromptItem =>
+      (item): item is OpenChatQueuedPromptItem =>
         item.kind === "prompt" &&
         item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
@@ -2854,32 +2864,24 @@ function useChatTileSessionViewModel(
       if (!canAct) return false;
       if (profile === null) return false;
       if (activeEditingQueueItemId !== null) {
-        const actionId = chatActions.queueEdit(
-          activeEditingQueueItemId,
-          input.content,
-        );
-        if (actionId === null) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
         // carries the settings and the host picks safe-point vs interrupt-restart
         // (any drift was already confirmed by the composer's steer dialog).
         // Plain Enter just saves the edit with its restamped settings.
-        if (input.deliveryPolicy === "after_safe_point") {
-          if (
-            chatActions.queueSteerNow(
-              activeEditingQueueItemId,
-              input.settings,
-            ) === null
-          ) {
-            return false;
-          }
-        } else if (
-          chatActions.queueSettingsUpdate(
-            activeEditingQueueItemId,
-            input.settings,
-          ) === null
-        ) {
-          return false;
-        }
+        //
+        // ONE call for both frames, so the store holds the whole submission -
+        // text, annotation cards, settings, intent - from before this returns
+        // `true` and the composer clears. A `null` means nothing is held, and
+        // the draft stays where it is.
+        const actionId = chatActions.submitQueueEdit({
+          queueItemId: activeEditingQueueItemId,
+          content: input.content,
+          restore: input.restore,
+          settings: input.settings,
+          intent:
+            input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
+        });
+        if (actionId === null) return false;
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
@@ -3542,6 +3544,32 @@ function useChatTileSessionViewModel(
     };
   }, [state.pendingActions, state.queue.items]);
 
+  // Local facts about this client's own unanswered frames, for the queue rows
+  // and the line beside the composer. Derived from the pending actions, so
+  // they clear on the ack or the reconnect sweep and on nothing else.
+  const queueStages = useMemo<QueuedMessageStages>(
+    () => ({
+      inFlight: queueItemsInFlight(state.pendingActions),
+      unconfirmedSendActionIds: unconfirmedSendActionIdsOf({
+        unconfirmedSendActionIds: state.unconfirmedSendActionIds,
+        pendingActions: state.pendingActions,
+      }),
+      onCheckDelivery: chatActions.checkSendDelivery,
+      streamReconnecting:
+        state.snapshotLoaded &&
+        state.connectionStatus !== "open" &&
+        state.fatalClose === null,
+    }),
+    [
+      chatActions.checkSendDelivery,
+      state.connectionStatus,
+      state.fatalClose,
+      state.pendingActions,
+      state.snapshotLoaded,
+      state.unconfirmedSendActionIds,
+    ],
+  );
+
   const lowerQueue = useMemo(
     () => ({
       editingItem: editingQueueItem,
@@ -3699,6 +3727,7 @@ function useChatTileSessionViewModel(
       interview: lowerInterview,
       approvals: lowerApprovals,
       queue: lowerQueue,
+      queueStages,
       composer: lowerComposer,
       backgroundItems: state.backgroundItems,
       backgroundStopPendingTaskIds,

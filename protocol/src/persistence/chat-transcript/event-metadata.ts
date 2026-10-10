@@ -29,7 +29,7 @@ import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
  */
 
 export function readMetadataString(
-  event: ChatEvent,
+  event: Pick<ChatEvent, "metadata">,
   key: string,
 ): string | null {
   const metadata = event.metadata;
@@ -39,7 +39,7 @@ export function readMetadataString(
 }
 
 export function readMetadataNumber(
-  event: ChatEvent,
+  event: Pick<ChatEvent, "metadata">,
   key: string,
 ): number | null {
   const metadata = event.metadata;
@@ -53,7 +53,10 @@ export function readMetadataNumber(
  * with a schema - e.g. the `folderIntent` a `setup.failed` event carries).
  * Returns `undefined` when the event has no metadata or the key is absent.
  */
-export function readMetadataValue(event: ChatEvent, key: string): unknown {
+export function readMetadataValue(
+  event: Pick<ChatEvent, "metadata">,
+  key: string,
+): unknown {
   const metadata = event.metadata;
   if (metadata === null) return undefined;
   return metadata[key];

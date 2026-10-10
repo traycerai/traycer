@@ -13,6 +13,7 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   contentBlockSchema,
@@ -29,14 +30,17 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 /**
- * `chat.subscribe@1.22`: `page` and `mcpApp` on a `tool_call` block and on its
+ * `chat.subscribe@1.23`: `page` and `mcpApp` on a `tool_call` block and on its
  * `tool_call.completed` event.
  *
- * PROJECTION, not tolerance: every line below `1.22` binds a hand-frozen block
+ * PROJECTION, not tolerance: every line below `1.23` binds a hand-frozen block
  * and event that do not declare the keys, so a frame carrying them parses there
  * with the keys gone and everything else intact - on each channel a body
  * reaches a peer on (the tail, a `range` response, `blockDelta`). The live line
  * keeps them.
+ *
+ * `1.22` is main's released open-harness-id line and is frozen byte for byte: it
+ * keeps the open harness leaves and, like every line below it, no stamps.
  */
 
 const SHA = "c".repeat(64);
@@ -70,7 +74,7 @@ const MCP_APP: ToolCallMcpAppStamp = {
   modelContext: null,
 };
 
-/** A tool call exactly as a 1.22 host persists it, both stamps present. */
+/** A tool call exactly as a 1.23 host persists it, both stamps present. */
 function stampedToolCall(): Record<string, unknown> {
   return {
     type: "tool_call",
@@ -238,6 +242,7 @@ const FROZEN_LINES = [
   { label: "1.18", contract: chatSubscribeV118 },
   { label: "1.20", contract: chatSubscribeV120 },
   { label: "1.21", contract: chatSubscribeV121 },
+  { label: "1.22", contract: chatSubscribeV122 },
 ] as const;
 
 describe.each(FROZEN_LINES)(
@@ -284,8 +289,32 @@ describe.each(FROZEN_LINES)(
   },
 );
 
-describe("chat.subscribe@1.22 carries the stamps", () => {
+describe("chat.subscribe@1.22 keeps its open harness ids while dropping the stamps", () => {
   const frames = chatSubscribeV122.serverFrameSchema;
+
+  it("accepts an unknown heard-from harness id and still strips the stamps", () => {
+    const row = assistantRow([stampedToolCall()]);
+    const future = {
+      ...row,
+      sender: {
+        type: "agent",
+        harnessId: "zzz-future",
+        agentId: "agent-1",
+        displayName: "Coder",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+    };
+    const block = firstToolCall(
+      tailMessage(frames.parse(snapshotFrame(future))),
+    );
+    expect(has(block, "page")).toBe(false);
+    expect(has(block, "mcpApp")).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.23 carries the stamps", () => {
+  const frames = chatSubscribeV123.serverFrameSchema;
 
   it("round-trips both stamps on the snapshot tail and on a range response", () => {
     const row = assistantRow([stampedToolCall()]);

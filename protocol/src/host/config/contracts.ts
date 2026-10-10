@@ -7,6 +7,13 @@ import {
   configBrowserResponseSchema,
   configBrowserSetRequestSchema,
   configBrowserSetResponseSchema,
+  configCatalogGetRequestSchema,
+  configCatalogResponseSchema,
+  configCatalogResponseSchemaV10,
+  configCatalogSetRequestSchema,
+  configCatalogSetRequestSchemaV10,
+  configCatalogSetResponseSchema,
+  configCatalogSetResponseSchemaV10,
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
   configEnvListRequestSchema,
@@ -216,4 +223,68 @@ export const configVisualizationSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configVisualizationSetRequestSchema,
   responseSchema: configVisualizationSetResponseSchema,
+});
+
+/** Reads the shared catalog probe timeout and its bounds. */
+export const configCatalogGetV10 = defineRpcContract({
+  method: "config.catalog.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configCatalogGetRequestSchema,
+  responseSchema: configCatalogResponseSchemaV10,
+});
+
+// v1.1 adds `overrides`, each provider's own timeout (Settings > Providers >
+// CLI & Args > Model list, "Same for all providers" off). The extra key is
+// strippable, so a 1.1 host answering a 1.0 client drops it on the wire.
+export const configCatalogGetV11 = defineRpcContract({
+  method: "config.catalog.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configCatalogGetRequestSchema,
+  responseSchema: configCatalogResponseSchema,
+});
+
+// A 1.0 host has no per-provider values, so every provider follows the shared
+// one: `overrides` is empty.
+export const configCatalogGetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configCatalogGetV10,
+  typeof configCatalogGetV11
+>({
+  from: configCatalogGetV10.schemaVersion,
+  to: configCatalogGetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, overrides: {} }),
+});
+
+/** Writes the shared catalog probe timeout. */
+export const configCatalogSetV10 = defineRpcContract({
+  method: "config.catalog.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configCatalogSetRequestSchemaV10,
+  responseSchema: configCatalogSetResponseSchemaV10,
+});
+
+// v1.1 writes either the shared value (`scope: "all"`, which leaves providers'
+// own values alone) or one provider's own value (`scope: "harness"`, `null`
+// clears it). The response grows `overrides` as `config.catalog.get` does.
+export const configCatalogSetV11 = defineRpcContract({
+  method: "config.catalog.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configCatalogSetRequestSchema,
+  responseSchema: configCatalogSetResponseSchema,
+});
+
+// A 1.0 body - a bare `{ probeTimeoutSeconds }` - always meant the shared
+// value, so it upgrades to `scope: "all"`, and a 1.0 client keeps working
+// against a 1.1 host unchanged.
+export const configCatalogSetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configCatalogSetV10,
+  typeof configCatalogSetV11
+>({
+  from: configCatalogSetV10.schemaVersion,
+  to: configCatalogSetV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    scope: "all",
+    probeTimeoutSeconds: request.probeTimeoutSeconds,
+  }),
+  upgradeResponse: (response) => ({ ...response, overrides: {} }),
 });

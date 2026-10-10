@@ -1,12 +1,15 @@
 import type {
-  ChatQueuedItem,
+  OpenChatQueuedItem,
   ChatQueuedManagedCommandItem,
-  ChatQueuedPromptItem,
-  ChatQueueState,
+  OpenChatQueuedPromptItem,
+  OpenChatQueueState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
-export type ReceivedAgentQueueItem = ChatQueuedPromptItem & {
-  readonly sender: Extract<ChatQueuedPromptItem["sender"], { type: "agent" }>;
+export type ReceivedAgentQueueItem = OpenChatQueuedPromptItem & {
+  readonly sender: Extract<
+    OpenChatQueuedPromptItem["sender"],
+    { type: "agent" }
+  >;
 };
 
 /**
@@ -23,7 +26,7 @@ export type ReceivedAgentQueueItem = ChatQueuedPromptItem & {
  * onto them.
  */
 export function isReceivedAgentResponse(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
 ): item is ReceivedAgentQueueItem {
   return item.kind === "prompt" && item.sender.type === "agent";
 }
@@ -36,7 +39,7 @@ export function isReceivedAgentResponse(
  * hand-steerable.
  */
 export function isManagedCommandQueueItem(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
 ): item is ChatQueuedManagedCommandItem {
   return item.kind === "managed-command";
 }
@@ -49,7 +52,7 @@ export function isManagedCommandQueueItem(
  * drawn.
  */
 export function queuedPromptMessageIds(
-  items: ReadonlyArray<ChatQueuedItem>,
+  items: ReadonlyArray<OpenChatQueuedItem>,
 ): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const item of items) {
@@ -75,12 +78,12 @@ export function queuedPromptMessageIds(
  * Display only. Setup, pause, and cancel keep reading the session queue.
  */
 export function queueWithoutPersistedPrompts(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   messages: ReadonlyArray<{
     readonly role: string;
     readonly messageId: string;
   }>,
-): ChatQueueState {
+): OpenChatQueueState {
   if (queue.items.length === 0) return queue;
   const persistedUserMessageIds = new Set<string>();
   for (const message of messages) {
@@ -123,7 +126,7 @@ const PAUSED_AFTER_ERROR_REASONS: ReadonlySet<string> = new Set([
  * left behind on an idle or running queue (a rebuild that changed the status
  * but kept the key) must not make the pill claim a pause that has ended.
  */
-export function queuePausedAfterError(queue: ChatQueueState): boolean {
+export function queuePausedAfterError(queue: OpenChatQueueState): boolean {
   if (queue.status !== "paused") return false;
   const reason = queue.pausedReason ?? null;
   return reason !== null && PAUSED_AFTER_ERROR_REASONS.has(reason);

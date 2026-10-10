@@ -4,8 +4,8 @@ import { AnimatePresence } from "motion/react";
 import type {
   BackgroundItem,
   ChatActiveTurn,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PinnedTodoPanel } from "@/components/chat/chat-pinned-stack";
 import { ChatAccumulatedChangesPanel } from "@/components/chat/chat-accumulated-changes-panel";
@@ -17,6 +17,11 @@ import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import {
+  useChatDockOpenStore,
+  useChatQueueCollapsed,
+} from "@/stores/chats/chat-dock-open-store";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 
 import {
   ChatDockCompactStrip,
@@ -141,14 +146,14 @@ export interface ChatLowerDockProps {
   readonly scrollRegionMaxHeightClass: string;
   readonly onQueuePause: () => string | null;
   readonly onQueueResume: () => string | null;
-  readonly onQueueEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onQueueCancel: (item: ChatQueuedItem) => void;
-  readonly onQueueAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onQueueEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onQueueCancel: (item: OpenChatQueuedItem) => void;
+  readonly onQueueAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onQueueReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onQueueSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onQueueSteerNow: (item: OpenChatQueuedPromptItem) => void;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
@@ -350,7 +355,10 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
                     data-layout-passive
                     data-layout-cue="Message queue · Always here"
                   >
-                    {queuePanel(props, anyRowVisible)}
+                    <ChatDockQueuePanel
+                      dock={props}
+                      separated={anyRowVisible}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -494,7 +502,32 @@ function dockPanelContent(
   );
 }
 
-function queuePanel(dock: ChatLowerDockProps, separated: boolean): ReactNode {
+/**
+ * The Message queue, with its fold read from and written to the store per
+ * (host, chat) (#2441): the panel unmounts every time the queue drains, and a
+ * fold it kept itself came back open with the next queued message.
+ *
+ * A component of its own, mounted only while the queue holds something, so
+ * the tab's host is read where a queue exists - always inside a tab - and not
+ * by every dock (a layout-editor picture can draw one with no tab around it).
+ */
+function ChatDockQueuePanel(props: {
+  readonly dock: ChatLowerDockProps;
+  readonly separated: boolean;
+}): ReactNode {
+  const { dock } = props;
+  const hostId = useTabHostId();
+  const chatId = dock.chatId;
+  const collapsed = useChatQueueCollapsed(hostId, chatId);
+  const setQueueCollapsed = useChatDockOpenStore(
+    (state) => state.setQueueCollapsed,
+  );
+  const onOpenChange = useCallback(
+    (open: boolean) => {
+      setQueueCollapsed(hostId, chatId, !open);
+    },
+    [hostId, chatId, setQueueCollapsed],
+  );
   return (
     <QueuedMessagePanel
       queue={dock.queue}
@@ -505,7 +538,9 @@ function queuePanel(dock: ChatLowerDockProps, separated: boolean): ReactNode {
       readOnly={dock.readOnly}
       editingQueueItemId={dock.editingQueueItemId}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
-      separated={separated}
+      separated={props.separated}
+      open={!collapsed}
+      onOpenChange={onOpenChange}
       onPause={dock.onQueuePause}
       onResume={dock.onQueueResume}
       onEdit={dock.onQueueEdit}

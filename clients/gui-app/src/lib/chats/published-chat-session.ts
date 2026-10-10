@@ -1,14 +1,15 @@
 import { createStore, useStore } from "zustand";
 import type { UseBoundStore, StoreApi } from "zustand";
+// The OPEN record schemas: a published copy can carry a row from a host newer
+// than this build, naming a harness it only heard from (an agent sender, an
+// actor, a plan source). Such a row converts and renders by its raw id, the
+// same as it does off `chat.subscribe@1.22`; only a block kind this build has
+// no renderer for becomes a placeholder. Every closed record parses the same.
 import {
-  chatEventSchema,
-  type ChatEvent,
-} from "@traycer/protocol/persistence/epic/chat-events";
-import {
-  messageSchema,
-  type Message,
-} from "@traycer/protocol/persistence/epic/messages";
-import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+  openChatEventSchema,
+  openContentBlockSchema,
+  openMessageSchema,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
@@ -16,6 +17,11 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * A published chat, adapted into the shape the ordinary chat surface reads.
@@ -64,8 +70,8 @@ import type {
  */
 
 export interface PublishedChatConversion {
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+  readonly messages: readonly OpenMessage[];
+  readonly events: readonly OpenChatEvent[];
   /**
    * Messages and events this build could parse as chat-sync but not as its own
    * epic records. Surfaced beside the transcript's own fidelity line rather
@@ -84,8 +90,8 @@ export interface PublishedChatConversion {
 export function convertPublishedChat(
   presented: PresentedChat,
 ): PublishedChatConversion {
-  const messages: Message[] = [];
-  const events: ChatEvent[] = [];
+  const messages: OpenMessage[] = [];
+  const events: OpenChatEvent[] = [];
   let unreadableCount = 0;
   for (const message of presented.messages) {
     const rebuilt = rebuildMessage(message.raw, message.blocks);
@@ -97,7 +103,7 @@ export function convertPublishedChat(
     unreadableCount += rebuilt.replacedBlockCount;
   }
   for (const event of presented.events) {
-    const parsed = chatEventSchema.safeParse(event.raw);
+    const parsed = openChatEventSchema.safeParse(event.raw);
     if (parsed.success) events.push(parsed.data);
     else unreadableCount += 1;
   }
@@ -112,24 +118,29 @@ export function convertPublishedChat(
  * Returns `null` only when the ENVELOPE itself is unrepresentable, which the
  * caller counts.
  */
+interface RebuiltMessage {
+  readonly message: OpenMessage;
+  readonly replacedBlockCount: number;
+}
+
 function rebuildMessage(
   raw: JsonObject,
   presentedBlocks: PresentedChat["messages"][number]["blocks"],
-): { readonly message: Message; readonly replacedBlockCount: number } | null {
+): RebuiltMessage | null {
   if (presentedBlocks.length === 0) {
-    const parsed = messageSchema.safeParse(raw);
+    const parsed = openMessageSchema.safeParse(raw);
     return parsed.success
       ? { message: parsed.data, replacedBlockCount: 0 }
       : null;
   }
   let replacedBlockCount = 0;
   const blocks = presentedBlocks.map((block, index) => {
-    const parsed = contentBlockSchema.safeParse(block.raw);
+    const parsed = openContentBlockSchema.safeParse(block.raw);
     if (parsed.success) return block.raw;
     replacedBlockCount += 1;
     return placeholderBlockRaw(block.blockId ?? `unreadable-${index}`, index);
   });
-  const parsed = messageSchema.safeParse({ ...raw, blocks });
+  const parsed = openMessageSchema.safeParse({ ...raw, blocks });
   if (!parsed.success) return null;
   return { message: parsed.data, replacedBlockCount };
 }
@@ -173,7 +184,7 @@ export function convertReplicaChat(
   rawMessages: readonly Record<string, unknown>[],
   rawEvents: readonly Record<string, unknown>[],
 ): PublishedChatConversion {
-  const messages: Message[] = [];
+  const messages: OpenMessage[] = [];
   let unreadableCount = 0;
   for (const raw of rawMessages) {
     const rebuilt = rebuildReplicaMessage(raw);
@@ -184,9 +195,9 @@ export function convertReplicaChat(
     messages.push(rebuilt.message);
     unreadableCount += rebuilt.replacedBlockCount;
   }
-  const events: ChatEvent[] = [];
+  const events: OpenChatEvent[] = [];
   for (const raw of rawEvents) {
-    const parsed = chatEventSchema.safeParse(raw);
+    const parsed = openChatEventSchema.safeParse(raw);
     if (parsed.success) events.push(parsed.data);
     else unreadableCount += 1;
   }
@@ -201,8 +212,8 @@ export function convertReplicaChat(
  */
 function rebuildReplicaMessage(
   raw: Record<string, unknown>,
-): { readonly message: Message; readonly replacedBlockCount: number } | null {
-  const parsed = messageSchema.safeParse(raw);
+): RebuiltMessage | null {
+  const parsed = openMessageSchema.safeParse(raw);
   if (parsed.success) {
     return { message: parsed.data, replacedBlockCount: 0 };
   }
@@ -210,7 +221,7 @@ function rebuildReplicaMessage(
   if (!Array.isArray(rawBlocks)) return null;
   let replacedBlockCount = 0;
   const blocks = rawBlocks.map((block: unknown, index: number) => {
-    const blockParsed = contentBlockSchema.safeParse(block);
+    const blockParsed = openContentBlockSchema.safeParse(block);
     if (blockParsed.success) return block;
     replacedBlockCount += 1;
     const blockId =
@@ -221,7 +232,7 @@ function rebuildReplicaMessage(
         : `unreadable-${index}`;
     return placeholderBlockRaw(blockId, index);
   });
-  const reparsed = messageSchema.safeParse({ ...raw, blocks });
+  const reparsed = openMessageSchema.safeParse({ ...raw, blocks });
   return reparsed.success
     ? { message: reparsed.data, replacedBlockCount }
     : null;
@@ -411,6 +422,10 @@ export function publishedChatSessionState(
     // `queueCancel` and never has a cancel's ack to answer.
     pendingCancelRestorations: {},
     failedSendRestoration: null,
+    // No wire here either: no queue edit is ever submitted, and no send can
+    // go unanswered.
+    queueEditRecords: {},
+    unconfirmedSendActionIds: new Set<string>(),
     hashOnlyRecoveries: {},
     currentComposerSettings: null,
     liveAssistantMessage: null,
@@ -458,6 +473,8 @@ export function publishedChatSessionState(
     // A copy has no delivery view, so nothing is ever restored to acknowledge.
     messageDeliveryRestored: () => null,
     queueEdit: () => null,
+    submitQueueEdit: () => null,
+    checkSendDelivery: () => undefined,
     queueCancel: () => null,
     queueReorder: () => null,
     queueSteerNow: () => null,

@@ -11,10 +11,15 @@ import {
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type {
+  TodoBlock,
   ContentBlock,
   Message,
-  TodoBlock,
 } from "@traycer/protocol/persistence/epic/schemas";
+
+import type {
+  OpenContentBlock,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # Where this lives, and why it moved
@@ -91,11 +96,22 @@ function pinnedTodoItemsFromBlock(block: TodoBlock): PinnedTodoItem[] {
   }));
 }
 
-/** Every assistant block in the transcript, by id. */
+/**
+ * Every assistant block in the transcript, by id. Two signatures, one body:
+ * the host indexes the closed records it wrote and reads closed blocks back;
+ * a `chat.subscribe@1.22` client indexes open ones. The body only re-keys what
+ * it is given, so the closed signature is sound.
+ */
 export function contentBlocksById(
   messages: readonly Message[],
-): ReadonlyMap<string, ContentBlock> {
-  const blocks = new Map<string, ContentBlock>();
+): ReadonlyMap<string, ContentBlock>;
+export function contentBlocksById(
+  messages: readonly OpenMessage[],
+): ReadonlyMap<string, OpenContentBlock>;
+export function contentBlocksById(
+  messages: readonly OpenMessage[],
+): ReadonlyMap<string, OpenContentBlock> {
+  const blocks = new Map<string, OpenContentBlock>();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const block of message.blocks) blocks.set(block.blockId, block);
@@ -170,7 +186,7 @@ export function startPinnedTodoFold(): PinnedTodoFoldState {
 export function foldPinnedTodoRows(
   state: PinnedTodoFoldState,
   rows: readonly TranscriptRowDescriptor[],
-  blocksById: ReadonlyMap<string, ContentBlock>,
+  blocksById: ReadonlyMap<string, OpenContentBlock>,
 ): PinnedTodoFoldState {
   // Copied, not shared: `applyParsedTaskTodoItems` mutates the accumulator,
   // and `state` may be a caller's held checkpoint.
@@ -252,7 +268,7 @@ export function pinnedTodoFoldResult(
  */
 export function foldPinnedTodo(
   rows: readonly TranscriptRowDescriptor[],
-  blocksById: ReadonlyMap<string, ContentBlock>,
+  blocksById: ReadonlyMap<string, OpenContentBlock>,
 ): PinnedTodoFoldResult {
   return pinnedTodoFoldResult(
     foldPinnedTodoRows(startPinnedTodoFold(), rows, blocksById),

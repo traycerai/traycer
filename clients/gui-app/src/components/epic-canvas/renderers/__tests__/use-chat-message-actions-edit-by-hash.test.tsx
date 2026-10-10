@@ -228,6 +228,8 @@ function chatActionsStub(): ChatActions {
     resumeQueue: vi.fn(),
     queueEdit: vi.fn(),
     queueSettingsUpdate: vi.fn(),
+    submitQueueEdit: vi.fn(),
+    checkSendDelivery: vi.fn(),
     restampQueuedItemSettings: vi.fn(),
     updateActivePermissionMode: vi.fn(),
     updateActiveProfile: vi.fn(),

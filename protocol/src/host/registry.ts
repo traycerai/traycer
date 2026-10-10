@@ -347,6 +347,7 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -492,6 +493,12 @@ import {
   configWorktreesSetV10,
   configVisualizationGetV10,
   configVisualizationSetV10,
+  configCatalogGetV10,
+  configCatalogGetV11,
+  configCatalogGetUpgradeV10ToV11,
+  configCatalogSetV10,
+  configCatalogSetV11,
+  configCatalogSetUpgradeV10ToV11,
 } from "@traycer/protocol/host/config/contracts";
 import {
   diagnosticsLogsListV10,
@@ -5889,6 +5896,42 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         0: {
           contract: configWorktreesSetV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // 1.1: per-provider values (`overrides`) and the scoped set. The Providers
+  // CLI & Args rows render only when BOTH methods negotiate 1.1.
+  "config.catalog.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: configCatalogGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configCatalogGetV11,
+          upgradeFromPreviousVersion: configCatalogGetUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.catalog.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: configCatalogSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configCatalogSetV11,
+          upgradeFromPreviousVersion: configCatalogSetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -13364,7 +13407,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 22,
+      latestMinor: 23,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13493,16 +13536,22 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (Command Code). No shape of its own: a row context's session anchor
         // takes the live union here and the 1.5.0 one on 1.9-1.20, and the
         // host refuses such a chat to a subscriber below this minor.
-        // Frozen at the pre-page message bodies since @1.22 opened above it.
+        // Frozen at the pre-page message bodies since @1.23 opened above it.
         21: {
           contract: chatSubscribeV121,
         },
-        // @1.22 adds `page` and `mcpApp` on a tool call (the block and its
-        // `tool_call.completed` event): an agent page and an MCP App. Every
-        // older line binds the pre-page block and event, and the host deletes
-        // both keys by name for a subscriber below this minor.
+        // @1.22 is the open-harness-id line: the leaves a chat names a harness
+        // through without the peer acting on it (agent senders, event actors,
+        // steer blocks, provider notices, plans, session and plan runtime
+        // events) take an open string, so a chat that merely heard from an
+        // agent on a harness the peer cannot name is served rather than
+        // refused. The head the peer drives keeps the closed enum.
         22: {
           contract: chatSubscribeV122,
+        },
+        // @1.23 adds agent-page and MCP App stamps; older peers receive neither.
+        23: {
+          contract: chatSubscribeV123,
         },
       },
     },

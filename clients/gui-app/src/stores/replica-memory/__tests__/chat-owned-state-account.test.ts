@@ -50,6 +50,10 @@ const PRIVATE_COLLECTION_DECISIONS = {
   running: "temporary background-work projection",
   pending: "temporary interview projection",
   EMPTY_COLD_REWRITTEN_IDS: "shared immutable empty singleton",
+  EMPTY_UNCONFIRMED_SEND_ACTION_IDS: "shared immutable empty singleton",
+  NO_SWEPT_ACTION_IDS: "shared immutable empty singleton",
+  unconfirmedSendTimers:
+    "one timer handle per send dispatched in the last 30 seconds",
   opened: "temporary copy of a charged state collection",
 } as const;
 

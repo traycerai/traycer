@@ -185,7 +185,7 @@ describe("useSubagentContinueAsChat", () => {
   describe("which harness decides (the owning turn's provider, else settings)", () => {
     function turn(
       index: number,
-      provider: ChatRunSettings["harnessId"] | null,
+      provider: string | null,
       segment: SubagentSegment,
     ): ChatMessageModel {
       return {
@@ -226,6 +226,15 @@ describe("useSubagentContinueAsChat", () => {
         render({ messages, settings: settings("claude") }).result.current,
       ).not.toBeNull();
       expect(render({ messages, settings: null }).result.current).toBeNull();
+    });
+
+    it("does not fall back to settings for a turn that recorded a harness this build does not know", () => {
+      const messages = [
+        turn(1, "harness-this-build-predates", card("card-1", null)),
+      ];
+      expect(
+        render({ messages, settings: settings("codex") }).result.current,
+      ).toBeNull();
     });
 
     it("judges each card by its OWN turn's provider", () => {

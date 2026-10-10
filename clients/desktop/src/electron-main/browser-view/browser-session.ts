@@ -1,22 +1,28 @@
 import {
-  dialog,
+  app,
   session,
   type Certificate,
   type Session,
   type WebPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserCookieKey,
   BrowserPrimaryProfileDelta,
 } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../app/logger";
-import { confirmDestructiveInMainSync } from "../app/confirm-destructive";
+import { confirmDestructiveInMain } from "../app/confirm-destructive";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
+import {
+  BrowserViewDownloads,
+  type BrowserDownloadItem,
+  type BrowserDownloadWebContents,
+  type BrowserSessionDownloadChange,
+} from "./browser-download";
+import { nodeBrowserDownloadFiles } from "./browser-download-files";
 import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
 import { releaseHeadlessOriginCookieKeys } from "./storage/browser-forget-ledger";
 import {
@@ -110,43 +116,7 @@ interface BrowserViewTrackedWebContents {
   once(event: "destroyed", listener: () => void): void;
 }
 
-interface BrowserDownloadItem {
-  getURL(): string;
-  getFilename(): string;
-  getMimeType(): string;
-  getTotalBytes(): number;
-  getReceivedBytes(): number;
-  getSavePath(): string;
-  setSavePath(path: string): void;
-  cancel(): void;
-  on(
-    event: "updated",
-    listener: (updatedEvent: unknown, state: string) => void,
-  ): void;
-  on(
-    event: "done",
-    listener: (doneEvent: unknown, state: string) => void,
-  ): void;
-}
-
-interface BrowserDownloadWebContents {
-  readonly id: number;
-  getURL(): string;
-}
-
-export interface BrowserSessionDownloadChange {
-  readonly webContentsId: number;
-  readonly downloadId: string;
-  readonly url: string;
-  readonly filename: string;
-  readonly mimeType: string;
-  readonly totalBytes: number;
-  readonly receivedBytes: number;
-  readonly state: BrowserViewDownloadState;
-  readonly savePath: string | null;
-  readonly dangerType: string | null;
-  readonly canCancel: boolean;
-}
+export type { BrowserSessionDownloadChange } from "./browser-download";
 
 export interface BrowserSessionCertificateErrorChange {
   readonly webContentsId: number;
@@ -187,7 +157,22 @@ const browserDownloadListeners = new Set<
 const browserCertificateListeners = new Set<
   (change: BrowserSessionCertificateErrorChange) => void
 >();
-const activeDownloadsById = new Map<string, BrowserDownloadItem>();
+/**
+ * Whether a person can see the tab a WebContents belongs to. The view manager
+ * owns that reading and installs it; until it does, and after it is gone,
+ * nothing is on screen, so a dangerous download is refused rather than asked
+ * about on a desktop nobody may be at.
+ */
+let browserViewOnScreenProbe: (webContentsId: number) => boolean = () => false;
+const browserViewDownloads = new BrowserViewDownloads({
+  downloadsDirectory: () => app.getPath("downloads"),
+  files: nodeBrowserDownloadFiles,
+  confirm: confirmDestructiveInMain,
+  isOnScreen: (webContentsId) => browserViewOnScreenProbe(webContentsId),
+  emit: (change) => {
+    browserDownloadListeners.forEach((listener) => listener(change));
+  },
+});
 const pendingCertificateErrorsById = new Map<
   string,
   BrowserSessionPendingCertificateError
@@ -481,7 +466,7 @@ function installBrowserViewSessionPolicy(
     callback({});
   });
   target.on("will-download", (_event, item, webContents) => {
-    handleBrowserViewDownload(item, webContents);
+    browserViewDownloads.handle(item, webContents);
   });
 }
 
@@ -541,10 +526,21 @@ export function onBrowserViewCertificateError(
 }
 
 export function cancelBrowserViewDownload(downloadId: string): boolean {
-  const item = activeDownloadsById.get(downloadId);
-  if (item === undefined) return false;
-  item.cancel();
-  return true;
+  return browserViewDownloads.cancel(downloadId);
+}
+
+export function setBrowserViewOnScreenProbe(
+  probe: (webContentsId: number) => boolean,
+): void {
+  browserViewOnScreenProbe = probe;
+}
+
+/**
+ * Discards every dangerous download whose question is still open. Called as
+ * the browser plane goes away, when no answer can arrive any more.
+ */
+export function discardHeldBrowserViewDownloads(): void {
+  browserViewDownloads.discardHeld();
 }
 
 export function readBrowserViewPendingCertificateError(
@@ -602,130 +598,6 @@ setBrowserCertificateErrorHandler({
   },
 });
 
-function handleBrowserViewDownload(
-  item: BrowserDownloadItem,
-  webContents: BrowserDownloadWebContents,
-): void {
-  const downloadId = randomUUID();
-  const filename = item.getFilename();
-  const dangerType = dangerousDownloadType(filename);
-  emitBrowserDownloadChange(item, webContents, {
-    downloadId,
-    state: "prompting",
-    savePath: null,
-    dangerType,
-    canCancel: true,
-  });
-
-  if (
-    dangerType !== null &&
-    !confirmDestructiveInMainSync({
-      title: "Confirm download",
-      message: `Save ${filename}?`,
-      detail: `${dangerType} files can run code on your machine.\n\nSource: ${item.getURL()}`,
-      confirmLabel: "Save anyway",
-    })
-  ) {
-    item.cancel();
-    emitBrowserDownloadChange(item, webContents, {
-      downloadId,
-      state: "cancelled",
-      savePath: null,
-      dangerType,
-      canCancel: false,
-    });
-    return;
-  }
-
-  const savePath = dialog.showSaveDialogSync({
-    title: "Save download",
-    defaultPath: filename,
-    buttonLabel: "Save",
-  });
-  if (savePath === undefined) {
-    item.cancel();
-    emitBrowserDownloadChange(item, webContents, {
-      downloadId,
-      state: "cancelled",
-      savePath: null,
-      dangerType,
-      canCancel: false,
-    });
-    return;
-  }
-
-  item.setSavePath(savePath);
-  activeDownloadsById.set(downloadId, item);
-  log.info("[browser-view] download accepted", {
-    url: item.getURL(),
-    filename,
-    mimeType: item.getMimeType(),
-    totalBytes: item.getTotalBytes(),
-    initiatedBy: webContents.getURL(),
-  });
-  emitBrowserDownloadChange(item, webContents, {
-    downloadId,
-    state: "progressing",
-    savePath,
-    dangerType,
-    canCancel: true,
-  });
-  item.on("updated", (_updatedEvent, state) => {
-    const downloadState =
-      state === "interrupted" ? "interrupted" : "progressing";
-    emitBrowserDownloadChange(item, webContents, {
-      downloadId,
-      state: downloadState,
-      savePath,
-      dangerType,
-      canCancel: true,
-    });
-  });
-  item.on("done", (_doneEvent, state) => {
-    activeDownloadsById.delete(downloadId);
-    const downloadState = terminalDownloadState(state);
-    log.info("[browser-view] download finished", {
-      url: item.getURL(),
-      state,
-      receivedBytes: item.getReceivedBytes(),
-    });
-    emitBrowserDownloadChange(item, webContents, {
-      downloadId,
-      state: downloadState,
-      savePath,
-      dangerType,
-      canCancel: false,
-    });
-  });
-}
-
-function emitBrowserDownloadChange(
-  item: BrowserDownloadItem,
-  webContents: BrowserDownloadWebContents,
-  state: {
-    readonly downloadId: string;
-    readonly state: BrowserViewDownloadState;
-    readonly savePath: string | null;
-    readonly dangerType: string | null;
-    readonly canCancel: boolean;
-  },
-): void {
-  const change: BrowserSessionDownloadChange = {
-    webContentsId: webContents.id,
-    downloadId: state.downloadId,
-    url: item.getURL(),
-    filename: item.getFilename(),
-    mimeType: item.getMimeType(),
-    totalBytes: item.getTotalBytes(),
-    receivedBytes: item.getReceivedBytes(),
-    state: state.state,
-    savePath: state.savePath,
-    dangerType: state.dangerType,
-    canCancel: state.canCancel,
-  };
-  browserDownloadListeners.forEach((listener) => listener(change));
-}
-
 function emitBrowserCertificateError(
   pending: BrowserSessionPendingCertificateError,
 ): void {
@@ -742,21 +614,6 @@ function emitBrowserCertificateError(
   browserCertificateListeners.forEach((listener) => listener(change));
 }
 
-function terminalDownloadState(state: string): BrowserViewDownloadState {
-  if (state === "completed") return "completed";
-  if (state === "cancelled") return "cancelled";
-  return "interrupted";
-}
-
-function dangerousDownloadType(filename: string): string | null {
-  const lower = filename.toLowerCase();
-  const extension = lower.includes(".")
-    ? lower.slice(lower.lastIndexOf("."))
-    : "";
-  if (DANGEROUS_DOWNLOAD_EXTENSIONS.has(extension)) return extension;
-  return null;
-}
-
 function findPendingCertificateError(
   input: CertificateErrorReport,
 ): BrowserSessionPendingCertificateError | null {
@@ -771,29 +628,3 @@ function findPendingCertificateError(
   }
   return null;
 }
-
-const DANGEROUS_DOWNLOAD_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".app",
-  ".applescript",
-  ".bat",
-  ".cmd",
-  ".command",
-  ".com",
-  ".cpl",
-  ".dmg",
-  ".exe",
-  ".hta",
-  ".jar",
-  ".js",
-  ".jse",
-  ".msi",
-  ".pkg",
-  ".ps1",
-  ".reg",
-  ".scr",
-  ".sh",
-  ".vb",
-  ".vbe",
-  ".vbs",
-  ".wsf",
-]);

@@ -687,7 +687,7 @@ const stampSha256Schema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
 
 /**
  * The page an agent showed with `traycer_show_page`, stamped on that call's
- * `tool_call` block (`chat.subscribe@1.22`). The bytes are an epic file
+ * `tool_call` block (`chat.subscribe@1.23`). The bytes are an epic file
  * (`files/pages/<slug>-<id>.html`, written once); the stamp names them by path
  * and sha so a row renders exactly the page that was shown, whatever the path
  * holds later.
@@ -772,7 +772,7 @@ export type McpCallToolResult = z.infer<typeof mcpCallToolResultSchema>;
 
 /**
  * The MCP App a tool call rendered, stamped on its `tool_call` block
- * (`chat.subscribe@1.22`). The host captures the `ui://` resource into an epic
+ * (`chat.subscribe@1.23`). The host captures the `ui://` resource into an epic
  * file (`files/mcp-apps/<sha>.html`) and records everything the app needs to
  * render without a live server: its input and result, its CSP and permissions.
  *
@@ -893,7 +893,7 @@ export const toolCallBlockSchema = lazySchema(() =>
     // `imageGenerationResultSchema`.
     imageResults: z.array(imageGenerationResultSchema).default([]),
     // The page this call showed, or the MCP App it rendered
-    // (`chat.subscribe@1.22`) - see `toolCallPageStampSchema` and
+    // (`chat.subscribe@1.23`) - see `toolCallPageStampSchema` and
     // `toolCallMcpAppStampSchema`. Null for every other call and for blocks
     // persisted before these fields. Deliberately NOT on the hand-frozen
     // `toolCallBlockSchemaPrePage` below, so `1.21` and older never see them.
@@ -904,7 +904,7 @@ export const toolCallBlockSchema = lazySchema(() =>
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
 // Wire-freeze copy of `toolCallBlockSchema` as every `chat.subscribe` line up to
-// `@1.21` ships it: the live block without the `page` / `mcpApp` stamps `1.22`
+// `@1.21` ships it: the live block without the `page` / `mcpApp` stamps `1.23`
 // added. Bound by every historical content-block union that used to reference
 // the live block, so those lines keep their vocabulary and lose only the two
 // keys. Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
@@ -2695,7 +2695,7 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
 // ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
 //
 // The live block vocabulary as those lines ship it, holding back exactly what
-// `1.22` added: the `page` / `mcpApp` stamps on a tool call
+// `1.23` added: the `page` / `mcpApp` stamps on a tool call
 // (`toolCallBlockSchemaPrePage`). Every older union above takes the same leaf
 // in place of the live block. Every other member binds its live schema: freeze
 // the member here before adding a field to it.

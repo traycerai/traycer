@@ -194,6 +194,35 @@ describe("convertPublishedChat", () => {
     expect(message.blocks).toHaveLength(1);
     expect(message.blocks[0].type).toBe("text");
   });
+
+  it("converts a row from a harness this build does not know (an open heard-from id)", () => {
+    // A published copy can come from a host newer than this build, naming a
+    // harness this build only heard from. The row converts and carries the raw
+    // id; it is neither replaced with a placeholder nor counted unreadable.
+    const presented = presentedChatWith([textBlock("b1", "known text")]);
+    const unknownSender = {
+      type: "agent",
+      harnessId: "harness-this-build-predates",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    };
+    const converted = convertPublishedChat({
+      ...presented,
+      messages: presented.messages.map((message) => ({
+        ...message,
+        raw: { ...message.raw, sender: unknownSender },
+      })),
+    });
+    expect(converted.unreadableCount).toBe(0);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.sender).toEqual(unknownSender);
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
+  });
 });
 
 /**
@@ -253,6 +282,33 @@ describe("convertReplicaChat", () => {
     );
     expect(placeholder).toHaveLength(1);
     expect(converted.unreadableCount).toBe(1);
+  });
+
+  it("converts a row from a harness this build does not know (an open heard-from id)", () => {
+    const unknownSender = {
+      type: "agent",
+      harnessId: "harness-this-build-predates",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    };
+    const converted = convertReplicaChat(
+      [
+        {
+          ...replicaAssistantRow([textBlock("b1", "known text")]),
+          sender: unknownSender,
+        },
+      ],
+      [],
+    );
+    expect(converted.unreadableCount).toBe(0);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.sender).toEqual(unknownSender);
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
   });
 
   it("drops and counts a row whose envelope cannot be represented at all", () => {

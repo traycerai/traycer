@@ -28,6 +28,10 @@ import {
   type UpdateAttemptLockHandle,
 } from "./lock";
 import { readLockHolder } from "../host-lock/cross-process-lock";
+import {
+  deriveAttemptLiveness,
+  RECOMMENDED_ATTEMPT_STALENESS_MS,
+} from "./liveness";
 import type { HostUpdateAttemptRecord } from "./record";
 import { attemptIdentityOf, sameAttemptIdentity } from "./record";
 import { updateAttemptLockPath } from "./paths";
@@ -136,6 +140,11 @@ export type UpdateMaintenanceExemption =
    *    a live host; this admission compares the INSTALL RECORD because at
    *    admission time nothing is running - that is the condition it exists to
    *    resolve.
+   *
+   * ACTIVE records are judged by `supervisorRelaunchOverActive`: the
+   * placed-byte shapes whose own next act is this start, and a pre-placement
+   * (`downloading` / `preparing`) record whose updater died - stale and
+   * unheld, the §1.5 `interrupted` verdict.
    *
    * It never creates, advances, or terminalizes a record - it holds no
    * capability that could - so the record is closed by the reconciler's
@@ -1717,9 +1726,35 @@ export function parkedActivationMatchesInstall(
  *    that hits a busy host and parks. That is a changed DELIVERED state -
  *    bytes that would have been placed are not - which is what the criterion
  *    forbids, and it is the distinction that separates these from the
- *    relabelled `preparing`/`activate` case above. These are also the phases
- *    where the host is normally still up, so the admission buys least where
- *    it costs most.
+ *    relabelled `preparing`/`activate` case above. So they refuse while the
+ *    updater may be alive - EXCEPT once it is provably gone.
+ *
+ * ## The one pre-placement admission: the updater is dead
+ *
+ * This arm used to refuse those phases outright, on the premise that they
+ * are "the phases where the host is normally still up". That premise is false
+ * once the updater is dead: `host update` stops the host BEFORE it writes
+ * `applying` (the pre-swap stop, recorded with reason `stop`, so the
+ * supervisor exits 0 and nothing relaunches it), and a CLI killed in that
+ * window - Ctrl-C, a closed terminal, a crash, or a process-group signal from
+ * the agent it was launched inside - leaves `preparing`/active with the host
+ * DOWN. Every automatic start (the desktop's packaged-macOS start, `host
+ * service start`, `host ensure`, a relaunched supervisor) is this admission,
+ * so refusing it left the machine hostless until a person ran `host restart`
+ * (RCA `forced-host-update-stuck-restart-rca`, field 2026-10-09).
+ *
+ * The delivered-state argument above assumes a holder that resumes. When the
+ * shared §1.5 derivation calls the record `interrupted` - no write for
+ * `RECOMMENDED_ATTEMPT_STALENESS_MS` AND no live holder - there is none to
+ * resume, so the end state with or without this start is the same: the
+ * attempt stands until `host update` recovers it, and the only difference is
+ * whether a host runs meanwhile. The start runs the INSTALLED bytes, which for
+ * a record that placed nothing are the pre-attempt ones, and it leaves the
+ * record exactly as it is. `interruptedBeforePlacement` says how the holder
+ * half is established without probing (we hold the lock) and why the
+ * staleness half covers a live updater outside the lock. A record written
+ * inside the window, or a lock a live executor holds (`busy`, before this
+ * runs), answers exactly what it answered before.
  *
  * ## The identity test differs from the parked arm's, and must
  *
@@ -1764,7 +1799,15 @@ async function supervisorRelaunchOverActive(
   record: HostUpdateAttemptRecord,
   readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
 ): Promise<ActiveAttemptDisposition> {
-  if (!startsWhatThisRecordPlaced(record)) return "refuse";
+  if (!startsWhatThisRecordPlaced(record)) {
+    if (!interruptedBeforePlacement(record, Date.now())) return "refuse";
+    // The installed bytes are what this start runs, so they have to exist:
+    // the same two nulls as below, refused for the same reasons. No version
+    // test - nothing was placed, so the install is the pre-attempt one and
+    // never the target.
+    if (readInstalledIdentity === null) return "refuse";
+    return (await readInstalledIdentity()) === null ? "refuse" : "allow";
+  }
   // The same two nulls, refused for the same two reasons as the parked arm.
   // `installed === null` also happens to be the swap's absent window - the
   // instant between the two renames when there is no install directory at all
@@ -1801,4 +1844,42 @@ function startsWhatThisRecordPlaced(record: HostUpdateAttemptRecord): boolean {
     return true;
   }
   return record.phase === "preparing" && record.continuation === "activate";
+}
+
+/**
+ * Is this a PRE-placement record whose updater is gone?
+ *
+ * Only `downloading` and `preparing` (whose `activate` continuation never
+ * reaches here: `startsWhatThisRecordPlaced` admits it first) - the phases
+ * that have placed nothing, so starting the installed host runs exactly what
+ * the machine ran before the attempt began. `applying` is deliberately absent:
+ * it MOVES bytes, and no age makes starting from a directory mid-swap safe.
+ *
+ * Interrupted is the shared §1.5 verdict, `deriveAttemptLiveness`, never a
+ * second reading of it. Its holder input is `no-holder` because this contender
+ * owns the attempt lock right now, which it could not if a live executor held
+ * it: contention is the holder probe here, for the reason the paragraph above
+ * gives (`probeAttemptHolder` would observe US). The staleness clause is what
+ * covers a live updater momentarily outside the lock: every writer of these
+ * two phases holds the attempt lock from its claim through `applying` (the
+ * CLI's `runAttemptExecutorSegment` and the desktop's activation segment each
+ * write and keep working inside one lock span), so a holder-free gap on a
+ * record written within `RECOMMENDED_ATTEMPT_STALENESS_MS` is not trusted to
+ * mean anything.
+ */
+function interruptedBeforePlacement(
+  record: HostUpdateAttemptRecord,
+  nowMs: number,
+): boolean {
+  if (record.phase !== "downloading" && record.phase !== "preparing") {
+    return false;
+  }
+  return (
+    deriveAttemptLiveness({
+      current: { kind: "valid", value: record, version: record.schemaVersion },
+      holder: { kind: "no-holder" },
+      nowMs,
+      stalenessMs: RECOMMENDED_ATTEMPT_STALENESS_MS,
+    }).kind === "interrupted"
+  );
 }

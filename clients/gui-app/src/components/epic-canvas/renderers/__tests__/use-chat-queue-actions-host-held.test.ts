@@ -103,6 +103,8 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
     resumeQueue: () => null,
     queueEdit: () => null,
     queueSettingsUpdate: () => null,
+    submitQueueEdit: () => null,
+    checkSendDelivery: () => undefined,
     restampQueuedItemSettings: () => undefined,
     updateActivePermissionMode: () => null,
     updateActiveProfile: () => null,

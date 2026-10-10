@@ -8,10 +8,6 @@ import {
   BUDGET_PLANE_IDS,
   sessionKeyOf,
 } from "@traycer-clients/shared/replica-runtime";
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
 import {
@@ -22,6 +18,11 @@ import {
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * The six whole-set snapshot slices the windowed (and legacy) chat snapshot
@@ -152,8 +153,8 @@ function sliceBytes(slice: unknown): number {
  * as a whole-transcript claim rather than as a silent hole in the budget.
  */
 export function legacyTranscriptResidencyBytes(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
 ): number {
   let bytes = 0;
   for (const message of messages) bytes += recordByteLength(message);

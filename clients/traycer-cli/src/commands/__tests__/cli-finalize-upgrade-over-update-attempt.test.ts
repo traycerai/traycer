@@ -655,7 +655,10 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
 //
 //  - "downloading" / "preparing"+null / "preparing"+"resume-apply": tier 2
 //    refuses because `startsWhatThisRecordPlaced` is false for all three
-//    (only "restarting", "verifying", and "preparing"+"activate" pass it).
+//    (only "restarting", "verifying", and "preparing"+"activate" pass it)
+//    AND each is written NOW: a stale, unheld one is an interrupted updater,
+//    which tier 2 admits on its own (`interruptedBeforePlacement`), and the
+//    third tier would never be reached.
 //  - "restarting" / "verifying" with installed != target: tier 2's
 //    `startsWhatThisRecordPlaced` IS true for these phases, so the version
 //    mismatch is what forces its refusal - matched, it would allow at tier
@@ -691,6 +694,7 @@ describe("cliFinalizeUpgradeCommand - the third (recovery-maintenance) tier adds
         execution: "active",
         continuation: null,
         targetVersion: MISMATCHED_TARGET,
+        updatedAt: new Date().toISOString(),
       },
       expectStart: 1,
     },
@@ -702,6 +706,7 @@ describe("cliFinalizeUpgradeCommand - the third (recovery-maintenance) tier adds
         execution: "active",
         continuation: null,
         targetVersion: MISMATCHED_TARGET,
+        updatedAt: new Date().toISOString(),
       },
       expectStart: 1,
     },
@@ -713,6 +718,7 @@ describe("cliFinalizeUpgradeCommand - the third (recovery-maintenance) tier adds
         execution: "active",
         continuation: "resume-apply",
         targetVersion: MISMATCHED_TARGET,
+        updatedAt: new Date().toISOString(),
       },
       expectStart: 1,
     },

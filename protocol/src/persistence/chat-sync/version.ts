@@ -138,7 +138,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // notice was until this key existed.
 //
 // 1.7 carries `tool_call.page` and `tool_call.mcpApp` (an agent page and an MCP
-// App, stamped on the call that produced them - a `chat.subscribe@1.22` field
+// App, stamped on the call that produced them - a `chat.subscribe@1.23` field
 // that lands in a publication). A NEW minor rather than riding 1.6:
 // `host-v1.4.2` shipped chat-sync 1.6. Defaulted `null`, so an older record
 // parses unchanged, and a content block's `raw` re-emission (§2 of

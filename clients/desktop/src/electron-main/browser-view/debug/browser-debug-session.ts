@@ -11,11 +11,20 @@ import type {
 import { describeLogError, log } from "../../app/logger";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
 import { BrowserFrameRoutes } from "./browser-frame-routes";
+import { FileChooserInterception } from "./file-chooser-interception";
 import { isRecord, recordValue } from "../guards";
 
 interface BrowserDebugSessionOptions {
   readonly webContents: BrowserDebugWebContents;
   readonly onDetached: (reason: string) => void;
+  /**
+   * Whether a click on a file input should open NO OS picker right now. True
+   * while nobody can see the tab: the picker is window-modal over the app and
+   * only a person can close it, so one an agent's click raised on a hidden tab
+   * sat there until someone noticed (traycerai/traycer#2420). False while the
+   * tab is on screen, where the person at the tile still gets the picker.
+   */
+  readonly interceptFileChooser: () => boolean;
 }
 
 interface CdpEvent {
@@ -35,6 +44,8 @@ export interface BrowserDebugLease {
 export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
+  private readonly interceptFileChooser: () => boolean;
+  private readonly fileChooser: FileChooserInterception;
   private readonly frameRoutes: BrowserFrameRoutes;
   private readonly bindingCalledListeners = new Set<
     (params: Record<string, unknown>) => void
@@ -58,6 +69,17 @@ export class BrowserDebugSession {
   constructor(options: BrowserDebugSessionOptions) {
     this.webContents = options.webContents;
     this.onDetached = options.onDetached;
+    this.interceptFileChooser = options.interceptFileChooser;
+    this.fileChooser = new FileChooserInterception({
+      live: () => this.isAttached(),
+      desired: () => this.interceptsFileChooser(),
+      send: (enabled) =>
+        this.webContents.debugger.sendCommand(
+          "Page.setInterceptFileChooserDialog",
+          { enabled },
+          undefined,
+        ),
+    });
     this.frameRoutes = new BrowserFrameRoutes({
       browserDebugger: () => this.webContents.debugger,
       isAttached: () => this.isAttached(),
@@ -68,7 +90,17 @@ export class BrowserDebugSession {
       raceWithSessionEnd: <T>(work: Promise<T>, message: string) =>
         this.raceWithDebugSessionEnd(work, message),
       attachmentEnded: () => this.attachmentEnd.promise,
+      interceptFileChooser: () => this.interceptsFileChooser(),
     });
+  }
+
+  /**
+   * Only while someone drives the tab through this session: with no lease
+   * left the setting comes off, which is what hands a debugger another
+   * consumer attached back the way it was found.
+   */
+  private interceptsFileChooser(): boolean {
+    return this.leases > 0 && this.interceptFileChooser();
   }
 
   isAttached(): boolean {
@@ -98,6 +130,20 @@ export class BrowserDebugSession {
     } finally {
       this.stopListeningIfIdle();
     }
+  }
+
+  /**
+   * Brings the attached debugger's chooser interception in line with
+   * `interceptFileChooser`. Called on every edge of the tab's on-screen
+   * reading; a no-op while nothing is attached, because the enable batch
+   * applies the current reading whenever the debugger comes up, and a tab with
+   * no debugger has nobody who could click a file input off screen.
+   */
+  syncFileChooserInterception(): void {
+    if (!this.isReady()) return;
+    void this.fileChooser.sync();
+    // Per target: an out-of-process iframe's session needs its own.
+    this.frameRoutes.syncFileChooserInterception();
   }
 
   onBindingCalled(
@@ -235,6 +281,7 @@ export class BrowserDebugSession {
         browserDebugger.sendCommand("Network.enable", {}, undefined),
         // DOM.describeNode requires its domain to be enabled first.
         browserDebugger.sendCommand("DOM.enable", {}, undefined),
+        this.fileChooser.sync(),
       ]).then(() => undefined),
       "Browser debugger detached while enabling",
     )
@@ -247,6 +294,8 @@ export class BrowserDebugSession {
           throw new Error("Browser debug session ended while enabling");
         }
         this.enabled = true;
+        // The on-screen reading may have moved while the batch was in flight.
+        this.syncFileChooserInterception();
       })
       .catch((err: unknown) => {
         if (this.enablePromise !== enablePromise) throw err;
@@ -335,6 +384,8 @@ export class BrowserDebugSession {
       .find((value) => value !== null);
     this.stopListening();
     this.resetDetachedState();
+    // The detached debugger took its interception with it.
+    this.fileChooser.reset();
     this.onDetached(reason ?? "Debugger detached");
   }
 
@@ -343,6 +394,8 @@ export class BrowserDebugSession {
     const browserDebugger = this.webContents.debugger;
     if (!browserDebugger.isAttached()) {
       this.resetDetachedState();
+      // A fresh attachment intercepts nothing, whatever the last one held.
+      this.fileChooser.reset();
       browserDebugger.attach("1.3");
       this.attachedBySession = true;
     }
@@ -353,15 +406,21 @@ export class BrowserDebugSession {
     if (this.leases > 0 || this.disposed) return;
     const browserDebugger = this.liveDebugger();
     const attachedBySession = this.attachedBySession;
+    const attached = browserDebugger !== null && browserDebugger.isAttached();
+    // Someone else attached this debugger and keeps it. The interception this
+    // session put on it comes off with the last lease; left on, it would
+    // outlive every record of it and swallow the person's picker. The iframe
+    // sessions go first: the reset below forgets them.
+    if (attached && !attachedBySession) {
+      this.frameRoutes.syncFileChooserInterception();
+    }
     // Listeners off first: this detach is deliberate, and the detach listener
     // exists to report the ones we did not ask for.
     this.stopListening();
     this.resetDetachedState();
-    if (
-      !attachedBySession ||
-      browserDebugger === null ||
-      !browserDebugger.isAttached()
-    ) {
+    if (browserDebugger === null || !attached) return;
+    if (!attachedBySession) {
+      void this.fileChooser.sync();
       return;
     }
     try {

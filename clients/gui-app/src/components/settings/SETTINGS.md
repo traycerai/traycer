@@ -266,6 +266,11 @@ predicates; it never imports the assembled index or the search consumer.
   `null` / `false` / `""` rendering the bare label. The theme slots pass
   `"Active"` there ("Light theme · Active"); the definition's label stays the
   searchable copy.
+- **`details` is the row's full-width tail.** Options a row's control
+  governs go in `details`, drawn on a line of their own under the label and
+  the control, across the row's whole width; `null` / `false` draw nothing,
+  which is how a row hides its options while its switch is off. Archive idle
+  agents automatically is the caller.
 - **Hand-built regions read the definition too.** The branch-prefix row keeps
   its bespoke layout (the input and its live preview share a line) and writes
   `data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}` and its
@@ -1177,21 +1182,46 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       absent. Gated on the selected host, so it has no search entry of its
       own: its label and keywords (archive, idle, inactive, auto, cleanup,
       timer) contribute to the Agents group. Controls: the main switch
-      (`enabled`), a seconds field (whole number inside the host's `bounds`,
-      committed on blur or Enter (not an Enter that confirms an IME
-      composition), an inline error and no write otherwise,
-      editable while the switch is off, 3600 clamped into the host's
-      `bounds` for a never-saved account, which is also what the switches
-      write), and
-      under the description "Also archive chats I created"
-      (`includeUserCreated`, off by default; terminal agents count as the
-      user's). Every write sends all three fields. The status line is the
-      threshold in words ("After 1 hour of inactivity, on all your hosts.
-      Applied when a host next looks at the chat's task."), "Off on all your
-      hosts." while disabled, and "Couldn't read the auto-archive setting from
-      this host." on a failed read. Controls stay disabled with no error until
-      the viewer id resolves and the read lands, and while a save is pending
-      (with `AgentSpinningDots`). The client never schedules archiving: the
+      (`enabled`), alone in the control slot. Its options sit in the row's
+      `details` slot, an inset group (`bg-foreground/3`, one option per line,
+      label and hint left, control right) drawn only while the policy has
+      loaded and the switch is on; closing it writes nothing. "Archive after"
+      is a preset picker (1 hour, 6 hours, 1 day, 3 days, 7 days, 30 days,
+      filtered to the host's `bounds`) that commits on pick, plus "Custom…",
+      which writes nothing and opens a number-and-unit field: minutes, hours
+      and days, with seconds listed only when the shown value needs them,
+      in the largest unit that states the shown seconds exactly (the shown
+      threshold is the newest save's while one is in flight, else the saved
+      one). A shown value that is no preset is Custom with the field open, and
+      picking a preset drops the field's draft. The presets and the custom
+      field are one value, so one action is one write: the custom value
+      commits on a unit pick, on Enter (not an Enter that confirms an IME
+      composition), and when focus leaves the whole threshold control -
+      moving between the number, the unit picker, the preset picker or
+      either portalled list is not leaving. A value outside `bounds` shows an
+      inline error and writes nothing, and a commit that matches the shown
+      threshold sends nothing. "Include chats I started" (`includeUserCreated`, off by
+      default; terminal agent chats count as the user's) is the second line.
+      Under the group, a footnote: "Archived when a host next opens the task.
+      A new message brings a chat back." A never-saved account shows 3600
+      clamped into `bounds`, which is also what the switches write. Every
+      write sends all three fields. A failed read adds "Couldn't read the
+      auto-archive setting from this host." under the description. Controls
+      stay disabled with no error until the viewer id resolves and the read
+      lands. While a save is pending they stay LIVE, unlike the usual
+      disabled-while-pending rule, with `AgentSpinningDots` beside the main
+      switch: saves queue in order (`chatAutoArchiveWriteScope`), the row
+      shows the newest save's policy, and a disabled switch would swallow the
+      click that lands right after the threshold field saved on its way out.
+      Every write is built at event time on the newest unsettled write the
+      row sent (a ref, cleared when that write settles), not on the rendered
+      policy: a touch tap delivers the field's leave-blur and the switch's
+      click in one task, before React has re-rendered. When the newest save
+      is rejected the row drops back to the saved policy; a rejected older
+      save does not, because the newer save queued behind it re-sends its
+      fields. The row body is keyed by the viewer, so an account switch with
+      Settings open drops the outgoing account's draft and stops following
+      its in-flight save. The client never schedules archiving: the
       host's sweep does, and a task nothing holds open is swept when a host
       next opens it, which is why the copy makes no wall-clock promise.
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
@@ -1958,6 +1988,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     actions and Pause, under the pill row and every other row. It has no
     Size, no Shown and no dock position; stale stored values for it are
     dropped on rehydrate. It empties to nothing, leaving no gap.
+    Its fold is remembered per host and chat in `chat-dock-open-store.ts`
+    (#2441), because the panel unmounts whenever the queue drains and a fold
+    kept in the panel came back open with the next queued message; chat ids
+    are host-minted, so the host is part of the key. A received agent row is
+    one line (its sender chip and the message as plain text, ellipsized; a
+    held reason waits for the unfold) until its text is clicked, and the
+    header splits the count: `2 messages · 12 from agents`.
   - **Received A2A queue rows follow the Running agents mode**, and fold into
     the same chip with their own count. That is also why the chip exists
     whenever those rows do, even with no sub-agent running: without it, folding
@@ -2685,6 +2722,47 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
+    CLI & Args: how long the scoped host waits for this provider's model and
+    command lists (`~/.traycer/cli/config.json` on that machine: the shared
+    value in `catalog.probeTimeoutSeconds`, each provider's own in the
+    top-level `catalogOverrides` block, over `config.catalog.get` / `set` at
+    1.1; top-level because a #2450-era binary strips unknown keys INSIDE
+    `catalog` on its next write but carries an unknown top-level block). Two `SettingsRow`s and
+    no other copy. **Timeout** ("How long to wait for the model list.") is a
+    `SettingsSegmentedControl` of 60 / 90 / 120 / 180 s filtered to the
+    `bounds` the host returns, plus the shown value as its own segment when a
+    hand-edited file holds another. **Same for all providers** is a switch.
+    On (the default: no `overrides[harnessId]`), the picker shows and edits the
+    SHARED value (`scope: "all"`), which every provider whose switch is on
+    follows; it never touches another provider's own value. Off, the provider
+    has its own value (`scope: "harness"`) and the picker edits only that.
+    Turning it off writes the shared value as the provider's own, so nothing
+    changes until the picker moves; turning it on clears it (`null`). The
+    override map is keyed by HARNESS id (`GUI_HARNESS_BY_PROVIDER_ID`, so
+    `claude-code` stores under `claude`), because the host reads it per catalog
+    probe, which is keyed by harness. Gate: the panel's `HostScopeGate` (usable
+    scope) plus `resolveAutoCleanupGate` (reachable host, BOTH methods
+    negotiated at 1.1 - `catalogTimeoutRowsSupported`); anything short of
+    `ready` renders nothing, so a 1.0 host (shared value only) has no rows.
+    Writes go through `useConfigCatalogSetMutation`, which cancels any
+    in-flight read, files the host's answer (the re-read state) into the
+    `config.catalog.get` cache and only then settles. The controls are
+    disabled while ANY write is outstanding on the host
+    (`useConfigCatalogSetOutstanding`, `useIsMutating` on the host-keyed
+    `configMutationKeys.catalogSet(hostId)`), including one whose rows have
+    since unmounted, so the next write is never built on the state before the
+    last one (switch off, then a pick, must go out as `scope: "harness"`). The
+    write carries a dispatch-time floor of `config.catalog.set@1.1`
+    (`requiredHostMethodVersion`): a host rolled back to 1.0 after the rows
+    rendered refuses it instead of taking the 1.1 body through the same-major
+    downgrade, which would strip `scope` and move the shared value. A failed first read (malformed config file) replaces
+    the Timeout row's description with the repair sentence; a failed RE-read
+    behind a known value keeps that value. Search: the `modelList` region group
+    (anchor `null`, like every Providers region) with both rows contributing
+    to it. Every provider that advertises CLI & Args (all of them today, amp
+    and cursor included) has the rows. The host reads the value at every
+    catalog probe, so a change applies to the next read without a restart.
   - **Who reviews &lt;provider&gt;'s commands**
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
     tab (icon `ShieldCheck`, since the Account tab already uses `KeyRound`,
@@ -3357,7 +3435,11 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       code rather than becoming a wrong-bug answer: a config the parser rejects
       is a server that failed to start.
     - **The global "All providers" status lives on the panel HEADING row**, and
-      renders only when `isHostScopeUsable(scope.status)`.
+      renders only when `isHostScopeUsable(scope.status)`. The heading row
+      carries STATUS ONLY: a setting is a row in the tab it belongs to. The
+      Model list timeout sat there as a chip for one staging build
+      (traycer#2450) and was moved to each provider's CLI & Args tab, below,
+      because a knob on a status line has no label hierarchy around it.
       `latestProviderCheckedAt` is a max over every provider and Refresh
       re-probes all of them; at the card's top-right it sat inches from the
       selected provider's Enabled toggle and read as that provider's own.

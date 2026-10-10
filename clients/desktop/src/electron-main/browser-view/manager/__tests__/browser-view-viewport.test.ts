@@ -148,6 +148,7 @@ describe("BrowserViewViewport", () => {
     const entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
     const debugSessions = new BrowserViewDebugSessions({
       onDetached: () => undefined,
+      isOnScreen: () => false,
     });
     const annotations = new BrowserViewAnnotationHost({
       entries,
@@ -167,6 +168,7 @@ describe("BrowserViewViewport", () => {
     const entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
     const debugSessions = new BrowserViewDebugSessions({
       onDetached: () => undefined,
+      isOnScreen: () => false,
     });
     const annotations = new BrowserViewAnnotationHost({
       entries,
@@ -214,6 +216,7 @@ describe("BrowserViewViewport", () => {
       entries,
       debugSessions: new BrowserViewDebugSessions({
         onDetached: () => undefined,
+        isOnScreen: () => false,
       }),
       send: () => false,
     });

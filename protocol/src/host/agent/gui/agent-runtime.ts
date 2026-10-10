@@ -580,7 +580,7 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // sends this reproduces today's shipped (image-free) behavior.
     imageResults: z.array(imageGenerationResultSchema).default([]),
     // The page this call showed, or the MCP App it rendered
-    // (`chat.subscribe@1.22`; see `toolCallPageStampSchema` /
+    // (`chat.subscribe@1.23`; see `toolCallPageStampSchema` /
     // `toolCallMcpAppStampSchema`). Optional rather than defaulted, like
     // `managedCommand`: the host stamps them on completion, every adapter
     // omits them, and an omission is "nothing to say" - a re-completion must
@@ -596,7 +596,7 @@ export type ToolCallCompletedEvent = z.infer<
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` as every `chat.subscribe`
 // line from `@1.7` to `@1.21` ships it: the live event without the `page` /
-// `mcpApp` stamps `1.22` added. Bound by every runtime-event union that used
+// `mcpApp` stamps `1.23` added. Bound by every runtime-event union that used
 // to reference the live event. Hand-frozen, NOT derived from the live shape.
 export const toolCallCompletedEventSchemaPrePage = lazySchema(() =>
   z.object({
@@ -2099,7 +2099,7 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
 // Wire-freeze copy of the runtime-event union as `chat.subscribe@1.20`/`@1.21`
 // ship it: every live member, with `tool_call.completed` swapped for its
 // pre-page freeze so neither line can observe a tool call's `page` / `mcpApp`
-// stamps (`1.22`). Explicitly listed rather than derived from the live union,
+// stamps (`1.23`). Explicitly listed rather than derived from the live union,
 // for the reason `runtimeEventSchemaPreImage` gives.
 export const runtimeEventSchemaPrePage = lazySchema(() =>
   z.discriminatedUnion("type", [

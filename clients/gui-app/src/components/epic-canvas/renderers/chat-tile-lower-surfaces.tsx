@@ -6,8 +6,8 @@ import type {
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
@@ -61,6 +61,10 @@ import {
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_STREAM_RECONNECTING_COPY,
+  ChatComposerDeliveryStatus,
+} from "@/components/chat/composer/chat-composer-delivery-status";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -156,7 +160,7 @@ function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
   if (access.readOnlyNotice !== null) return access.readOnlyNotice;
   if (access.isViewer) return "You have view-only access to this chat";
-  return "Reconnecting to the host — sending is paused";
+  return CHAT_STREAM_RECONNECTING_COPY;
 }
 
 export interface ChatLowerTurnState {
@@ -232,25 +236,25 @@ export interface ChatLowerApprovalsState {
 }
 
 export interface ChatLowerQueueState {
-  readonly editingItem: ChatQueuedPromptItem | null;
+  readonly editingItem: OpenChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
   readonly resumeRequested: boolean;
   readonly keepPausedRequested: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onCancel: (item: OpenChatQueuedItem) => void;
+  readonly onAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
   readonly onStopBackgroundSession: () => string | null;
   readonly onReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: OpenChatQueuedPromptItem) => void;
 }
 
 export interface ChatLowerComposerState {
@@ -930,7 +934,9 @@ function LiveChatComposer(props: {
       workspaceAvailability={model.composer.workspaceAvailability}
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
-      topSlot={null}
+      // This chat's own stream and delivery state, held beside the composer
+      // for as long as it is true rather than behind a tooltip.
+      topSlot={<ChatComposerDeliveryStatus />}
       suggestedPrompt={model.composer.suggestedPrompt}
     />
   );
