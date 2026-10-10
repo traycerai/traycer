@@ -21,7 +21,6 @@ import {
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { isMobileApp } from "@/lib/mobile-app";
-import { useOpenLinkIn } from "@/lib/links/open-link";
 import { epicFileViewer } from "@/lib/files/viewer-registry";
 import { epicFileMutationKeys } from "@/lib/query-keys";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
@@ -45,36 +44,6 @@ function toastEpicFileError(error: Error, fallback: string): void {
 /** The last path segment: what a downloaded file is named. */
 export function epicFileName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
-}
-
-/**
- * Opens a file in the in-app browser on the tile's host (D08). Always in-app:
- * the URL is the host's loopback, which only a browser running on that host
- * can reach.
- */
-export function useEpicFileOpenInBrowser(
-  address: EpicFileAddress,
-): UseMutationResult<void, Error, void> {
-  const rpc = useEpicFileRpc();
-  const { openLinkIn } = useOpenLinkIn();
-  return useMutation<void>({
-    mutationKey: epicFileMutationKeys.openInBrowser(),
-    mutationFn: async () => {
-      const response = await rpc.openFileInBrowser({
-        epicId: address.epicId,
-        path: address.path,
-        sha256: address.sha256,
-        via: address.via,
-      });
-      if (response.kind === "unavailable") {
-        throw new Error(epicFileUnavailableMessage(response.reason));
-      }
-      openLinkIn(response.url, "in-app");
-    },
-    onError: (error) => {
-      toastEpicFileError(error, `Couldn't open ${epicFileName(address.path)}`);
-    },
-  });
 }
 
 const MIB = 1024 * 1024;

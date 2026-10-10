@@ -613,7 +613,6 @@ import {
   epicCancelFetchFileV10,
   epicDeleteFileV10,
   epicFetchFileV10,
-  epicOpenFileInBrowserV10,
   epicReadFileV10,
   epicRestoreFileV10,
 } from "@traycer/protocol/host/epic/files";
@@ -8752,10 +8751,9 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     degrade: { kind: "unsupported" },
   },
   // The epic files plane (`epic/files.ts`): every byte a client renders, the
-  // explicit download of a big file, tombstone/restore, and the token-bound
-  // "Open in browser" URL. Optional and off the released floor: a new method
-  // name is handshake-fatal against a released peer, and an old host simply
-  // hides the files surface.
+  // explicit download of a big file, and tombstone/restore. Optional and off
+  // the released floor: a new method name is handshake-fatal against a
+  // released peer, and an old host simply hides the files surface.
   "epic.readFile": {
     1: {
       latestMinor: 0,
@@ -8804,19 +8802,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: epicRestoreFileV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
-  },
-  "epic.openFileInBrowser": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: epicOpenFileInBrowserV10,
-          upgradeFromPreviousVersion: null,
-        },
       },
       downgradePathsFromLatest: {},
     },

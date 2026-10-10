@@ -71,7 +71,6 @@ describe("useEpicFileRpc inside a tab with no override", () => {
       { ...ADDRESS, via: null, want: { kind: "text" } },
       signal,
     );
-    await result.current.openFileInBrowser({ ...ADDRESS, via: null });
     await result.current.fetchFile(ADDRESS);
     await result.current.cancelFetchFile(ADDRESS);
 
@@ -82,7 +81,6 @@ describe("useEpicFileRpc inside a tab with no override", () => {
       signal,
     );
     expect(mocks.request.mock.calls).toEqual([
-      ["epic.openFileInBrowser", { ...ADDRESS, via: null }],
       ["epic.fetchFile", ADDRESS],
       ["epic.cancelFetchFile", ADDRESS],
     ]);
@@ -91,7 +89,6 @@ describe("useEpicFileRpc inside a tab with no override", () => {
   it("uses the override when a test supplies one", async () => {
     const override: EpicFileRpc = {
       readFile: vi.fn<EpicFileRpc["readFile"]>(),
-      openFileInBrowser: vi.fn<EpicFileRpc["openFileInBrowser"]>(),
       fetchFile: vi.fn<EpicFileRpc["fetchFile"]>().mockResolvedValue({
         kind: "present",
       }),

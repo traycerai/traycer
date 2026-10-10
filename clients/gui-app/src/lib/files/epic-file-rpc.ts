@@ -4,8 +4,6 @@ import type {
   EpicCancelFetchFileResponse,
   EpicFetchFileRequest,
   EpicFetchFileResponse,
-  EpicOpenFileInBrowserRequest,
-  EpicOpenFileInBrowserResponse,
   EpicReadFileRequest,
   EpicReadFileResponse,
 } from "@traycer/protocol/host/epic/files";
@@ -29,9 +27,6 @@ export interface EpicFileRpc {
     params: EpicReadFileRequest,
     signal: AbortSignal,
   ) => Promise<EpicReadFileResponse>;
-  readonly openFileInBrowser: (
-    params: EpicOpenFileInBrowserRequest,
-  ) => Promise<EpicOpenFileInBrowserResponse>;
   /** Copies a file too big for the eager mirror onto this host. */
   readonly fetchFile: (
     params: EpicFetchFileRequest,
@@ -60,7 +55,6 @@ export function useEpicFileRpc(): EpicFileRpc {
         Promise.reject(hostClientUnavailableError(method));
       return {
         readFile: () => unavailable("epic.readFile"),
-        openFileInBrowser: () => unavailable("epic.openFileInBrowser"),
         fetchFile: () => unavailable("epic.fetchFile"),
         cancelFetchFile: () => unavailable("epic.cancelFetchFile"),
       };
@@ -68,8 +62,6 @@ export function useEpicFileRpc(): EpicFileRpc {
     return {
       readFile: (params, signal) =>
         client.requestWithSignal("epic.readFile", params, signal),
-      openFileInBrowser: (params) =>
-        client.request("epic.openFileInBrowser", params),
       fetchFile: (params) => client.request("epic.fetchFile", params),
       cancelFetchFile: (params) =>
         client.request("epic.cancelFetchFile", params),

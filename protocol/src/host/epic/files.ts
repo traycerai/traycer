@@ -280,41 +280,6 @@ export const epicRestoreFileV10 = defineRpcContract({
   responseSchema: epicRestoreFileResponseSchema,
 });
 
-// ─── epic.openFileInBrowser ────────────────────────────────────────────────
-
-/**
- * A short-lived `http://127.0.0.1:<port>/page/<token>` URL for the in-app
- * browser tab. The browser runs on the host, so loopback resolves for a remote
- * GUI too. The token is bound to the file, the sha, the network policy and the
- * caller when it is minted.
- */
-export const epicOpenFileInBrowserRequestSchema = lazySchema(() =>
-  z.object({
-    ...epicFileAddressFields,
-    via: epicFileViaSchema.nullable(),
-  }),
-);
-export type EpicOpenFileInBrowserRequest = z.infer<
-  typeof epicOpenFileInBrowserRequestSchema
->;
-
-export const epicOpenFileInBrowserResponseSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("url"), url: z.string().url() }),
-    epicFileUnavailableSchema,
-  ]),
-);
-export type EpicOpenFileInBrowserResponse = z.infer<
-  typeof epicOpenFileInBrowserResponseSchema
->;
-
-export const epicOpenFileInBrowserV10 = defineRpcContract({
-  method: "epic.openFileInBrowser",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: epicOpenFileInBrowserRequestSchema,
-  responseSchema: epicOpenFileInBrowserResponseSchema,
-});
-
 // ─── The files arm of `epic.state.subscribe@1.2` ──────────────────────────
 
 /**

@@ -1,5 +1,5 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { Download, FileCode, Globe, Layers, Maximize2 } from "lucide-react";
+import { Download, FileCode, Layers, Maximize2 } from "lucide-react";
 import type {
   ToolCallPageStamp,
   ToolInputDetail,
@@ -20,7 +20,6 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   epicFileName,
   useEpicFileDownload,
-  useEpicFileOpenInBrowser,
 } from "@/hooks/files/use-epic-file-mutations";
 import type { EpicFileAddress } from "@/hooks/files/use-epic-file-text-query";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -197,8 +196,6 @@ function initialPageHeight(
 
 interface PageActions {
   readonly expand: () => void;
-  readonly openInBrowser: () => void;
-  readonly openInBrowserPending: boolean;
   readonly download: () => void;
   readonly downloadPending: boolean;
 }
@@ -209,9 +206,8 @@ function usePageActions(
   hostId: string,
 ): PageActions {
   const { openTile } = useEpicTileNavigation();
-  const openInBrowser = useEpicFileOpenInBrowser(address);
   const download = useEpicFileDownload(hostId, address);
-  const track = (action: "expand" | "download" | "open_browser"): void => {
+  const track = (action: "expand" | "download"): void => {
     Analytics.getInstance().track(AnalyticsEvent.PageAction, { action });
   };
   return {
@@ -232,11 +228,6 @@ function usePageActions(
         ),
       );
     },
-    openInBrowser: () => {
-      track("open_browser");
-      openInBrowser.mutate();
-    },
-    openInBrowserPending: openInBrowser.isPending,
     download: () => {
       track("download");
       download.mutation.mutate();
@@ -282,14 +273,6 @@ function ShownPage(props: {
             className="tc-editor-toolbar-button"
           />
           <ToolbarButton
-            icon={<Globe className="size-4" aria-hidden />}
-            label="Open in browser"
-            active={false}
-            disabled={actions.openInBrowserPending}
-            onClick={actions.openInBrowser}
-            className="tc-editor-toolbar-button"
-          />
-          <ToolbarButton
             icon={<Download className="size-4" aria-hidden />}
             label="Download HTML"
             active={false}
@@ -305,8 +288,6 @@ function ShownPage(props: {
             address={address}
             title={page.title}
             initialHeight={initialPageHeight(page, width)}
-            onOpenInBrowser={actions.openInBrowser}
-            openInBrowserPending={actions.openInBrowserPending}
           />
         )}
       </div>
@@ -390,13 +371,6 @@ function PageTouchActions(props: {
           disabled: false,
           onSelect: actions.expand,
           navigates: true,
-        },
-        {
-          icon: <Globe aria-hidden />,
-          label: "Open in browser",
-          disabled: actions.openInBrowserPending,
-          onSelect: actions.openInBrowser,
-          navigates: false,
         },
         {
           icon: <Download aria-hidden />,

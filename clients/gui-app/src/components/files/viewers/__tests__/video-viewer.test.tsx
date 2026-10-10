@@ -53,7 +53,6 @@ function host(urls: (() => Promise<EpicReadFileResponse>)[]): EpicFileRpc {
         urlCalls += 1;
         return answer();
       }),
-    openFileInBrowser: vi.fn<EpicFileRpc["openFileInBrowser"]>(),
     fetchFile: vi.fn<EpicFileRpc["fetchFile"]>(),
     cancelFetchFile: vi.fn<EpicFileRpc["cancelFetchFile"]>(),
   };

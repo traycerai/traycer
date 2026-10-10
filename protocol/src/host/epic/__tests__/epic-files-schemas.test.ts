@@ -8,7 +8,6 @@ import {
   epicCancelFetchFileV10,
   epicDeleteFileV10,
   epicFetchFileV10,
-  epicOpenFileInBrowserV10,
   epicReadFileV10,
   epicRestoreFileV10,
 } from "@traycer/protocol/host/epic/files";
@@ -258,29 +257,6 @@ describe("epic.deleteFile / epic.restoreFile", () => {
           .success,
       ).toBe(false);
     }
-  });
-});
-
-describe("epic.openFileInBrowser", () => {
-  it("takes the address and a nullable `via`, and answers a url or unavailable", () => {
-    const request = epicOpenFileInBrowserV10.requestSchema;
-    const response = epicOpenFileInBrowserV10.responseSchema;
-    expect(
-      request.safeParse({ ...address, sha256: SHA, via: null }).success,
-    ).toBe(true);
-    expect(request.safeParse({ ...address, sha256: SHA }).success).toBe(false);
-    expect(
-      response.safeParse({
-        kind: "url",
-        url: "http://127.0.0.1:4310/page/token",
-      }).success,
-    ).toBe(true);
-    expect(
-      response.safeParse({ kind: "unavailable", reason: "missing" }).success,
-    ).toBe(true);
-    expect(response.safeParse({ kind: "url", url: "page/token" }).success).toBe(
-      false,
-    );
   });
 });
 

@@ -1455,11 +1455,6 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.deleteFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "epic.restoreFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "epic.openFileInBrowser": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   // An MCP App's reads answer from the harness's live server, on demand; the
   // app asks again when it wants a fresher answer, so nothing polls.
   "chat.mcpApp.describeTool": { ...LATEST_SCHEDULING, poll: null },

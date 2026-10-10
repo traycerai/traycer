@@ -44,20 +44,12 @@ import { TILE_KIND_EPIC_FILE } from "@/stores/epics/canvas/tile-kinds";
 
 const mocks = vi.hoisted(() => ({
   openTile: vi.fn<(intent: TileOpenIntent) => null>(),
-  openLinkIn: vi.fn<(url: string, destination: string) => void>(),
   downloadBlobToDevice:
     vi.fn<(blob: Blob, name: string, fileSave: unknown) => Promise<null>>(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: mocks.openTile }),
-}));
-
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLinkIn: () => ({
-    openLinkIn: mocks.openLinkIn,
-    canOpenInApp: true,
-  }),
 }));
 
 // The device save is the one effect jsdom cannot perform.
@@ -129,13 +121,11 @@ const textResponse = (
 });
 
 type ReadFile = EpicFileRpc["readFile"];
-type OpenFileInBrowser = EpicFileRpc["openFileInBrowser"];
 type FetchFile = EpicFileRpc["fetchFile"];
 type CancelFetchFile = EpicFileRpc["cancelFetchFile"];
 
 interface FakeRpc extends EpicFileRpc {
   readonly readFile: Mock<ReadFile>;
-  readonly openFileInBrowser: Mock<OpenFileInBrowser>;
   readonly fetchFile: Mock<FetchFile>;
   readonly cancelFetchFile: Mock<CancelFetchFile>;
 }
@@ -146,17 +136,13 @@ function makeRpc(
   const readFile = vi
     .fn<ReadFile>()
     .mockImplementation(() => Promise.resolve(read));
-  const openFileInBrowser = vi.fn<OpenFileInBrowser>().mockResolvedValue({
-    kind: "url",
-    url: "http://127.0.0.1:4000/page/t",
-  });
   const fetchFile = vi
     .fn<FetchFile>()
     .mockResolvedValue({ kind: "downloading" });
   const cancelFetchFile = vi
     .fn<CancelFetchFile>()
     .mockResolvedValue({ cancelled: true });
-  return { readFile, openFileInBrowser, fetchFile, cancelFetchFile };
+  return { readFile, fetchFile, cancelFetchFile };
 }
 
 interface RowOverrides {
@@ -229,7 +215,6 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   mocks.openTile.mockReset();
-  mocks.openLinkIn.mockReset();
   mocks.downloadBlobToDevice.mockReset();
 });
 
@@ -570,53 +555,9 @@ describe("<PageRow /> when the page crashes", () => {
     // fetch them again.
     expect(rpc.readFile).toHaveBeenCalledTimes(1);
   });
-
-  it("offers Open in browser, which opens the page on the host's loopback in-app", async () => {
-    const rpc = makeRpc(textResponse("open"));
-    renderRow(rpc, SHOWN, null);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "crash the page" }),
-    );
-    const notice = await screen.findByRole("status");
-    fireEvent.click(
-      within(notice).getByRole("button", { name: /Open in browser/ }),
-    );
-
-    await waitFor(() => {
-      expect(mocks.openLinkIn).toHaveBeenCalledWith(
-        "http://127.0.0.1:4000/page/t",
-        "in-app",
-      );
-    });
-  });
 });
 
 describe("<PageRow /> hover bar", () => {
-  it("Open in browser asks the host for a page URL and opens it in-app", async () => {
-    const rpc = makeRpc(textResponse("open"));
-    renderRow(rpc, SHOWN, null);
-    await screen.findByTestId("sandbox-frame");
-
-    const toolbar = screen.getByRole("toolbar", { name: "Page actions" });
-    fireEvent.click(
-      within(toolbar).getByRole("button", { name: "Open in browser" }),
-    );
-
-    await waitFor(() => {
-      expect(mocks.openLinkIn).toHaveBeenCalledWith(
-        "http://127.0.0.1:4000/page/t",
-        "in-app",
-      );
-    });
-    expect(rpc.openFileInBrowser).toHaveBeenCalledWith({
-      epicId: EPIC_ID,
-      path: STAMP.path,
-      sha256: STAMP.sha256,
-      via: { chatId: CHAT_ID, blockId: BLOCK_ID },
-    });
-  });
-
   it("Download HTML saves the page it already read, named after the file", async () => {
     const rpc = makeRpc(textResponse("open"));
     renderRow(rpc, SHOWN, null);
@@ -720,14 +661,10 @@ describe("<PageRow /> page_action analytics (D31)", () => {
     fireEvent.click(
       within(toolbar).getByRole("button", { name: "Download HTML" }),
     );
-    fireEvent.click(
-      within(toolbar).getByRole("button", { name: "Open in browser" }),
-    );
 
     expect(track.mock.calls).toEqual([
       [AnalyticsEvent.PageAction, { action: "expand" }],
       [AnalyticsEvent.PageAction, { action: "download" }],
-      [AnalyticsEvent.PageAction, { action: "open_browser" }],
     ]);
   });
 
@@ -737,11 +674,10 @@ describe("<PageRow /> page_action analytics (D31)", () => {
     await screen.findByTestId("sandbox-frame");
 
     const sheetActions: ReadonlyArray<
-      readonly [string, "expand" | "download" | "open_browser"]
+      readonly [string, "expand" | "download"]
     > = [
       ["Open full screen", "expand"],
       ["Save HTML file", "download"],
-      ["Open in browser", "open_browser"],
     ];
     for (const [label, action] of sheetActions) {
       fireEvent.click(screen.getByRole("button", { name: "Page actions" }));
@@ -754,7 +690,7 @@ describe("<PageRow /> page_action analytics (D31)", () => {
         action,
       });
     }
-    expect(track).toHaveBeenCalledTimes(3);
+    expect(track).toHaveBeenCalledTimes(2);
   });
 });
 

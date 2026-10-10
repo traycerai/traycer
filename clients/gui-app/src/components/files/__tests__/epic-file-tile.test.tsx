@@ -121,7 +121,6 @@ function makeRpc(answer: ReadAnswer): EpicFileRpc {
     readFile: vi
       .fn<EpicFileRpc["readFile"]>()
       .mockImplementation((request) => Promise.resolve(answer(request))),
-    openFileInBrowser: vi.fn<EpicFileRpc["openFileInBrowser"]>(),
     fetchFile: vi
       .fn<EpicFileRpc["fetchFile"]>()
       .mockResolvedValue({ kind: "present" }),
@@ -213,9 +212,6 @@ describe("<EpicFileTile /> when its host goes away", () => {
     expect(screen.getByTestId("epic-file-tile-offline").textContent).toContain(
       "Studio Mac",
     );
-    expect(
-      screen.getByRole("button", { name: "Open in browser" }),
-    ).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Download" })).toHaveProperty(
       "disabled",
       true,

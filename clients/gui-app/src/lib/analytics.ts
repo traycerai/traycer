@@ -947,7 +947,7 @@ export interface AnalyticsEventProperties {
   };
   /** An agent page's own action; never its title, path or content (D31). */
   readonly [AnalyticsEvent.PageAction]: {
-    readonly action: "expand" | "download" | "open_browser";
+    readonly action: "expand" | "download";
   };
   /**
    * How an MCP App's tool call ended: `approved` when the host ran it (with or
@@ -2090,7 +2090,7 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.PageAction],
     "action",
-    new Set(["expand", "download", "open_browser"]),
+    new Set(["expand", "download"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.McpAppCall],

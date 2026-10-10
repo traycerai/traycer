@@ -448,7 +448,6 @@ const fileRpc: EpicFileRpc = {
       mediaType: body.mediaType,
     };
   },
-  openFileInBrowser: () => never,
   fetchFile: () => Promise.resolve({ kind: "downloading" }),
   cancelFetchFile: () => Promise.resolve({ cancelled: true }),
 };

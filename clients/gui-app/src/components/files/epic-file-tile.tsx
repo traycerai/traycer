@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
-import { Globe, MoreHorizontal } from "lucide-react";
+import { MoreHorizontal } from "lucide-react";
 import { EpicFileDownloadButton } from "@/components/files/epic-file-download-button";
 import { EpicFileVersionNav } from "@/components/files/epic-file-version-nav";
 import { MiddleTruncatedText } from "@/components/files/middle-truncated-text";
@@ -9,7 +9,6 @@ import { ImageViewer } from "@/components/files/viewers/image-viewer";
 import { PdfViewer } from "@/components/files/viewers/pdf-viewer";
 import { VideoViewer } from "@/components/files/viewers/video-viewer";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,10 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import {
-  useEpicFileDownload,
-  useEpicFileOpenInBrowser,
-} from "@/hooks/files/use-epic-file-mutations";
+import { useEpicFileDownload } from "@/hooks/files/use-epic-file-mutations";
 import { useEpicFileRecord } from "@/hooks/files/use-epic-file-record";
 import type { EpicFileAddress } from "@/hooks/files/use-epic-file-text-query";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -66,7 +62,6 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
   const viewer = epicFileViewer(node.path);
   // The manifest's title names the file where it has one (a page, an app).
   const title = useEpicFileRecord(node.path)?.entry.title?.trim() ?? "";
-  const openInBrowser = useEpicFileOpenInBrowser(address);
   const download = useEpicFileDownload(hostId, address);
   const { copy } = useClipboardCopy({
     resetMs: COPIED_RESET_MS,
@@ -112,35 +107,6 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
           <PathBar
             path={node.path}
             title={title}
-            openInBrowser={
-              // Icon-only once the bar is too narrow for its words.
-              <TooltipWrapper
-                label="Open in browser"
-                side="bottom"
-                sideOffset={undefined}
-                align={undefined}
-              >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="Open in browser"
-                  disabled={offline || openInBrowser.isPending}
-                  onClick={() => openInBrowser.mutate()}
-                >
-                  <Globe aria-hidden />
-                  <span className="hidden @[30rem]/path-bar:inline">
-                    Open in browser
-                  </span>
-                  {openInBrowser.isPending ? (
-                    <AgentSpinningDots
-                      className={undefined}
-                      testId={undefined}
-                      variant={undefined}
-                    />
-                  ) : null}
-                </Button>
-              </TooltipWrapper>
-            }
             versionNav={versionNav}
             actions={fileActions}
           >
@@ -151,8 +117,6 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
               address={address}
               title={title.length > 0 ? title : node.name}
               initialHeight={null}
-              onOpenInBrowser={() => openInBrowser.mutate()}
-              openInBrowserPending={openInBrowser.isPending}
             />
           </PathBar>
         );
@@ -190,7 +154,6 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
             path={node.path}
             title={title}
             versionNav={versionNav}
-            openInBrowser={null}
             actions={fileActions}
           >
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground">
@@ -231,14 +194,13 @@ function PathBar(props: {
   /** The manifest's title, or `""` to show the path itself. */
   readonly title: string;
   readonly versionNav: ReactNode;
-  readonly openInBrowser: ReactNode;
   readonly actions: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
   const hasTitle = props.title.length > 0;
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <div className="@container/path-bar flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-canvas-border/70 px-3 py-1">
+      <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-canvas-border/70 px-3 py-1">
         <TooltipWrapper
           label={props.path}
           side="bottom"
@@ -265,7 +227,6 @@ function PathBar(props: {
         </TooltipWrapper>
         {props.versionNav}
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
-        {props.openInBrowser}
         {props.actions}
       </div>
       <div className="min-h-0 flex-1">{props.children}</div>

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AnalyticsEvent, sanitizeAnalyticsProperties } from "@/lib/analytics";
 
 describe("visualization analytics events (D31)", () => {
-  it.each(["expand", "download", "open_browser"])(
+  it.each(["expand", "download"])(
     "passes page_action %s through unchanged",
     (action) => {
       expect(

@@ -135,7 +135,6 @@ const fileRpc: EpicFileRpc = {
       mediaType: "text/html",
       networkPolicy: "https-only",
     }),
-  openFileInBrowser: () => Promise.reject(new Error("not in this fixture")),
   fetchFile: () => Promise.reject(new Error("not in this fixture")),
   cancelFetchFile: () => Promise.reject(new Error("not in this fixture")),
 };

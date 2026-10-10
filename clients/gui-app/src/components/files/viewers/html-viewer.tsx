@@ -32,8 +32,6 @@ export interface HtmlViewerProps {
    * `null` fills the container (the epic-file tile).
    */
   readonly initialHeight: number | null;
-  readonly onOpenInBrowser: () => void;
-  readonly openInBrowserPending: boolean;
 }
 
 function ignoreTeardown(): void {}
@@ -114,36 +112,19 @@ export function HtmlViewer(props: HtmlViewerProps) {
       <PageNotice
         icon={<AlertTriangle aria-hidden />}
         title="This page stopped responding"
-        detail="Reload it, or open it in the browser to see the console."
+        detail="Reload it to run it again."
         actions={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setCrashed(false);
-                setMeasuredHeight(null);
-                setGeneration((value) => value + 1);
-              }}
-            >
-              Reload
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={props.openInBrowserPending}
-              onClick={props.onOpenInBrowser}
-            >
-              Open in browser
-              {props.openInBrowserPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : null}
-            </Button>
-          </>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setCrashed(false);
+              setMeasuredHeight(null);
+              setGeneration((value) => value + 1);
+            }}
+          >
+            Reload
+          </Button>
         }
       />
     );

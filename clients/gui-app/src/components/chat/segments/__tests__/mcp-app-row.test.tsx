@@ -224,9 +224,6 @@ function makeFileRpc(
     readFile: vi
       .fn<EpicFileRpc["readFile"]>()
       .mockImplementation(() => Promise.resolve(read)),
-    openFileInBrowser: vi
-      .fn<EpicFileRpc["openFileInBrowser"]>()
-      .mockResolvedValue({ kind: "url", url: "http://127.0.0.1:4000/x" }),
     fetchFile: vi
       .fn<EpicFileRpc["fetchFile"]>()
       .mockResolvedValue({ kind: "downloading" }),

@@ -38,7 +38,6 @@ describe("epic.readFile condition poll", () => {
     const readFile = vi.fn(() => Promise.resolve(UNAVAILABLE));
     const rpc: EpicFileRpc = {
       readFile,
-      openFileInBrowser: vi.fn(),
       fetchFile: vi.fn(),
       cancelFetchFile: vi.fn(),
     };
