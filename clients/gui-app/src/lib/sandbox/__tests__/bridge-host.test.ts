@@ -732,6 +732,93 @@ describe("app requests", () => {
     expect(harness.onSize).not.toHaveBeenCalled();
   });
 
+  describe("an embedded download over the general cap", () => {
+    // A 256 KiB file is ~342 KiB of base64: past the cap every other message
+    // obeys, though the file itself is far under the 25 MiB the bridge allows.
+    const FILE_BYTES = 256 * 1024;
+    const blob = "A".repeat(Math.ceil(FILE_BYTES / 3) * 4);
+    const downloadParams = {
+      contents: [
+        {
+          type: "resource",
+          resource: {
+            uri: "file:///report.bin",
+            mimeType: "application/octet-stream",
+            blob,
+          },
+        },
+      ],
+    };
+
+    it("reaches an app's handler as a request", async () => {
+      const handler = vi.fn<SandboxAppRequestHandler>(() =>
+        Promise.resolve({}),
+      );
+      const harness = ready(handler, OPENS);
+      const message = request(1, "ui/download-file", downloadParams);
+      // Over the cap every other message obeys, or this proves nothing.
+      expect(
+        new TextEncoder().encode(JSON.stringify(message)).byteLength,
+      ).toBeGreaterThan(MAX_INBOUND_MESSAGE_BYTES);
+      harness.host.receive(message);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]?.[0]).toBe("ui/download-file");
+      expect(harness.responseTo(1)).toMatchObject({ result: {} });
+    });
+
+    it("is itself bounded: a request past the download cap is refused and never reaches the handler", () => {
+      const handler = vi.fn<SandboxAppRequestHandler>(() =>
+        Promise.resolve({}),
+      );
+      const harness = ready(handler, OPENS);
+      // The cap holds six 25 MiB files and the envelope (about 150.25 MiB of
+      // JSON); a real 151 MiB string goes through the real serializer.
+      const huge = "A".repeat(151 * 1024 * 1024);
+      harness.host.receive(
+        request(1, "ui/download-file", {
+          contents: [
+            {
+              type: "resource",
+              resource: { uri: "file:///huge.bin", blob: huge },
+            },
+          ],
+        }),
+      );
+      expect(handler).not.toHaveBeenCalled();
+      expect(errorCode(harness.responseTo(1))).toBe(-32602);
+    });
+
+    it("still meets the general cap on any other method", () => {
+      const handler = vi.fn<SandboxAppRequestHandler>(() =>
+        Promise.resolve({}),
+      );
+      const harness = ready(handler, OPENS);
+      harness.host.receive(request(1, "tools/call", downloadParams));
+      harness.host.receive(request(2, "resources/read", downloadParams));
+      expect(handler).not.toHaveBeenCalled();
+      expect(errorCode(harness.responseTo(1))).toBe(-32602);
+      expect(errorCode(harness.responseTo(2))).toBe(-32602);
+    });
+
+    it("still meets the general cap as a notification, with no id to answer", () => {
+      const handler = vi.fn<SandboxAppRequestHandler>(() =>
+        Promise.resolve({}),
+      );
+      const harness = ready(handler, OPENS);
+      const before = harness.sent.length;
+      harness.host.receive(notification("ui/download-file", downloadParams));
+      expect(handler).not.toHaveBeenCalled();
+      expect(harness.sent).toHaveLength(before);
+    });
+
+    it("still meets the general cap on a page, which has no app requests", () => {
+      const harness = ready(null, OPENS);
+      harness.host.receive(request(1, "ui/download-file", downloadParams));
+      expect(errorCode(harness.responseTo(1))).toBe(-32602);
+    });
+  });
+
   it("measures the cap in UTF-8 bytes, not UTF-16 units", () => {
     const handler = vi.fn(() => Promise.resolve({}));
     const harness = ready(handler, OPENS);

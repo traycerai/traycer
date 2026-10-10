@@ -93,8 +93,17 @@ describe("the epic state stream client across the @1.1 / @1.2 skew", () => {
 
     expect(client.snapshots).toHaveLength(1);
     expect(client.deltas).toHaveLength(1);
-    expect("files" in (client.snapshots[0] ?? {})).toBe(false);
-    expect(client.deltas[0]?.seq).toBe(1);
+    // A host that predates the arm sends no `files`; the lenient arm decodes
+    // that as `null`, never as a files set.
+    const snapshot = client.snapshots[0];
+    expect(
+      snapshot !== undefined && "files" in snapshot ? snapshot.files : null,
+    ).toBeNull();
+    const delta = client.deltas[0];
+    expect(
+      delta !== undefined && "files" in delta ? delta.files : null,
+    ).toBeNull();
+    expect(delta?.seq).toBe(1);
   });
 
   it("keeps the files arm a @1.2 host sends, rather than letting the @1.1 schema strip it", () => {

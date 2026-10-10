@@ -44,7 +44,8 @@ export function epicFileTextQueryOptions(
     // stale. Only an unavailable answer is worth asking again (the table's
     // `epic.readFile` lanes): the bytes usually arrive on their own, and the
     // row promises to show the page when they do.
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: (query) =>
+      query.state.data?.kind === "unavailable" ? 0 : Number.POSITIVE_INFINITY,
     retry: false,
   });
 }

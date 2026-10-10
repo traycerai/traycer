@@ -58,7 +58,8 @@ export const EPIC_STATE_SUBSCRIBE_METHOD = "epic.state.subscribe";
 /**
  * A frame from either line this client negotiates: `@1.2` (with the files
  * arm) or `@1.1` from a host that predates it. Host skew is normal, so both
- * decode; a consumer that wants files checks `"files" in frame`.
+ * decode; an absent or unreadable files arm is normalized to `null` by the
+ * latest schema, so consumers treat a null arm as no files update.
  */
 export type EpicStateServerFrame =
   | EpicStateSubscribeServerFrameV12
@@ -145,8 +146,9 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    // `@1.2` first: an `@1.1` frame lacks the required `files` arm and fails
-    // it, while the `@1.1` schema would accept a `@1.2` frame by stripping it.
+    // `@1.2` first: its lenient files arm preserves readable file updates and
+    // normalizes an absent or unreadable arm to null. Trying `@1.1` first
+    // would silently strip valid file updates from newer hosts.
     const latest = epicStateSubscribeServerFrameSchemaV12.safeParse(envelope);
     const parsed = latest.success
       ? latest

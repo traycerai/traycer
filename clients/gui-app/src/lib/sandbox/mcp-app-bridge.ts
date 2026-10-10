@@ -10,6 +10,9 @@ import type {
 } from "@/lib/sandbox/bridge-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
+import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
+
+export { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
 
 /**
  * The requests only an MCP App may make, served for one stamped block on top
@@ -99,8 +102,6 @@ export interface McpAppBridgeHandlers {
   readonly openLink: (url: string) => void;
 }
 
-/** An embedded download larger than this is refused (plan §2.7). */
-export const MAX_EMBEDDED_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_FILE_NAME_CHARS = 200;
 
 const ERROR_TEXT: Record<ChatMcpAppErrorCode, string> = {

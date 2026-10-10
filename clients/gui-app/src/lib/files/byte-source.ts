@@ -199,15 +199,20 @@ export async function readSignedUrl(
 
 /** The fraction of a URL's lifetime after which the client asks for a new one. */
 const URL_RENEWAL_FRACTION = 0.8;
+const MIN_URL_RENEWAL_DELAY_MS = 30_000;
 
 /**
  * How long to wait before renewing a URL received at `receivedAt`: 80 % of its
  * lifetime, measured from receipt because the answer carries only the expiry.
- * Never negative - an already-expired answer renews at once.
+ * A clock ahead of the server must not cause an immediate refetch loop.
+ * Media errors still trigger the viewer's independent one-shot renewal.
  */
 export function urlRenewalDelayMs(
   expiresAt: number,
   receivedAt: number,
 ): number {
-  return Math.max(0, (expiresAt - receivedAt) * URL_RENEWAL_FRACTION);
+  return Math.max(
+    MIN_URL_RENEWAL_DELAY_MS,
+    (expiresAt - receivedAt) * URL_RENEWAL_FRACTION,
+  );
 }

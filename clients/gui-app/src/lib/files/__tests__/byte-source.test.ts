@@ -238,12 +238,16 @@ describe("readSignedUrl", () => {
 });
 
 describe("urlRenewalDelayMs", () => {
-  it("renews at 80% of the lifetime measured from receipt", () => {
-    expect(urlRenewalDelayMs(11_000, 1_000)).toBe(8_000);
+  it("renews at 80% of a long lifetime, measured from receipt", () => {
+    expect(urlRenewalDelayMs(301_000, 1_000)).toBe(240_000);
   });
 
-  it("renews at once for an already-expired answer", () => {
-    expect(urlRenewalDelayMs(1_000, 5_000)).toBe(0);
+  it("never plans sooner than 30 s, for a short lifetime, a near expiry or an already-expired answer", () => {
+    // 80% of 10 s is 8 s, but an answer that short must not be re-requested in
+    // a tight loop.
+    expect(urlRenewalDelayMs(11_000, 1_000)).toBe(30_000);
+    expect(urlRenewalDelayMs(2_000, 1_000)).toBe(30_000);
+    expect(urlRenewalDelayMs(1_000, 5_000)).toBe(30_000);
   });
 });
 

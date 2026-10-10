@@ -715,27 +715,86 @@ async function pickSavePath(
  * dialog appears. Resolves `true` once it completes and `false` when it is
  * cancelled; an interrupted download rejects.
  */
+const claimedDownloads = new WeakSet<DownloadItem>();
+const DOWNLOAD_START_TIMEOUT_MS = 30_000;
+
 function downloadUrlTo(
   sender: WebContents,
   url: string,
   filePath: string,
 ): Promise<boolean> {
+  if (sender.isDestroyed()) return Promise.resolve(false);
+  const wanted = new URL(url).href;
+  const session = sender.session;
   return new Promise((resolve, reject) => {
+    let claimed: DownloadItem | null = null;
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      session.off("will-download", onWillDownload);
+      sender.off("destroyed", onDestroyed);
+      claimed?.off("done", onDone);
+    };
+    const finish = (success: boolean, error: Error | null): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error !== null) reject(error);
+      else resolve(success);
+    };
+    const onDestroyed = (): void => {
+      finish(false, null);
+      claimed?.cancel();
+    };
+    const onDone = (_event: ElectronEvent, state: string): void => {
+      if (state === "completed") finish(true, null);
+      else if (state === "cancelled") finish(false, null);
+      else finish(false, new Error(`The download was ${state}`));
+    };
     const onWillDownload = (
       _event: ElectronEvent,
       item: DownloadItem,
+      source: WebContents,
     ): void => {
-      if (item.getURLChain()[0] !== url) return;
-      sender.session.off("will-download", onWillDownload);
-      item.setSavePath(filePath);
-      item.once("done", (_doneEvent, state) => {
-        if (state === "completed") resolve(true);
-        else if (state === "cancelled") resolve(false);
-        else reject(new Error(`The download was ${state}`));
-      });
+      const first = item.getURLChain()[0];
+      if (
+        source !== sender ||
+        claimedDownloads.has(item) ||
+        first === undefined ||
+        !URL.canParse(first) ||
+        new URL(first).href !== wanted
+      )
+        return;
+      // Session listeners run in registration order. A concurrent request for
+      // this same URL must claim the next item, never overwrite this save path.
+      claimedDownloads.add(item);
+      claimed = item;
+      clearTimeout(timer);
+      session.off("will-download", onWillDownload);
+      item.once("done", onDone);
+      try {
+        item.setSavePath(filePath);
+      } catch {
+        finish(false, new Error("The download destination could not be set"));
+        item.cancel();
+      }
     };
-    sender.session.on("will-download", onWillDownload);
-    sender.downloadURL(url);
+    // Only admission is timed: an accepted large download may take longer.
+    const timer = setTimeout(() => {
+      finish(false, new Error("The download did not start"));
+    }, DOWNLOAD_START_TIMEOUT_MS);
+    session.on("will-download", onWillDownload);
+    sender.once("destroyed", onDestroyed);
+    try {
+      sender.downloadURL(url);
+    } catch (error) {
+      finish(
+        false,
+        error instanceof Error
+          ? error
+          : new Error("The download could not start"),
+      );
+    }
   });
 }
 

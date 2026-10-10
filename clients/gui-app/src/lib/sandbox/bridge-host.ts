@@ -6,6 +6,7 @@ import {
 import type { SandboxNetworkPolicy } from "@/lib/sandbox/mcp-csp";
 import type { SandboxPermission } from "@/lib/sandbox/sandbox-url";
 import type { SandboxTheme } from "@/lib/sandbox/theme-map";
+import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
 
 /**
  * The app side of the sandbox frame, with no DOM in it: the caller hands it
@@ -122,8 +123,16 @@ export interface SandboxBridgeHostOptions {
 
 export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
 
-/** Messages from the frame larger than this, as UTF-8 JSON, are dropped. */
+/** Ordinary messages from the frame are bounded as UTF-8 JSON. */
 export const MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
+/**
+ * Embedded app downloads need room for their encoded bytes plus the envelope.
+ * JSON can expand one text byte to six characters (a Unicode escape), which
+ * also covers base64's four-for-three expansion. The handler still enforces
+ * the decoded per-file limit; this separate cap bounds the whole request.
+ */
+const MAX_INBOUND_DOWNLOAD_MESSAGE_BYTES =
+  6 * MAX_EMBEDDED_DOWNLOAD_BYTES + MAX_INBOUND_MESSAGE_BYTES;
 export const MAX_IN_FLIGHT_APP_REQUESTS = 16;
 /** From mount until the written page proves itself with its nonce. */
 export const LOAD_TIMEOUT_MS = 15_000;
@@ -233,15 +242,12 @@ function stringifyJson(data: unknown): string | null {
  * What is dispatched is that JSON parsed back, never the structured clone the
  * frame posted.
  */
-function toInboundJson(data: unknown): InboundJson {
+function toInboundJson(data: unknown, maxBytes: number): InboundJson {
   const json = stringifyJson(data);
   if (json === null) return { kind: "not-json" };
   // A UTF-16 unit never takes more than its UTF-8 bytes, so the length alone
   // refuses a huge message without encoding it.
-  if (
-    json.length > MAX_INBOUND_MESSAGE_BYTES ||
-    utf8.encode(json).byteLength > MAX_INBOUND_MESSAGE_BYTES
-  ) {
+  if (json.length > maxBytes || utf8.encode(json).byteLength > maxBytes) {
     return { kind: "too-large" };
   }
   const value: unknown = JSON.parse(json);
@@ -351,7 +357,13 @@ export class SandboxBridgeHost {
     if (this.phase === "disposed") return;
     const posted = parseInbound(data);
     if (posted === null) return;
-    const json = toInboundJson(data);
+    const maxBytes =
+      this.options.appRequests !== null &&
+      posted.method === "ui/download-file" &&
+      posted.id !== null
+        ? MAX_INBOUND_DOWNLOAD_MESSAGE_BYTES
+        : MAX_INBOUND_MESSAGE_BYTES;
+    const json = toInboundJson(data, maxBytes);
     if (json.kind !== "ok") {
       if (posted.id !== null && !posted.isResponse) {
         const reason =

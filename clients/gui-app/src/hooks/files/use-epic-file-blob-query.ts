@@ -57,7 +57,8 @@ export function epicFileBlobQueryOptions(
     meta: stampHostRpcMethod(undefined, "epic.readFile"),
     // Content-addressed: a sha's bytes never change. An unavailable answer is
     // asked again on the table's `epic.readFile` lanes.
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: (query) =>
+      query.state.data?.kind === "blob" ? Number.POSITIVE_INFINITY : 0,
     gcTime: BLOB_GC_MS,
     retry: false,
   });

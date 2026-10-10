@@ -927,4 +927,35 @@ describe("epic.state.subscribe read model - files", () => {
     replica.apply(filesTransaction(3, filesRow(3, [downloading(40)])));
     expect(changes()).toBe(afterSnapshot + 1);
   });
+
+  describe("publishes a replacement that changes only one manifest field", () => {
+    const base = fileRecord({ path: "files/a.txt", title: "Report" });
+    const changed: ReadonlyArray<readonly [string, EpicStateFileRecord]> = [
+      ["title", fileRecord({ path: "files/a.txt", title: "Renamed" })],
+      [
+        "derivedFrom",
+        fileRecord({
+          path: "files/a.txt",
+          title: "Report",
+          replaces: "files/o",
+        }),
+      ],
+      ["kind", { ...base, entry: { ...base.entry, kind: "page" } }],
+      [
+        "mediaType",
+        { ...base, entry: { ...base.entry, mediaType: "application/pdf" } },
+      ],
+    ];
+
+    it.each(changed)("%s", (_field, record) => {
+      const { replica, changes } = newReplica();
+      replica.apply(snapshotWithFiles(filesRow(1, [base])));
+      const afterSnapshot = changes();
+
+      replica.apply(filesTransaction(2, filesRow(2, [record])));
+
+      expect(replica.slices().files.records).toEqual([record]);
+      expect(changes()).toBe(afterSnapshot + 1);
+    });
+  });
 });

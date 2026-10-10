@@ -175,6 +175,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
   "gui-app/src/components/remote-folder-picker-dialog.tsx": 4,
   "gui-app/src/components/resources/resource-monitor-popover.tsx": 9,
+  "gui-app/src/components/sandbox/sandbox-frame.tsx": 1,
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
@@ -184,6 +185,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/lib/keybindings/bare-key-owner.ts": 1,
   "gui-app/src/lib/keybindings/chord.ts": 4,
   "gui-app/src/lib/notifications/notification-feed-keyboard-navigation.ts": 1,
+  "gui-app/src/lib/sandbox/sandbox-loader.ts": 1,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
   // The mac/non-mac history-modifier check, kept separate from every

@@ -329,6 +329,11 @@ function filesSliceEq(a: FilesSlice, b: FilesSlice): boolean {
     const right = b.records[index];
     return (
       left.path === right.path &&
+      left.entry.v === right.entry.v &&
+      left.entry.kind === right.entry.kind &&
+      left.entry.mediaType === right.entry.mediaType &&
+      left.entry.title === right.entry.title &&
+      left.entry.derivedFrom === right.entry.derivedFrom &&
       left.entry.sha256 === right.entry.sha256 &&
       left.entry.status === right.entry.status &&
       left.entry.deletedAt === right.entry.deletedAt &&
