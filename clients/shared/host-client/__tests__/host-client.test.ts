@@ -26,6 +26,7 @@ import type { HostDirectoryEntry } from "../host-directory";
 import type { RemoteHostDirectoryEntry } from "../remote-fetcher";
 import { WsRpcClient } from "../../host-transport/ws-rpc-client";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   type RequiredHostMethodVersion,
 } from "../../host-transport/host-messenger";
@@ -605,6 +606,111 @@ describe("HostClient", () => {
         },
         bearer: client.getRequestContext()?.credentials,
       },
+    });
+  });
+
+  describe("request authority without AbortSignal.any (older WebViews)", () => {
+    /**
+     * `AbortSignal.any` landed in Chromium 116 / iOS 17.4, but older WebViews
+     * still in the field (a reported Android WebView 114) lack it - and there
+     * the unconditional call inside `captureAuthority` threw a TypeError
+     * before `requestCoordinator.request` ever ran, failing EVERY host RPC
+     * before dispatch. Each case runs the real shared request path with the
+     * API removed.
+     */
+    async function withoutAbortSignalAny(
+      run: () => Promise<void>,
+    ): Promise<void> {
+      const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+      Object.defineProperty(AbortSignal, "any", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
+      try {
+        await run();
+      } finally {
+        if (descriptor === undefined) {
+          Reflect.deleteProperty(AbortSignal, "any");
+        } else {
+          Object.defineProperty(AbortSignal, "any", descriptor);
+        }
+      }
+    }
+
+    it("dispatches a requester's unary request to the messenger", async () => {
+      await withoutAbortSignalAny(async () => {
+        const { client, requester, messenger } = buildHostClientWithMock();
+        client.setRequestContext(makeContext("user-1", "tok-1"));
+
+        await expect(requester.request("host.ping", {})).resolves.toEqual({
+          pong: true,
+        });
+        expect(messenger.calls).toHaveLength(1);
+      });
+    });
+
+    it("aborts an in-flight request when the binding generation ends", async () => {
+      await withoutAbortSignalAny(async () => {
+        const { client, requester, messenger } = buildHostClientWithMock();
+        messenger.setHandlers({
+          "host.ping": () => new Promise<never>(() => {}),
+        });
+        client.setRequestContext(makeContext("user-1", "tok-1"));
+
+        const pending = requester.request("host.ping", {});
+        const outcome = pending.then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(messenger.calls).toHaveLength(1);
+
+        client.getAuthorityRegistry().dispose();
+
+        expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
+      });
+    });
+
+    it("aborts an in-flight request when the request context aborts", async () => {
+      await withoutAbortSignalAny(async () => {
+        const { client, requester, messenger } = buildHostClientWithMock();
+        messenger.setHandlers({
+          "host.ping": () => new Promise<never>(() => {}),
+        });
+        const context = makeContext("user-1", "tok-1");
+        client.setRequestContext(context);
+
+        const pending = requester.request("host.ping", {});
+        const outcome = pending.then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(messenger.calls).toHaveLength(1);
+
+        context.abort("identity-transition");
+
+        expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
+      });
+    });
+
+    it("still composes the authority where AbortSignal.any exists", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      messenger.setHandlers({
+        "host.ping": () => new Promise<never>(() => {}),
+      });
+      const context = makeContext("user-1", "tok-1");
+      client.setRequestContext(context);
+
+      const pending = requester.request("host.ping", {});
+      const outcome = pending.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(messenger.calls).toHaveLength(1);
+
+      context.abort("identity-transition");
+
+      expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
     });
   });
 
