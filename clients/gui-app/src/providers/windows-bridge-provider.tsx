@@ -25,6 +25,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import { installCrossWindowEpicVisibility } from "@/lib/epics/cross-window-epic-visibility";
 import { installDesktopWindowVisibility } from "@/lib/epics/desktop-window-visibility";
+import { installDesktopBackgroundRendering } from "@/lib/browser-view/tiles/desktop-background-rendering";
 import {
   createDebouncedDesktopPerWindowProjectionBridge,
   DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
@@ -252,6 +253,8 @@ function installDesktopWindowsBridge(
   // window's claim synchronously, and that report reads the document gate.
   const uninstallDesktopWindowVisibility =
     installDesktopWindowVisibility(bridge);
+  const uninstallDesktopBackgroundRendering =
+    installDesktopBackgroundRendering(bridge);
   const uninstallCrossWindowVisibility =
     installCrossWindowEpicVisibility(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);
@@ -338,6 +341,7 @@ function installDesktopWindowsBridge(
   return () => {
     lifecycle.cancelled = true;
     uninstallCrossWindowVisibility();
+    uninstallDesktopBackgroundRendering();
     uninstallDesktopWindowVisibility();
     perWindowSubscription.dispose();
     if (typeof window !== "undefined") {

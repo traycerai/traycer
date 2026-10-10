@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import {
   STATUS_ANIMATION_PULSE_CADENCE_MS,
   useStatusAnimation,
@@ -28,7 +28,6 @@ export function PingRing(props: {
   readonly peakOpacity: number;
 }) {
   const { peakOpacity } = props;
-  const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback(
     (element: HTMLSpanElement, elapsedMs: number) => {
       const phase = (elapsedMs / CYCLE_MS) % 1;
@@ -48,7 +47,11 @@ export function PingRing(props: {
     },
     [peakOpacity],
   );
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
+  const ref = useStatusAnimation(
+    write,
+    clear,
+    STATUS_ANIMATION_PULSE_CADENCE_MS,
+  );
   return (
     <span
       ref={ref}

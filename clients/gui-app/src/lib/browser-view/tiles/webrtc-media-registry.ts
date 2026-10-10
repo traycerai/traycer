@@ -353,6 +353,33 @@ interface RegistryRecord {
 }
 
 const records = new Map<string, RegistryRecord>();
+const presenceListeners = new Set<(present: boolean) => void>();
+
+/** Whether this window holds any media entry, i.e. a video plane may be live. */
+export function hasBrowserMediaEntries(): boolean {
+  return records.size > 0;
+}
+
+/**
+ * Edges of {@link hasBrowserMediaEntries}: `true` when the first entry is
+ * created, `false` when the last one is disposed. The desktop shell keeps the
+ * window rendering unseen exactly while it is `true`
+ * (`desktop-background-rendering.ts`), because the receiver must keep its
+ * timers and `requestVideoFrameCallback` running while covered.
+ */
+export function subscribeBrowserMediaPresence(
+  listener: (present: boolean) => void,
+): () => void {
+  presenceListeners.add(listener);
+  return () => {
+    presenceListeners.delete(listener);
+  };
+}
+
+function notifyPresence(): void {
+  const present = records.size > 0;
+  for (const listener of Array.from(presenceListeners)) listener(present);
+}
 
 /**
  * Three segments, deliberately - no `instanceId`, unlike the neighbouring
@@ -368,8 +395,10 @@ export function acquireBrowserMediaEntry(input: {
   readonly createPeer: MediaPeerFactory;
 }): { readonly entry: BrowserMediaEntry; readonly release: () => void } {
   const keyId = browserMediaKeyId(input.key);
-  const record = records.get(keyId) ?? createRecord(input.createPeer);
+  const existing = records.get(keyId);
+  const record = existing ?? createRecord(input.createPeer);
   records.set(keyId, record);
+  if (existing === undefined && records.size === 1) notifyPresence();
   record.refCount += 1;
   if (record.closeTimer !== null) {
     window.clearTimeout(record.closeTimer);
@@ -388,6 +417,7 @@ export function acquireBrowserMediaEntry(input: {
         if (record.refCount > 0) return;
         records.delete(keyId);
         record.dispose();
+        if (records.size === 0) notifyPresence();
       }, RELEASE_GRACE_MS);
     },
   };

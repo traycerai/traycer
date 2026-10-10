@@ -49,6 +49,13 @@ export interface WindowsBridgeSurface {
     ownership: OwnershipBridgeSurface;
     epicVisibility: EpicVisibilityBridgeSurface;
     windowVisibility: WindowVisibilityBridgeSurface;
+    /**
+     * Turns background throttling off for THIS window while a browser tile's
+     * WebRTC video plane needs it (`electron-main/windows/background-rendering.ts`).
+     */
+    backgroundRendering: {
+      setRequired(required: boolean): Promise<void>;
+    };
     perWindowState: PerWindowStateBridgeSurface;
     authSession: AuthSessionBridgeSurface;
   };
@@ -97,6 +104,14 @@ export function buildWindowsBridge(windowId: string): WindowsBridgeSurface {
       ownership: buildOwnershipBridge(),
       epicVisibility: buildEpicVisibilityBridge(),
       windowVisibility: buildWindowVisibilityBridge(),
+      backgroundRendering: {
+        setRequired: async (required) => {
+          await ipcRenderer.invoke(
+            RunnerHostInvoke.backgroundRenderingSet,
+            required,
+          );
+        },
+      },
       perWindowState: buildPerWindowStateBridge(),
       authSession: buildAuthSessionBridge(),
     },

@@ -1,4 +1,4 @@
-import { useCallback, useRef, type ReactNode } from "react";
+import { useCallback, type ReactNode } from "react";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
 import {
   STATUS_ANIMATION_SMOOTH_CADENCE_MS,
@@ -84,7 +84,6 @@ const SWEEP_TRAVEL_MS = 1300;
  * stylesheet's own `mask-position`), so the resting mark is one flat alpha.
  */
 function BootMarkShimmer(props: { readonly children: ReactNode }): ReactNode {
-  const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
     const phase = elapsedMs % SWEEP_PERIOD_MS;
     const travel = Math.min(phase / SWEEP_TRAVEL_MS, 1);
@@ -99,7 +98,11 @@ function BootMarkShimmer(props: { readonly children: ReactNode }): ReactNode {
   const clear = useCallback((element: HTMLSpanElement) => {
     element.style.maskPosition = "";
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
+  const ref = useStatusAnimation(
+    write,
+    clear,
+    STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  );
   return (
     <span
       ref={ref}

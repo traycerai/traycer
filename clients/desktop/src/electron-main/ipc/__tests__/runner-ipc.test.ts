@@ -655,6 +655,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.epicVisibilitySnapshot,
           RunnerHostInvoke.epicVisibilityReport,
           RunnerHostInvoke.windowVisibilitySnapshot,
+          RunnerHostInvoke.backgroundRenderingSet,
           RunnerHostInvoke.perWindowStateGet,
           RunnerHostInvoke.perWindowStateCapabilities,
           RunnerHostInvoke.perWindowStateUpdate,
@@ -1307,12 +1308,12 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("tells each window about its OWN on-screen state on minimize/restore and hide/show, and answers the snapshot per sender", async () => {
-    // Renderer parking's window-level input (fixup 5). The renderer cannot
-    // observe minimise itself: every GUI window runs with
-    // `backgroundThrottling: false`, which keeps `document.visibilityState`
-    // at "visible" through minimise and hide. So main derives "on screen"
-    // from the BrowserWindow and pushes it to THAT window only - a minimised
-    // window A must not make window B think it is hidden.
+    // Renderer parking's window-level input (fixup 5). While a WebRTC video
+    // plane has turned background throttling off, the renderer cannot observe
+    // minimise itself: `document.visibilityState` stays "visible" through
+    // minimise and hide. So main derives "on screen" from the BrowserWindow
+    // and pushes it to THAT window only - a minimised window A must not make
+    // window B think it is hidden.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -1392,6 +1393,71 @@ describe("RunnerIpcBridge", () => {
     // (The handler's "unattributable sender answers visible" arm is not
     // reachable here: `handleInvoke` rejects an unregistered sender as
     // untrusted before any handler runs.)
+
+    bridge.dispose();
+  });
+
+  it("sets background throttling on the asking window's own WebContents, and rejects a non-boolean demand", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(
+      RunnerHostInvoke.backgroundRenderingSet,
+    );
+    if (handler === undefined) {
+      throw new Error("background rendering handler missing");
+    }
+    // The asking window's own WebContents, with Electron's real state: one
+    // throttling boolean (on by default) and a count of the calls that reach it.
+    const webContents = { throttling: true, setCalls: 0 };
+    const askingEvent = {
+      ...sender(101),
+      sender: {
+        id: 101,
+        getBackgroundThrottling: (): boolean => webContents.throttling,
+        setBackgroundThrottling: (allowed: boolean): void => {
+          webContents.setCalls += 1;
+          webContents.throttling = allowed;
+        },
+      },
+    };
+
+    // A required demand turns throttling off; releasing it turns it back on.
+    await Promise.resolve(handler(askingEvent, true));
+    expect(webContents.throttling).toBe(false);
+    await Promise.resolve(handler(askingEvent, false));
+    expect(webContents.throttling).toBe(true);
+    expect(webContents.setCalls).toBe(2);
+
+    // A repeat of the current state never reaches Electron (each call there
+    // re-shows a hidden widget).
+    await Promise.resolve(handler(askingEvent, false));
+    expect(webContents.setCalls).toBe(2);
+
+    // Anything but a boolean is refused without touching the window.
+    await expect(async () => handler(askingEvent, "true")).rejects.toThrow(
+      "expects a boolean",
+    );
+    await expect(async () => handler(askingEvent, undefined)).rejects.toThrow(
+      "expects a boolean",
+    );
+    expect(webContents.setCalls).toBe(2);
+    expect(webContents.throttling).toBe(true);
 
     bridge.dispose();
   });

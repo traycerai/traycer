@@ -23,6 +23,7 @@ import { installWebviewAttachGuards } from "../browser-view/webview-guest-birth"
 import { buildAppUrl } from "../app/app-protocol";
 import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
+import { installBackgroundRenderingReset } from "./background-rendering";
 import {
   placementToBrowserWindowBounds,
   type WindowGeometryPlacement,
@@ -129,16 +130,12 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // window may create `<webview>` tags; attach is fail-closed in
       // `installWebviewAttachGuards` before the renderer loads.
       webviewTag: true,
-      // An occluded window's timers are throttled to ~1/min by default, which
-      // collapses the WebRTC receiver's own reporting and stops
-      // `requestVideoFrameCallback` entirely. The browser tile's sender reads
-      // that silence as a path that cannot carry frames and ratchets its
-      // capture rate down for the rest of the session; the GUI must keep
-      // compositing and reporting while it is not being looked at. The cost
-      // is accepted and whole-renderer: an occluded window keeps its timers,
-      // rAF and compositing running, so it goes on spending CPU (and battery)
-      // in the background rather than idling.
-      backgroundThrottling: false,
+      // Throttled while covered, minimised or hidden, like a background tab.
+      // The renderer turns it off only while a browser tile's WebRTC video
+      // plane needs it (`background-rendering.ts`), and never for the whole
+      // window's life again: off, Electron keeps a window that was shown once
+      // "visible" and compositing forever (traycer#2355).
+      backgroundThrottling: true,
       zoomFactor: options.zoomFactor,
     },
   });
@@ -161,6 +158,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installNavigationGuard(window.webContents);
   installContextMenu(window.webContents);
   installResponsivenessListeners(window.webContents);
+  installBackgroundRenderingReset(window.webContents);
   installWebviewAttachGuards(window.webContents, options.windowId);
 
   const devWindowTitle = options.devWindowTitle;

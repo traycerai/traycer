@@ -6,8 +6,8 @@ import {
 /**
  * `setInterval` that exists only while `isDocumentVisible()` is true.
  *
- * Desktop windows run with `backgroundThrottling: false`, which keeps Page
- * Visibility at `"visible"` through minimise. This helper therefore reads
+ * A desktop window that a WebRTC video plane keeps rendering unseen stays at
+ * Page Visibility `"visible"` through minimise. This helper therefore reads
  * `lib/dom/document-visibility.ts` (Page Visibility AND the shell's
  * on-screen bit) and never `document.hidden`.
  *
