@@ -44,6 +44,8 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
 vi.mock("../../browser-view/browser-session", () => ({
   createBrowserViewWebPreferences: vi.fn(),
   cancelBrowserViewDownload: vi.fn(),
+  setBrowserViewOnScreenProbe: vi.fn(),
+  discardHeldBrowserViewDownloads: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
   ensureBrowserViewSessionForPartition: vi.fn(),

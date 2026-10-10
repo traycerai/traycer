@@ -12,12 +12,8 @@ import type {
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
-import {
-  profileCopyDraftPollActivity,
-  profileCopyOutcomesPollActivity,
-  type ProfileCopyPollActivity,
-} from "@/lib/profile-copy/profile-copy-model";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
@@ -86,6 +82,18 @@ export function defineConditionPolicy<
     resetLaneIds: entry.resetLaneIds,
   };
 }
+
+/** An epic file the host cannot serve yet; it usually lands on its own. */
+const EPIC_FILE_UNAVAILABLE_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.unavailable",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: 15 * SECOND_MS,
+};
+const EPIC_FILE_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.error",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
 
 export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   id: "providers.pending",
@@ -344,58 +352,6 @@ const PROVIDERS_RESET_LANES: ReadonlySet<string> = new Set([
   PROVIDERS_STEADY_POLL_LANE.id,
 ]);
 
-/**
- * Profile copy: the host is working on its own (a preflight or dispatch, a
- * verification, the last promotion step, a persisted row the next `status`
- * re-drives). Backs off rather than holding 2s: an import may take minutes
- * and every source `status` tick is a directory read plus a receipt dial per
- * open row, neither cached per RPC.
- */
-export const PROFILE_COPY_ACTIVE_POLL_LANE: ConditionPollLane = {
-  id: "profileCopy.active",
-  initialDelayMs: 2 * SECOND_MS,
-  maxDelayMs: 10 * SECOND_MS,
-};
-/**
- * Profile copy: nothing moves without a person (a sign-in, a decision) or an
- * unanswered destination coming back. Slow on purpose - see the lane above -
- * and every row settled stops polling altogether.
- */
-export const PROFILE_COPY_WAITING_POLL_LANE: ConditionPollLane = {
-  id: "profileCopy.waiting",
-  initialDelayMs: 15 * SECOND_MS,
-  maxDelayMs: MINUTE_MS,
-};
-/**
- * A failed profile-copy read keeps polling, backed off: FORBIDDEN during an
- * account-directory outage is not permanent, and the host never re-dials a
- * failed cancel on its own - a later `status` is what carries it. The hooks
- * stop on the errors that ARE permanent (`E_HOST_UNSUPPORTED`,
- * `E_INVALID_ARGUMENT`) through `enabled`.
- */
-export const PROFILE_COPY_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
-  id: "profileCopy.initial-error",
-  initialDelayMs: 5 * SECOND_MS,
-  maxDelayMs: MINUTE_MS,
-};
-export const PROFILE_COPY_STALE_ERROR_POLL_LANE: ConditionPollLane = {
-  id: "profileCopy.stale-error",
-  initialDelayMs: 5 * SECOND_MS,
-  maxDelayMs: MINUTE_MS,
-};
-
-function profileCopyPollLane(
-  activity: ProfileCopyPollActivity,
-): ConditionPollLane | false {
-  switch (activity) {
-    case "active":
-      return PROFILE_COPY_ACTIVE_POLL_LANE;
-    case "waiting":
-      return PROFILE_COPY_WAITING_POLL_LANE;
-    case "idle":
-      return false;
-  }
-}
 const HARNESS_RESET_LANES: ReadonlySet<string> = new Set([
   HARNESS_ALL_AVAILABLE_POLL_LANE.id,
 ]);
@@ -848,8 +804,19 @@ export const HOST_METHOD_POLL_TABLE = {
       resetLaneIds: HARNESS_RESET_LANES,
     }),
   },
-  "agent.gui.listModels": { ...LATEST_SCHEDULING, poll: null },
-  "agent.gui.listCommands": { ...LATEST_SCHEDULING, poll: null },
+  // A catalog read waits on the host's own probe bound, which the user's
+  // Model list timeout can raise past the ordinary unary deadline; see
+  // `CATALOG_LIST_RESPONSE_TIMEOUT_MS`. Every caller passes it.
+  "agent.gui.listModels": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "agent.gui.listCommands": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "agent.gui.getPlan": { ...LATEST_SCHEDULING, poll: null },
   "agent.tui.listHarnesses": { ...LATEST_SCHEDULING, poll: null },
   // Preparing a launch creates or updates host-side harness launch state.
@@ -972,21 +939,6 @@ export const HOST_METHOD_POLL_TABLE = {
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
-  // Internal profile-copy contracts still need scheduling rows because this
-  // table is exhaustive over the shared registry. Rows grant no authority:
-  // the host rejects user principals on all four coordination verbs.
-  "host.profileCopy.preflight": { ...LATEST_SCHEDULING, poll: null },
-  "host.profileCopy.import": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileCopy.receipt": { ...LATEST_SCHEDULING, poll: null },
-  "host.profileCopy.cancel": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   "host.fileCopy.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1228,6 +1180,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Creating a chat persists a new collaboration record.
   "epic.createChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.continueSubagent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Renaming a chat persists its title.
   "epic.renameChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Updating chat run settings changes persisted execution configuration.
@@ -1475,6 +1432,57 @@ export const HOST_METHOD_POLL_TABLE = {
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Epic files are content-addressed too: a read names its sha. Download
+  // progress rides the files lane's `localState`, never a poll; only an
+  // unavailable answer is asked again, since an upload landing on another
+  // host reaches no lane here.
+  "epic.readFile": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readFile", {
+      // Three caches share this method: the text and blob reads keep a
+      // `kind` at the top, the signed-URL read keeps it under `result`.
+      classify: (data) => {
+        if (data === undefined) return false;
+        if (data.kind === "unavailable") return EPIC_FILE_UNAVAILABLE_POLL_LANE;
+        if (!("result" in data)) return false;
+        const result = data.result;
+        return typeof result === "object" &&
+          result !== null &&
+          "kind" in result &&
+          result.kind === "unavailable"
+          ? EPIC_FILE_UNAVAILABLE_POLL_LANE
+          : false;
+      },
+      initialErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      staleDataErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
+  "epic.fetchFile": { ...LATEST_SCHEDULING, poll: null },
+  // User actions: each one runs, in order.
+  "epic.cancelFetchFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deleteFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.restoreFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // An MCP App's reads answer from the harness's live server, on demand; the
+  // app asks again when it wants a fresher answer, so nothing polls.
+  "chat.mcpApp.describeTool": { ...LATEST_SCHEDULING, poll: null },
+  "chat.mcpApp.readResource": { ...LATEST_SCHEDULING, poll: null },
+  // A tool call and a model-context update change something: each one runs,
+  // in order.
+  "chat.mcpApp.callTool": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.mcpApp.updateModelContext": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -1840,114 +1848,41 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Optional copy contracts are installed before their runtime handlers.
-  // Inventory/preflight reads may coalesce; mutations must not be dropped.
-  // Cross-method ordering and revision checks remain the host's responsibility.
-  // The three state reads poll only while a Settings copy surface observes
-  // them. `status` and `draftStatus` stop once every row they return is
-  // settled; `incoming` never does, because a copy started on another device
-  // arrives with no push and no focus refetch, so the slow lane is the only
-  // thing that lists it on a Providers screen already open here.
-  "providers.profileCopy.preview": { ...LATEST_SCHEDULING, poll: null },
-  "providers.profileCopy.status": {
+  // Profile sync. The overview is statuses only and is read from the source
+  // host while its dialog is open; the three `host.*` methods travel between
+  // two linked hosts and are never sent by an app.
+  "providers.profileSync.overview": {
     ...LATEST_SCHEDULING,
-    poll: defineConditionPolicy("providers.profileCopy.status", {
-      classify: (data) =>
-        data === undefined
-          ? false
-          : profileCopyPollLane(profileCopyOutcomesPollActivity(data.outcomes)),
-      initialErrorLane: PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
-      staleDataErrorLane: PROFILE_COPY_STALE_ERROR_POLL_LANE,
-      resetLaneIds: NO_RESET_LANES,
-    }),
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
   },
-  "providers.profileCopy.incoming": {
-    ...LATEST_SCHEDULING,
-    poll: defineConditionPolicy("providers.profileCopy.incoming", {
-      classify: (data) =>
-        data === undefined ? false : PROFILE_COPY_WAITING_POLL_LANE,
-      initialErrorLane: PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
-      staleDataErrorLane: PROFILE_COPY_STALE_ERROR_POLL_LANE,
-      resetLaneIds: NO_RESET_LANES,
-    }),
-  },
-  "providers.profileCopy.draftStatus": {
-    ...LATEST_SCHEDULING,
-    poll: defineConditionPolicy("providers.profileCopy.draftStatus", {
-      classify: (data) =>
-        data === undefined
-          ? false
-          : profileCopyPollLane(profileCopyDraftPollActivity(data.outcome)),
-      initialErrorLane: PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
-      staleDataErrorLane: PROFILE_COPY_STALE_ERROR_POLL_LANE,
-      resetLaneIds: NO_RESET_LANES,
-    }),
-  },
-  "providers.profileCopy.start": {
+  "providers.profileSync.syncNow": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "providers.profileCopy.cancel": {
+  "providers.profileSync.setKeepInSync": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "providers.profileCopy.cancelDraft": {
+  "providers.profileSync.acceptAccount": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "providers.profileCopy.setPreference": {
+  "host.profileSync.apply": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "providers.profileCopy.verify": {
+  "host.profileSync.offerCredential": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "providers.profileCopy.confirmVerification": {
+  "host.profileSync.fetchCredential": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileCopy.confirmIdentity": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileCopy.retry": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileCopy.login.start": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileCopy.login.touch": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileCopy.login.submitCode": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileCopy.login.cancel": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  // Waiters on the same import/login attempt share the existing login wait
-  // budget. Code/touch/cancel remain independent mutations, never joined.
-  "providers.profileCopy.login.await": {
-    mode: "join",
-    joinResponseTimeoutMs: 16 * MINUTE_MS,
     poll: null,
   },
   "providers.detectVersion": { ...LATEST_SCHEDULING, poll: null },
@@ -2335,6 +2270,18 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.visualization.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.catalog.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.worktrees.get": { ...LATEST_SCHEDULING, poll: null },
   "config.worktrees.set": {
     mode: "fifo",
@@ -2374,6 +2321,18 @@ export const HOST_METHOD_POLL_TABLE = {
   // what delivers that (see `autoJudge.set` above - two bodies are two queue
   // keys); `autoPolicyWriteScope` on `useAutoPolicySetMutation` is.
   "autoPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The account-wide chat auto-archive setting. Read on Settings mount, never
+  // polled: another device's save reaches this host's cache on its own
+  // 5-minute refresh, and a timer here would only wake the host for it.
+  "chatAutoArchive.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, ordered on the client by
+  // `chatAutoArchiveWriteScope` on `useChatAutoArchiveSetMutation`, exactly as
+  // `autoPolicy.set` above.
+  "chatAutoArchive.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

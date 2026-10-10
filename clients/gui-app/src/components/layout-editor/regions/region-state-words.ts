@@ -14,6 +14,7 @@ import type {
   SizedValues,
   ToolActivityValues,
 } from "@/lib/layout/layout-values";
+import type { LayoutFacts } from "@/components/layout-editor/regions/row-availability";
 
 /**
  * The one word each region's row reads out beside its name (L-33, L-47).
@@ -26,6 +27,21 @@ import type {
 
 export function shownStateWord(values: ShownValues): string {
   return values.shown === "shown" ? "Shown" : "Hidden";
+}
+
+/**
+ * The microphone's word: a shown mic does nothing while General > Voice input
+ * is off, which is what its row says too (C4).
+ */
+export function micStateWord(
+  values: ShownValues,
+  _arrangement: LayoutArrangement,
+  facts: LayoutFacts,
+): string {
+  if (values.shown === "shown" && !facts.voiceInputEnabled) {
+    return "Voice input off";
+  }
+  return shownStateWord(values);
 }
 
 export function sizedStateWord(values: SizedValues): string {
@@ -84,8 +100,13 @@ export function barPlacementStateWord(
   return `Tab strip, ${placement.side === "left" ? "start" : "end"}`;
 }
 
+/**
+ * Pinned before the style: the pinned strip never reads the chip's style
+ * (C1), so naming one while the breakdown is pinned names nothing on screen.
+ */
 export function contextUsageStateWord(values: ContextUsageValues): string {
   if (values.shown === "hidden") return "Hidden";
+  if (values.pinBreakdown) return "Pinned";
   if (values.style === "text") return "Text";
   return values.style === "ring" ? "Ring and number" : "Ring only";
 }

@@ -8,8 +8,9 @@
  * "this user has a lot open" from "this session is accumulating".
  *
  * Two channels, deliberately different frequencies:
- *   - PostHog (here): one sample every 15 min, plus a pressure event when the
- *     JS heap crosses a tier. Low volume, aggregate-queryable across users.
+ *   - PostHog (here): one sample every 3 h per window, plus a pressure event
+ *     when the JS heap crosses a tier. Low volume, aggregate-queryable across
+ *     users.
  *   - `lib/perf/perf-telemetry.ts`: high-frequency, opt-in, local ndjson for
  *     when a single machine needs to be dissected.
  *
@@ -29,14 +30,35 @@ import {
 const BYTES_PER_MB = 1024 * 1024;
 const MS_PER_HOUR = 3_600_000;
 
-export const RESOURCE_SAMPLE_INTERVAL_MS = 15 * 60_000;
+/**
+ * Every 3 h, and every reading is published. At a 15-minute cadence this was
+ * the app's largest analytics event; the question it answers - does heap
+ * climb with session age - is one of hours, not minutes. The cost is
+ * resolution: see the slope window and the pressure check below.
+ */
+export const RESOURCE_SAMPLE_INTERVAL_MS = 3 * MS_PER_HOUR;
 /** First sample is deferred past boot so it measures a settled renderer
  * rather than the hydration transient. */
 export const RESOURCE_FIRST_SAMPLE_DELAY_MS = 60_000;
-/** 8 samples at the 15-minute cadence = a 2-hour slope window: long enough to
- * ignore per-turn churn, short enough to still move within one sitting. */
-const SLOPE_WINDOW_SAMPLES = 8;
+/**
+ * 4 samples at the 3-hour cadence = a ~9-hour slope window: the span of one
+ * long sitting, so a leak that builds over a working day still moves the
+ * slope while the window is open. Keeping 8 samples would stretch it to ~21 h
+ * and average a leak away into the overnight idle. With MIN_SLOPE_SAMPLES the
+ * first slope arrives with the 6-hour sample, so a window closed sooner never
+ * reports one - growth inside a shorter session is invisible to this event
+ * and is left to the pressure tiers.
+ */
+const SLOPE_WINDOW_SAMPLES = 4;
 const MIN_SLOPE_SAMPLES = 3;
+/**
+ * The pressure check rides the sample, so a tier crossing is reported at the
+ * next sample - up to 3 h after it happens - and a heap that spikes and falls
+ * back between two samples is never seen. The throttle is inert at that
+ * cadence (every sample is past it), so a sustained tier reports once per
+ * sample; it stays so a faster caller of `sampleOnce` cannot repeat a tier
+ * more than hourly.
+ */
 const PRESSURE_REPEAT_THROTTLE_MS = MS_PER_HOUR;
 
 /**
@@ -108,8 +130,8 @@ export interface ResourceTelemetryDeps {
 }
 
 export interface ResourceTelemetrySampler {
-  /** Take and emit exactly one sample. Exposed for tests and for the pressure
-   * path; production drives it from `start`. */
+  /** Take and emit exactly one sample, and check it for pressure. Exposed for
+   * tests; production drives it from `start`. */
   readonly sampleOnce: () => void;
   readonly start: () => () => void;
 }
@@ -197,7 +219,7 @@ export function readJsHeap(): JsHeapReading | null {
  * pid in the main process - one shared bookmark for every caller. Sampling it
  * would corrupt the Resource Monitor's live reading (its next 1 Hz tick would
  * measure a sub-second window) and would itself report an interval defined by
- * whichever other poller ran last, not the 15 minutes this sampler implies.
+ * whichever other poller ran last, not the 3 hours this sampler implies.
  * A number that cannot be compared across samples or aggregated across users
  * is worse than no number, and the JS heap is the signal this event exists
  * for. Restoring CPU here needs a sampler-owned delta source, not this one.
@@ -261,7 +283,7 @@ export function createResourceTelemetrySampler(
       sampleOnce();
     }, RESOURCE_FIRST_SAMPLE_DELAY_MS);
     // Plain interval: this sampler exists to catch heap growth over long
-    // sessions, including ones that sit minimised. A 15-minute tick is
+    // sessions, including ones that sit minimised. A 3-hour tick is
     // cheap, and `fireOnShow` would cluster samples on restore and skew
     // `heapSlopeMbPerHour`.
     const repeatTimer = window.setInterval(() => {

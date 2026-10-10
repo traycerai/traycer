@@ -84,6 +84,7 @@ import {
   runtimeEventSchemaPreFallback,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
+  runtimeEventSchemaPrePage,
   runtimeEventSchemaPreSettlement,
   runtimeEventSchemaV12PreInReplyTo,
   runtimeInterviewAnswerSchema,
@@ -103,6 +104,14 @@ import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreReasonix,
 } from "@traycer/protocol/host/agent/shared";
+import {
+  openChatEventSchema,
+  openChatSchema,
+  openRuntimeEventSchema,
+  openRuntimeEventSchemaPrePage,
+  openUserMessageSchema,
+  openUserMessageSenderSchema,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import {
   worktreeBindingSchema,
   worktreeIntentSchema,
@@ -124,7 +133,9 @@ import {
   chatRangeResponseSchema,
   chatRangeResponseSchemaPreMessageDelivery,
   chatRangeResponseSchemaPreBrowser,
+  chatRangeResponseSchemaPreCommandCode,
   chatRangeResponseSchemaPreFallback,
+  chatRangeResponseSchemaPrePage,
   chatRangeResponseSchemaPreReceipt,
   chatRangeResponseSchemaPreShellHost,
   chatRecordSchema,
@@ -133,13 +144,21 @@ import {
   chatTranscriptDerivedSchemaPreSetupPlacement,
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
+  openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPrePage,
+  openChatTranscriptWindowSchemaPrePage,
+  openChatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreBrowser,
+  chatTranscriptWindowSchemaPreCommandCode,
   chatTranscriptWindowSchemaPreFallback,
+  chatTranscriptWindowSchemaPrePage,
   chatTranscriptWindowSchemaPreReceipt,
   chatTranscriptWindowSchemaPreShellHost,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
-import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import {
+  transcriptRowContextSchemaPreAntigravity,
+  transcriptRowContextSchemaPreCommandCode,
+} from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
@@ -844,6 +863,40 @@ export const chatQueueStateSchema = lazySchema(() =>
   }),
 );
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
+
+// ─── Open-harness-id queue (`chat.subscribe@1.22`) ──────────────────────────
+//
+// The live queue with the prompt item's `sender` reopened: an A2A prompt
+// queued by an agent on a harness the peer cannot name is still a prompt the
+// peer can show. `settings` stays the closed tuple - a queued prompt's settings
+// are what its turn will RUN under, which the composer and the pickers key on,
+// so a harness they cannot name still floors the chat (see
+// `open-harness-wire.ts` for the heard / drive line). Derived from the live
+// item, not hand-copied: a field added to the live prompt item must reach this
+// line, and the plain `z.union` keeps the prompt arm LAST for the reason
+// `chatQueuedItemSchema` gives.
+export const openChatQueuedPromptItemSchema = lazySchema(() =>
+  chatQueuedPromptItemSchema.extend({
+    sender: openUserMessageSenderSchema,
+  }),
+);
+export type OpenChatQueuedPromptItem = z.infer<
+  typeof openChatQueuedPromptItemSchema
+>;
+export const openChatQueuedItemSchema = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    openChatQueuedPromptItemSchema,
+  ]),
+);
+export type OpenChatQueuedItem = z.infer<typeof openChatQueuedItemSchema>;
+export const openChatQueueStateSchema = lazySchema(() =>
+  chatQueueStateSchema.extend({
+    items: z.array(openChatQueuedItemSchema),
+  }),
+);
+export type OpenChatQueueState = z.infer<typeof openChatQueueStateSchema>;
 
 // Wire-freeze of the queue as `chat.subscribe@1.17` ships it: the live three
 // arms and the live prompt item (sender host included), without the
@@ -2338,6 +2391,18 @@ export const chatSnapshotSchema = lazySchema(() =>
 );
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
+// The full snapshot as a READER holds it: open rows, events and queue, the head
+// still closed. No line binds this shape - the legacy full-snapshot lines are
+// frozen closed - it is the client's one snapshot TYPE, which it also builds
+// itself from a windowed transcript, so it has to admit what `1.22` delivers.
+export const openChatSnapshotSchema = lazySchema(() =>
+  chatSnapshotSchema.extend({
+    chat: openChatSchema,
+    queue: openChatQueueStateSchema,
+  }),
+);
+export type OpenChatSnapshot = z.infer<typeof openChatSnapshotSchema>;
+
 export const chatErrorNoticeSchema = lazySchema(() =>
   z.object({
     code: z.string(),
@@ -3111,13 +3176,34 @@ const chatSubscribeCommonServerFrameSchemasV118 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.20`): the approval card carries
-// the provider's display facts and `cautious`.
+// The common frames as `chat.subscribe@1.20` and `@1.21` ship them: the
+// approval card carries the provider's display facts and `cautious`, and the
+// three sender-bearing frames bind the closed harness enum.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.22`): `1.21`'s with the three
+// sender-bearing frames - `messageAccepted`, `queueChanged`, `eventAppended` -
+// reopened to the open harness id (`open-harness-wire.ts`). Everything else is
+// the same binding.
+const chatSubscribeCommonServerFrameSchemasOpenHarness =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchema,
+    event: openChatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3249,10 +3335,25 @@ const chatSubscribeSharedServerFrameSchemasV118 = [
   ...chatSubscribeCommonServerFrameSchemasV118,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
+// `chat.subscribe@1.20`/`@1.21`'s shared frames: the live list with the
+// pre-page `blockDelta`, whose `tool_call.completed` carries no `page` /
+// `mcpApp` stamp (`1.23`).
+const chatSubscribeSharedServerFrameSchemasV121 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemas,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPrePage),
+];
 const chatSubscribeSharedServerFrameSchemas = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemas,
   blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+// The live shared frames (`chat.subscribe@1.22`): the open-harness common set
+// over the `blockDelta` whose seven harness-bearing events are reopened.
+const chatSubscribeSharedServerFrameSchemasOpenHarness = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+  blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
 // Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing
@@ -5132,7 +5233,12 @@ const chatTranscriptWindowSchemaV18 = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaV18),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    // Overridden by the one line that binds this tail (`1.8`, with the
+    // pre-Antigravity copy); a frozen copy here so nothing released names the
+    // live row context.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .optional(),
   }),
 );
 
@@ -5368,19 +5474,24 @@ const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
 // and a failed attempt that names when its wait would resume
 // (`waitResumesAt`). All three are existing keys, so `.extend` keeps their
 // positions.
+//
+// The tail is the copy `1.18`-`1.20` share: the live tail with the row
+// context's anchor union as the 1.5.0 tags shipped it.
 const chatWindowedSnapshotSchemaV118 = lazySchema(() =>
   chatWindowedSnapshotSchemaV117.extend({
     queue: chatQueueStateSchema,
-    tail: chatTranscriptWindowSchema,
+    tail: chatTranscriptWindowSchemaPreCommandCode,
     lastFailedAttempt: lastFailedAttemptSchema.optional(),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.20`): `1.18` with the approval
-// card's display facts, the cron background kind, and two live-only keys. Both
-// new keys are optional and stripped by name below `1.20`, like `1.10`'s
-// fallback DTOs: absent is "nothing to show", which is also what an older
-// host's silence means.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.20` ships it: `1.18` with the
+// approval card's display facts, the cron background kind, and two live-only
+// keys. Both new keys are optional and stripped by name below `1.20`, like
+// `1.10`'s fallback DTOs: absent is "nothing to show", which is also what an
+// older host's silence means.
+//
+// Frozen since `1.21` opened above it; its tail is `1.18`'s, inherited.
+const chatWindowedSnapshotSchemaV120 = lazySchema(() =>
   chatWindowedSnapshotSchemaV118.extend({
     pendingApprovals: z.array(chatApprovalStateSchema),
     // Both cards gain `cautious` and `displayFacts` on this line.
@@ -5393,7 +5504,39 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
     thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
   }),
 );
+// The windowed snapshot as `chat.subscribe@1.21` ships it: `1.20` with a tail
+// whose row context may carry the session anchor of a harness added after
+// 1.5.0, and whose bodies are the pre-page ones. An existing key, so `.extend`
+// keeps its position.
+const chatWindowedSnapshotSchemaV121 = lazySchema(() =>
+  chatWindowedSnapshotSchemaV120.extend({
+    tail: chatTranscriptWindowSchemaPrePage,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.23`): `1.21` with the live
+// tail, whose tool calls may carry `page` / `mcpApp` stamps.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV121.extend({
+    tail: chatTranscriptWindowSchema,
+  }),
+);
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
+
+// The live windowed snapshot (`chat.subscribe@1.22`): `1.21`'s with the queue
+// and the tail reopened to the open harness id. `chat` (the record head:
+// settings, active session chain, held wake chains), `activeTurn` and the
+// fallback tuples keep the closed enum - they are what a peer DRIVES, and the
+// host still refuses a chat whose head names a harness the peer cannot
+// (`open-harness-wire.ts`).
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchema.extend({
+    queue: openChatQueueStateSchema,
+    tail: openChatTranscriptWindowSchema,
+  }),
+);
+export type OpenChatWindowedSnapshot = z.infer<
+  typeof openChatWindowedSnapshotSchema
+>;
 
 const chatSubscribeWindowedSnapshotServerFrameSchema = lazySchema(() =>
   z.object({
@@ -5402,6 +5545,16 @@ const chatSubscribeWindowedSnapshotServerFrameSchema = lazySchema(() =>
     ...chatReferenceFields,
     snapshot: chatWindowedSnapshotSchema,
   }),
+);
+
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness = lazySchema(
+  () =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchema,
+    }),
 );
 
 const chatSubscribeAccumulatedChangesServerFrameSchema = lazySchema(() =>
@@ -5507,6 +5660,39 @@ const chatSubscribeRangeServerFrameSchema = lazySchema(() =>
   }),
 );
 
+// The same frame as `1.21` ships it: a scrolled-back row is the second channel
+// a tool call's `page` / `mcpApp` stamp could reach that line on, frozen for
+// the reason the snapshot's `tail` is.
+const chatSubscribeRangeServerFrameSchemaPrePage = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPrePage,
+  }),
+);
+
+const chatSubscribeRangeServerFrameSchemaOpenHarness = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: openChatRangeResponseSchema,
+  }),
+);
+
+// The same frame as `1.18`-`1.20` ship it: the live range with the row
+// context's anchor union as the 1.5.0 tags shipped it, frozen for the reason
+// the snapshot's `tail` is.
+const chatSubscribeRangeServerFrameSchemaPreCommandCode = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPreCommandCode,
+  }),
+);
+
 // The same frame as every line below `1.11` ships it. A `range` response
 // carries transcript rows, and a row can carry a resume trigger's
 // `managedCommand` - which `1.11` gave a `hostId`. Frozen for the same reason
@@ -5551,7 +5737,10 @@ const chatRangeResponseSchemaV18 = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaV18),
     events: z.array(chatEventSchema),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    // Overridden by `1.8`, like the tail's above.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCommandCode)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -5670,7 +5859,7 @@ const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaV118,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -5693,7 +5882,7 @@ const chatSubscribeServerFrameSchemaV119 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaV118,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -5702,6 +5891,61 @@ const chatSubscribeServerFrameSchemaV119 = lazySchema(() =>
   ]),
 );
 
+/**
+ * `chat.subscribe@1.20`'s server frames, frozen when `1.21` opened above it:
+ * the Claude-parity line as the 1.5.0 tags shipped it. Arm for arm the live
+ * union below, except that the snapshot's tail and the `range` response carry
+ * the row context those tags shipped
+ * (`transcriptRowContextSchemaPreCommandCode`).
+ */
+const chatSubscribeServerFrameSchemaV120 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV120,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreCommandCode,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV121,
+  ]),
+);
+
+/**
+ * `chat.subscribe@1.21`'s server frames, frozen when `1.23` opened above it:
+ * arm for arm the live union below, except that the message bodies - on the
+ * snapshot's tail, on a `range` response and on `blockDelta`'s
+ * `tool_call.completed` - carry no `page` / `mcpApp` stamp.
+ */
+const chatSubscribeServerFrameSchemaV121 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV121,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPrePage,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV121,
+  ]),
+);
+
+/**
+ * The live windowed union as the WRITER builds it: every harness-bearing leaf
+ * on the closed enum, because the host emits only ids it knows. `1.23` binds
+ * the open twin below for readers. The released `1.21` closed union and
+ * `1.22` open union are frozen separately with pre-page bodies.
+ */
 export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema,
@@ -5717,8 +5961,63 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
+
 export type ChatSubscribeWindowedServerFrame = z.infer<
   typeof chatSubscribeWindowedServerFrameSchema
+>;
+
+/** Frozen 1.22: open harness ids with pre-page bodies on every channel. */
+const chatSubscribeServerFrameSchemaV122 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV121.extend({
+        queue: openChatQueueStateSchema,
+        tail: openChatTranscriptWindowSchemaPrePage,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPrePage,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchema,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+    blockDeltaServerFrameSchema(openRuntimeEventSchemaPrePage),
+  ]),
+);
+
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.23`): the
+ * union above with the snapshot, the `range` response, the three
+ * sender-bearing common frames and the `blockDelta` bound to their
+ * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
+ * (the active turn, the fallback tuples) and the snapshot's record head - keep
+ * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
+ * is assignable to this type; the client parses with this schema.
+ */
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarness,
+  ]),
+);
+export type OpenChatSubscribeWindowedServerFrame = z.infer<
+  typeof openChatSubscribeWindowedServerFrameSchema
 >;
 
 // ─── Frozen `chat.subscribe@1.8` shape (pre-fallback) ─────────────────────
@@ -6488,6 +6787,95 @@ export const chatSubscribeV120 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 20 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
-  serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV120,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The first line that may carry a harness added after 1.5.0 (Command Code is
+ * the first).
+ *
+ * `1.21` adds no key, no frame and no enum value of its own. Every shape is
+ * `1.20`'s; what differs is which harnesses those shapes may name, and one
+ * binding says so in the schema: a row's `rowContext.sessionAnchor`, on the
+ * snapshot's tail and on a `range` response, takes the live anchor union here
+ * and the 1.5.0 one on `1.9`-`1.20`.
+ *
+ * The rest of the harness axis is held by the host, as it was for Reasonix
+ * (`1.7`) and Antigravity (`1.9`): a chat whose harness a line cannot name is
+ * REFUSED to a subscriber below this minor rather than projected
+ * (`minimumChatSubscribeMinorForHarness`), and a row context naming such an
+ * anchor inside an otherwise servable chat has the anchor withheld.
+ *
+ * The open request and the client frames are `1.20`'s, unchanged.
+ *
+ * Frozen at the pre-page message bodies since `1.23` opened above it
+ * (`chatSubscribeServerFrameSchemaV121`).
+ */
+export const chatSubscribeV121 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 21 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV121,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The open-harness-id line: the first on which a client is refused a chat
+ * only for a harness it would have to DRIVE, never for one it merely heard
+ * from.
+ *
+ * `1.22` adds no key and no frame. Every leaf a chat names a harness through
+ * without the peer acting on it - a user row's or queued prompt's agent
+ * `sender`, an assistant row's `sender`, a steer block's `sender`, an event's
+ * `actor`, a provider notice, a plan block and its source, and the
+ * `session.created` / `session.resumed` / `plan.*` / `provider_notice.upsert` /
+ * `steer.submitted` runtime events - takes an open string here
+ * (`open-harness-wire.ts`), where `1.0`-`1.21` take the closed enum. The host's
+ * per-harness floor therefore binds a `1.22` peer only through the carriers it
+ * drives (the chat's settings, its session chains, the active turn, a queued
+ * prompt's settings), and a row's session anchor it cannot decode is withheld,
+ * never floored: a Claude chat that received one reply from an agent on a
+ * harness this peer's enum ends before now opens here. The protocol's twin of
+ * that floor is `CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR` in `chat-frame-compat.ts`.
+ *
+ * The open request and the client frames are `1.21`'s, unchanged: a client
+ * still cannot WRITE a harness id the host does not know.
+ */
+export const chatSubscribeV122 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 22 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV122,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The agent-page and MCP App line.
+ *
+ * `1.23` adds two keys and no frame, no union member and no enum value:
+ * `page` and `mcpApp` on a `tool_call` block (`toolCallPageStampSchema`,
+ * `toolCallMcpAppStampSchema`) and on its `tool_call.completed` event. A page
+ * an agent showed with `traycer_show_page` and an MCP App a tool rendered
+ * both arrive as a stamp on the call that produced them.
+ *
+ * PROJECTION, not tolerance, like `1.20`'s surfaces: every line below `1.23`
+ * binds the hand-frozen `toolCallBlockSchemaPrePage` /
+ * `toolCallCompletedEventSchemaPrePage` on every body channel (the tail, a
+ * `range` response and `blockDelta`), and the host deletes both keys by name
+ * for every peer below `1.23` (`chat-frame-projection.ts`). A peer below it
+ * renders the call as the plain tool row it always did.
+ *
+ * Defaulted `null` on the block and optional on the event: a block persisted
+ * before the keys reads as "no stamp", and an adapter that never stamps simply
+ * omits them from the event.
+ *
+ * The open request and the client frames are `1.22`'s, unchanged.
+ */
+export const chatSubscribeV123 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 23 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

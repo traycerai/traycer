@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_USAGE_ROW_KEYS } from "@/lib/context-usage-rows";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
-import { layoutChanges, regionChanged } from "@/lib/layout/layout-diff";
+import { layoutChanges, regionChangedKeys } from "@/lib/layout/layout-diff";
 import { type LayoutValues } from "@/lib/layout/layout-values";
 import {
   effectiveLayoutValues,
@@ -154,7 +154,7 @@ describe("useLayoutStore", () => {
       // ... and it is NOT a change, because nothing about the picture differs
       // from the base. That is the half the header, the dot and the revert
       // read, and it is measured rather than stored.
-      expect(regionChanged(getLayoutSnapshot(), "model")).toBe(false);
+      expect(regionChangedKeys(getLayoutSnapshot(), "model")).toEqual([]);
       expect(changeCount(getLayoutSnapshot())).toBe(0);
     });
 
@@ -208,6 +208,28 @@ describe("useLayoutStore", () => {
         effectiveLayoutValues("compact", getLayoutSnapshot().overrides),
       ).toEqual(PRESET_VALUES.compact);
     });
+  });
+
+  describe("readings on agent rows by preset", () => {
+    it.each([
+      ["default", false],
+      ["compact", false],
+      ["detailed", true],
+    ] as const)(
+      "%s resolves agentRows to %s, whatever was set before",
+      (presetId, expected) => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("resourceMonitor", { agentRows: !expected });
+
+        useLayoutStore.getState().applyPreset(presetId);
+
+        expect(
+          effectiveLayoutValues(presetId, getLayoutSnapshot().overrides)
+            .resourceMonitor.agentRows,
+        ).toBe(expected);
+      },
+    );
   });
 
   describe("applying a preset that changes nothing", () => {
@@ -287,8 +309,8 @@ describe("useLayoutStore", () => {
         .setRegionValues("usageLimits", { density: "compact" });
       const snapshot = getLayoutSnapshot();
 
-      expect(regionChanged(snapshot, "usageLimits")).toBe(true);
-      expect(regionChanged(snapshot, "model")).toBe(false);
+      expect(regionChangedKeys(snapshot, "usageLimits")).toEqual(["density"]);
+      expect(regionChangedKeys(snapshot, "model")).toEqual([]);
     });
   });
 
@@ -495,7 +517,7 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
           pinBreakdown: true,
           pinnedFields: ["used", "output"],
         },
-        resourceMonitor: { shown: "hidden", agentRows: false },
+        resourceMonitor: { shown: "hidden" },
         railComments: { shown: "hidden" },
         railPullRequests: { shown: "shown" },
       });
@@ -506,6 +528,7 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
         "chats",
         "artifacts",
         "terminals",
+        "files",
         "browsers",
         "git-diff",
         "pull-requests",
@@ -549,6 +572,7 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
       "chats",
       "artifacts",
       "terminals",
+      "files",
       "browsers",
       "git-diff",
       "pull-requests",
@@ -583,30 +607,37 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
 
   it.each([
     {
-      name: "a valid empty list turns the agent rows off and keeps the metric defaults",
+      // Off is the shipped default, so nothing is recorded.
+      name: "a valid empty list turns the agent rows off, which is the default",
       state: { navigatorResourceMetrics: [] },
-      monitor: { agentRows: false },
+      monitor: null,
     },
     {
-      // The rows' own default is already ON (`SHIPPED_DEFAULT_VALUES.resourceMonitor.agentRows`),
-      // so a nonempty list agreeing with it costs nothing to record - only the
-      // metrics that differ from the shipped set survive the diff.
+      // The rows' own default is OFF (`SHIPPED_DEFAULT_VALUES.resourceMonitor.agentRows`),
+      // so a nonempty list turns them on and that differs from the default -
+      // it is recorded alongside the metrics that differ from the shipped set.
       name: "a nonempty list sets each metric from membership, under a hidden monitor",
       state: {
         showGlobalResourceMonitor: false,
         navigatorResourceMetrics: ["memory"],
       },
-      monitor: { shown: "hidden", cpu: false, memory: true, processes: false },
+      monitor: {
+        shown: "hidden",
+        cpu: false,
+        memory: true,
+        processes: false,
+        agentRows: true,
+      },
     },
     {
-      // Every field this record resolves to - the switch, the metrics, the
-      // rows - equals the shipped Default, so nothing is recorded at all.
-      name: "a nonempty list matching the shipped metrics carries nothing",
+      // The metrics and the switch equal the shipped Default; only the rows
+      // differ (a nonempty list means rows on, the default is off).
+      name: "a nonempty list matching the shipped metrics carries only the rows",
       state: {
         showGlobalResourceMonitor: true,
         navigatorResourceMetrics: ["cpu", "processes"],
       },
-      monitor: null,
+      monitor: { agentRows: true },
     },
     {
       name: "an invalid list carries no row or metric preference",
@@ -716,8 +747,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     });
     writeLeftPanelRecord({
       panelGroups: [
-        // Five members: only four make a stack, the fifth stands alone
-        // (lossy, `MAX_RAIL_STACK_MEMBERS`).
+        // Five members, all carried into one stack: a stack has no cap.
         {
           panelIds: [
             "file-tree",
@@ -742,9 +772,11 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
   const EXPECTED_OVERRIDES = {
     homeTab: { shown: "shown" },
-    // `showBar` and `showModeWord` are in the stored record and carry nowhere.
-    usageLimits: { reset: false, amount: "remaining" },
-    resourceMonitor: { shown: "hidden", processes: false, ramShare: true },
+    // The bar is off, so the reading is the percent alone.
+    usageLimits: { reset: false, amount: "remaining", readingStyle: "percent" },
+    // Header placement: the sidebar chips (cpu) were the only metrics this
+    // user saw and picked, so they win over the strip's never-drawn list.
+    resourceMonitor: { shown: "hidden", processes: false, agentRows: true },
     contextUsage: {
       style: "ring",
       pinBreakdown: true,
@@ -791,12 +823,13 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
       "chats",
       "artifacts",
       "git-diff",
+      "files",
       "pull-requests",
     ]);
     expect(railStacks(state.arrangement.rail)).toEqual([
       {
         kind: "stack",
-        id: "stack:railFileTree+railSharing+railComments+railBrowsers",
+        id: "stack:railFileTree+railSharing+railComments+railBrowsers+railTerminals",
       },
       { kind: "stack", id: "stack:railArtifacts+railGitDiff" },
     ]);
@@ -842,6 +875,104 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
     expect(state().overrides.usageLimits).toEqual({ shown: "hidden" });
     expect(state().overrides.resourceMonitor).toEqual({ shown: "hidden" });
+  });
+
+  describe("the usage reading style from showBar and showModeWord", () => {
+    async function readingStyleFor(
+      showBar: unknown,
+      showModeWord: unknown,
+    ): Promise<unknown> {
+      writeLayoutRecordAtVersion(
+        {
+          statusBar: {
+            placement: "status-bar",
+            rateLimits: { showBar, showModeWord },
+          },
+          composer: {},
+        },
+        1,
+      );
+      const { state } = await relaunchStore();
+      return state().overrides.usageLimits?.readingStyle;
+    }
+
+    it("reads a bar turned off as the percent alone, whether or not the mode word was on", async () => {
+      expect(await readingStyleFor(false, false)).toBe("percent");
+      expect(await readingStyleFor(false, true)).toBe("percent");
+    });
+
+    it("reads the bar with the mode word off as both", async () => {
+      expect(await readingStyleFor(true, false)).toBe("both");
+    });
+
+    it("carries nothing for the bar with the mode word on, the shipped reading", async () => {
+      expect(await readingStyleFor(true, true)).toBeUndefined();
+    });
+
+    it("carries nothing when showBar is not a boolean", async () => {
+      expect(await readingStyleFor("yes", false)).toBeUndefined();
+      expect(await readingStyleFor(undefined, false)).toBeUndefined();
+    });
+
+    it("carries the style under the header placement too", async () => {
+      writeLayoutRecordAtVersion(
+        {
+          statusBar: {
+            placement: "header",
+            rateLimits: { showBar: false, showModeWord: true },
+          },
+          composer: {},
+        },
+        1,
+      );
+
+      const { state } = await relaunchStore();
+
+      expect(state().overrides.usageLimits).toEqual({
+        readingStyle: "percent",
+      });
+    });
+  });
+
+  describe("the monitor's metrics from the strip list and the sidebar chips", () => {
+    async function monitorFor(placement: string): Promise<unknown> {
+      writeLayoutRecordAtVersion(
+        {
+          statusBar: {
+            placement,
+            resources: { enabled: true, metrics: ["cpu", "ramShare"] },
+          },
+          composer: {},
+        },
+        1,
+      );
+      writeSettingsRecord({ navigatorResourceMetrics: ["memory"] });
+      const { state } = await relaunchStore();
+      return state().overrides.resourceMonitor;
+    }
+
+    // Only a value that differs from the shipped Default is kept (cpu is on
+    // there; memory, ramShare and agentRows are off), which is why each
+    // expectation names just the metrics that moved.
+    it("takes the sidebar chips under the header, where the strip list was never on screen", async () => {
+      // Chips are memory alone: memory on, the shipped cpu and processes off,
+      // and the strip's ramShare is not carried.
+      expect(await monitorFor("header")).toEqual({
+        cpu: false,
+        memory: true,
+        processes: false,
+        agentRows: true,
+      });
+    });
+
+    it("keeps the strip list under the status bar", async () => {
+      // The strip list is cpu and ramShare, so the chips' memory is ignored.
+      expect(await monitorFor("status-bar")).toEqual({
+        processes: false,
+        ramShare: true,
+        agentRows: true,
+      });
+    });
   });
 
   it("produces no overrides for a v1 record already sitting on its own shipped defaults", async () => {

@@ -13,9 +13,7 @@ import type {
   InterviewBlock,
   ParsedTaskTodoPersisted,
   PlanAction,
-  PlanBlock,
   PlanStep,
-  ProviderNoticeMetadata,
   ToolInputDetail,
   TodoItem,
   WorkflowActivityEntry,
@@ -33,8 +31,26 @@ import {
   parseTaskTodoToolPayloads,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
+import type {
+  OpenContentBlock,
+  OpenPlanBlock,
+  OpenProviderNoticeMetadata,
+  OpenRuntimeEvent,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
+// TWO signatures on every exported block function below, one body. The host
+// feeds closed records and gets closed records back; a `chat.subscribe@1.22`
+// client feeds open ones (`open-harness-wire.ts`) - a `plan.delta` from a
+// harness it cannot name becomes a plan block naming it - and gets open ones
+// back. The body is typed open, and the closed signature is sound because the
+// body never introduces a harness id its input did not carry: every id it
+// writes into a block is read off the event or the block beside it.
 export interface TurnContentState {
   readonly blocks: ContentBlock[];
+  readonly blocksVersion: number;
+}
+export interface OpenTurnContentState {
+  readonly blocks: OpenContentBlock[];
   readonly blocksVersion: number;
 }
 
@@ -42,13 +58,13 @@ export interface TurnContentState {
  * Finds a block by ID and type using a type predicate callback,
  * returning a narrowed result without any assertion.
  */
-function findBlockOfType<T extends ContentBlock["type"]>(
-  blocks: ContentBlock[],
+function findBlockOfType<T extends OpenContentBlock["type"]>(
+  blocks: OpenContentBlock[],
   blockId: string,
   type: T,
-): Extract<ContentBlock, { type: T }> | undefined {
+): Extract<OpenContentBlock, { type: T }> | undefined {
   return blocks.find(
-    (b): b is Extract<ContentBlock, { type: T }> =>
+    (b): b is Extract<OpenContentBlock, { type: T }> =>
       b.blockId === blockId && b.type === type,
   );
 }
@@ -65,10 +81,10 @@ function findBlockOfType<T extends ContentBlock["type"]>(
  * losing the other.
  */
 function replaceBlock(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   blockId: string,
-  updated: ContentBlock,
-): ContentBlock[] {
+  updated: OpenContentBlock,
+): OpenContentBlock[] {
   return blocks.map((b) =>
     b.blockId === blockId && b.type === updated.type ? updated : b,
   );
@@ -141,10 +157,10 @@ function runtimeSettlementId(
 }
 
 function applyRuntimeInterviewSettlement(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   event: InterviewResolvedEvent | InterviewErroredEvent,
   settlement: InterviewSettlement,
-): ContentBlock[] {
+): OpenContentBlock[] {
   const existing = findBlockOfType(blocks, event.blockId, "interview");
   // A settlement can arrive for a block this accumulator never saw requested
   // (a resumed session, a detached interview whose request block was trimmed).
@@ -218,7 +234,7 @@ export function resolveFinalizedActionStatus(
 // `resolveFinalizedActionStatus`).
 export function finalizeStatusForTerminalEvent(
   event: Extract<
-    RuntimeEvent,
+    OpenRuntimeEvent,
     { type: "turn.completed" | "turn.stopped" | "turn.interrupted" }
   >,
 ): FinalizedActionStatus {
@@ -251,7 +267,17 @@ export function finalizeStreamingActionBlocks(
   blocks: ContentBlock[],
   timestamp: number,
   actionStatus: FinalizedActionStatus,
-): ContentBlock[] {
+): ContentBlock[];
+export function finalizeStreamingActionBlocks(
+  blocks: OpenContentBlock[],
+  timestamp: number,
+  actionStatus: FinalizedActionStatus,
+): OpenContentBlock[];
+export function finalizeStreamingActionBlocks(
+  blocks: OpenContentBlock[],
+  timestamp: number,
+  actionStatus: FinalizedActionStatus,
+): OpenContentBlock[] {
   let hasUpdates = false;
 
   const finalizedBlocks = blocks.map((block) => {
@@ -326,7 +352,15 @@ export function finalizeStreamingActionBlocks(
 export function reopenStreamingSubagentBlocks(
   before: ContentBlock[],
   finalized: ContentBlock[],
-): ContentBlock[] {
+): ContentBlock[];
+export function reopenStreamingSubagentBlocks(
+  before: OpenContentBlock[],
+  finalized: OpenContentBlock[],
+): OpenContentBlock[];
+export function reopenStreamingSubagentBlocks(
+  before: OpenContentBlock[],
+  finalized: OpenContentBlock[],
+): OpenContentBlock[] {
   if (finalized === before) return finalized;
   const streamingDetachedIds = streamingDetachedBlockIds(before);
   if (streamingDetachedIds.size === 0) return finalized;
@@ -339,7 +373,7 @@ export function reopenStreamingSubagentBlocks(
 }
 
 function streamingDetachedBlockIds(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
 ): ReadonlySet<string> {
   const ids = new Set(
     blocks
@@ -371,14 +405,14 @@ function streamingDetachedBlockIds(
 }
 
 function finalizeBlock(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   event: {
     readonly blockId: string;
     readonly timestamp: number;
     readonly parentBlockId?: string | null;
   },
   type: "text" | "reasoning",
-): ContentBlock[] {
+): OpenContentBlock[] {
   const existing = findBlockOfType(blocks, event.blockId, type);
   if (!existing) {
     return blocks;
@@ -455,7 +489,7 @@ function makeSubAgentBlock(fields: {
   spawnToolCallId: string | null;
   stopped: boolean;
   workflowMeta: WorkflowMeta | null;
-}): Extract<ContentBlock, { type: "subagent" }> {
+}): Extract<OpenContentBlock, { type: "subagent" }> {
   return { type: "subagent", ...fields };
 }
 
@@ -558,19 +592,19 @@ function normalizePlanAction(action: RuntimePlanAction): PlanAction {
 }
 
 function findPlanBlock(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   blockId: string,
   planId: string,
-): PlanBlock | undefined {
+): OpenPlanBlock | undefined {
   return blocks.find(
-    (block): block is PlanBlock =>
+    (block): block is OpenPlanBlock =>
       block.type === "plan" &&
       (block.blockId === blockId || block.planId === planId),
   );
 }
 
 function statusForPlanStatus(
-  planStatus: PlanBlock["planStatus"],
+  planStatus: OpenPlanBlock["planStatus"],
 ): "streaming" | "completed" {
   return planStatus === "drafting" ? "streaming" : "completed";
 }
@@ -580,19 +614,19 @@ function makePlanBlock(fields: {
   status: "streaming" | "completed";
   timestamp: number;
   parentBlockId: string | null;
-  planStatus: PlanBlock["planStatus"];
+  planStatus: OpenPlanBlock["planStatus"];
   planId: string;
-  source: PlanBlock["source"];
+  source: OpenPlanBlock["source"];
   title: string | null;
   summary: string | null;
   markdownPreview: string;
-  fullContentRef: PlanBlock["fullContentRef"];
+  fullContentRef: OpenPlanBlock["fullContentRef"];
   steps: PlanStep[];
   actions: PlanAction[];
   approvalId: string | null;
   supersededByPlanId: string | null;
   metadata: Record<string, unknown> | null;
-}): PlanBlock {
+}): OpenPlanBlock {
   return {
     type: "plan",
     harnessId: fields.source.harnessId,
@@ -601,7 +635,7 @@ function makePlanBlock(fields: {
 }
 
 function findResolvedApprovalDecision(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   approvalId: string | null,
 ): PersistenceApprovalDecision | undefined {
   if (approvalId === null) return undefined;
@@ -610,10 +644,10 @@ function findResolvedApprovalDecision(
 }
 
 function applyApprovalDecisionToPlan(
-  block: PlanBlock,
+  block: OpenPlanBlock,
   decision: PersistenceApprovalDecision,
   timestamp: number,
-): PlanBlock {
+): OpenPlanBlock {
   return {
     ...block,
     status: "completed",
@@ -623,21 +657,21 @@ function applyApprovalDecisionToPlan(
 }
 
 function applyAlreadyResolvedApproval(
-  blocks: ContentBlock[],
-  block: PlanBlock,
+  blocks: OpenContentBlock[],
+  block: OpenPlanBlock,
   timestamp: number,
-): PlanBlock {
+): OpenPlanBlock {
   const decision = findResolvedApprovalDecision(blocks, block.approvalId);
   if (decision === undefined) return block;
   return applyApprovalDecisionToPlan(block, decision, timestamp);
 }
 
 function updatePlansForApprovalResolution(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   approvalId: string,
   decision: PersistenceApprovalDecision,
   timestamp: number,
-): ContentBlock[] {
+): OpenContentBlock[] {
   let hasUpdates = false;
   const updatedBlocks = blocks.map((block) => {
     if (block.type !== "plan" || block.approvalId !== approvalId) return block;
@@ -647,7 +681,10 @@ function updatePlansForApprovalResolution(
   return hasUpdates ? updatedBlocks : blocks;
 }
 
-function plansShareSupersedeScope(left: PlanBlock, right: PlanBlock): boolean {
+function plansShareSupersedeScope(
+  left: OpenPlanBlock,
+  right: OpenPlanBlock,
+): boolean {
   if (left.harnessId !== right.harnessId) return false;
   if (left.source.kind !== right.source.kind) return false;
   if (left.source.sessionId !== null && right.source.sessionId !== null) {
@@ -661,10 +698,10 @@ function plansShareSupersedeScope(left: PlanBlock, right: PlanBlock): boolean {
 }
 
 function supersedeActivePeerPlans(
-  blocks: ContentBlock[],
-  current: PlanBlock,
+  blocks: OpenContentBlock[],
+  current: OpenPlanBlock,
   timestamp: number,
-): ContentBlock[] {
+): OpenContentBlock[] {
   if (
     current.planStatus !== "ready" &&
     current.planStatus !== "awaiting_approval"
@@ -699,11 +736,11 @@ function supersedeActivePeerPlans(
 }
 
 function replaceAndSupersedePlanBlock(
-  blocks: ContentBlock[],
+  blocks: OpenContentBlock[],
   blockId: string,
-  updated: PlanBlock,
+  updated: OpenPlanBlock,
   timestamp: number,
-): ContentBlock[] {
+): OpenContentBlock[] {
   const replaced = replaceBlock(blocks, blockId, updated);
   return supersedeActivePeerPlans(replaced, updated, timestamp);
 }
@@ -718,7 +755,15 @@ export function createTurnContentState(): TurnContentState {
 export function accumulateTurnContent(
   state: TurnContentState,
   event: RuntimeEvent,
-): TurnContentState {
+): TurnContentState;
+export function accumulateTurnContent(
+  state: OpenTurnContentState,
+  event: OpenRuntimeEvent,
+): OpenTurnContentState;
+export function accumulateTurnContent(
+  state: OpenTurnContentState,
+  event: OpenRuntimeEvent,
+): OpenTurnContentState {
   const blocks = accumulateEvent(state.blocks, event);
   if (blocks === state.blocks) return state;
   return {
@@ -730,7 +775,15 @@ export function accumulateTurnContent(
 export function accumulateEvent(
   blocks: ContentBlock[],
   event: RuntimeEvent,
-): ContentBlock[] {
+): ContentBlock[];
+export function accumulateEvent(
+  blocks: OpenContentBlock[],
+  event: OpenRuntimeEvent,
+): OpenContentBlock[];
+export function accumulateEvent(
+  blocks: OpenContentBlock[],
+  event: OpenRuntimeEvent,
+): OpenContentBlock[] {
   switch (event.type) {
     case "session.created":
     case "session.resumed":
@@ -831,7 +884,7 @@ export function accumulateEvent(
       // the rendered fields and fallback text - not append-only like
       // `text.delta` - so a later `showBufferingUi` update or terminal
       // completion overwrites the prior rendering in place.
-      const providerNotice: ProviderNoticeMetadata = {
+      const providerNotice: OpenProviderNoticeMetadata = {
         harnessId: event.harnessId,
         noticeKind: event.noticeKind,
         tone: event.tone,
@@ -932,6 +985,8 @@ export function accumulateEvent(
           type: "tool_call",
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
@@ -970,6 +1025,10 @@ export function accumulateEvent(
           // that carried it, and a re-completion without one keeps it.
           agentMessageReceipt:
             event.agentMessageReceipt ?? existing.agentMessageReceipt,
+          // The host's page / MCP App stamps (`chat.subscribe@1.22`): identity
+          // the completion established, kept by a re-completion without them.
+          page: event.page ?? existing.page,
+          mcpApp: event.mcpApp ?? existing.mcpApp,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
@@ -1003,6 +1062,8 @@ export function accumulateEvent(
           agentMessageSend: event.agentMessageSend,
           managedCommand: event.managedCommand ?? null,
           agentMessageReceipt: event.agentMessageReceipt ?? null,
+          page: event.page ?? null,
+          mcpApp: event.mcpApp ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
@@ -1041,6 +1102,8 @@ export function accumulateEvent(
           type: "tool_call",
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           blockId: event.blockId,
           status: "errored",
           timestamp: event.timestamp,
@@ -1095,7 +1158,7 @@ export function accumulateEvent(
 
     case "approval.resolved": {
       const decision = normalizeApprovalDecision(event.decision);
-      let blocksWithApproval: ContentBlock[];
+      let blocksWithApproval: OpenContentBlock[];
       const existing = findBlockOfType(blocks, event.blockId, "approval");
       if (existing) {
         const updated = {

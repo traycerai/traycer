@@ -36,7 +36,7 @@ afterEach(reset);
 const PROVIDER = DEFAULT_ARRANGEMENT.usageProviders[0];
 
 describe("layoutModified", () => {
-  it("tracks a value pick, an arrangement move and an apply, each independently", () => {
+  it("tracks a value pick and an apply, and never an arrangement move (T5)", () => {
     expect(layoutModified(getLayoutSnapshot())).toBe(false);
 
     useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
@@ -49,7 +49,8 @@ describe("layoutModified", () => {
     useLayoutStore
       .getState()
       .setArrangement({ ...DEFAULT_ARRANGEMENT, sidebarSide: "right" });
-    expect(layoutModified(getLayoutSnapshot())).toBe(true);
+    // A preset never moves anything, so it cannot put this back either.
+    expect(layoutModified(getLayoutSnapshot())).toBe(false);
 
     useLayoutStore.getState().setArrangement(DEFAULT_ARRANGEMENT);
     expect(layoutModified(getLayoutSnapshot())).toBe(false);

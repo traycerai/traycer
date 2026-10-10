@@ -99,6 +99,43 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["plugin", "plugins", "extension", "marketplace"],
   },
+  // The Model list group in each provider's CLI & Args tab. Host-gated (both
+  // `config.catalog.*` methods at 1.1), so it lands at the top of the page like
+  // the other region groups, and its two rows fold into it.
+  modelList: {
+    kind: "group",
+    search: { anchor: null },
+    label: "Model list",
+    description: "How long to wait for a provider's model list.",
+    breadcrumb: "Providers",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "model list timeout",
+      "timeout",
+      "model picker",
+      "slow",
+      "wait",
+      "catalog",
+    ],
+  },
+  modelListTimeout: {
+    kind: "row",
+    group: "modelList",
+    search: { contributesTo: "modelList" },
+    label: "Timeout",
+    description: "How long to wait for the model list.",
+    availableWhen: alwaysAvailable,
+    keywords: ["seconds", "probe timeout"],
+  },
+  modelListSameForAll: {
+    kind: "row",
+    group: "modelList",
+    search: { contributesTo: "modelList" },
+    label: "Same for all providers",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["shared", "every provider", "all providers"],
+  },
   environmentVariables: {
     kind: "group",
     search: { anchor: null },

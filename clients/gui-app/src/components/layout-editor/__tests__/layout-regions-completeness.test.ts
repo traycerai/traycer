@@ -15,9 +15,11 @@ import { SURFACE_GROUPS } from "@/components/layout-editor/regions/region-gramma
 import {
   positionAxisChanged,
   positionRowChanged,
+  revertOrderGroup,
   revertPositionAxis,
   revertPositionRow,
 } from "@/components/layout-editor/regions/region-position-rows";
+import type { LayoutFacts } from "@/components/layout-editor/regions/row-availability";
 import {
   type LayoutOverrides,
   type LayoutValues,
@@ -37,6 +39,9 @@ import { DEFAULT_LAYOUT_SNAPSHOT } from "@/stores/layout/layout-store";
  * - is a compile error by construction (C-20), so it is deliberately not
  * tested here.
  */
+
+/** Voice input on, so no state word reads "Voice input off" unless a test asks. */
+const FACTS: LayoutFacts = { voiceInputEnabled: true };
 
 /** The state words the vocabulary allows (L-33, L-47). Nothing else may appear. */
 const STATE_WORDS: ReadonlyArray<string> = [
@@ -59,6 +64,11 @@ const STATE_WORDS: ReadonlyArray<string> = [
   "Text",
   "Ring and number",
   "Ring only",
+  // The pinned breakdown never reads the chip's style (C1), so it is named
+  // instead of one.
+  "Pinned",
+  // A shown microphone with General > Voice input off (C4).
+  "Voice input off",
   "Bars",
   "Bars and text",
   // Tool activity and Thinking's disclosure default (audit R1, R3).
@@ -78,12 +88,15 @@ const HEADER_KEYS: ReadonlySet<string> = new Set(["shown", "size"]);
  * `resourceMonitor.agentRows` tunes the SIDEBAR (the readings on each agent
  * and terminal row), not the monitor itself (G7): its control now lives on
  * `ResourceReadingsRow`, a Sidebar-surface row rather than one of this
- * region's own grammar rows.
+ * region's own grammar rows. `model.toolbarStyle` styles the whole composer
+ * toolbar rather than the model chip (C3), so it is the Composer area's
+ * Toolbar style row (`AREA_ROWS`), though its value is stored on Model.
  */
 const SURFACE_OWNED_LEAVES: Readonly<
   Partial<Record<RegionId, ReadonlyArray<string>>>
 > = {
   resourceMonitor: ["agentRows"],
+  model: ["toolbarStyle"],
 };
 
 const EVERY_REGION_HIDDEN: LayoutOverrides = {
@@ -108,6 +121,7 @@ const EVERY_REGION_HIDDEN: LayoutOverrides = {
   railArtifacts: { shown: "hidden" },
   railGitDiff: { shown: "hidden" },
   railPullRequests: { shown: "hidden" },
+  railFiles: { shown: "hidden" },
   railFileTree: { shown: "hidden" },
   railSharing: { shown: "hidden" },
   railComments: { shown: "hidden" },
@@ -132,7 +146,7 @@ const MOVED_ARRANGEMENT = {
 
 /** Whether `query` finds `id` through Find a setting - by name, option, state or keyword. */
 function findsRegion(query: string, id: RegionId): boolean {
-  return layoutFindResults(query, DEFAULT_LAYOUT_SNAPSHOT).some(
+  return layoutFindResults(query, DEFAULT_LAYOUT_SNAPSHOT, FACTS).some(
     (result) => result.region === id,
   );
 }
@@ -157,9 +171,9 @@ function keysReachableFromRows(region: RegionId): ReadonlyArray<string> {
 }
 
 describe("the region registry covers every region", () => {
-  it("lists all twenty-five regions, grouped by surface", () => {
-    expect(LAYOUT_REGION_IDS).toHaveLength(25);
-    expect(new Set(LAYOUT_REGION_IDS).size).toBe(25);
+  it("lists all twenty-six regions, grouped by surface", () => {
+    expect(LAYOUT_REGION_IDS).toHaveLength(26);
+    expect(new Set(LAYOUT_REGION_IDS).size).toBe(26);
     const surfaceOrder = LAYOUT_REGION_IDS.map(
       (id) => regionFacts(id).surface,
     ).map((surface) =>
@@ -279,7 +293,7 @@ describe("state words", () => {
     for (const id of LAYOUT_REGION_IDS) {
       for (const values of REACHABLE_VALUES) {
         for (const arrangement of [DEFAULT_ARRANGEMENT, MOVED_ARRANGEMENT]) {
-          const word = regionStateWord(id, values, arrangement);
+          const word = regionStateWord(id, values, arrangement, FACTS);
           expect(STATE_WORDS, `${id}: ${word}`).toContain(word);
         }
       }
@@ -291,7 +305,7 @@ describe("state words", () => {
     for (const id of LAYOUT_REGION_IDS) {
       // Access and Model have no Shown (G6) - never reads Hidden.
       if (!("shown" in SHIPPED_DEFAULT_VALUES[id])) continue;
-      expect(regionStateWord(id, hidden, DEFAULT_ARRANGEMENT), id).toBe(
+      expect(regionStateWord(id, hidden, DEFAULT_ARRANGEMENT, FACTS), id).toBe(
         "Hidden",
       );
     }
@@ -301,22 +315,24 @@ describe("state words", () => {
     const values = PRESET_VALUES.default;
     // Both halves, because both are the answer to "where is it" (L-156): a
     // row that said only "Tab strip" left the end it is on unsaid.
-    expect(regionStateWord("usageLimits", values, DEFAULT_ARRANGEMENT)).toBe(
-      "Status bar, left",
-    );
-    expect(regionStateWord("usageLimits", values, MOVED_ARRANGEMENT)).toBe(
-      "Tab strip, right",
-    );
-    expect(regionStateWord("minimap", values, DEFAULT_ARRANGEMENT)).toBe(
+    expect(
+      regionStateWord("usageLimits", values, DEFAULT_ARRANGEMENT, FACTS),
+    ).toBe("Status bar, left");
+    expect(
+      regionStateWord("usageLimits", values, MOVED_ARRANGEMENT, FACTS),
+    ).toBe("Tab strip, right");
+    expect(regionStateWord("minimap", values, DEFAULT_ARRANGEMENT, FACTS)).toBe(
       "Right",
     );
-    expect(regionStateWord("minimap", values, MOVED_ARRANGEMENT)).toBe("Left");
-    expect(
-      regionStateWord("resourceMonitor", values, DEFAULT_ARRANGEMENT),
-    ).toBe("Status bar, right");
-    expect(regionStateWord("resourceMonitor", values, MOVED_ARRANGEMENT)).toBe(
-      "Tab strip, left",
+    expect(regionStateWord("minimap", values, MOVED_ARRANGEMENT, FACTS)).toBe(
+      "Left",
     );
+    expect(
+      regionStateWord("resourceMonitor", values, DEFAULT_ARRANGEMENT, FACTS),
+    ).toBe("Status bar, right");
+    expect(
+      regionStateWord("resourceMonitor", values, MOVED_ARRANGEMENT, FACTS),
+    ).toBe("Tab strip, left");
   });
 
   it("distinguishes the density readings a preset produces", () => {
@@ -325,6 +341,7 @@ describe("state words", () => {
         "runningAgents",
         PRESET_VALUES.compact,
         DEFAULT_ARRANGEMENT,
+        FACTS,
       ),
     ).toBe("Chip");
     expect(
@@ -332,16 +349,23 @@ describe("state words", () => {
         "runningAgents",
         PRESET_VALUES.default,
         DEFAULT_ARRANGEMENT,
+        FACTS,
       ),
     ).toBe("Full row");
     expect(
-      regionStateWord("model", PRESET_VALUES.detailed, DEFAULT_ARRANGEMENT),
+      regionStateWord(
+        "model",
+        PRESET_VALUES.detailed,
+        DEFAULT_ARRANGEMENT,
+        FACTS,
+      ),
     ).toBe("Bars and text");
     expect(
       regionStateWord(
         "contextUsage",
         PRESET_VALUES.compact,
         DEFAULT_ARRANGEMENT,
+        FACTS,
       ),
     ).toBe("Ring only");
     expect(
@@ -349,8 +373,28 @@ describe("state words", () => {
         "railPullRequests",
         PRESET_VALUES.default,
         DEFAULT_ARRANGEMENT,
+        FACTS,
       ),
     ).toBe("Auto");
+  });
+
+  it("says Voice input off for a shown microphone, and Hidden for a hidden one whatever Voice input says", () => {
+    const voiceOff: LayoutFacts = { voiceInputEnabled: false };
+    const micHidden = effectiveLayoutValues("default", {
+      mic: { shown: "hidden" },
+    });
+    const micShown = PRESET_VALUES.default;
+    expect(
+      regionStateWord("mic", micShown, DEFAULT_ARRANGEMENT, voiceOff),
+    ).toBe("Voice input off");
+    expect(regionStateWord("mic", micShown, DEFAULT_ARRANGEMENT, FACTS)).toBe(
+      "Shown",
+    );
+    for (const facts of [voiceOff, FACTS]) {
+      expect(
+        regionStateWord("mic", micHidden, DEFAULT_ARRANGEMENT, facts),
+      ).toBe("Hidden");
+    }
   });
 });
 
@@ -428,7 +472,12 @@ describe("the Position row against the default arrangement (L-57)", () => {
     expect(reverted.usageHost).toBe("header");
     expect(reverted.dock).toEqual([...DEFAULT_ARRANGEMENT.dock].reverse());
 
-    const dockBack = revertPositionRow(moved, "background");
+    // An order is a fact about the LIST, not about one row in it: a region's
+    // own revert leaves its place in the dock where it is, and the list
+    // header's revert is the one thing that puts the whole group back.
+    const dockRow = revertPositionRow(moved, "background");
+    expect(dockRow.dock).toEqual([...DEFAULT_ARRANGEMENT.dock].reverse());
+    const dockBack = revertOrderGroup(moved, "dock");
     expect(dockBack.dock).toEqual(DEFAULT_ARRANGEMENT.dock);
     expect(dockBack.minimapSide).toBe("left");
 

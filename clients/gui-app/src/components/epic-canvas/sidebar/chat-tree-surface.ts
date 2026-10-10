@@ -20,9 +20,8 @@ export interface ChatTreeSurface {
    * Runs when a row action has finished with the surface - the switcher sheet
    * closes here, so whatever the user picked takes the screen.
    *
-   * Not only tile opens. A row's tap calls it after opening the tile; "New
-   * child agent" calls it before opening the modal, which opens no tile at all.
-   * What the two share is that the surface has served its purpose and should
+   * A row's tap calls it after opening the tile. What a tap and every other
+   * row action share is that the surface has served its purpose and should
    * get out of the way, and that is the property being named - an action that
    * dismisses from one control and not another is a divergence, not a feature.
    *
@@ -51,6 +50,12 @@ export interface ChatTreeSurface {
    * renders none of its own.
    */
   readonly searchQuery: string | null;
+  /**
+   * "New child agent" on this surface: create the agent and show it, in place
+   * of the New Conversation modal the desktop opens. The phone sheet creates an
+   * empty chat (`useSwitcherNewChat`) and closes once it is on screen.
+   */
+  readonly startNewChat: (parentId: string | null) => void;
 }
 
 export const ChatTreeSurfaceContext = createContext<ChatTreeSurface | null>(

@@ -2263,12 +2263,12 @@ function ChatNodeShellBody(
   const childCreateSurface = useChatTreeSurface();
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
-    // Same dismiss the tap path makes, and for the same reason root create
-    // already makes it: the modal opens over the surface, and without this the
-    // sheet is still there when the modal closes. Root and child create must
-    // answer this identically - an asymmetry here is a divergence, not a
-    // feature.
-    if (childCreateSurface !== null) childCreateSurface.onRowActivated();
+    // The surface (the phone sheet) creates the agent itself, exactly as its
+    // root "+" does - root and child create must answer identically.
+    if (childCreateSurface !== null) {
+      childCreateSurface.startNewChat(nodeId);
+      return;
+    }
     openNewConversationModal({
       epicId,
       tabId,

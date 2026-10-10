@@ -64,6 +64,8 @@ export function ZoomableImageDialogBody(props: {
         onTransformChange={handleTransformChange}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />
       <div className="absolute bottom-safe-bottom-gutter right-3 flex flex-wrap items-center justify-end gap-2">
         <div

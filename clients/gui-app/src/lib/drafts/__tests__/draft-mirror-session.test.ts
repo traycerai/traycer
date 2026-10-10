@@ -10,7 +10,7 @@ import type {
   DraftDocument,
   DraftWrite,
   DraftsListResponse,
-  DraftsSubscribeServerFrameV10,
+  DraftsSubscribeServerFrameV11,
 } from "@traycer/protocol/host";
 import {
   DraftMirrorSession,
@@ -145,7 +145,7 @@ function unsupportedError(method: string): HostRpcError {
 
 function createStreamHarness(): {
   readonly client: DraftsStreamSubscribe;
-  readonly emit: (frame: DraftsSubscribeServerFrameV10) => void;
+  readonly emit: (frame: DraftsSubscribeServerFrameV11) => void;
   /** Drive the session's own status handler - how a reconnect is staged. */
   readonly emitStatus: (status: StreamConnectionStatus) => void;
   readonly sent: Array<{ readonly kind: string; readonly draftIds?: unknown }>;

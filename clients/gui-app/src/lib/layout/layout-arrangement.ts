@@ -6,7 +6,6 @@ import {
   DEFAULT_RAIL_DIVIDER_SEQ,
   RAIL_REGION_IDS,
   railDividerId,
-  MAX_RAIL_STACK_MEMBERS,
   areRailsEqual,
   normalizeRail,
   railRegionForLeftPanelId,
@@ -608,30 +607,6 @@ export function statusBarHostsAnyRegion(
   );
 }
 
-/**
- * Whether the status bar strip is on screen: the ONE answer to that question,
- * read by the shell that mounts it and by every control that only makes sense
- * while it is mounted.
- *
- * A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
- * same way. Mobile ignores both hosts entirely and answers with `mobileFooter`
- * (L-51), which is off by default - and it ignores them for the CONTENTS too
- * (L-162): a footer switched on draws both readings whichever bar each of
- * them names, because the phone has one bar and a footer that honoured a
- * header pick would silently drop a readout. Its ends are fixed as well -
- * usage left, resources right - since an end picked for a desktop bar says
- * nothing about the phone's. The picks are kept, not overridden, so the
- * desktop window they were made in still honours them.
- */
-export function statusBarShown(
-  arrangement: LayoutArrangement,
-  isMobileViewport: boolean,
-): boolean {
-  return isMobileViewport
-    ? arrangement.mobileFooter
-    : statusBarHostsAnyRegion(arrangement);
-}
-
 // ── The tab strip's placement (S-01, S-02, S-05, S-25) ──────────────────────
 
 /**
@@ -1024,13 +999,13 @@ function carriedMembers(
 
 /**
  * What a drop onto the middle of a rail icon would do (L-181): `join` adds the
- * carried panels to the target's stack (or makes a stack with it), `full` is
- * refused because the result would pass {@link MAX_RAIL_STACK_MEMBERS}, and
- * `same` does nothing because the carried panels are already stacked with the
- * target. The rail draws the join cue, a refusal cue, or nothing, from this
- * answer, and the writer obeys the same one.
+ * carried panels to the target's stack (or makes a stack with it), and `same`
+ * does nothing because the carried panels are already stacked with the
+ * target. A stack has no cap, so no join is refused for its size. The rail
+ * draws the join cue or nothing from this answer, and the writer obeys the
+ * same one.
  */
-export type RailStackJoin = "join" | "full" | "same";
+export type RailStackJoin = "join" | "same";
 
 export function railStackJoin(
   rail: ReadonlyArray<RailEntry>,
@@ -1045,10 +1020,7 @@ export function railStackJoin(
     carry,
   );
   const target = railStackOf(rail, targetId)?.members ?? [targetId];
-  if (carried.some((member) => target.includes(member))) return "same";
-  return target.length + carried.length > MAX_RAIL_STACK_MEMBERS
-    ? "full"
-    : "join";
+  return carried.some((member) => target.includes(member)) ? "same" : "join";
 }
 
 /**
@@ -1127,9 +1099,8 @@ export function stackRailPanels(
 /**
  * The panel directly below this one's stack (or below this panel, standing
  * alone), when the list's "Stack with the panel below" can join the two
- * (L-168, L-181): this panel is the last of its stack, the next entry is a
- * panel rather than a divider, and the two stacks together stay within
- * {@link MAX_RAIL_STACK_MEMBERS}. `null` otherwise.
+ * (L-168, L-181): this panel is the last of its stack and the next entry is a
+ * panel rather than a divider. `null` otherwise.
  */
 export function railPanelToStackBelow(
   rail: ReadonlyArray<RailEntry>,
@@ -1142,12 +1113,7 @@ export function railPanelToStackBelow(
   const [, blockEnd] = railBlockAt(rail, index);
   if (blockEnd !== index) return null;
   const below = rail.at(index + 1);
-  if (below === undefined || below.kind !== "panel") return null;
-  const count = (id: RailRegionId): number =>
-    railStackOf(rail, id)?.members.length ?? 1;
-  return count(regionId) + count(below.id) <= MAX_RAIL_STACK_MEMBERS
-    ? below.id
-    : null;
+  return below === undefined || below.kind !== "panel" ? null : below.id;
 }
 
 /**

@@ -597,18 +597,20 @@ describe("optional-method capability negotiation", () => {
     // widens it to [1..6] on all three. It is not a restatement of `major`:
     // `major` is the canonical one a peer picks by default, `supportedMajors`
     // is the set it can still be talked down to.
+    // `commandcode` then opened major 7 over the frozen 6.0 on all three, with
+    // parse-or-refuse v7->v6 bridges, so the installed set is [1..7].
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 6,
+      major: 7,
       minor: 0,
-      supportedMajors: [1, 2, 3, 4, 5, 6],
+      supportedMajors: [1, 2, 3, 4, 5, 6, 7],
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 6, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6] });
+    ).toEqual({ major: 7, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6, 7] });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 6,
+      major: 7,
       minor: 0,
-      supportedMajors: [1, 2, 3, 4, 5, 6],
+      supportedMajors: [1, 2, 3, 4, 5, 6, 7],
     });
   });
 

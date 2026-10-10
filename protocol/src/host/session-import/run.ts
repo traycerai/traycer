@@ -53,6 +53,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreAntigravity,
+  guiHarnessIdSchemaPreCommandCode,
   permissionModeSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -218,6 +219,24 @@ export const sessionImportRunServerFrameSchemaPreAntigravity = lazySchema(() =>
   ]),
 );
 
+/**
+ * Frozen server-frame union as the 1.5.0 tags shipped @1.1 and @1.2: the
+ * `progress` arm's harness pinned to the twenty-one ids those peers
+ * strict-decode (through Antigravity). The host withholds a `progress` frame
+ * naming a later harness from a <1.3 subscriber, as it already withholds an
+ * Antigravity one from @1.0.
+ */
+export const sessionImportRunServerFrameSchemaPreCommandCode = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    sessionImportRunStartedFrameSchema,
+    sessionImportRunProgressFrameSchema.extend({
+      harness: guiHarnessIdSchemaPreCommandCode,
+    }),
+    sessionImportRunCompleteFrameSchema,
+    sessionImportRunPongFrameSchema,
+  ]),
+);
+
 export const sessionImportRunClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -250,7 +269,7 @@ export const sessionImportRunV11 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: sessionImportRunOpenRequestSchemaPreAuto,
-  serverFrameSchema: sessionImportRunServerFrameSchema,
+  serverFrameSchema: sessionImportRunServerFrameSchemaPreCommandCode,
   clientFrameSchema: sessionImportRunClientFrameSchema,
 });
 
@@ -280,6 +299,18 @@ export const sessionImportRunV11 = defineStreamRpcContract({
 export const sessionImportRunV12 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: sessionImportRunOpenRequestSchema,
+  serverFrameSchema: sessionImportRunServerFrameSchemaPreCommandCode,
+  clientFrameSchema: sessionImportRunClientFrameSchema,
+});
+
+/**
+ * @1.3 is the first minor whose `progress` frames may name a harness added
+ * after 1.5.0 (Command Code is the first). No other shape delta over @1.2.
+ */
+export const sessionImportRunV13 = defineStreamRpcContract({
+  method: "sessionImport.run",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: sessionImportRunOpenRequestSchema,
   serverFrameSchema: sessionImportRunServerFrameSchema,
   clientFrameSchema: sessionImportRunClientFrameSchema,

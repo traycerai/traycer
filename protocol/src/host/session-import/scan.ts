@@ -37,6 +37,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreAntigravity,
+  guiHarnessIdSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   sessionImportCandidateSchema,
@@ -185,6 +186,56 @@ export const sessionImportScanServerFrameSchemaPreAntigravity = lazySchema(() =>
   ]),
 );
 
+/**
+ * Frozen server-frame shape as the 1.5.0 tags shipped @1.2: the live union
+ * with every harness slot pinned to the twenty-one ids those peers
+ * strict-decode (through Antigravity). Same mechanism as the pre-Antigravity
+ * copy above, one release later: the host must keep a later id out of every
+ * frame it sends a <1.3 subscriber.
+ */
+const sessionImportCandidateSchemaPreCommandCode = lazySchema(() =>
+  sessionImportCandidateSchema.extend({
+    harness: guiHarnessIdSchemaPreCommandCode,
+  }),
+);
+
+const sessionImportGroupSchemaPreCommandCode = lazySchema(() =>
+  sessionImportGroupSchema.extend({
+    sessions: z.array(sessionImportCandidateSchemaPreCommandCode),
+  }),
+);
+
+export const sessionImportScanServerFrameSchemaPreCommandCode = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("started"),
+      providers: z.array(guiHarnessIdSchemaPreCommandCode),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("group"),
+      group: sessionImportGroupSchemaPreCommandCode,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("providerFailed"),
+      harness: guiHarnessIdSchemaPreCommandCode,
+      reason: sessionImportFailureReasonSchema,
+      detail: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("complete"),
+      totals: sessionImportScanTotalsSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
 export const sessionImportScanV10 = defineStreamRpcContract({
   method: "sessionImport.scan",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -215,6 +266,21 @@ export const sessionImportScanV11 = defineStreamRpcContract({
 export const sessionImportScanV12 = defineStreamRpcContract({
   method: "sessionImport.scan",
   schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: sessionImportScanOpenRequestSchema,
+  // Frozen at the harness ids the 1.5.0 tags shipped.
+  serverFrameSchema: sessionImportScanServerFrameSchemaPreCommandCode,
+  clientFrameSchema: sessionImportScanClientFrameSchema,
+});
+
+/**
+ * @1.3 is the first minor whose frames may carry a harness added after 1.5.0
+ * (Command Code is the first). Nothing else changes: the capability signal is
+ * the negotiated minor, and a host must keep such an id out of every frame it
+ * sends a <1.3 subscriber.
+ */
+export const sessionImportScanV13 = defineStreamRpcContract({
+  method: "sessionImport.scan",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: sessionImportScanOpenRequestSchema,
   serverFrameSchema: sessionImportScanServerFrameSchema,
   clientFrameSchema: sessionImportScanClientFrameSchema,

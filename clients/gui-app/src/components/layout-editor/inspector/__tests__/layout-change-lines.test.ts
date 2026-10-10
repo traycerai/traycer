@@ -121,6 +121,82 @@ describe("Tool activity and Thinking read Open and Closed, not a dock row's word
   });
 });
 
+describe("a value stored in another region's bag is named for the row that sets it", () => {
+  it("reads Model's toolbarStyle as the Composer's Toolbar style, in the example's words", () => {
+    const result = lines(
+      snapshotWithOverrides({ model: { toolbarStyle: "bordered" } }),
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].label).toBe("Toolbar style");
+    expect(result[0].current).toBe("Bordered");
+    expect(result[0].baseline).toBe("Default: Flat");
+    expect(result[0].changes.map(changeKey)).toEqual(["toolbarStyle"]);
+  });
+
+  it("reads the Resource monitor's agentRows as the Sidebar's readings row", () => {
+    const result = lines(
+      snapshotWithOverrides({ resourceMonitor: { agentRows: true } }),
+    );
+
+    expect(result.map((line) => line.label)).toEqual([
+      "Readings on agent rows",
+    ]);
+  });
+
+  it("keeps a region's own style line apart from the toolbar's", () => {
+    const result = lines(
+      snapshotWithOverrides({
+        model: { toolbarStyle: "bordered", style: "bars" },
+      }),
+    );
+
+    expect(result.map((line) => line.label).sort()).toEqual([
+      "Model style",
+      "Toolbar style",
+    ]);
+  });
+});
+
+describe("the pinned breakdown's order (C2)", () => {
+  const reordered: LayoutArrangement = {
+    ...DEFAULT_ARRANGEMENT,
+    pinnedContextFieldOrder: [
+      ...DEFAULT_ARRANGEMENT.pinnedContextFieldOrder,
+    ].reverse(),
+  };
+
+  it("is one arrangement line, named for the row that drags it, reverted on its own", () => {
+    const line = arrangementChangeLine({ kind: "pinnedFieldOrder" });
+
+    expect(line.label).toBe("Context usage: Breakdown order");
+    expect(line.current).toBe("Reordered");
+    expect(line.baseline).toBe("Default order");
+    expect(line.changes).toEqual([{ kind: "pinnedFieldOrder" }]);
+  });
+
+  it("is one session line, and its revert goes back to the order the session opened with", () => {
+    const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+    const current = sessionSnapshot("default", {}, reordered);
+
+    const { arrangement } = sessionChangeLines(entry, current);
+
+    expect(arrangement).toEqual([
+      {
+        key: "pinnedFieldOrder",
+        label: "Context usage: Breakdown order",
+        before: null,
+        after: "Reordered",
+        revert: { kind: "changes", changes: [{ kind: "pinnedFieldOrder" }] },
+      },
+    ]);
+    expect(
+      revertSessionLine(current, entry, arrangement[0].revert).arrangement
+        .pinnedContextFieldOrder,
+    ).toEqual(DEFAULT_ARRANGEMENT.pinnedContextFieldOrder);
+  });
+});
+
 describe("arrangementChangeLine - Reading width", () => {
   it("labels the field, its current word and its shipped default", () => {
     const line = arrangementChangeLine({

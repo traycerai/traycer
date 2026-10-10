@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
 import { SAMPLE_LIVE_AGENTS } from "@/components/sample-workspace/sample-workspace-scene";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
-import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import {
   needsYouItemChatId,
@@ -45,8 +44,6 @@ export interface StripTaskGroup {
   readonly tabId: string;
   /** The task, or `null` for the layout editor's sample tab. */
   readonly epicId: string | null;
-  /** The task's live title, which an agent named the same does not repeat. */
-  readonly taskTitle: string | null;
   /** The row is the task in front, so a click opens in its own canvas. */
   readonly active: boolean;
   /** Ghosted: the layout editor pointing at Side tab view in Tabs only. */
@@ -99,7 +96,6 @@ export function useStripTaskGroup(
   const sample = useSampleScene();
   const epicId = tab?.kind === "epic" ? tab.epicId : null;
   const { warm, agents } = useStripTaskAgents(epicId);
-  const taskTitle = useRegisteredEpicTitle(epicId);
   const needsYou = useStripTaskNeedsYou(epicId);
   const [expandedChoice, setExpanded] = useStripTaskExpanded(epicId, active);
   const [viaPointer, setViaPointer] = useState(false);
@@ -180,7 +176,6 @@ export function useStripTaskGroup(
       return {
         tabId: tab.id,
         epicId: null,
-        taskTitle: null,
         active,
         ghost: mode === "preview",
         rows: SAMPLE_LIVE_AGENTS.map((agent) => ({
@@ -199,7 +194,6 @@ export function useStripTaskGroup(
     return {
       tabId: tab.id,
       epicId,
-      taskTitle,
       active,
       ghost: false,
       rows: shown,
@@ -222,7 +216,6 @@ export function useStripTaskGroup(
     mode,
     sample,
     epicId,
-    taskTitle,
     active,
     rows,
     shown,

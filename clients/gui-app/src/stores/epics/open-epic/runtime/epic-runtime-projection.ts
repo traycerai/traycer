@@ -35,6 +35,7 @@ import type {
   ArtifactRoomsSlice,
   ChatsSlice,
   CommentThreadsSlice,
+  FilesSlice,
   EpicProjectedSlices,
   TerminalAgentsSlice,
 } from "../types";
@@ -44,6 +45,7 @@ import {
   EMPTY_ARTIFACT_ROOMS_SLICE,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
+  EMPTY_FILES_SLICE,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "../types";
@@ -198,6 +200,8 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
    * Absence of an artifact key is NOT emptiness - see `CommentThreadsSlice`.
    */
   readonly commentThreads: CommentThreadsSlice;
+  /** The epic's files from the records lane; unserved on every legacy head. */
+  readonly files: FilesSlice;
   readonly snapshotMeta: SnapshotMetaEpic | null;
   readonly snapshotLoaded: boolean;
   /**
@@ -230,6 +234,7 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   // subscribers a fresh reference.
   tuiAgentRetractions: EMPTY_CHAT_RETRACTIONS,
   commentThreads: EMPTY_COMMENT_THREADS_SLICE,
+  files: EMPTY_FILES_SLICE,
   snapshotMeta: null,
   snapshotLoaded: false,
   isDirty: false,

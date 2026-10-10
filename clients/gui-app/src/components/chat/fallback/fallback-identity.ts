@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -489,6 +490,7 @@ export function useFallbackModelCatalogues(
     ReadonlyArray<ModelCatalogueRead>
   >({
     client,
+    responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
     options: {

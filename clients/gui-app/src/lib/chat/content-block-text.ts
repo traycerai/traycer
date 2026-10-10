@@ -1,6 +1,7 @@
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { isRenderableSubAgentBlock } from "./subagent-blocks";
+
+import type { OpenContentBlock } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 const CONTENT_BLOCKS_PREVIEW_MAX_CHARS = 200;
 const CONTENT_BLOCKS_PREVIEW_SOURCE_SCAN_LIMIT = 16_384;
@@ -12,7 +13,7 @@ const WHITESPACE_RE = /\s/;
  * second, fully joined copy of every block only makes the transcript larger.
  */
 export function contentBlocksPreview(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): string {
   if (blocks.length === 0) return "Working...";
   const preview = new ContentBlocksPreviewBuilder();
@@ -92,7 +93,7 @@ function sliceWholeCodePoints(text: string, maxUnits: number): string {
 
 function appendContentBlockPreview(
   preview: ContentBlocksPreviewBuilder,
-  block: ContentBlock,
+  block: OpenContentBlock,
 ): void {
   switch (block.type) {
     case "text": {
@@ -131,7 +132,7 @@ function appendContentBlockPreview(
 }
 
 type StructuredContentBlock = Exclude<
-  ContentBlock,
+  OpenContentBlock,
   { type: "text" | "reasoning" | "tool_call" | "file_change" | "command" }
 >;
 

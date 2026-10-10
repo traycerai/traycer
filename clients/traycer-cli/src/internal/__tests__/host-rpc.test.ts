@@ -30,8 +30,8 @@ import type {
 import type { ZodType } from "zod";
 import {
   agentGetProviderProfileRateLimitsResponseSchema,
-  agentGetProviderProfileRateLimitsResponseSchemaV5,
   agentGetProviderProfileRateLimitsResponseSchemaV6,
+  agentGetProviderProfileRateLimitsResponseSchemaV7,
 } from "@traycer/protocol/host/agent/profiles";
 import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -531,18 +531,19 @@ describe("canonicalResponseSchemaFor", () => {
     expect(canonicalResponseSchemaFor("terminal.list")).toBe(
       listTerminalsResponseSchemaV23,
     );
-    // v6.0, not v5.0: `cli-v1.3.0` shipped the v5.0 line, so
-    // traycerai/traycer#1808 froze it against `providerRateLimitsSchemaV80`
-    // and opened v6.0 over the live union. This pin moving is the intended
-    // consequence of a freeze - what must NOT happen is the call site staying
-    // on v5.0 while this pin moves, which is why the two are asserted apart.
+    // v7.0, not v6.0: the 1.5.0 tags shipped the v6.0 line, so it is frozen
+    // against `providerRateLimitsSchemaV91` and v7.0 is open over the live
+    // union - the same move traycerai/traycer#1808 made one line down for
+    // `cli-v1.3.0`. This pin moving is the intended consequence of a freeze -
+    // what must NOT happen is the call site staying on v6.0 while this pin
+    // moves, which is why the two are asserted apart.
     expect(
       canonicalResponseSchemaFor("agent.getProviderProfileRateLimits"),
-    ).toBe(agentGetProviderProfileRateLimitsResponseSchemaV6);
+    ).toBe(agentGetProviderProfileRateLimitsResponseSchemaV7);
     // And the line the release froze is now demonstrably NOT canonical.
     expect(
       canonicalResponseSchemaFor("agent.getProviderProfileRateLimits"),
-    ).not.toBe(agentGetProviderProfileRateLimitsResponseSchemaV5);
+    ).not.toBe(agentGetProviderProfileRateLimitsResponseSchemaV6);
   });
 });
 
@@ -554,7 +555,7 @@ describe("parseCanonicalHostResponse", () => {
     };
     const parsed = parseCanonicalHostResponse(
       "agent.getProviderProfileRateLimits",
-      agentGetProviderProfileRateLimitsResponseSchemaV6,
+      agentGetProviderProfileRateLimitsResponseSchemaV7,
       value,
     );
     expect(parsed).toEqual(value);

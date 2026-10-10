@@ -4,6 +4,7 @@ import {
   GET_CHAT_RUN_SETTINGS_BATCH_MAX_IDS,
   getChatRunSettingsBatchRequestSchema,
   getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsBatchResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 
 describe("epic.getChatRunSettingsBatch", () => {
@@ -16,11 +17,21 @@ describe("epic.getChatRunSettingsBatch", () => {
     expect(hostRpcRegistry["epic.getChatRunSettingsBatch"][1].latestMinor).toBe(
       0,
     );
+    // `commandcode` opened major 2 over the frozen 1.0, which is why 1.0 binds
+    // the frozen response and 2.0 binds the live one.
+    expect(hostRpcRegistry["epic.getChatRunSettingsBatch"][2].latestMinor).toBe(
+      0,
+    );
+    expect(
+      hostRpcRegistry["epic.getChatRunSettingsBatch"][2].versions[0].contract
+        .responseSchema,
+    ).toBe(getChatRunSettingsBatchResponseSchema);
     expect(hostRpcRegistry["epic.getChatRunSettingsBatch"].degrade).toEqual({
       kind: "unsupported",
     });
     expect(v10.requestSchema).toBe(getChatRunSettingsBatchRequestSchema);
-    expect(v10.responseSchema).toBe(getChatRunSettingsBatchResponseSchema);
+    expect(v10.responseSchema).toBe(getChatRunSettingsBatchResponseSchemaV10);
+    expect(v10.responseSchema).not.toBe(getChatRunSettingsBatchResponseSchema);
   });
 
   it("round-trips a request at the id cap", () => {

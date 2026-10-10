@@ -120,20 +120,24 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
       );
     }
     if (compact) {
-      // The icon already says which metric this is, so the label is dropped.
+      // Compact is the CPU icon alone, as in the top strip: the number is one
+      // hover away, and the icon takes the warning color when CPU runs hot.
+      const { value, unavailableReason } = views[0];
       return (
         <TooltipWrapper
-          label={views[0].unavailableReason}
+          label={unavailableReason ?? (value === null ? null : `CPU ${value}`)}
           side="top"
           sideOffset={6}
           align={undefined}
         >
-          <span className="inline-flex">
-            <CpuReading
-              view={views[0]}
-              cpuPercent={cpuPercent}
-              withLabel={false}
-            />
+          <span
+            className={cn(
+              "inline-flex items-center",
+              cpuWarning && RUNNING_LOW_TEXT_CLASS_NAME,
+            )}
+            data-testid="status-bar-resource-cpu-icon"
+          >
+            {icon}
           </span>
         </TooltipWrapper>
       );
@@ -232,15 +236,13 @@ export function StatusBarMetric(props: {
 }
 
 /**
- * The Compact reading, in every placement: the CPU icon and its percent, in the
+ * The expanded side strip's Compact tile: the CPU icon and "cpu N%", in the
  * warning color from the shared threshold. The percent holds a fixed minimum
- * width, so its button does not change width as the value moves; the expanded
- * strip's tile also says "cpu" before it.
+ * width, so the tile does not change width as the value moves.
  */
 export function CpuReading(props: {
   readonly view: StatusBarResourceMetricView;
   readonly cpuPercent: number | null;
-  readonly withLabel: boolean;
 }): ReactNode {
   const { view } = props;
   const value = view.value ?? UNAVAILABLE_DASH;
@@ -254,7 +256,7 @@ export function CpuReading(props: {
     >
       <Cpu className="size-3.5" aria-hidden />
       <span className="min-w-6 text-end tabular-nums">
-        {props.withLabel ? `${view.label} ${value}` : value}
+        {`${view.label} ${value}`}
       </span>
     </span>
   );

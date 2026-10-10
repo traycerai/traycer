@@ -348,67 +348,7 @@ describe("<EpicLeftPanelRail />", () => {
     ).not.toBeUndefined();
   });
 
-  it("computes a combine cue from the MODEL's full stack, not from how many members are drawn (L-170, L-181)", () => {
-    // Build a 4-member stack, then hide every member but Chats: it draws as a
-    // LONE icon (no capsule at all), though the model still holds all four.
-    // Reading the drawn shape instead of the model would offer a join this
-    // stack cannot take.
-    act(() => {
-      let arrangement = currentLayoutArrangement();
-      arrangement = stackRailPanels(
-        arrangement,
-        "terminals",
-        "artifacts",
-        "stack",
-      );
-      arrangement = stackRailPanels(
-        arrangement,
-        "browsers",
-        "artifacts",
-        "stack",
-      );
-      applyRail(arrangement.rail);
-      setRailVisibilityOverride("artifacts", false);
-      setRailVisibilityOverride("terminals", false);
-      setRailVisibilityOverride("browsers", false);
-    });
-
-    render(
-      <EpicLeftPanelRail
-        epicId={EPIC_ID}
-        tabId={TAB_ID}
-        orientation="vertical"
-      />,
-    );
-    expect(screen.queryAllByTestId("epic-rail-stack")).toHaveLength(0);
-
-    act(() => {
-      useEpicDndStore.getState().canvasDragStarted(
-        {
-          kind: "left-panel-rail-item",
-          viewTabId: TAB_ID,
-          panelId: "sharing",
-          origin: "rail",
-        },
-        null,
-      );
-      useEpicDndStore.getState().dropPreviewChanged({
-        kind: "left-panel-rail",
-        viewTabId: TAB_ID,
-        panelId: "chats",
-        position: "combine",
-      });
-    });
-
-    expect(screen.getByTestId("epic-rail-chats").className).toContain(
-      "ring-destructive",
-    );
-    expect(screen.getByTestId("epic-rail-chats").className).not.toContain(
-      "ring-primary",
-    );
-  });
-
-  it("draws the shipped rail as eight direct children - the chats/artifacts capsule plus seven icons - with no dividers", () => {
+  it("draws the shipped rail as nine direct children - the chats/artifacts capsule plus eight icons - with no dividers", () => {
     // "Every panel available": comments needs its own reveal + a commentable
     // artifact, same as `revealCommentsPanel` below.
     testState.activeArtifactId = "artifact-1";
@@ -425,14 +365,15 @@ describe("<EpicLeftPanelRail />", () => {
 
     const rail = screen.getByTestId("epic-sidebar-rail");
     // The shipped pair (chats + artifacts) draws as ONE capsule (L-166,
-    // L-167), so the rail's direct children are eight rather than nine: the
-    // capsule and the remaining seven panels.
+    // L-167), so the rail's direct children are nine rather than ten: the
+    // capsule and the remaining eight panels.
     expect(
       Array.from(rail.children).map((child) =>
         child.getAttribute("data-testid"),
       ),
     ).toEqual([
       "epic-rail-stack",
+      "epic-rail-files",
       "epic-rail-terminals",
       "epic-rail-browsers",
       "epic-rail-git-diff",
@@ -727,6 +668,7 @@ describe("<EpicLeftPanelRail />", () => {
       ),
     ).toEqual([
       "epic-rail-stack",
+      "epic-rail-files",
       "epic-rail-terminals",
       "epic-rail-panel-drop-line",
       "epic-rail-browsers",
@@ -1273,6 +1215,7 @@ describe("<EpicLeftPanelRail />", () => {
         "Terminals",
         "Browsers",
         "Artifacts",
+        "Files",
         "Git Diff",
         "Pull Requests",
         "File Tree",
@@ -1414,11 +1357,12 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.queryByTestId("epic-rail-unstack-terminals")).toBeNull();
     });
 
-    it("refuses to hide the last visible panel", () => {
+    it("refuses to hide the last shown panel, and says why (T3)", () => {
       for (const panelId of [
         "terminals",
         "browsers",
         "artifacts",
+        "files",
         "git-diff",
         "pull-requests",
         "file-tree",
@@ -1429,14 +1373,46 @@ describe("<EpicLeftPanelRail />", () => {
       renderRail();
       openRailMenu();
 
-      // Agents is all that is left; the body always renders some panel, so an
-      // empty rail would leave nothing to click back with.
+      // Agents is the only panel left SHOWN (Comments is `auto`, which never
+      // counts); the body always renders some panel, so an empty rail would
+      // leave nothing to click back with.
       const lastItem = screen.getByTestId("epic-rail-toggle-chats");
-      expect(lastItem.getAttribute("data-disabled")).not.toBeNull();
+      // Off but still in keyboard focus, so its reason can be reached.
+      expect(lastItem.getAttribute("aria-disabled")).toBe("true");
+      expect(lastItem.getAttribute("data-disabled")).toBeNull();
+      expect(lastItem.textContent).toContain("One panel always stays shown.");
       expect(screen.queryByTestId("epic-rail-hide-pointed-panel")).toBeNull();
 
       fireEvent.click(lastItem);
       expect(visibilityOverrides().chats).toBeUndefined();
+    });
+
+    it("still locks Agents when Pull requests is auto and drawn in this task: only saved Shown counts", () => {
+      for (const panelId of [
+        "terminals",
+        "browsers",
+        "artifacts",
+        "files",
+        "git-diff",
+        "file-tree",
+        "sharing",
+        "comments",
+      ] as const) {
+        setRailVisibilityOverride(panelId, false);
+      }
+      // Pull requests keeps its default `auto` and this epic has one, so the
+      // rail DRAWS it. The saved layout must still hold in a task with none.
+      setPullRequestPresence(true);
+      renderRail();
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+      openRailMenu();
+
+      const lastItem = screen.getByTestId("epic-rail-toggle-chats");
+      // Off but still in keyboard focus, so its reason can be reached.
+      expect(lastItem.getAttribute("aria-disabled")).toBe("true");
+      expect(lastItem.getAttribute("data-disabled")).toBeNull();
+      expect(lastItem.textContent).toContain("One panel always stays shown.");
+      expect(screen.queryByTestId("epic-rail-hide-pointed-panel")).toBeNull();
     });
 
     it("highlights the fallback icon when the active panel is hidden", () => {
@@ -1778,7 +1754,7 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
     });
   });
 
-  it("registers the body droppable at the stack's TOP panel, not the active member, and draws the join/full/same drop cue (L-181, L-182)", () => {
+  it("registers the body droppable at the stack's TOP panel, not the active member, and draws the join/same drop cue (L-181, L-182)", () => {
     // Browsers is active, but Terminals is the top of the stack (L-181): the
     // body is one drop target for the whole stack, so it is Terminals the
     // droppable names, whichever member the user is looking at.
@@ -1862,8 +1838,8 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
       screen.getByTestId("epic-sidebar").querySelector("[data-body-drop-cue]"),
     ).toBeNull();
 
-    // Grown to the max (terminals+browsers+git-diff+pull-requests): a FIFTH
-    // panel's join now draws "full" instead.
+    // Grown to four (terminals+browsers+git-diff+pull-requests): a FIFTH
+    // panel still joins, since a stack has no cap.
     act(() => {
       applyRail(
         stackRailPanels(
@@ -1898,7 +1874,7 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
         .getByTestId("epic-sidebar")
         .querySelector("[data-body-drop-cue]")
         ?.getAttribute("data-body-drop-cue"),
-    ).toBe("full");
+    ).toBe("join");
   });
 });
 
@@ -1953,6 +1929,7 @@ describe("Browsers panel registration", () => {
     // (L-166, L-167), not two loose icons.
     expect(railIds).toEqual([
       "epic-rail-stack",
+      "epic-rail-files",
       "epic-rail-terminals",
       "epic-rail-browsers",
       "epic-rail-git-diff",

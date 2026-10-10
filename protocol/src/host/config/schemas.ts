@@ -367,3 +367,145 @@ export const configWorktreesSetResponseSchema = configWorktreesResponseSchema;
 export type ConfigWorktreesSetResponse = z.infer<
   typeof configWorktreesSetResponseSchema
 >;
+
+/**
+ * Reads whether agents get the page tools (`visualization.agentPages`).
+ * Machine-user-global like the browser switch, and read at agent launch, so a
+ * change applies to agents started after it.
+ */
+export const configVisualizationGetRequestSchema = emptyRequestSchema;
+export type ConfigVisualizationGetRequest = z.infer<
+  typeof configVisualizationGetRequestSchema
+>;
+
+export const configVisualizationResponseSchema = lazySchema(() =>
+  z.object({
+    agentPages: z.boolean(),
+  }),
+);
+export type ConfigVisualizationResponse = z.infer<
+  typeof configVisualizationResponseSchema
+>;
+
+/** Turns the page tools on or off for agents launched from now on. */
+export const configVisualizationSetRequestSchema = lazySchema(() =>
+  z.object({
+    agentPages: z.boolean(),
+  }),
+);
+export type ConfigVisualizationSetRequest = z.infer<
+  typeof configVisualizationSetRequestSchema
+>;
+
+export const configVisualizationSetResponseSchema =
+  configVisualizationResponseSchema;
+export type ConfigVisualizationSetResponse = z.infer<
+  typeof configVisualizationSetResponseSchema
+>;
+
+/**
+ * Reads the machine-wide catalog probe timeout: how long the host waits for a
+ * provider to list its models or commands. Like the worktrees policy it is not
+ * keyed by host id or deploy slot: the file is one per OS user.
+ */
+export const configCatalogGetRequestSchema = emptyRequestSchema;
+export type ConfigCatalogGetRequest = z.infer<
+  typeof configCatalogGetRequestSchema
+>;
+
+/**
+ * The host-enforced range, sent so the GUI's control cannot offer a value the
+ * host will refuse. Bounds are host constants, not user policy - they travel
+ * as data so they can move without a protocol change.
+ */
+export const configCatalogBoundsSchema = lazySchema(() =>
+  z.object({
+    minSeconds: z.number().int().positive(),
+    maxSeconds: z.number().int().positive(),
+  }),
+);
+export type ConfigCatalogBounds = z.infer<typeof configCatalogBoundsSchema>;
+
+/**
+ * The 1.0 response: the shared timeout and its bounds. Frozen - 1.1 adds the
+ * providers' own values beside it.
+ */
+export const configCatalogResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    // Whole seconds, already clamped into `bounds` by the host.
+    probeTimeoutSeconds: z.number().int().positive(),
+    bounds: configCatalogBoundsSchema,
+  }),
+);
+export type ConfigCatalogResponseV10 = z.infer<
+  typeof configCatalogResponseSchemaV10
+>;
+
+/**
+ * The 1.1 response. `probeTimeoutSeconds` is the value every provider shares;
+ * `overrides` maps a harness id to that provider's own value, for each
+ * provider whose "Same for all providers" switch is off. A provider absent
+ * from it follows the shared value. Keys are open strings, so a harness this
+ * schema predates still decodes; every value is clamped into `bounds`.
+ */
+export const configCatalogResponseSchema = lazySchema(() =>
+  z.object({
+    probeTimeoutSeconds: z.number().int().positive(),
+    overrides: z.record(z.string().min(1), z.number().int().positive()),
+    bounds: configCatalogBoundsSchema,
+  }),
+);
+export type ConfigCatalogResponse = z.infer<typeof configCatalogResponseSchema>;
+
+/**
+ * The 1.0 request: sets the shared timeout. The schema proves only a positive
+ * whole number: the host refuses a value outside its bounds, so a schema-level
+ * range would freeze an implementation constant into the wire. Frozen; a 1.0
+ * body reaches a 1.1 host as `{ scope: "all" }` through the registry's upgrade.
+ */
+export const configCatalogSetRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    probeTimeoutSeconds: z.number().int().positive(),
+  }),
+);
+export type ConfigCatalogSetRequestV10 = z.infer<
+  typeof configCatalogSetRequestSchemaV10
+>;
+
+/**
+ * The 1.1 request, one of two writes:
+ *
+ * - `scope: "all"` sets the shared value. It leaves every provider's own value
+ *   alone: a provider whose switch is off keeps its value.
+ * - `scope: "harness"` sets one provider's own value, or clears it with `null`
+ *   so the provider follows the shared value again. `harnessId` is an open
+ *   string, like the response's keys; the host refuses an id it does not know.
+ *
+ * Bounds are the host's to enforce, for both scopes, as in 1.0.
+ */
+export const configCatalogSetRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("scope", [
+    z.object({
+      scope: z.literal("all"),
+      probeTimeoutSeconds: z.number().int().positive(),
+    }),
+    z.object({
+      scope: z.literal("harness"),
+      harnessId: z.string().min(1),
+      probeTimeoutSeconds: z.number().int().positive().nullable(),
+    }),
+  ]),
+);
+export type ConfigCatalogSetRequest = z.infer<
+  typeof configCatalogSetRequestSchema
+>;
+
+export const configCatalogSetResponseSchemaV10 = configCatalogResponseSchemaV10;
+export type ConfigCatalogSetResponseV10 = z.infer<
+  typeof configCatalogSetResponseSchemaV10
+>;
+
+export const configCatalogSetResponseSchema = configCatalogResponseSchema;
+export type ConfigCatalogSetResponse = z.infer<
+  typeof configCatalogSetResponseSchema
+>;

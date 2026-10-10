@@ -1,4 +1,4 @@
-import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpenChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
  * Pure predicates over a queue row, shared by the queue header (what to
@@ -7,7 +7,7 @@ import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe"
  * neither depends on the other for a fact about the row.
  */
 
-export function queueItemSteerLocked(item: ChatQueuedItem): boolean {
+export function queueItemSteerLocked(item: OpenChatQueuedItem): boolean {
   return item.status === "steer_requested" || item.status === "steering";
 }
 
@@ -19,7 +19,7 @@ export function queueItemSteerLocked(item: ChatQueuedItem): boolean {
  * but never justifies offering the button.
  */
 export function queueItemCanPauseFromQueueHeader(
-  item: ChatQueuedItem,
+  item: OpenChatQueuedItem,
 ): boolean {
   if (item.kind !== "prompt") return false;
   if (item.sender.type !== "user") return false;

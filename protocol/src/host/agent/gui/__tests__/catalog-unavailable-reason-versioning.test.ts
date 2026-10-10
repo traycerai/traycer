@@ -21,6 +21,7 @@ import {
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
+  listGuiHarnessesResponseSchemaV92,
 } from "../unary-schemas";
 
 const row = {
@@ -73,7 +74,9 @@ describe("catalog unavailable reason versioning", () => {
   });
 
   it("strips the key for both a 9.0 decode and a cross-major downgrade", () => {
-    const live = listGuiHarnessesResponseSchema.parse({ harnesses: [row] });
+    // The 9 -> 8 bridge takes the FROZEN 9.2 head, so the fixture is parsed
+    // through that schema rather than the live (commandcode-capable) one.
+    const live = listGuiHarnessesResponseSchemaV92.parse({ harnesses: [row] });
     const v90 = listGuiHarnessesResponseSchemaV90.parse(live);
     expect(v90.harnesses[0]).not.toHaveProperty("unavailableReason");
 

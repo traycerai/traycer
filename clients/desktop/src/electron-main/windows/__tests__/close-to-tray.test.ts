@@ -598,6 +598,13 @@ describe("window-creation count (real WindowRegistry)", () => {
       isRelaunchIntended: () => false,
       isLocalHostRunning: () => Promise.resolve(true),
       isForegroundHostRun: async () => false,
+      // Not reported: stop-if-idle takes its silent if-idle stop, as before the
+      // host reported a terminal count.
+      probeHostActivity: async () => ({
+        kind: "answered",
+        busy: false,
+        terminalsInUse: null,
+      }),
       lifecycle: {
         readQuitPolicy: async () => ({ mode: "ask", rev: 1 }),
         writeQuitVerdict: async () => "written",
@@ -885,6 +892,13 @@ describe("reopen after a native Cancel (composition, counted by window creation)
       isRelaunchIntended: () => false,
       isLocalHostRunning: () => Promise.resolve(true),
       isForegroundHostRun: async () => false,
+      // Not reported: stop-if-idle takes its silent if-idle stop, as before the
+      // host reported a terminal count.
+      probeHostActivity: async () => ({
+        kind: "answered",
+        busy: false,
+        terminalsInUse: null,
+      }),
       lifecycle: {
         readQuitPolicy: async () => ({ mode: "ask", rev: 1 }),
         writeQuitVerdict: async () => "written",

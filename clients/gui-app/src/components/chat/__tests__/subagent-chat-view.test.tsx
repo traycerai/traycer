@@ -12,6 +12,7 @@ import {
   OpenSubagentAsChatContext,
   type SubagentDrillIn,
 } from "@/components/chat/segments/subagent-open-as-chat";
+import { SubagentContinueAsChatContext } from "@/components/chat/segments/subagent-continue-as-chat";
 import { SubagentChatView } from "@/components/chat/subagent-chat-view";
 import type {
   ChatMessage as ChatMessageModel,
@@ -160,6 +161,65 @@ describe("<SubagentChatView />", () => {
     expect(screen.getAllByText("root-agent").length).toBeGreaterThan(0);
     expect(screen.getByText("root-agent task")).toBeTruthy();
     expect(screen.getByText("root words")).toBeTruthy();
+  });
+
+  it("draws Continue as chat in the breadcrumb when the action is offered", () => {
+    const run = vi.fn();
+    render(
+      <SubagentContinueAsChatContext.Provider value={{ run, isPending: false }}>
+        <ChatExpansionTestProviders tileInstanceId="subagent-chat-view-tile">
+          <SubagentChatView
+            drillIn={{ openId: "root", open: vi.fn(), close: vi.fn() }}
+            messages={messagesWithNestedCards()}
+            bottomInset={0}
+            scrollRef={createRef<HTMLDivElement>()}
+            transcriptRef={createRef<HTMLElement>()}
+          />
+        </ChatExpansionTestProviders>
+      </SubagentContinueAsChatContext.Provider>,
+    );
+
+    const button = screen.getByTestId("subagent-chat-continue");
+    expect(button.closest("nav")).toBe(
+      screen.getByTestId("subagent-chat-back").closest("nav"),
+    );
+    fireEvent.click(button);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the task, the result and Continue for a card with no children", () => {
+    const run = vi.fn();
+    const replyOnly: SubagentSegment = {
+      ...card("reply", "reply-agent", []),
+      result: "the agent replied only",
+    };
+    render(
+      <SubagentContinueAsChatContext.Provider value={{ run, isPending: false }}>
+        <ChatExpansionTestProviders tileInstanceId="subagent-chat-view-tile">
+          <SubagentChatView
+            drillIn={{ openId: "reply", open: vi.fn(), close: vi.fn() }}
+            messages={[
+              { ...makeMessage(1, "assistant"), segments: [replyOnly] },
+            ]}
+            bottomInset={0}
+            scrollRef={createRef<HTMLDivElement>()}
+            transcriptRef={createRef<HTMLElement>()}
+          />
+        </ChatExpansionTestProviders>
+      </SubagentContinueAsChatContext.Provider>,
+    );
+
+    expect(screen.getByText("reply-agent task")).toBeTruthy();
+    expect(screen.getByText("the agent replied only")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("subagent-chat-continue"));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no Continue as chat without the action", () => {
+    renderView("root", { openId: "root", open: vi.fn(), close: vi.fn() });
+
+    expect(screen.queryByTestId("subagent-chat-continue")).toBeNull();
+    expect(screen.getByTestId("subagent-chat-back")).toBeTruthy();
   });
 
   it("calls close from the back button", () => {

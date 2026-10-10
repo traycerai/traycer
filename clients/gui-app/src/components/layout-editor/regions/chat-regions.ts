@@ -21,7 +21,19 @@ import {
   thinkingStateWord,
   toolActivityStateWord,
 } from "@/components/layout-editor/regions/region-state-words";
+import {
+  alwaysLive,
+  disabledBy,
+  INDEPENDENT,
+  LIVE,
+  liveWithNote,
+  type RegionRule,
+} from "@/components/layout-editor/regions/row-availability";
 import { CONTEXT_USAGE_ROW_KEYS } from "@/lib/context-usage-rows";
+import {
+  alwaysAvailable,
+  isDesktopLayoutRowAvailable,
+} from "@/lib/settings/settings-availability";
 
 /**
  * The transcript's own three regions (customization audit R1, R3). Each is the
@@ -49,6 +61,8 @@ export const TOOL_ACTIVITY_REGION: LayoutRegion<"toolActivity"> = {
     "transcript",
   ],
   rows: [],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SIZE_ONLY_VERBS,
   stateWord: toolActivityStateWord,
 };
@@ -73,6 +87,8 @@ export const THINKING_REGION: LayoutRegion<"thinking"> = {
     "transcript",
   ],
   rows: [],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SIZED_VERBS,
   stateWord: thinkingStateWord,
 };
@@ -87,9 +103,24 @@ export const TIMESTAMPS_REGION: LayoutRegion<"timestamps"> = {
   hint: null,
   keywords: ["timestamps", "time", "date", "sent", "messages", "transcript"],
   rows: [],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SHOW_HIDE_VERBS,
   stateWord: shownStateWord,
 };
+
+/**
+ * The minimap is an edge rail for a pointer that can hover, which the phone
+ * layout never draws: its Minimap is the tile bar's drawer, and that ignores
+ * the region (`shouldMountChatTurnMinimap`). So it is nothing at all in the
+ * installed app (its shell gate) and a note in a narrow browser tab, where
+ * widening the window brings the rail back (C5). The Side row under it says
+ * nothing of its own: the note is said once, on the region's row.
+ */
+const minimapRule: RegionRule = (context) =>
+  context.shell.phoneLayout
+    ? liveWithNote("Shows on wider windows with a mouse.")
+    : LIVE;
 
 export const MINIMAP_REGION: LayoutRegion<"minimap"> = {
   id: "minimap",
@@ -113,8 +144,11 @@ export const MINIMAP_REGION: LayoutRegion<"minimap"> = {
     {
       kind: "position-side",
       description: "Which edge of the transcript and artifact it sits on.",
+      depends: INDEPENDENT,
     },
   ],
+  shellGate: isDesktopLayoutRowAvailable,
+  availability: minimapRule,
   quickVerbs: SHOW_HIDE_VERBS,
   stateWord: (values, arrangement) =>
     sideStateWord(values, arrangement.minimapSide),
@@ -143,15 +177,11 @@ export const CONTEXT_USAGE_REGION: LayoutRegion<"contextUsage"> = {
     "ring",
     "breakdown",
   ],
+  // Pin breakdown decides which of the two below it applies (C1): the pinned
+  // strip never reads the chip's style, and the chip never draws the
+  // breakdown rows. Chip style is declared first because the breakdown ships
+  // unpinned, so the live one sits right under the switch by default.
   rows: [
-    {
-      kind: "style",
-      key: "style",
-      label: "Style",
-      description: null,
-      labelPlacement: "end",
-      examples: CONTEXT_USAGE_EXAMPLES,
-    },
     {
       kind: "fine-tune",
       rows: [
@@ -160,17 +190,41 @@ export const CONTEXT_USAGE_REGION: LayoutRegion<"contextUsage"> = {
           label: "Pin breakdown",
           description: "Keep the context breakdown open above the indicator.",
           pinsTransient: true,
-          liveWhileHidden: null,
-          requires: null,
+          depends: INDEPENDENT,
           control: { kind: "switch", key: "pinBreakdown" },
         },
+      ],
+    },
+    {
+      kind: "style",
+      key: "style",
+      label: "Chip style",
+      description: null,
+      labelPlacement: "end",
+      examples: CONTEXT_USAGE_EXAMPLES,
+      depends: {
+        under: "pinBreakdown",
+        availability: (context) =>
+          context.values.contextUsage.pinBreakdown
+            ? disabledBy("Turn off Pin breakdown to use this.", null)
+            : LIVE,
+      },
+    },
+    {
+      kind: "fine-tune",
+      rows: [
         {
           id: "pinnedFields",
           label: "Breakdown rows",
-          description: null,
+          description: "Drag to set their order. At least one row stays.",
           pinsTransient: true,
-          liveWhileHidden: null,
-          requires: "pinBreakdown",
+          depends: {
+            under: "pinBreakdown",
+            availability: (context) =>
+              context.values.contextUsage.pinBreakdown
+                ? LIVE
+                : disabledBy("Turn on Pin breakdown to use this.", null),
+          },
           control: {
             kind: "field-checks",
             key: "pinnedFields",
@@ -185,8 +239,12 @@ export const CONTEXT_USAGE_REGION: LayoutRegion<"contextUsage"> = {
           label: "Compact conversation button",
           description: null,
           pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
+          // Which harness can compact is the turn's fact, not the form's.
+          depends: {
+            under: null,
+            availability: () =>
+              liveWithNote("Only for harnesses that can compact."),
+          },
           control: {
             kind: "segment",
             key: "compactButton",
@@ -196,6 +254,8 @@ export const CONTEXT_USAGE_REGION: LayoutRegion<"contextUsage"> = {
       ],
     },
   ],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SHOW_HIDE_VERBS,
   stateWord: contextUsageStateWord,
 };

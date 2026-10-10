@@ -1,23 +1,10 @@
 import {
   alwaysAvailable,
+  isDesktopLayoutRowAvailable,
   isLayoutEditorAvailable,
   isMobileFooterRowAvailable,
-  type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
-
-/**
- * Rows with no effect in the installed mobile app, which always draws its own
- * header and no tab strip or sidebar: the tab strip's placement, view and
- * overflow, the sidebar's side, the readings on agent rows (the phone's
- * switcher lists draw none), and the reading width (a phone is narrower than
- * even the Comfortable column).
- */
-function isDesktopLayoutRowAvailable(
-  context: SettingsAvailabilityContext,
-): boolean {
-  return !context.mobileApp;
-}
 
 /**
  * Where the app's own chrome sits and how much of it shows.
@@ -254,6 +241,20 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: alwaysAvailable,
     keywords: ["toolbar", "dock", "message box", "buttons"],
   },
+  /**
+   * The whole toolbar row's chrome - attach, access, model and microphone -
+   * so a Composer row rather than a detail of the Model region it is stored
+   * on (C3). Drawn by `ToolbarStyleRow` on both hosts.
+   */
+  toolbarStyle: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-toolbar-style" },
+    label: "Toolbar style",
+    description: "Every button on the composer's toolbar.",
+    availableWhen: alwaysAvailable,
+    keywords: ["toolbar", "flat", "bordered", "buttons", "chrome", "outline"],
+  },
   statusBar: {
     kind: "group",
     search: { anchor: "layout-surface-status-bar" },
@@ -275,17 +276,17 @@ export const LAYOUT = defineSettingsSection("layout", {
    */
   /**
    * The grammar's surface tier (L-51): it belongs to no region, and it decides
-   * whether the strip exists at all on a narrow viewport. Only the installed
-   * mobile app withholds the footer by default, so only that build has the
-   * switch; every other build draws the strip whenever a reading still names
-   * it.
+   * whether the strip exists at all in the phone layout, which withholds the
+   * footer by default and draws the two readings as header icons instead. So
+   * the switch exists wherever that layout is drawn - the installed app, and a
+   * browser tab below 768px - and it is the area's first row there (U1).
    */
   mobileFooter: {
     kind: "row",
     group: "statusBar",
     search: { anchor: "layout-mobile-footer" },
     label: "Status bar on small screens",
-    description: null,
+    description: "Off, usage and resources show as icons in the header.",
     availableWhen: isMobileFooterRowAvailable,
     keywords: ["footer", "phone", "mobile", "small screen", "status bar"],
   },

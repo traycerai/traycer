@@ -1,3 +1,4 @@
+import { railContentWidthPx } from "@/lib/layout/rail-content-width";
 import {
   Fragment,
   use,
@@ -76,7 +77,6 @@ import {
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
   LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
-  LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS,
   LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
   LEFT_PANEL_RAIL_TILE_CLASS,
   railGroupLabel,
@@ -120,12 +120,12 @@ interface EpicLeftPanelRailContentProps {
  * One thing the rail draws: a panel's icon, a stack's ONE group icon (G3,
  * L-181), or a divider (L-155).
  *
- * Every divider the rail holds is drawn, at rest as well as in a session: at
- * rest it is extra space and in a session a handle (L-140), and both of those
- * are `LeftPanelRailDivider`'s answer rather than this list's. Which panels
- * are drawn, and which pairs survive as pairs, is `railDisplayEntries`'
- * answer, not a second copy of the rule here (R5R-05, L-166) - so a hidden
- * member leaves its stack on the rail and in the body by the same walk.
+ * At rest a divider is extra space and in a session a handle (L-140), which is
+ * `LeftPanelRailDivider`'s answer rather than this list's. Which panels are
+ * drawn, which pairs survive as pairs, and which dividers still separate two
+ * drawn icons at rest (T3) is `railDisplayEntries`' answer, not a second copy
+ * of the rule here (R5R-05, L-166) - so a hidden member leaves its stack on
+ * the rail and in the body by the same walk.
  */
 type RailItem =
   | { readonly kind: "panel"; readonly panel: LeftPanelMetadataDefinition }
@@ -139,12 +139,16 @@ type RailItem =
 function railItems(
   rail: ReadonlyArray<RailEntry>,
   context: LeftPanelAvailabilityContext,
+  dividersEditing: boolean,
 ): ReadonlyArray<RailItem> {
-  return railDisplayEntries(rail, (regionId) =>
-    isLeftPanelVisible(
-      getLeftPanelDefinition(leftPanelIdForRailRegion(regionId)),
-      context,
-    ),
+  return railDisplayEntries(
+    rail,
+    (regionId) =>
+      isLeftPanelVisible(
+        getLeftPanelDefinition(leftPanelIdForRailRegion(regionId)),
+        context,
+      ),
+    dividersEditing ? "handles" : "spacing",
   ).map((entry): RailItem => {
     if (entry.kind === "divider") return { kind: "divider", id: entry.id };
     if (entry.kind === "panel") {
@@ -255,8 +259,8 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     ],
   );
   const items = useMemo(
-    () => railItems(rail, availabilityContext),
-    [availabilityContext, rail],
+    () => railItems(rail, availabilityContext, dividersEditing),
+    [availabilityContext, rail, dividersEditing],
   );
   // Which icon lights up. Resolved rather than compared against `activePanelId`
   // directly so a hidden active panel highlights whatever the body fell back
@@ -324,7 +328,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
       : getLeftPanelDefinition(panelSectionDragSource.panelId);
   const dropAtRailEnd = railPanelDropPreview?.kind === "left-panel-rail-list";
   // What this tab's rail drag carries, whatever it was grabbed off, so a
-  // middle-band preview can be read as a join, a refusal or nothing (L-181).
+  // middle-band preview can be read as a join or nothing (L-181).
   const dragSource = useLeftPanelRailDragSource(tabId);
   const dropCueFor = (
     targetPanelId: LeftPanelId,
@@ -531,23 +535,6 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   );
 }
 
-function railContentWidthPx(rail: HTMLElement): number {
-  const style = getComputedStyle(rail);
-  const padding =
-    Number.parseFloat(style.paddingLeft) +
-    Number.parseFloat(style.paddingRight);
-  let left = Infinity;
-  let right = -Infinity;
-  for (const child of rail.children) {
-    const rect = child.getBoundingClientRect();
-    // A `display: contents` wrapper has no box of its own.
-    if (rect.width === 0) continue;
-    left = Math.min(left, rect.left);
-    right = Math.max(right, rect.right);
-  }
-  return right > left ? right - left + padding : padding;
-}
-
 function RailBoundaryPreview(props: {
   readonly definition: LeftPanelMetadataDefinition | null;
   readonly orientation: RailOrientation;
@@ -609,7 +596,7 @@ interface RailPanelButtonProps {
   readonly active: boolean;
   /**
    * What a drop aimed at this icon's MIDDLE band would do (L-181): join its
-   * stack, or be refused because the stack is full.
+   * stack, or nothing.
    */
   readonly dropCue: Exclude<RailStackJoin, "same"> | null;
   readonly onClick: () => void;
@@ -774,7 +761,6 @@ export function RailButton(props: RailButtonProps) {
             active && activeClass,
             isDragSource && "cursor-grabbing opacity-50",
             dropCue === "join" && LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
-            dropCue === "full" && LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS,
           )}
         >
           <span

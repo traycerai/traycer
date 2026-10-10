@@ -3,6 +3,7 @@ import {
   AntigravityIcon,
   ClaudeAIIcon,
   CodexIcon,
+  CommandCodeIcon,
   CopilotIcon,
   CursorIcon,
   DevinIcon,
@@ -51,4 +52,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   omp: { Icon: OmpIcon, className: "text-foreground" },
   reasonix: { Icon: ReasonixIcon, className: "text-foreground" },
   antigravity: { Icon: AntigravityIcon, className: "text-foreground" },
+  commandcode: { Icon: CommandCodeIcon, className: "text-foreground" },
 };

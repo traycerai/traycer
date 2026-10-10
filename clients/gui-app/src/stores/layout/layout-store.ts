@@ -1,10 +1,8 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   DEFAULT_ARRANGEMENT,
-  statusBarShown,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import {
@@ -14,7 +12,7 @@ import {
 import {
   normalizeRail,
   RAIL_REGION_BY_PANEL,
-  railFromPanelIdOrder,
+  railPanelEntriesFromIds,
   railStackId,
   railVisibilityFor,
   type RailEntry,
@@ -24,6 +22,7 @@ import {
   sameRegionValue,
   type LayoutOverrides,
   type LayoutValues,
+  type ReadingStyle,
   type RegionSize,
   type Visibility,
 } from "@/lib/layout/layout-values";
@@ -266,17 +265,6 @@ export function useLayoutSnapshot(): LayoutSnapshot {
 }
 
 /**
- * `statusBarShown` over the live store and the live viewport - the mount
- * decision the shell and the strip's own controls share.
- */
-export function useStatusBarShown(): boolean {
-  const isMobileViewport = useIsMobileViewport();
-  return useLayoutStore((state) =>
-    statusBarShown(state.arrangement, isMobileViewport),
-  );
-}
-
-/**
  * Non-hook read of the Home tab, for the framework-free seams that gate on it
  * (route guards, the tab command coordinator, the keybinding dispatcher).
  */
@@ -356,14 +344,12 @@ function migrateLayoutPersistedState(
  * field whether or not anyone touched it, and the delta is the user's own
  * picks (L-133).
  *
- * Three things do not survive, deliberately:
+ * Two things do not survive, deliberately:
  * - A provider on Automatic AND explicit limits keeps only the explicit keys.
  *   The two are exclusive now (R1-15), and the explicit picks are the more
  *   specific answer.
  * - The resource monitor's Scope (host tree or this app) has no equivalent:
  *   the monitor always reads the host.
- * - A sidebar group of more than four panels splits, because a stack holds at
- *   most four (`carriedRail`).
  */
 function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
   const settings = legacySettingsRecord();
@@ -423,7 +409,9 @@ function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
 /**
  * The usage reading's display picks. `enabled` is carried only while the
  * readings lived in the strip: in the header, v1.4.0 drew the usage button
- * whatever it said, so there it never spoke for anything on screen.
+ * whatever it said, so there it never spoke for anything on screen. `reset`,
+ * `amount` and the reading style are carried whichever placement drew them:
+ * they describe what a reading says, not where it sits.
  */
 function carriedUsageLimits(
   statusBar: Record<string, unknown>,
@@ -436,7 +424,33 @@ function carriedUsageLimits(
         : shownIf(rateLimits.enabled),
     reset: rateLimits.showTimer,
     amount: rateLimits.percentMode,
+    readingStyle: carriedReadingStyle(rateLimits),
   };
+}
+
+/**
+ * v1.4.0's `showBar` and `showModeWord` as the one reading style that replaced
+ * them (`bar` | `percent` | `both` | `full`).
+ *
+ * v1.4.0 always drew the percent, so a reader who turned the bar off had chosen
+ * a percent reading: `percent`. The mode word (the used/remaining word) has no
+ * home outside `full`, so with the bar off `percent` is the closest reading
+ * that exists. A bar with the word off is `both`: bar and percent, no word.
+ *
+ * Bar and word both on carries nothing, and that is a limit of the data, not a
+ * choice: the old records store every field, so a user who never touched the
+ * two cannot be told apart from one who set exactly this. It is left to the
+ * shipped default rather than guessed at. A `showBar` that is not a boolean
+ * says nothing either.
+ */
+function carriedReadingStyle(
+  rateLimits: Record<string, unknown>,
+): ReadingStyle | undefined {
+  if (rateLimits.showBar === false) return "percent";
+  if (rateLimits.showBar === true && rateLimits.showModeWord === false) {
+    return "both";
+  }
+  return undefined;
 }
 
 /**
@@ -445,9 +459,14 @@ function carriedUsageLimits(
  * `resources.enabled`. A record with no strip slice answers from the global
  * switch, the one a build before the strip had.
  *
- * Its readings are the strip's own list when there is one. Before it, the
- * sidebar's chips were the only readings anybody picked, so a non-empty chip
- * list stands in. The chips themselves became `agentRows`, and an empty list,
+ * Its readings are the strip's own list when there is one, except under the
+ * header placement. There the strip's list was never on screen, so nobody
+ * picked it: the only metrics that user saw and chose were the sidebar's
+ * chips, and in this build the metric booleans are what the agent rows draw
+ * (`useNavigatorResourceMetrics`). A non-empty chip list therefore wins under
+ * the header. Under the status bar the strip's list stays the answer, and the
+ * chips stand in only for a record with no strip list, written before the
+ * strip existed. The chips themselves became `agentRows`, and an empty list,
  * the old default, is an answer: no readings on the rows.
  */
 function carriedResourceMonitor(
@@ -459,9 +478,13 @@ function carriedResourceMonitor(
     ? settings.navigatorResourceMetrics
     : null;
   const chipMetrics = chips !== null && chips.length > 0 ? chips : null;
-  const metrics = Array.isArray(resources.metrics)
+  const stripMetrics = Array.isArray(resources.metrics)
     ? resources.metrics
-    : chipMetrics;
+    : null;
+  const metrics =
+    statusBar.placement === "header" && chipMetrics !== null
+      ? chipMetrics
+      : (stripMetrics ?? chipMetrics);
   const stripDrawsIt =
     statusBar.placement !== "header" && typeof resources.enabled === "boolean";
   return {
@@ -547,10 +570,8 @@ function carriedRailVisibility(value: unknown): Record<string, unknown> {
  * ONE: the shipped sidebar put every lone panel in a group of its own and a
  * divider between every pair, and neither of those was a thing anybody placed.
  *
- * A group becomes one stack of every member this build still has (L-181), up
- * to four (`MAX_RAIL_STACK_MEMBERS`): the shipped groups had no cap, and
- * `normalizeRail` keeps a longer group's first four as the stack while the
- * rest keep their ORDER and stand alone.
+ * A group becomes one stack of every member this build still has (L-181):
+ * the shipped groups had no cap, and neither has a stack.
  */
 function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
   if (!Array.isArray(value)) return DEFAULT_ARRANGEMENT.rail;
@@ -566,7 +587,7 @@ function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
   );
   const panelIds = groups.flat();
   if (panelIds.length === 0) return DEFAULT_ARRANGEMENT.rail;
-  const rail = railFromPanelIdOrder(panelIds);
+  const rail = railPanelEntriesFromIds(panelIds);
   const links = groups.flatMap((group): RailEntry[] => {
     const members = group.flatMap((panelId) => {
       const regionId = carriedRailRegion(panelId);

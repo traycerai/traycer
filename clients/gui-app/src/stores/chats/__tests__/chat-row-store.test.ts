@@ -93,6 +93,8 @@ function settledAssistantWithTodo(turnId: string): AssistantMessage {
       backgroundTask: false,
       stopped: false,
       imageResults: [],
+      page: null,
+      mcpApp: null,
     },
     {
       type: "text",

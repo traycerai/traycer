@@ -6,10 +6,6 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   appendLiveRecords,
@@ -18,6 +14,11 @@ import {
   streamWindowMessage,
   updateWindowMessage,
 } from "@/stores/chats/transcript-window";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 vi.mock(
   "@traycer/protocol/persistence/chat-transcript/record-bytes",
@@ -41,7 +42,7 @@ const CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
 };
 
-function userMessage(messageId: string, timestamp: number): Message {
+function userMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "user",
     messageId,
@@ -52,7 +53,7 @@ function userMessage(messageId: string, timestamp: number): Message {
   };
 }
 
-function messageWithText(message: Message, text: string): Message {
+function messageWithText(message: OpenMessage, text: string): OpenMessage {
   if (message.role !== "user") return message;
   return {
     ...message,
@@ -75,7 +76,7 @@ describe("deferred streaming charge", () => {
   it("does not serialize the live row across N deferred deltas, then serializes at settle", () => {
     let window = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [userMessage("live", 1)],
-      events: [] as ChatEvent[],
+      events: [] as OpenChatEvent[],
     });
     vi.mocked(recordByteLength).mockClear();
 
@@ -113,7 +114,7 @@ describe("the live term of hydratedBytes", () => {
     const original = userMessage("live", 1);
     const window = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [original],
-      events: [] as ChatEvent[],
+      events: [] as OpenChatEvent[],
     });
     const before = window.hydratedBytes;
     const grown = messageWithText(original, "x".repeat(4096));
@@ -133,7 +134,7 @@ describe("the live term of hydratedBytes", () => {
   it("is UNMOVED by a `deferred` charge, per the eviction gate's own premise", () => {
     const window = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [userMessage("live", 1)],
-      events: [] as ChatEvent[],
+      events: [] as OpenChatEvent[],
     });
     const before = window.hydratedBytes;
 

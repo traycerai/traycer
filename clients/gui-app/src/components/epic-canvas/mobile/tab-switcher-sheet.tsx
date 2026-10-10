@@ -12,6 +12,7 @@ import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-age
 import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
 import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-browsers-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
+import { SwitcherFilesList } from "@/components/epic-canvas/mobile/switcher-files-list";
 import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
@@ -235,6 +236,10 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
           tabId={tabId}
           onClose={onClose}
         />
+      );
+    case "files":
+      return (
+        <SwitcherFilesList epicId={epicId} tabId={tabId} onClose={onClose} />
       );
     case "comments":
       return <SwitcherCommentsList epicId={epicId} tabId={tabId} />;

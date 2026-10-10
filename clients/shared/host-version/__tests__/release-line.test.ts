@@ -1,6 +1,14 @@
+import {
+  CANONICAL_RC_VERSION_PATTERN as PROTOCOL_RC_PATTERN,
+  STABLE_VERSION_PATTERN as PROTOCOL_STABLE_PATTERN,
+  isCanonicalReleaseVersion as protocolIsCanonicalReleaseVersion,
+} from "@traycer/protocol/host/version-order";
 import { describe, expect, it } from "vitest";
 import {
+  CANONICAL_RC_VERSION_PATTERN,
+  STABLE_VERSION_PATTERN,
   isCanonicalReleaseCandidate,
+  isCanonicalReleaseVersion,
   isCanonicalStagingVersion,
   isHiddenFromDefaultCatalog,
   isMatchingStableRelease,
@@ -240,5 +248,13 @@ describe("isMatchingStableRelease", () => {
     expect(isMatchingStableRelease("2.0.0-rc.2", "2.0.0-rc.1")).toBe(false);
     expect(isMatchingStableRelease("2.1.0", "2.0.0-rc.1")).toBe(false);
     expect(isMatchingStableRelease("2.0.0", "2.0.0-beta.1")).toBe(false);
+  });
+});
+
+describe("release-shape re-exports", () => {
+  it("are the protocol's own objects", () => {
+    expect(CANONICAL_RC_VERSION_PATTERN).toBe(PROTOCOL_RC_PATTERN);
+    expect(STABLE_VERSION_PATTERN).toBe(PROTOCOL_STABLE_PATTERN);
+    expect(isCanonicalReleaseVersion).toBe(protocolIsCanonicalReleaseVersion);
   });
 });

@@ -287,6 +287,10 @@ async function setUpPidVariant(
   // "teardown": no pid.json at all - nothing to write.
 }
 
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
 interface RecordCase {
   readonly name: string;
   readonly overrides: (
@@ -334,6 +338,41 @@ const RECORD_CASES: readonly RecordCase[] = [
         allowDowngrade: false,
         acceptStoreFormatLoss: false,
       },
+    }),
+  },
+  // The updater died between its pre-swap stop and `applying` (RCA
+  // forced-host-update-stuck-restart, 2026-10-09): the record is
+  // pre-placement, unheld, and has not been written for longer than
+  // `RECOMMENDED_ATTEMPT_STALENESS_MS`, so it is interrupted and the start
+  // brings up the INSTALLED bytes beside it.
+  {
+    name: "interrupted (preparing / active / resume-apply, stale, no live holder)",
+    overrides: () => ({
+      phase: "preparing",
+      execution: "active",
+      continuation: "resume-apply",
+      targetVersion: "9.9.9",
+      updatedAt: minutesAgo(3),
+    }),
+  },
+  {
+    name: "interrupted (preparing / active / null, stale, no live holder)",
+    overrides: () => ({
+      phase: "preparing",
+      execution: "active",
+      continuation: null,
+      targetVersion: "9.9.9",
+      updatedAt: minutesAgo(3),
+    }),
+  },
+  {
+    name: "interrupted (downloading / active, stale, no live holder)",
+    overrides: () => ({
+      phase: "downloading",
+      execution: "active",
+      continuation: null,
+      targetVersion: "9.9.9",
+      updatedAt: minutesAgo(3),
     }),
   },
 ];
@@ -486,5 +525,100 @@ describe("buildServiceStartCommand - the explicit start, over a standing update-
           "Service start command is starting the service beside a standing update attempt",
       ),
     ).toBe(false);
+  });
+  // Controls for the interrupted admission: each keeps today's answer.
+  async function startExpectingRefusal(
+    overrides: Partial<HostUpdateAttemptRecord>,
+  ): Promise<{ readonly err: unknown; readonly starts: number }> {
+    const hostHomeDirPath = await freshHome();
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleInstallRecord(INSTALLED_VERSION),
+    );
+    mocks.serviceLabelForMock.mockReturnValue(SERVICE_LABEL);
+    const { controller, calls } = startCapableController();
+    mocks.createServiceControllerMock.mockReturnValue(controller);
+    await writeAttemptRecord(hostHomeDirPath, overrides);
+    let err: unknown;
+    try {
+      await buildServiceStartCommand({ lifecycleOrigin: "terminal" })(
+        fakeCtx([]),
+      );
+    } catch (caught) {
+      err = caught;
+    }
+    return { err, starts: calls.start };
+  }
+
+  it("control: a preparing / active record written 30 s ago stays refused - an updater between writes may still be alive", async () => {
+    const { err, starts } = await startExpectingRefusal({
+      phase: "preparing",
+      execution: "active",
+      continuation: "resume-apply",
+      targetVersion: "9.9.9",
+      updatedAt: new Date(Date.now() - 30_000).toISOString(),
+    });
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe(
+      CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    );
+    expect(starts).toBe(0);
+  });
+
+  it("control: a stale applying / active record stays refused - byte placement keeps today's answer at any age", async () => {
+    const { err, starts } = await startExpectingRefusal({
+      phase: "applying",
+      execution: "active",
+      continuation: null,
+      targetVersion: "9.9.9",
+      updatedAt: minutesAgo(3),
+    });
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe(
+      CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    );
+    expect(starts).toBe(0);
+  });
+
+  it("control: a stale preparing / active record whose attempt lock is HELD stays busy, and start is never called", async () => {
+    const hostHomeDirPath = await freshHome();
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleInstallRecord(INSTALLED_VERSION),
+    );
+    mocks.serviceLabelForMock.mockReturnValue(SERVICE_LABEL);
+    const { controller, calls } = startCapableController();
+    mocks.createServiceControllerMock.mockReturnValue(controller);
+    await writeAttemptRecord(hostHomeDirPath, {
+      phase: "preparing",
+      execution: "active",
+      continuation: "resume-apply",
+      targetVersion: "9.9.9",
+      updatedAt: minutesAgo(3),
+    });
+    const heldOutcome = await acquireUpdateAttemptLock({
+      hostHomeDir: hostHomeDirPath,
+      reason: "control-live-holder",
+      waitMs: 0,
+      pollIntervalMs: 10,
+    });
+    expect(heldOutcome.kind).toBe("acquired");
+    const held: UpdateAttemptLockHandle | null =
+      heldOutcome.kind === "acquired" ? heldOutcome.handle : null;
+
+    let err: unknown;
+    try {
+      await buildServiceStartCommand({ lifecycleOrigin: "terminal" })(
+        fakeCtx([]),
+      );
+    } catch (caught) {
+      err = caught;
+    } finally {
+      await held?.release();
+    }
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe(CLI_ERROR_CODES.CLI_LOCK_BUSY);
+    expect(calls.start).toBe(0);
   });
 });

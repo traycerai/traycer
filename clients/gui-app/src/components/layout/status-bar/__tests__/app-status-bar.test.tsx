@@ -1160,7 +1160,7 @@ describe("<AppStatusBar /> reading placement (L-156)", () => {
   });
 
   it("draws neither reading once both have named the header", () => {
-    // The shell does not mount a strip in this state (`statusBarShown`), but
+    // The shell does not mount a strip in this state (`useStatusBarVisible`), but
     // the strip must not draw half of one if something does: an empty row is
     // a bordered 24px band holding a spacer.
     place({ usageHost: "header", resourceHost: "header" });

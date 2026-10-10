@@ -9,17 +9,30 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Test a branch before merging it: the Actions tab, or
+  # `gh workflow run test.yml --ref <branch>`.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run.
+  group: tests-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   test:
     name: ${{ matrix.name }}
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     # Every leg runs on the standard runner. This repository is public, and
     # standard runners are free and unmetered on public repositories; larger
     # runners (`ubuntu-latest-8-cores`) are billed even here. The GUI shards
@@ -263,6 +276,34 @@ jobs:
           df -h 2>/dev/null | head -10 || true
           echo "::endgroup::"
 
+  # The one required check for the whole matrix above. The `main` ruleset used to
+  # require four matrix names (`test (@traycer/protocol)`,
+  # `test (traycer-clients-gui-app)`, `test (@traycer-clients/desktop)` and
+  # `test (@traycer-clients/traycer-cli)`), but a matrix job skipped by a job-level
+  # `if` is never expanded, so on a team PR those names would never report and
+  # would block the merge. This job is skipped as a whole there, and a skipped job
+  # satisfies a required check. When it runs it fails unless every leg passed;
+  # `always()` makes it report even when a leg failed or was cancelled.
+  tests:
+    name: tests
+    needs: [test]
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      always() && (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every test leg passed
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = success
+
   # Windows job: the ONLY Windows execution of CLI code in PR CI. Until this
   # existed, `smoke:sea` ran solely inside the release workflows, so every
   # Windows claim in the CLI was unexecuted until a release — which is how the
@@ -281,6 +322,13 @@ jobs:
   # touching no CLI file. A gate that skips on the riskiest diffs is not a gate.
   test-windows-cli-exit:
     name: test (cli win32 SEA exit code)
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -332,6 +380,78 @@ jobs:
         working-directory: clients/traycer-cli
         run: bunx vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts
 
+  # Decides whether the macOS job below has anything to test. It is the
+  # slowest job in this workflow by minutes (a real electron-builder pack on
+  # top of the desktop suite), and most pull requests change nothing it
+  # covers.
+  macos-packaging-changes:
+    name: test (desktop darwin + packaging) changes
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # What the macOS job covers that no Linux job does: the desktop
+      # workspace's darwin-gated blocks and its real pack. So the list is that
+      # workspace, the packages its tests and its packaging scripts read
+      # (`@traycer-clients/shared`, `@traycer/protocol`, the CLI sources the
+      # label and path parity tests import, `clients/scripts/` for the
+      # release-target stamp), the dependency set and its patches
+      # (`app-builder-lib`), the Nx config that defines the `test` target, and
+      # this workflow. A package is listed whole, never by subdirectory or by
+      # file type: the pack copies a README out of `clients/desktop/`, so not
+      # even Markdown there is free. `--no-renames` reports a moved file at
+      # both its old path and its new one, so a file moved out of a listed
+      # package still counts.
+      #
+      # `clients/gui-app/` is deliberately absent. The pack builds the
+      # renderer from it, and the only thing this job asserts about the
+      # renderer is that the build succeeds; the `build` lane of
+      # `pre-commit.yml` builds the desktop app on Linux whenever gui-app
+      # changes, so a renderer that no longer builds is caught there. The rest
+      # of what it asserts (the bundled CLI's arch, mode and version file, the
+      # helper app and its plists) the renderer does not feed. The desktop
+      # tests that read gui-app sources run in the Linux matrix above.
+      #
+      # Only a pull request can skip: a push to `main` bypasses the filter.
+      - name: Does this change touch what the macOS job covers?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "A $EVENT run always runs the macOS job."
+            exit 0
+          fi
+          relevant=$(git diff --name-only --no-renames "$PR_BASE...HEAD" | awk '
+            /^clients\/desktop\// || /^clients\/shared\// ||
+            /^clients\/traycer-cli\// || /^clients\/scripts\// ||
+            /^protocol\// || /^patches\// || /^package\.json$/ ||
+            /^bun\.lock$/ || /^nx\.json$/ ||
+            /^\.github\/workflows\/test\.yml$/ { print }
+          ')
+          if [ -n "$relevant" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            printf 'Running the macOS job; it covers:\n%s\n' "$relevant"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing the macOS job covers changed: skipping it."
+          fi
+
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)
   # are `skipIf(platform !== "darwin")`-gated and silently skip on the ubuntu
@@ -341,8 +461,24 @@ jobs:
   # runs here too so darwin-only regressions surface; every launchctl-adjacent
   # test in it forces `process.platform` OFF darwin internally, so nothing in
   # this job can touch the runner's real launchd/BTM state.
+  #
+  # It runs when `macos-packaging-changes` says the change touches what it
+  # covers. It is not a required check, so a skipped run holds no pull
+  # request; a failed `macos-packaging-changes` skips it too, and that
+  # failure is itself a red check on the pull request.
   test-macos-packaging:
     name: test (desktop darwin + packaging)
+    needs: macos-packaging-changes
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+      && needs.macos-packaging-changes.outputs.run == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

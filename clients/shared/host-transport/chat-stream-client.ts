@@ -3,10 +3,10 @@ import {
   chatSubscribeServerFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchema,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
-  chatSubscribeWindowedServerFrameSchema,
+  openChatSubscribeWindowedServerFrameSchema,
   type ChatSubscribeClientFrame,
   type ChatSubscribeServerFrame,
-  type ChatSubscribeWindowedServerFrame,
+  type OpenChatSubscribeWindowedServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatSkeletonResume } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
@@ -42,7 +42,7 @@ export interface ChatStreamCallbacks {
   ) => void;
   readonly onMessageAccepted: (
     frame: Extract<
-      ChatSubscribeServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "messageAccepted" }
     >,
   ) => void;
@@ -53,7 +53,10 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   readonly onQueueChanged: (
-    frame: Extract<ChatSubscribeServerFrame, { readonly kind: "queueChanged" }>,
+    frame: Extract<
+      OpenChatSubscribeWindowedServerFrame,
+      { readonly kind: "queueChanged" }
+    >,
   ) => void;
   readonly onTurnStateChanged: (
     frame: Extract<
@@ -62,7 +65,10 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   readonly onBlockDelta: (
-    frame: Extract<ChatSubscribeServerFrame, { readonly kind: "blockDelta" }>,
+    frame: Extract<
+      OpenChatSubscribeWindowedServerFrame,
+      { readonly kind: "blockDelta" }
+    >,
   ) => void;
   readonly onApprovalRequested: (
     frame: Extract<
@@ -108,7 +114,7 @@ export interface ChatStreamCallbacks {
   ) => void;
   readonly onEventAppended: (
     frame: Extract<
-      ChatSubscribeServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "eventAppended" }
     >,
   ) => void;
@@ -203,31 +209,31 @@ export interface ChatStreamCallbacks {
    */
   readonly onWindowedSnapshot: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "snapshot" }
     >,
   ) => void;
   readonly onSkeletonChunk: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "skeletonChunk" }
     >,
   ) => void;
   readonly onIndexChanged: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "indexChanged" }
     >,
   ) => void;
   readonly onRange: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "range" }
     >,
   ) => void;
   readonly onAccumulatedChanges: (
     frame: Extract<
-      ChatSubscribeWindowedServerFrame,
+      OpenChatSubscribeWindowedServerFrame,
       { readonly kind: "accumulatedChanges" }
     >,
   ) => void;
@@ -517,7 +523,8 @@ export class ChatStreamClient {
    * only the `snapshot` differs in shape between the lines.
    */
   private handleWindowedFrame(envelope: StreamFrameEnvelope): void {
-    const parsed = chatSubscribeWindowedServerFrameSchema.safeParse(envelope);
+    const parsed =
+      openChatSubscribeWindowedServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       // Every other parse failure in this file is announced, and this one is
       // the least self-evident of them: a dropped `snapshot` or `skeletonChunk`
@@ -532,7 +539,7 @@ export class ChatStreamClient {
       warnDroppedFrame("windowed frame", parsed.error.issues);
       return;
     }
-    const frame: ChatSubscribeWindowedServerFrame = parsed.data;
+    const frame: OpenChatSubscribeWindowedServerFrame = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onWindowedSnapshot(frame);

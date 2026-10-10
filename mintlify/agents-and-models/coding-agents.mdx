@@ -11,7 +11,7 @@ For the agent surface itself, including composer controls, permissions, attachme
 
 ## Supported Coding Agents
 
-Traycer supports 21 coding agents. The first table shows what each one can do; the second shows how each one connects.
+Traycer supports 22 coding agents. The first table shows what each one can do; the second shows how each one connects.
 
 | Coding agent          | Chat | Terminal | Fast mode       | Profiles | Steer mid-turn | Permission modes      |
 | --------------------- | ---- | -------- | --------------- | -------- | -------------- | --------------------- |
@@ -36,6 +36,7 @@ Traycer supports 21 coding agents. The first table shows what each one can do; t
 | **Hugging Face**      | Yes  | No       | No              | No       | Yes            | All                   |
 | **Reasonix**          | Yes  | No       | No              | No       | Yes            | All                   |
 | **Antigravity**       | Yes  | No       | No              | Yes      | No             | All                   |
+| **Command Code**      | Yes  | No       | No              | No       | No             | All                   |
 
 <Info>
   - **Chat** and **Terminal** say which [interface](/concepts/terminal-agents-vs-terminals) the coding agent can back. A coding agent that uses a CLI behind its Chat integration is not automatically available on the Terminal interface.
@@ -68,9 +69,10 @@ Traycer supports 21 coding agents. The first table shows what each one can do; t
 | **Hugging Face**      | After credential check | Managed by Traycer                       | Hugging Face token                                                   | Account, Usage limits, MCP, Plugins, Skills         |
 | **Reasonix**          | After credential check | Managed by Traycer                       | **Set up in terminal** (runs `reasonix setup`)                       | None                                                |
 | **Antigravity**       | After credential check | Managed by Traycer, except on Intel Macs | Google account sign-in, or a Gemini API key                          | Profiles & Limits                                   |
+| **Command Code**      | After credential check | You install it                           | Sign in from a terminal (runs `cmd login`)                           | None                                                |
 
 - **Turned on.** Claude Code and Codex start enabled; Traycer Inference is opt-in. Other providers can turn on at host startup after credential verification, unless you have already chosen their setting. See [Turn A Provider On Or Off](/settings/providers#turn-a-provider-on-or-off).
-- **CLI.** Traycer downloads and updates the CLIs it manages; see [CLI Binary And Arguments](/settings/providers#cli-binary-and-arguments). Install the Amp and Hermes Agent CLIs yourself. Antigravity has no Intel Mac build, so on an Intel Mac install the Antigravity IDE to get its agent server.
+- **CLI.** Traycer downloads and updates the CLIs it manages; see [CLI Binary And Arguments](/settings/providers#cli-binary-and-arguments). Install the Amp, Hermes Agent, and Command Code CLIs yourself. Command Code installs with `npm i -g command-code`; its command is `cmd`, or `cmdc` on Windows. Antigravity has no Intel Mac build, so on an Intel Mac install the Antigravity IDE to get its agent server.
 - **Settings tabs.** Every provider also has **CLI & Args**, **Env**, and **Permissions**. What each tab holds is in [Provider Tabs](/settings/providers#provider-tabs).
 
 ## Models

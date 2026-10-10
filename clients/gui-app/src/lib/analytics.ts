@@ -7,12 +7,6 @@ import {
 import { LAYOUT_VALUE_ENUM_MEMBERS } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
 import { isMobileApp } from "@/lib/mobile-app";
-import {
-  PROFILE_COPY_REASONS,
-  PROFILE_COPY_STATES,
-  type ProfileCopyReason,
-  type ProfileCopyState,
-} from "@/lib/profile-copy/profile-copy-model";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -157,6 +151,7 @@ export type AnalyticsHarness =
   | "antigravity"
   | "claude"
   | "codex"
+  | "commandcode"
   | "copilot"
   | "cursor"
   | "devin"
@@ -291,6 +286,7 @@ export type AnalyticsProvider =
   | "antigravity"
   | "claude-code"
   | "codex"
+  | "commandcode"
   | "copilot"
   | "cursor"
   | "devin"
@@ -311,19 +307,18 @@ export type AnalyticsProvider =
 
 export type AnalyticsRole = "editor" | "owner" | "viewer";
 
-/** A settled profile-copy attempt's wire `state`, verbatim. */
-export type AnalyticsProfileCopyState = ProfileCopyState;
-/** The wire `reason` enum verbatim, or `none` - never free text. */
-export type AnalyticsProfileCopyReason = ProfileCopyReason | "none";
-
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
+  | "agentPages"
   | "agentOfficeDefaultView"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
   | "artifactIconColors"
+  | "catalogProbeTimeout"
+  | "catalogProbeTimeoutSameForAll"
+  | "chatAutoArchive"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
@@ -436,8 +431,6 @@ export enum AnalyticsEvent {
   ProviderProfileLinkSucceeded = "provider_profile_link_succeeded",
   ProviderProfileLinkFailed = "provider_profile_link_failed",
   ProviderProfileLinkCancelled = "provider_profile_link_cancelled",
-  ProfileCopyStarted = "profile_copy_started",
-  ProfileCopyAttemptSettled = "profile_copy_attempt_settled",
   ProviderConfigurationChanged = "provider_configuration_changed",
   AccountContextChanged = "account_context_changed",
   SubscriptionRefreshed = "subscription_refreshed",
@@ -525,6 +518,9 @@ export enum AnalyticsEvent {
   DraftCopied = "draft_copied",
   DraftDeleted = "draft_deleted",
   DraftDeleteUndone = "draft_delete_undone",
+  PageAction = "page_action",
+  McpAppCall = "mcp_app_call",
+  FilesPanelOpened = "files_panel_opened",
   NotificationCenterOpened = "notification_center_opened",
   NotificationFilterChanged = "notification_filter_changed",
   NotificationActivationCompleted = "notification_activation_completed",
@@ -610,6 +606,7 @@ export function analyticsTargetForCanvasTileType(
     case "terminal-agent":
       return "terminal_agent";
     case "workspace-file":
+    case "epic-file":
       return "file";
     case "git-diff":
     case "snapshot-diff":
@@ -723,19 +720,6 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ProviderProfileLinkCancelled]: {
     readonly provider: AnalyticsProvider;
     readonly mode: "create" | "reauth";
-  };
-  /** Enum-only: no label, host id, operation id, account id or email. */
-  readonly [AnalyticsEvent.ProfileCopyStarted]: {
-    readonly provider: AnalyticsProvider;
-    /** Whether the source was a managed profile or the Terminal account. */
-    readonly source_kind: "managed" | "ambient";
-    readonly destination_count: number;
-  };
-  /** One per attempt per window, when it settles. Wire enums only. */
-  readonly [AnalyticsEvent.ProfileCopyAttemptSettled]: {
-    readonly provider: AnalyticsProvider;
-    readonly state: AnalyticsProfileCopyState;
-    readonly reason: AnalyticsProfileCopyReason;
   };
   readonly [AnalyticsEvent.ProviderConfigurationChanged]: {
     readonly operation: AnalyticsProviderOperation;
@@ -963,6 +947,19 @@ export interface AnalyticsEventProperties {
     readonly surface: AnalyticsDraftSurface;
     readonly draft_kind: AnalyticsDraftKind;
   };
+  /** An agent page's own action; never its title, path or content (D31). */
+  readonly [AnalyticsEvent.PageAction]: {
+    readonly action: "expand" | "download";
+  };
+  /**
+   * How an MCP App's tool call ended: `approved` when the host ran it (with or
+   * without asking), `denied` when the reader declined, `refused` when the
+   * host refused it. Never the server, tool or arguments (D31).
+   */
+  readonly [AnalyticsEvent.McpAppCall]: {
+    readonly outcome: "approved" | "denied" | "refused";
+  };
+  readonly [AnalyticsEvent.FilesPanelOpened]: null;
   readonly [AnalyticsEvent.NotificationCenterOpened]: {
     readonly entry_point: AnalyticsNotificationEntryPoint;
     readonly host_state: AnalyticsNotificationHostState;
@@ -1275,6 +1272,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "antigravity",
   "claude",
   "codex",
+  "commandcode",
   "copilot",
   "cursor",
   "devin",
@@ -1323,6 +1321,7 @@ const ANALYTICS_LAYOUT_REGIONS = new Set<string>(
     railTerminals: true,
     railBrowsers: true,
     railArtifacts: true,
+    railFiles: true,
     railGitDiff: true,
     railPullRequests: true,
     railFileTree: true,
@@ -1336,6 +1335,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "antigravity",
   "claude-code",
   "codex",
+  "commandcode",
   "copilot",
   "cursor",
   "devin",
@@ -1404,12 +1404,16 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 const ANALYTICS_SETTINGS = new Set<string>(
   Object.keys({
     agentBrowserAccess: true,
+    agentPages: true,
     agentOfficeDefaultView: true,
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
     allowPrereleaseUpdates: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
+    catalogProbeTimeout: true,
+    catalogProbeTimeoutSameForAll: true,
+    chatAutoArchive: true,
     codeFontFamily: true,
     codeFontSize: true,
     composerMode: true,
@@ -1692,14 +1696,6 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["provider", "mode", "blocker"],
   ),
   ...eventKeyEntries(
-    [AnalyticsEvent.ProfileCopyStarted],
-    ["provider", "destination_count", "source_kind"],
-  ),
-  ...eventKeyEntries(
-    [AnalyticsEvent.ProfileCopyAttemptSettled],
-    ["provider", "state", "reason"],
-  ),
-  ...eventKeyEntries(
     [AnalyticsEvent.ProviderConfigurationChanged],
     ["operation"],
   ),
@@ -1840,6 +1836,8 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.DraftDeleteUndone],
     ["surface", "draft_kind"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.PageAction], ["action"]),
+  ...eventKeyEntries([AnalyticsEvent.McpAppCall], ["outcome"]),
   ...eventKeyEntries(
     [AnalyticsEvent.NotificationCenterOpened],
     ["entry_point", "host_state", "attention_bucket", "unread_bucket"],
@@ -1967,6 +1965,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
 ]);
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
+  AnalyticsEvent.FilesPanelOpened,
   AnalyticsEvent.SignInSucceeded,
   AnalyticsEvent.HostFailover,
   AnalyticsEvent.HostRecovered,
@@ -2093,6 +2092,16 @@ function eventValueEntries(
 
 const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
+    [AnalyticsEvent.PageAction],
+    "action",
+    new Set(["expand", "download"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.McpAppCall],
+    "outcome",
+    new Set(["approved", "denied", "refused"]),
+  ),
+  ...eventValueEntries(
     [
       AnalyticsEvent.DraftsListOpened,
       AnalyticsEvent.DraftOpened,
@@ -2147,18 +2156,6 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
     "reason",
     new Set(["launch", "recovery", "reinstall", "update"]),
-  ),
-  // The wire enums, exactly: anything else - free text, a label, an id - is
-  // not in the set, and an event carrying it is dropped whole.
-  ...eventValueEntries(
-    [AnalyticsEvent.ProfileCopyAttemptSettled],
-    "state",
-    new Set<string>(PROFILE_COPY_STATES),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.ProfileCopyAttemptSettled],
-    "reason",
-    new Set<string>([...PROFILE_COPY_REASONS, "none"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.ApprovalDecided, AnalyticsEvent.FileEditApprovalDecided],

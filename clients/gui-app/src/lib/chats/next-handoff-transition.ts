@@ -1,9 +1,10 @@
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AcceptedChatAction,
   FailedSendRestorationState,
 } from "@/stores/chats/chat-session-store";
 import type { InitialChatHandoff } from "@/stores/epics/initial-chat-handoff-store";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * Pure policy for the initial-chat-handoff state machine.
@@ -60,7 +61,7 @@ export interface HandoffTransitionContext {
   readonly snapshotLoaded: boolean;
   readonly canAct: boolean;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /**
    * The message the host's delivery view names (`chat.subscribe@1.15`), in any

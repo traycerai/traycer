@@ -177,6 +177,29 @@ describe("hostQuitStoppingLine", () => {
   });
 });
 
+describe("hostQuitTerminalsInUseTitle / hostQuitTerminalsInUseDescription", () => {
+  it("names one terminal in the singular", async () => {
+    const { hostQuitTerminalsInUseTitle, hostQuitTerminalsInUseDescription } =
+      await import("@/lib/host/host-lifecycle-copy");
+
+    expect(hostQuitTerminalsInUseTitle(1)).toBe("1 terminal is still in use");
+    expect(hostQuitTerminalsInUseDescription(1)).toBe(
+      "Stopping the host ends it. Quitting Traycer can keep the host running so it carries on, or stop it now.",
+    );
+  });
+
+  it("names several terminals in the plural, with the count", async () => {
+    const { hostQuitTerminalsInUseTitle, hostQuitTerminalsInUseDescription } =
+      await import("@/lib/host/host-lifecycle-copy");
+
+    expect(hostQuitTerminalsInUseTitle(2)).toBe("2 terminals are still in use");
+    expect(hostQuitTerminalsInUseTitle(3)).toBe("3 terminals are still in use");
+    expect(hostQuitTerminalsInUseDescription(3)).toBe(
+      "Stopping the host ends them. Quitting Traycer can keep the host running so they carry on, or stop it now.",
+    );
+  });
+});
+
 describe("hostQuitCountsLine", () => {
   describe("busy leads", () => {
     it("names the work phrase, capitalized, when the breakdown yields one", async () => {

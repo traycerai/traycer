@@ -80,6 +80,7 @@ import type {
   ArtifactRoomsSlice,
   ChatsSlice,
   CommentThreadsSlice,
+  FilesSlice,
   DeletedArtifactsSlice,
   EpicArtifactRoomAvailability,
   EpicHeader,
@@ -473,6 +474,12 @@ export interface OpenEpicState {
    * artifact, which is not the same as "no threads"; see `CommentThreadsSlice`.
    */
   readonly commentThreads: CommentThreadsSlice;
+  /**
+   * The epic's files as the records lane serves them. `served: false` on every
+   * legacy connection and before the lead snapshot - the Files panel reads that
+   * as "this host has no files plane", not as an empty epic.
+   */
+  readonly files: FilesSlice;
   readonly tree: TreeSlice;
   /**
    * Per-artifact-room availability mirrored from `epic.subscribe@1.0` `artifactRoomState`

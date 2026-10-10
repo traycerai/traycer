@@ -1,10 +1,8 @@
 import {
   useCallback,
-  useRef,
   type ClipboardEventHandler,
   type DragEventHandler,
   type KeyboardEvent,
-  type PointerEvent,
   type Ref,
 } from "react";
 import { PHONE_COMPOSER_EDITOR_CAP_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
@@ -26,10 +24,11 @@ import type {
   PastedComposerImageOutcome,
 } from "./editor/extensions/chat-paste-handler";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
+import { isPromptSuggestionAcceptKey } from "./prompt-suggestion";
 import {
-  isPromptSuggestionAcceptKey,
-  PROMPT_SUGGESTION_TAP_SLOP_PX,
-} from "./prompt-suggestion";
+  PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
+  usePromptSuggestionSwipe,
+} from "./use-prompt-suggestion-swipe";
 
 const PLACEHOLDER =
   "Ask anything, @tag files/folder, or use / to show available commands";
@@ -67,7 +66,8 @@ interface ChatComposerEditorSlotProps {
   /**
    * The provider's predicted next prompt, already gated by
    * `promptSuggestionAllowed` (so the draft is empty); `null` offers nothing.
-   * Shown as the placeholder; → or a tap on a touch device accepts it.
+   * Shown as the placeholder; → or a rightward swipe on a touch device accepts
+   * it.
    */
   readonly suggestedPrompt: string | null;
   /**
@@ -149,42 +149,21 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     [suggestedPrompt, onAcceptSuggestion],
   );
 
-  // Touch has no → key, so a tap on the composer accepts instead. Only a tap:
-  // a touch that travels is a scroll or a drag, and a mouse or pen click is
-  // just placing the caret.
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const handlePointerDown = useCallback((event: PointerEvent<HTMLElement>) => {
-    touchStartRef.current =
-      event.pointerType === "touch"
-        ? { x: event.clientX, y: event.clientY }
-        : null;
-  }, []);
-  const handlePointerUp = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
-      const start = touchStartRef.current;
-      touchStartRef.current = null;
-      if (start === null || suggestedPrompt === null) return;
-      if (event.pointerType !== "touch") return;
-      const travel = Math.hypot(
-        event.clientX - start.x,
-        event.clientY - start.y,
-      );
-      if (travel > PROMPT_SUGGESTION_TAP_SLOP_PX) return;
-      onAcceptSuggestion(suggestedPrompt);
-    },
-    [suggestedPrompt, onAcceptSuggestion],
+  // Touch has no → key, so a rightward swipe over the composer accepts
+  // instead. A tap is left alone: it is how the user starts typing.
+  const swipeHandlers = usePromptSuggestionSwipe(
+    suggestedPrompt,
+    onAcceptSuggestion,
   );
-  const handlePointerCancel = useCallback(() => {
-    touchStartRef.current = null;
-  }, []);
 
   return (
-    // `contents` keeps the wrapper out of layout; it only observes the tap.
+    // `contents` keeps the wrapper out of layout; it only observes the swipe.
     <div
       className="contents"
-      onPointerDown={handlePointerDown}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerCancel}
+      onPointerDown={swipeHandlers.onPointerDown}
+      onPointerMove={swipeHandlers.onPointerMove}
+      onPointerUp={swipeHandlers.onPointerUp}
+      onPointerCancel={swipeHandlers.onPointerCancel}
     >
       <ComposerPromptEditor
         ref={ref}
@@ -202,6 +181,9 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
         editorClassName={cn(
           "max-h-[3.5lh] min-h-9",
           PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
+          // Only while there is a suggestion to swipe: a draft keeps the
+          // browser's own handling of a sideways drag through its text.
+          suggestedPrompt !== null && PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
         )}
         stabilizeImageAttachmentCaret
         onDocumentChange={onDocumentChange}

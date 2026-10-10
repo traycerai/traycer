@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Gauge, Settings, TriangleAlert } from "lucide-react";
+import { Eye, EyeOff, Gauge, Settings } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
@@ -70,11 +70,7 @@ import {
 import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 import { useStatusBarRateLimitSegments } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
-import {
-  limitedProfileBannerText,
-  limitedProfiles,
-  type LimitedProfile,
-} from "@/lib/rate-limits/limited-profiles";
+import { limitedProviderIds } from "@/lib/rate-limits/limited-profiles";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   resolveStatusBarProfileIds,
@@ -821,7 +817,7 @@ function RateLimitPopoverScopedBody({
     () => orderRailTabs(providers, traycerSubscription.eligible),
     [providers, traycerSubscription.eligible],
   );
-  // Which profiles the host calls `limited`, for the banners and the rail dots.
+  // Which profiles the host calls `limited`, for the rail dots.
   // Passive: it reads the entries the strip and the blocks below already keep
   // fresh and can never start a fetch of its own.
   const windowedProviders = useMemo(
@@ -838,7 +834,7 @@ function RateLimitPopoverScopedBody({
     editing: false,
     sample: false,
   });
-  const limited = limitedProfiles(cluster);
+  const limitedProviders = limitedProviderIds(cluster);
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
   const { openSettings } = useSystemTabModalActions();
@@ -949,15 +945,12 @@ function RateLimitPopoverScopedBody({
             isFetching: traycerSubscription.query.isFetching,
             refetch: traycerSubscription.query.refetch,
           }}
-          limitedProviders={
-            new Set(limited.map((profile) => profile.providerId))
-          }
+          limitedProviders={limitedProviders}
           activeTab={resolvedTab}
           onSelect={setActiveTab}
           onClose={onClose}
         />
         <div className="min-h-0 min-w-0 overflow-y-auto p-3">
-          <LimitedProfileBanners limited={limited} />
           {resolvedTab === "overview" ? (
             <RateLimitOverview
               railTabs={railTabs}
@@ -1305,35 +1298,6 @@ function RailTab({
         ) : null}
       </button>
     </TooltipWrapper>
-  );
-}
-
-/**
- * One banner per limited profile, at the top of the content area and above
- * whichever tab is open: the limit is a fact about the account, not about the
- * tab. State only, with no action - the chat using that provider already
- * offers the switch. Nothing renders when no profile is limited.
- */
-function LimitedProfileBanners({
-  limited,
-}: {
-  readonly limited: ReadonlyArray<LimitedProfile>;
-}): ReactNode {
-  if (limited.length === 0) return null;
-  return (
-    <div className="mb-3 flex flex-col gap-2">
-      {limited.map((profile) => (
-        <div
-          key={`${profile.providerId}:${profile.profileId ?? ""}`}
-          role="status"
-          data-testid="rate-limit-limited-banner"
-          className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive"
-        >
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0">{limitedProfileBannerText(profile)}</span>
-        </div>
-      ))}
-    </div>
   );
 }
 

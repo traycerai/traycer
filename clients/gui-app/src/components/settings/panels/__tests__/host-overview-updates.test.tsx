@@ -862,12 +862,100 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     );
     expect(
       (await screen.findByTestId("confirm-destructive-dialog")).textContent,
-    ).toContain("Install v1.3.0 and lose access to newer chats?");
+    ).toContain("Install v1.3.0 over newer data?");
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(installRequests).toEqual([
         { version: "1.3.0", force: false, acceptStoreFormatLoss: false },
         { version: "1.3.0", force: false, acceptStoreFormatLoss: true },
+      ]);
+    });
+  });
+
+  it("turns the host's task-store refusal of one dispatched version into Install anyway on that row alone", async () => {
+    const installRequests: Array<{
+      readonly version: string;
+      readonly force: boolean;
+      readonly acceptStoreFormatLoss: boolean;
+    }> = [];
+    let installCalls = 0;
+    // A staging host: no table places its version, so the page cannot
+    // pre-label any row and the refusal is the host's own.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.4.3-staging.92.g8b2f6ce",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.4.2", "1.4.1"]),
+          }),
+        "host.update.install": (request) => {
+          installRequests.push(request);
+          installCalls += 1;
+          return installCalls === 1
+            ? {
+                outcome: "cli-failed" as const,
+                reason: "task-store-format-floor",
+                storeFloor: null,
+              }
+            : { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await selectHostOverviewTab("updates");
+    const rows = await screen.findByTestId("host-version-rows");
+    const [dispatchedRow, otherRow] = within(rows).getAllByRole("listitem");
+    expect(dispatchedRow.textContent).toContain("v1.4.2");
+    expect(otherRow.textContent).toContain("v1.4.1");
+    fireEvent.click(
+      within(dispatchedRow).getByRole("button", { name: "Install 1.4.2" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        within(dispatchedRow).getByRole("button", {
+          name: "Install 1.4.2 anyway",
+        }),
+      ).toHaveProperty("disabled", false);
+    });
+    // The failure line is the task sentence, and the other version's row is
+    // not affected by a refusal that named no version of its own.
+    expect(
+      (await screen.findByTestId("host-overview-version-install-refused"))
+        .textContent,
+    ).toMatch(
+      /^Can't install 1\.4\.2: it reads an older task store format than this device has/,
+    );
+    expect(
+      within(otherRow).getByRole("button", { name: "Install 1.4.1" }),
+    ).toHaveProperty("disabled", false);
+    expect(
+      within(otherRow).queryByRole("button", { name: "Install 1.4.1 anyway" }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(dispatchedRow).getByRole("button", {
+        name: "Install 1.4.2 anyway",
+      }),
+    );
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Install v1.4.2 over newer data?");
+    expect(dialog.textContent).toContain("task store");
+    expect(dialog.textContent).toContain("Nothing is deleted");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(installRequests).toEqual([
+        { version: "1.4.2", force: false, acceptStoreFormatLoss: false },
+        { version: "1.4.2", force: false, acceptStoreFormatLoss: true },
       ]);
     });
   });

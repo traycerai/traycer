@@ -1,11 +1,12 @@
 import { z } from "zod";
 
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   readMetadataNumber,
   readMetadataString,
 } from "@traycer/protocol/persistence/chat-transcript/event-metadata";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+
+import type { OpenChatEvent } from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # The setup interruption the composer restores a draft from
@@ -71,24 +72,21 @@ export type RestorableSetupInterruption = z.infer<
 >;
 
 const RESTORABLE_SETUP_INTERRUPTION_EVENT_TYPES: ReadonlySet<
-  ChatEvent["type"]
+  OpenChatEvent["type"]
 > = new Set(["setup.failed", "setup.cancelled"]);
 
-const RESTORE_CLEARING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
-  "setup.running",
-  "setup.succeeded",
-  "setup.cancelled",
-]);
+const RESTORE_CLEARING_EVENT_TYPES: ReadonlySet<OpenChatEvent["type"]> =
+  new Set(["setup.running", "setup.succeeded", "setup.cancelled"]);
 
 const RESTORE_CLEARING_EVENT_TYPES_WITHOUT_CANCELLED: ReadonlySet<
-  ChatEvent["type"]
+  OpenChatEvent["type"]
 > = new Set(["setup.running", "setup.succeeded"]);
 
 function hasSubsequentRestoreClearingEvent(
-  events: readonly ChatEvent[],
+  events: readonly OpenChatEvent[],
   fromIndex: number,
   workspacePath: string | null,
-  candidateType: ChatEvent["type"],
+  candidateType: OpenChatEvent["type"],
 ): boolean {
   // A `setup.cancelled` is not cleared by another `setup.cancelled`: a repeat
   // describes the same interruption the first one already owns.
@@ -123,7 +121,7 @@ function hasSubsequentRestoreClearingEvent(
  * `null` when there is no restorable interruption, which is the ordinary case.
  */
 export function selectRestorableSetupInterruption(
-  events: readonly ChatEvent[],
+  events: readonly OpenChatEvent[],
 ): RestorableSetupInterruption | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
@@ -177,7 +175,7 @@ export function selectRestorableSetupInterruption(
  */
 export function foldRestorableSetupInterruption(input: {
   readonly baseline: RestorableSetupInterruption | null;
-  readonly laterEvents: readonly ChatEvent[];
+  readonly laterEvents: readonly OpenChatEvent[];
 }): RestorableSetupInterruption | null {
   const { baseline, laterEvents } = input;
   // A later interruption supersedes the baseline outright - it is newer by

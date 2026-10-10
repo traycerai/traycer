@@ -703,8 +703,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
-  // Accepting the suggestion (→, or a tap on touch) FILLS and focuses - it
-  // never sends.
+  // Accepting the suggestion (→, or a rightward swipe on touch) FILLS and
+  // focuses - it never sends.
   const fillSuggestedPrompt = useCallback(
     (suggestion: string): boolean =>
       fillComposerWithSuggestion(editorRef.current, suggestion),

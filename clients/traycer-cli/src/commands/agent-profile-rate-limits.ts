@@ -1,7 +1,7 @@
 import { formatAgentProviderProfileRateLimitsResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
   agentGetProviderProfileRateLimitsRequestSchema,
-  agentGetProviderProfileRateLimitsResponseSchemaV6,
+  agentGetProviderProfileRateLimitsResponseSchemaV7,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   callHostRpc,
@@ -54,11 +54,15 @@ export function buildAgentProfileRateLimitsCommand(opts: {
     // handshake, so it has to parse against the head: pinned at the frozen
     // v5.0 it would have strict-decoded a v6.0 response and silently dropped
     // `antigravity` from a rate-limit read. `assertCanonicalResponseSchema` is
-    // what turned that into a red CI job instead of a wrong answer. Move this
-    // to `...V7` the same day a tag ships v6.0.
+    // what turned that into a red CI job instead of a wrong answer.
+    //
+    // It moved to `...V7` the same way: the 1.5.0 tags shipped the v6.0 line,
+    // which is now frozen at the provider ids they carried, and v7.0 is the
+    // head over the live union. Move this to `...V8` the same day a tag ships
+    // v7.0.
     const response = parseCanonicalHostResponse(
       "agent.getProviderProfileRateLimits",
-      agentGetProviderProfileRateLimitsResponseSchemaV6,
+      agentGetProviderProfileRateLimitsResponseSchemaV7,
       result,
     );
     return {

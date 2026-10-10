@@ -16,6 +16,8 @@ import {
   createChatRequestSchemaV12,
   createChatResponseSchema,
   createChatResponseSchemaV12,
+  continueSubagentRequestSchema,
+  continueSubagentResponseSchema,
   createCommentThreadRequestSchema,
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
@@ -168,8 +170,11 @@ import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
+  getChatRunSettingsResponseSchemaV30,
+  getChatRunSettingsBatchEntrySchemaV10,
   getChatRunSettingsBatchRequestSchema,
   getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsBatchResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
@@ -1567,7 +1572,101 @@ export const epicGetChatRunSettingsV30 = defineRpcContract({
   method: "epic.getChatRunSettings",
   schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: getChatRunSettingsRequestSchema,
+  // Frozen at the harness id set the 1.5.0 tags shipped - the same trap a
+  // third time. v4.0 is the head line.
+  responseSchema: getChatRunSettingsResponseSchemaV30,
+});
+
+// The LIVE line. The moment a tag ships `4`, freeze it against a snapshot
+// tuple and open `5`.
+export const epicGetChatRunSettingsV40 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
   responseSchema: getChatRunSettingsResponseSchema,
+});
+
+export const epicGetChatRunSettingsUpgradeV30ToV40 = defineUpgradePath<
+  typeof epicGetChatRunSettingsV30,
+  typeof epicGetChatRunSettingsV40
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 4, minor: 0 },
+  // Request shape is identical; a v3.0 settings tuple is a valid v4.0 one
+  // (only the `harnessId` enum grows), so both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsDowngradeV40ToV30 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV40,
+  typeof epicGetChatRunSettingsV30
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Refuse rather than answering `{ settings: null }` - see the v2->v1
+    // bridge below for why that arm would be a false claim, not a degrade.
+    const parsed = getChatRunSettingsResponseSchemaV30.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const epicGetChatRunSettingsDowngradeV40ToV20 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV40,
+  typeof epicGetChatRunSettingsV20
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = getChatRunSettingsResponseSchemaV20.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const epicGetChatRunSettingsDowngradeV40ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV40,
+  typeof epicGetChatRunSettingsV10
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const epicGetChatRunSettingsUpgradeV20ToV30 = defineUpgradePath<
@@ -1689,10 +1788,54 @@ export const epicGetChatRunSettingsBatchV10 = defineRpcContract({
   method: "epic.getChatRunSettingsBatch",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: getChatRunSettingsBatchRequestSchema,
-  // Live settings tuple, same head body as `epic.getChatRunSettings@3.0`.
-  // Optional; an old host answers `E_HOST_UNSUPPORTED` and the client falls
-  // back to N singles.
+  // Frozen at the settings tuple the 1.5.0 tags shipped, the same body as
+  // `epic.getChatRunSettings@3.0`. Optional; an old host answers
+  // `E_HOST_UNSUPPORTED` and the client falls back to N singles.
+  responseSchema: getChatRunSettingsBatchResponseSchemaV10,
+});
+
+// The LIVE line: the live settings tuple, same head body as
+// `epic.getChatRunSettings@4.0`.
+export const epicGetChatRunSettingsBatchV20 = defineRpcContract({
+  method: "epic.getChatRunSettingsBatch",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: getChatRunSettingsBatchRequestSchema,
   responseSchema: getChatRunSettingsBatchResponseSchema,
+});
+
+export const epicGetChatRunSettingsBatchUpgradeV10ToV20 = defineUpgradePath<
+  typeof epicGetChatRunSettingsBatchV10,
+  typeof epicGetChatRunSettingsBatchV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsBatchDowngradeV20ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsBatchV20,
+  typeof epicGetChatRunSettingsBatchV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Omits each entry the 1.0 line cannot represent and keeps the rest. The
+  // unary read refuses for such a chat because it has one tuple and nothing
+  // else to answer with; here refusing would withhold up to forty-nine
+  // readable siblings for one that is not. An omitted entry asserts nothing
+  // about its chat - unlike `settings: null`, which would claim the chat has
+  // no stored settings - and the caller already treats a chat with no entry
+  // as unresolved and renders the record row's harness mark for it.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      entries: response.entries.flatMap((entry) => {
+        const parsed = getChatRunSettingsBatchEntrySchemaV10.safeParse(entry);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
 });
 
 // The terminal-agent RECORD read (`epic.listTuiAgents@1.0`) lives in
@@ -1709,6 +1852,16 @@ export const epicGetChatRunSettingsBatchV10 = defineRpcContract({
 // `lane-unaries.ts` - the `tui-agent-records.ts` and `communication-graph.ts`
 // arrangement, not this file's. They are exported through the epic index, not
 // re-exported here, so `export *` consumers see exactly one binding.
+
+// A native subagent's conversation carried on as its own chat, through
+// session import (see `continueSubagentRequestSchema`). New method, first
+// minor: nothing released carries it, so there is nothing to upgrade from.
+export const epicContinueSubagentV10 = defineRpcContract({
+  method: "epic.continueSubagent",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: continueSubagentRequestSchema,
+  responseSchema: continueSubagentResponseSchema,
+});
 
 export {
   epicSubscribeV10,

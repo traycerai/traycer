@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { isDevBuild } from "../../config";
 import { log } from "./logger";
+import { SANDBOX_SCHEME_PRIVILEGES } from "./sandbox-protocol";
 
 export const APP_SCHEME = "app";
 const APP_HOST = "renderer";
@@ -17,6 +18,9 @@ const APP_HOST = "renderer";
  * blocking. `supportFetchAPI` and `corsEnabled` keep fetch/import paths
  * inside the renderer working. `stream: true` enables ReadableStream
  * responses (required for large assets to stream).
+ *
+ * The sandbox scheme rides the same call because Electron keeps only the
+ * last raw registration (see `runPreReady`).
  */
 export function registerAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
@@ -31,6 +35,7 @@ export function registerAppScheme(): void {
         bypassCSP: false,
       },
     },
+    SANDBOX_SCHEME_PRIVILEGES,
   ]);
 }
 

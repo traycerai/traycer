@@ -6,6 +6,7 @@ import {
   SortableList,
   type SortableListItem,
 } from "@/components/layout-editor/inspector/sortable-list";
+import { LIVE } from "@/components/layout-editor/regions/row-availability";
 
 type RowId = "minimap" | "contextUsage";
 
@@ -42,6 +43,7 @@ function row(id: RowId, label: string): SortableListItem<RowId> {
     removeLabel: null,
     onStack: null,
     stackMembers: null,
+    availability: LIVE,
   };
 }
 

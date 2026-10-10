@@ -3984,41 +3984,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
     renderPopover();
   }
 
-  it("adds one banner per limited profile, with the reset time and no action", () => {
-    showLimited([
-      limitedSegment({
-        providerId: "codex",
-        profileId: "p1",
-        label: "pro20x",
-        severity: "limited",
-        kind: "weekly",
-      }),
-      limitedSegment({
-        providerId: "codex",
-        profileId: "p2",
-        label: "team",
-        severity: "limited",
-        kind: "session",
-      }),
-      limitedSegment({
-        providerId: "claude-code",
-        profileId: null,
-        label: null,
-        severity: "healthy",
-        kind: "session",
-      }),
-    ]);
-
-    const banners = screen.getAllByTestId("rate-limit-limited-banner");
-    expect(banners).toHaveLength(2);
-    expect(banners[0].textContent).toMatch(
-      /^pro20x hit its weekly limit · Resets \w{3}, \w{3} \d+, \d+:\d{2} (AM|PM)$/,
-    );
-    expect(banners[1].textContent).toContain("team hit its 5h limit");
-    expect(within(banners[0]).queryByRole("button")).toBeNull();
-  });
-
-  it("draws no banner while no profile is limited, even one running low", () => {
+  it("draws no rail dot while no profile is limited, even one running low", () => {
     showLimited([
       limitedSegment({
         providerId: "codex",
@@ -4029,24 +3995,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
       }),
     ]);
 
-    expect(screen.queryByTestId("rate-limit-limited-banner")).toBeNull();
     expect(screen.queryByTestId("rate-limit-rail-limited-dot")).toBeNull();
-  });
-
-  it("keeps the banner above the content of every tab", () => {
-    showLimited([
-      limitedSegment({
-        providerId: "codex",
-        profileId: "p1",
-        label: "pro20x",
-        severity: "limited",
-        kind: "weekly",
-      }),
-    ]);
-
-    expect(screen.getAllByTestId("rate-limit-limited-banner")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("tab", { name: /^Codex/ }));
-    expect(screen.getAllByTestId("rate-limit-limited-banner")).toHaveLength(1);
   });
 
   it("marks only the provider with a limited profile on the rail, leaving the order alone", () => {

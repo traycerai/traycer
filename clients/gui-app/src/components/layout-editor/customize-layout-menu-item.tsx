@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { SlidersHorizontal } from "lucide-react";
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { explainedMenuItemProps } from "@/components/layout-editor/explained-menu-item";
+import { ExplainedMenuItemLabel } from "@/components/layout-editor/explained-menu-item-label";
+import { LAYOUT_EDITOR_HELD_ELSEWHERE_REASON } from "@/lib/layout/editor-lease";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
-import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
+import { useLayoutEditorDoor } from "@/lib/layout/use-layout-editor-door";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import type { RegionId } from "@/lib/layout/region-id";
 
@@ -20,7 +22,8 @@ import type { RegionId } from "@/lib/layout/region-id";
  * Where the editor can never open (the installed app) the door lands on the
  * region's own row in Settings > Layout instead, so the item says that rather
  * than naming an editor the press will not reach. One item either way, so the
- * menus around it keep their separators.
+ * menus around it keep their separators. All three states come from
+ * `useLayoutEditorDoor`, the answer every door shares.
  */
 export function CustomizeLayoutMenuItem(props: {
   /**
@@ -30,25 +33,36 @@ export function CustomizeLayoutMenuItem(props: {
   readonly target: RegionId | null;
 }): ReactNode {
   const navigate = useNavigate();
-  const availability = useSettingsAvailabilityContext();
+  const door = useLayoutEditorDoor();
+  const reasonId = useId();
+  const heldElsewhere = door === "held-elsewhere";
   return (
     <ContextMenuItem
       data-testid="customize-layout-menu-item"
-      onSelect={() => {
-        openLayoutEditor({
-          source: "direct_ui",
-          entry: "pointer",
-          target: props.target,
-          origin: { kind: "tab" },
-          navigateToTabIntent: (intent) =>
-            activateTabIntent(navigate, intent, undefined),
-        });
-      }}
+      // While another window holds the editor the press would do nothing, so
+      // the item is off and says why, in the palette's words (T6) - still
+      // focusable, with the reason as its description.
+      {...explainedMenuItemProps({
+        off: heldElsewhere,
+        reasonId,
+        onSelect: () => {
+          openLayoutEditor({
+            source: "direct_ui",
+            entry: "pointer",
+            target: props.target,
+            origin: { kind: "tab" },
+            navigateToTabIntent: (intent) =>
+              activateTabIntent(navigate, intent, undefined),
+          });
+        },
+      })}
     >
       <SlidersHorizontal aria-hidden />
-      {isLayoutEditorAvailable(availability)
-        ? "Customize layout..."
-        : "Layout settings..."}
+      <ExplainedMenuItemLabel
+        label={door === "absent" ? "Layout settings..." : "Customize layout..."}
+        reason={heldElsewhere ? LAYOUT_EDITOR_HELD_ELSEWHERE_REASON : null}
+        reasonId={reasonId}
+      />
     </ContextMenuItem>
   );
 }

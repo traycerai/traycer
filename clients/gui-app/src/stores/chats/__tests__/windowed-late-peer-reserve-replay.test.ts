@@ -3,8 +3,8 @@ import { renderHook } from "@testing-library/react";
 import { z } from "zod";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
-  chatSubscribeWindowedServerFrameSchema,
-  type ChatSubscribeWindowedServerFrame,
+  openChatSubscribeWindowedServerFrameSchema,
+  type OpenChatSubscribeWindowedServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   createChatSessionStore,
@@ -94,7 +94,7 @@ export function createHarness(): Harness {
 
 /** Each windowed frame, keyed by its `kind`. */
 type WindowedFrameByKind = {
-  readonly [F in ChatSubscribeWindowedServerFrame as F["kind"]]: F;
+  readonly [F in OpenChatSubscribeWindowedServerFrame as F["kind"]]: F;
 };
 
 /**
@@ -164,13 +164,13 @@ export function dispatchEnvelope(
   index: number,
   envelope: unknown,
 ): void {
-  const parsed = chatSubscribeWindowedServerFrameSchema.safeParse(envelope);
+  const parsed = openChatSubscribeWindowedServerFrameSchema.safeParse(envelope);
   if (!parsed.success) {
     throw new Error(
-      `frame #${index} failed chatSubscribeWindowedServerFrameSchema: ${JSON.stringify(parsed.error.issues)}`,
+      `frame #${index} failed openChatSubscribeWindowedServerFrameSchema: ${JSON.stringify(parsed.error.issues)}`,
     );
   }
-  const frame: ChatSubscribeWindowedServerFrame = parsed.data;
+  const frame: OpenChatSubscribeWindowedServerFrame = parsed.data;
   routeWindowedFrame(cb, frame.kind, frame);
 }
 

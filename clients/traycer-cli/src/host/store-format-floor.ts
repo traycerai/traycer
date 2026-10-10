@@ -41,18 +41,47 @@
  * boundary walks the epics: one read-only open and one row each, measured at
  * 7.9 ms over 22 epics / 144 MB, against a command that is about to transfer a
  * host bundle.
+ *
+ * ## The task store rides the same gate
+ *
+ * A data root holds a second forward-only store, the local task store
+ * (`epic-homes/epic-homes.db`), and a host that cannot read its stamp leaves
+ * every local task unopened until a newer host is installed again. No release
+ * publishes what it reads there, so `taskStoreFloorBlock`
+ * (`@traycer/protocol/host/store-formats`) answers from a table of releases,
+ * and this gate applies it under three rules that keep it from ever refusing
+ * an ordinary install:
+ *
+ * - It runs only past the applicability test, so an upgrade or a same-version
+ *   reinstall never reaches it, and only a canonical stable or
+ *   release-candidate target is judged - a staging or development build is
+ *   not, whatever its version sorts as.
+ * - The chat floor speaks first and keeps its verdict. One flag accepts both
+ *   losses, so the task store refuses on its own only at the two returns
+ *   where the chat floor CLEARED, and where the chat floor refuses it adds a
+ *   sentence to that refusal. A task refusal that spoke first would read
+ *   "nothing is deleted", be accepted, and carry the user past the chat
+ *   refusal unread.
+ * - A task store that cannot be read does not refuse. The cost of a wrong pass
+ *   is tasks that do not open until the next update; the cost of a wrong
+ *   refusal is a blocked install, repair installs included. That is looser
+ *   than the chat floor on purpose, and it is logged at INFO.
  */
 import {
+  NEWEST_TASK_STORE_FORMAT,
   decideStoreFormatFloor,
   resolveHostStoreFormats,
   storeFloorApplicability,
   storeFloorClearedByFormats,
+  taskStoreFloorBlock,
+  taskStoreFormatReadBy,
   type ChatDbStampFailure,
   type ChatDbStampFailureReason,
   type ChatDbStampReading,
   type HostStoreFormats,
   type HostStoreFormatsKnowledge,
   type StoreFormatFloorVerdict,
+  type TaskStoreFloorBlock,
 } from "@traycer/protocol/host/store-formats";
 import type { ILogger, LogValue } from "../logger";
 import { errorFromUnknown } from "../logger";
@@ -62,7 +91,11 @@ import { resolveManifestUrl } from "../registry/manifest-url";
 import { fetchText } from "../registry/fetch-resource";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
-import { surveyChatDbStamps } from "./chat-store-survey";
+import {
+  surveyChatDbStamps,
+  surveyTaskStoreFormats,
+  type TaskStoreFormatSurvey,
+} from "./chat-store-survey";
 import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import {
   describeQuiescenceGap,
@@ -201,7 +234,9 @@ export interface StoreFormatFloorInput {
  *
  * Returns normally on `clear`, on a gate that does not apply, and on a
  * `blocked`/`indeterminate` verdict the caller explicitly accepted; throws
- * `E_HOST_STORE_FORMAT_FLOOR` otherwise.
+ * `E_HOST_STORE_FORMAT_FLOOR` otherwise. "Store" is the chat stores first and
+ * the task store second: a chat verdict that clears still has the task store
+ * to answer for (see the module docblock).
  */
 export async function assertHostStoreFormatFloor(
   input: StoreFormatFloorInput,
@@ -223,6 +258,10 @@ export async function assertHostStoreFormatFloor(
     });
     return;
   }
+  // Found before the chat floor decides anything and acted on only after it
+  // has: the finding refuses on its own where the chat floor clears, and adds
+  // a sentence where the chat floor refuses.
+  const taskStore = await findTaskStoreFloorBlock(input);
   // The manifest's published field wins over the archive's own declaration:
   // the registry entry is stamped at RELEASE time from the same source
   // constant, and it is the value the host and the desktop resolve too, so
@@ -262,6 +301,7 @@ export async function assertHostStoreFormatFloor(
       targetChatDb: knownChatDb(target),
       installedChatDb: knownChatDb(installed),
     });
+    settleTaskStoreFloor(input, taskStore);
     return;
   }
   const survey = await surveyChatDbStamps(input.surveyRoots);
@@ -280,9 +320,10 @@ export async function assertHostStoreFormatFloor(
       targetChatDb: knownChatDb(target),
       epicsSurveyed: survey.readings.length,
     });
+    settleTaskStoreFloor(input, taskStore);
     return;
   }
-  const refusal = storeFormatFloorRefusal(input, target, verdict);
+  const refusal = storeFormatFloorRefusal(input, target, verdict, taskStore);
   if (input.acceptStoreFormatLoss) {
     // The SAME facts the refusal would have carried, at WARN. A run that
     // accepted the loss should leave behind exactly what a run that refused it
@@ -293,6 +334,7 @@ export async function assertHostStoreFormatFloor(
         environment: input.environment,
         site: input.site,
         ...floorLogFields(input, target, verdict),
+        ...taskStoreLogFields(taskStore),
         message: refusal.message,
       },
     );
@@ -304,10 +346,118 @@ export async function assertHostStoreFormatFloor(
       environment: input.environment,
       site: input.site,
       ...floorLogFields(input, target, verdict),
+      ...taskStoreLogFields(taskStore),
     },
     null,
   );
   throw refusal;
+}
+
+/**
+ * What the task store has to say about this target, or `null`.
+ *
+ * NEVER THROWS and never refuses: it only finds. `null` covers every way of
+ * having nothing to say - a target the table does not judge, a target that
+ * reads the newest format the table knows (no stamp can block it, so no file
+ * is opened), a machine with no task store, and a task store that could not
+ * be read. The last is the one worth a line: this floor stood aside over a
+ * store that is there, and someone reading why tasks stopped opening after a
+ * rollback should find that at INFO rather than infer it from silence.
+ */
+async function findTaskStoreFloorBlock(
+  input: StoreFormatFloorInput,
+): Promise<TaskStoreFloorBlock | null> {
+  const targetReads = taskStoreFormatReadBy(input.targetVersion);
+  if (targetReads === null || targetReads >= NEWEST_TASK_STORE_FORMAT) {
+    return null;
+  }
+  const survey = await surveyTaskStoreFormats(input.surveyRoots).catch(
+    (): TaskStoreFormatSurvey => ({ onDiskMax: null, unreadableRoots: 1 }),
+  );
+  if (survey.unreadableRoots > 0) {
+    input.logger.info(
+      "Host task store could not be read; the task-store floor stood aside",
+      {
+        environment: input.environment,
+        site: input.site,
+        targetVersion: input.targetVersion,
+        installedVersion: input.installedVersion,
+        targetTaskStore: targetReads,
+        unreadableRoots: survey.unreadableRoots,
+      },
+    );
+  }
+  if (survey.onDiskMax === null) return null;
+  return taskStoreFloorBlock(input.targetVersion, survey.onDiskMax);
+}
+
+/**
+ * The task store's own word, at a return where the chat floor cleared.
+ *
+ * Refuses, or is overridden by the same flag at the same level, exactly as
+ * the chat floor is: a run that accepted the loss leaves behind the line a
+ * run that refused it would have shown.
+ */
+function settleTaskStoreFloor(
+  input: StoreFormatFloorInput,
+  taskStore: TaskStoreFloorBlock | null,
+): void {
+  if (taskStore === null) return;
+  const refusal = taskStoreFloorRefusal(input, taskStore);
+  const fields = {
+    environment: input.environment,
+    site: input.site,
+    targetVersion: input.targetVersion,
+    installedVersion: input.installedVersion,
+    ...taskStoreLogFields(taskStore),
+  };
+  if (input.acceptStoreFormatLoss) {
+    input.logger.warn(
+      "Host task-store floor overridden by --accept-store-format-loss",
+      { ...fields, message: refusal.message },
+    );
+    return;
+  }
+  input.logger.error("Host task-store floor refused the target", fields, null);
+  throw refusal;
+}
+
+function taskStoreFloorRefusal(
+  input: StoreFormatFloorInput,
+  taskStore: TaskStoreFloorBlock,
+): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    message: `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input.installedVersion)} - it reads task store format ${taskStore.targetReads}, and this machine's task store is at format ${taskStore.onDisk}. ${describeTaskStoreLoss(taskStore)} Install a host that reads format ${taskStore.onDisk} instead, or rerun with --accept-store-format-loss to install it anyway and go without local tasks until one is installed.`,
+    details: {
+      environment: input.environment,
+      site: input.site,
+      verdict: "task-store-blocked",
+      targetVersion: input.targetVersion,
+      installedVersion: input.installedVersion,
+      ...taskStoreLogFields(taskStore),
+    },
+    exitCode: 1,
+  });
+}
+
+/**
+ * What landing the target does to local tasks, as one sentence shared by the
+ * task-only refusal and the chat refusal that carries it.
+ */
+function describeTaskStoreLoss(taskStore: TaskStoreFloorBlock): string {
+  return `Local tasks would not open and new ones could not be created until a host that reads format ${taskStore.onDisk} is installed again; nothing in the task store is deleted.`;
+}
+
+/** The task finding for a log line or an error envelope; nothing when none. */
+function taskStoreLogFields(taskStore: TaskStoreFloorBlock | null): {
+  readonly [key: string]: LogValue;
+} {
+  if (taskStore === null) return {};
+  return {
+    targetTaskStore: taskStore.targetReads,
+    onDiskTaskStore: taskStore.onDisk,
+  };
 }
 
 /**
@@ -351,6 +501,7 @@ function storeFormatFloorRefusal(
   input: StoreFormatFloorInput,
   target: HostStoreFormatsKnowledge,
   verdict: Exclude<StoreFormatFloorVerdict, { kind: "clear" }>,
+  taskStore: TaskStoreFloorBlock | null,
 ): CliError {
   const head = `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input.installedVersion)}`;
   // Direction-NEUTRAL, both sentences, and deliberately so: this gate is not
@@ -358,12 +509,19 @@ function storeFormatFloorRefusal(
   // archive with no sidecar - `storeFloorApplicability` evaluates a forward
   // move too, so "update forward" can be advice to do what the operator is
   // already doing, and "survive the downgrade" can name a move that is not one.
-  const remedy =
-    "Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats.";
+  //
+  // The flag accepts BOTH losses, so when the task store is blocked too the
+  // refusal says so before it names the flag: the sentence about local tasks,
+  // and a remedy that counts them in what is given up.
+  const taskStoreSentence =
+    taskStore === null
+      ? ""
+      : ` It also reads task store format ${taskStore.targetReads}, and this machine's task store is at format ${taskStore.onDisk}. ${describeTaskStoreLoss(taskStore)}`;
+  const remedy = `Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats${taskStore === null ? "" : " and to local tasks"}.`;
   const message =
     verdict.kind === "blocked"
-      ? `${head} - it reads chat store format ${verdict.targetChatDb}, and ${countedEpics(verdict.epics.length)} on this machine ${verdict.epics.length === 1 ? "carries" : "carry"} a newer one (${describeReadings(verdict.epics)}).${describeBlockedFailures(verdict.failures)} Those chats would be unreadable to it, and a host that meets a store it cannot open crash-loops rather than reporting it. ${remedy}`
-      : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the swap. ${remedy}`;
+      ? `${head} - it reads chat store format ${verdict.targetChatDb}, and ${countedEpics(verdict.epics.length)} on this machine ${verdict.epics.length === 1 ? "carries" : "carry"} a newer one (${describeReadings(verdict.epics)}).${describeBlockedFailures(verdict.failures)} Those chats would be unreadable to it, and a host that meets a store it cannot open crash-loops rather than reporting it.${taskStoreSentence} ${remedy}`
+      : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the swap.${taskStoreSentence} ${remedy}`;
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     message,
@@ -375,6 +533,7 @@ function storeFormatFloorRefusal(
       // log line gets, from the same builder, so a support thread comparing an
       // NDJSON envelope against `cli.log` cannot find them disagreeing.
       ...floorLogFields(input, target, verdict),
+      ...taskStoreLogFields(taskStore),
     },
     exitCode: 1,
   });

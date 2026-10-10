@@ -120,30 +120,68 @@ function section(id: "usageLimits" | "resourceMonitor"): HTMLElement {
   return node;
 }
 
+/** The group the region's disclosure draws the Profiles list in. */
+function profilesGroup(): HTMLFieldSetElement {
+  const group = document
+    .querySelector("[data-usage-profiles]")
+    ?.closest("fieldset");
+  if (!(group instanceof HTMLFieldSetElement)) {
+    throw new Error("the Profiles list is not drawn in a group");
+  }
+  return group;
+}
+
 function profileRow(id: string): HTMLElement {
   const node = document.querySelector(`[data-profile-row="${id}"]`);
   if (!(node instanceof HTMLElement)) throw new Error(`no profile row: ${id}`);
   return node;
 }
 
-/** Which of the rows a Compact reading ignores the section draws right now. */
+/**
+ * How the section draws one of its rows right now: `absent` when it has no
+ * such row, else what the row says about itself (`data-row-availability`).
+ * A row its controller leaves doing nothing is `disabled`, never `absent`.
+ */
+type RowState = "live" | "disabled" | "absent";
+
+function rowState(
+  id: "usageLimits" | "resourceMonitor",
+  label: string,
+): RowState {
+  const row = within(section(id))
+    .queryByText(label)
+    ?.closest("[data-layout-form-row]");
+  if (row === undefined || row === null) return "absent";
+  const state = row.getAttribute("data-row-availability");
+  if (state !== "live" && state !== "disabled") {
+    throw new Error(`${label} carries no availability`);
+  }
+  return state;
+}
+
+/** The rows that depend on the reading's Density or Location, as drawn now. */
 function drawn(id: "usageLimits" | "resourceMonitor"): {
-  readonly density: boolean;
-  readonly percentShows: boolean;
-  readonly resetTime: boolean;
-  readonly metrics: boolean;
-  readonly readingStyle: boolean;
+  readonly density: RowState;
+  readonly percentShows: RowState;
+  readonly resetTime: RowState;
+  readonly metrics: RowState;
+  readonly readingStyle: RowState;
 } {
-  const scope = within(section(id));
   return {
-    density: scope.queryByRole("radiogroup", { name: "Density" }) !== null,
-    percentShows:
-      scope.queryByRole("radiogroup", { name: "Percent shows" }) !== null,
-    resetTime: scope.queryByRole("switch", { name: "Reset time" }) !== null,
-    metrics: scope.queryByRole("checkbox", { name: "CPU" }) !== null,
-    readingStyle:
-      scope.queryByRole("radiogroup", { name: "Reading style" }) !== null,
+    density: rowState(id, "Density"),
+    percentShows: rowState(id, "Percent shows"),
+    resetTime: rowState(id, "Reset time"),
+    metrics: rowState(id, "Metrics"),
+    readingStyle: rowState(id, "Reading style"),
   };
+}
+
+/** The reason line a disabled row draws, found by its words inside the section. */
+function reasonsIn(
+  id: "usageLimits" | "resourceMonitor",
+  words: string,
+): ReadonlyArray<HTMLElement> {
+  return within(section(id)).queryAllByText(words);
 }
 
 function current(): LayoutArrangement {
@@ -167,58 +205,122 @@ afterEach(() => {
   useLayoutEditorStore.getState().endSession();
 });
 
-describe("the rows a Compact reading ignores are hidden", () => {
-  it("draws every row while both readings sit in the status bar, where Auto is Detailed", () => {
+/**
+ * The rows a Compact reading ignores stay in place, disabled, and say what
+ * would turn them on (U3): they are never removed, so nothing moves under the
+ * pointer when Density or Location changes.
+ */
+describe("the rows a Compact reading ignores are disabled, never removed", () => {
+  const DETAILED_REASON = "Set Density to Detailed to use this.";
+  const STATUS_BAR_REASON = "Set Location to the status bar to use this.";
+
+  it("draws every row live while both readings sit in the status bar, where Auto is Detailed", () => {
     render(<StatusBarSurface />);
 
     expect(drawn("usageLimits")).toEqual({
-      density: true,
-      percentShows: true,
-      resetTime: true,
-      metrics: false,
-      readingStyle: true,
+      density: "live",
+      percentShows: "live",
+      resetTime: "live",
+      metrics: "absent",
+      readingStyle: "live",
     });
     expect(drawn("resourceMonitor")).toEqual({
-      density: true,
-      percentShows: false,
-      resetTime: false,
-      metrics: true,
-      readingStyle: false,
+      density: "live",
+      percentShows: "absent",
+      resetTime: "absent",
+      metrics: "live",
+      readingStyle: "absent",
     });
   });
 
-  it("hides Percent shows, Reset time and Metrics once a pick of Compact resolves", () => {
+  it("disables Reading style, Percent shows and Reset time, each with the reason, once a pick of Compact resolves", () => {
     act(() => {
       useLayoutStore.getState().setRegionValues("usageLimits", {
         density: "compact",
       });
+    });
+    render(<StatusBarSurface />);
+
+    expect(drawn("usageLimits")).toEqual({
+      density: "live",
+      percentShows: "disabled",
+      resetTime: "disabled",
+      metrics: "absent",
+      readingStyle: "disabled",
+    });
+    const reasons = reasonsIn("usageLimits", DETAILED_REASON);
+    expect(reasons).toHaveLength(3);
+    for (const reason of reasons) {
+      expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+    }
+    // Each row's control is really off, and described by its own reason.
+    const percent = within(section("usageLimits"))
+      .getByText("Percent shows")
+      .closest("[data-layout-form-row]")
+      ?.querySelector("fieldset");
+    expect(percent instanceof HTMLFieldSetElement && percent.disabled).toBe(
+      true,
+    );
+    expect(
+      within(section("usageLimits"))
+        .getByRole("switch", { name: "Reset time" })
+        .matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("disables Metrics once the monitor's Compact resolves and agent rows print nothing, and keeps it live, with a note, while they print", () => {
+    act(() => {
       useLayoutStore.getState().setRegionValues("resourceMonitor", {
         density: "compact",
       });
     });
     render(<StatusBarSurface />);
 
-    expect(drawn("usageLimits")).toEqual({
-      density: true,
-      percentShows: false,
-      resetTime: false,
-      metrics: false,
-      readingStyle: false,
+    // Agent rows are off at the shipped default, so they use no metrics.
+    expect(drawn("resourceMonitor").metrics).toBe("disabled");
+    expect(drawn("resourceMonitor").density).toBe("live");
+    expect(
+      reasonsIn("resourceMonitor", DETAILED_REASON).map((reason) =>
+        reason.getAttribute("data-row-availability"),
+      ),
+    ).toEqual(["disabled"]);
+    expect(
+      within(section("resourceMonitor"))
+        .getByRole("checkbox", { name: "CPU" })
+        .matches(":disabled"),
+    ).toBe(true);
+
+    act(() => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        agentRows: true,
+      });
     });
-    expect(drawn("resourceMonitor").metrics).toBe(false);
-    expect(drawn("resourceMonitor").density).toBe(true);
+    expect(drawn("resourceMonitor").metrics).toBe("live");
+    expect(
+      within(section("resourceMonitor"))
+        .getByText(
+          "Compact shows CPU only. Agent rows use the metrics picked here, except RAM share.",
+        )
+        .getAttribute("data-row-availability"),
+    ).toBe("live");
+    expect(reasonsIn("resourceMonitor", DETAILED_REASON)).toHaveLength(0);
   });
 
-  it("hides them for Auto in the top tab strip and in a side strip, and brings them back for Detailed", () => {
+  it("disables them for Auto in the top tab strip and in a side strip, and brings them back for Detailed", () => {
+    act(() => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        agentRows: false,
+      });
+    });
     setArrangement({ usageHost: "header", resourceHost: "header" });
     render(<StatusBarSurface />);
 
-    expect(drawn("usageLimits").percentShows).toBe(false);
-    expect(drawn("resourceMonitor").metrics).toBe(false);
+    expect(drawn("usageLimits").percentShows).toBe("disabled");
+    expect(drawn("resourceMonitor").metrics).toBe("disabled");
 
     setArrangement({ tabStripPlacement: "left" });
-    expect(drawn("usageLimits").resetTime).toBe(false);
-    expect(drawn("resourceMonitor").metrics).toBe(false);
+    expect(drawn("usageLimits").resetTime).toBe("disabled");
+    expect(drawn("resourceMonitor").metrics).toBe("disabled");
 
     act(() => {
       useLayoutStore.getState().setRegionValues("usageLimits", {
@@ -229,13 +331,13 @@ describe("the rows a Compact reading ignores are hidden", () => {
       });
     });
     expect(drawn("usageLimits")).toMatchObject({
-      percentShows: true,
-      resetTime: true,
+      percentShows: "live",
+      resetTime: "live",
     });
-    expect(drawn("resourceMonitor").metrics).toBe(true);
+    expect(drawn("resourceMonitor").metrics).toBe("live");
   });
 
-  it("hides Reading style wherever the status bar is not drawing the reading, even for Detailed", () => {
+  it("disables Reading style wherever the status bar is not drawing the reading, even for Detailed", () => {
     act(() => {
       useLayoutStore.getState().setRegionValues("usageLimits", {
         density: "detailed",
@@ -246,15 +348,17 @@ describe("the rows a Compact reading ignores are hidden", () => {
 
     // Detailed in the tab strip is the strip's own form, with no calm profile.
     expect(drawn("usageLimits")).toMatchObject({
-      percentShows: true,
-      readingStyle: false,
+      percentShows: "live",
+      readingStyle: "disabled",
     });
+    expect(reasonsIn("usageLimits", STATUS_BAR_REASON)).toHaveLength(1);
 
     setArrangement({ tabStripPlacement: "left" });
-    expect(drawn("usageLimits").readingStyle).toBe(false);
+    expect(drawn("usageLimits").readingStyle).toBe("disabled");
 
     setArrangement({ usageHost: "status-bar" });
-    expect(drawn("usageLimits").readingStyle).toBe(true);
+    expect(drawn("usageLimits").readingStyle).toBe("live");
+    expect(reasonsIn("usageLimits", STATUS_BAR_REASON)).toHaveLength(0);
   });
 
   it("writes the Reading style pick", () => {
@@ -322,20 +426,24 @@ describe("the rows a Compact reading ignores are hidden", () => {
 });
 
 describe("each reading's Show switch", () => {
-  it("writes the reading's own shown value and takes its rows and the Profiles list with it", () => {
+  it("writes the reading's own shown value and greys its rows and the Profiles list with it, leaving them in place", () => {
     render(<StatusBarSurface />);
     const usage = within(section("usageLimits"));
-    expect(document.querySelector("[data-usage-profiles]")).not.toBeNull();
+    expect(profilesGroup().disabled).toBe(false);
 
     fireEvent.click(usage.getByRole("switch", { name: "Show Usage limits" }));
 
     expect(useLayoutStore.getState().overrides.usageLimits?.shown).toBe(
       "hidden",
     );
-    expect(document.querySelector("[data-usage-profiles]")).toBeNull();
+    // The Profiles list is drawn still, in a disabled group that the one
+    // hint above the rows describes - never taken out of the form.
+    const hint = usage.getByText("Show Usage limits to change these settings.");
+    expect(profilesGroup().disabled).toBe(true);
+    expect(profilesGroup().getAttribute("aria-describedby")).toContain(hint.id);
     expect(
-      usage.getByText("Show Usage limits to change these settings."),
-    ).toBeTruthy();
+      usage.getByRole("switch", { name: "Reset time" }).matches(":disabled"),
+    ).toBe(true);
     // The other reading is untouched.
     expect(
       useLayoutStore.getState().overrides.resourceMonitor?.shown,
@@ -430,12 +538,15 @@ describe("the Profiles list", () => {
   it("checks and unchecks a profile for the watched host, keeping the account already drawn", () => {
     render(<StatusBarSurface />);
 
-    // Nothing checked draws one account (the first), and it cannot be hidden.
-    expect(
-      screen
-        .getByRole("button", { name: "Hide Terminal" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+    // Nothing checked draws one account (the first), and it cannot be hidden:
+    // its eye is disabled, and the reason beside the profile describes it.
+    const lastEye = screen.getByRole("button", { name: "Hide Terminal" });
+    expect(lastEye.hasAttribute("disabled")).toBe(true);
+    const reason = screen.getByText(
+      "One profile stays shown. Hide the provider instead.",
+    );
+    expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+    expect(lastEye.getAttribute("aria-describedby")).toBe(reason.id);
 
     fireEvent.click(screen.getByRole("button", { name: "Show personal" }));
     expect(current().shownProfiles).toEqual({
@@ -460,6 +571,32 @@ describe("the Profiles list", () => {
 
     fireEvent.click(grab);
     expect(profileRow("personal-profile")).toBeTruthy();
+  });
+
+  it("reverts a hidden provider from the Usage limits row and leaves the Profiles order to the list's own revert (T2)", () => {
+    const reversed = [...current().usageProviders].reverse();
+    act(() => {
+      writeArrangement({
+        ...current(),
+        usageProviders: reversed,
+        hiddenProviders: ["codex"],
+      });
+    });
+    render(<StatusBarSurface />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Revert Usage limits" }),
+    );
+
+    expect(current().hiddenProviders).toEqual([]);
+    expect(current().usageProviders).toEqual(reversed);
+    // The row is quiet now; only the list header still offers its order back.
+    expect(
+      screen.queryByRole("button", { name: "Revert Usage limits" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Revert Profiles order" }),
+    ).toBeTruthy();
   });
 
   it("puts the provider order back from its revert, leaving a hidden provider alone", () => {

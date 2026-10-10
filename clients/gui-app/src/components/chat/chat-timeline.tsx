@@ -46,7 +46,7 @@ import {
   captureChatTimelineVisibleRows,
   clearChatTimelineVisibleRows,
 } from "@/components/chat/chat-timeline-panel-resize-snapshot";
-
+import { useFullscreenPinnedRowKeys } from "@/lib/sandbox/overlay-owner";
 import { ChatTranscriptPlaceholderRow } from "./chat-transcript-placeholder-row";
 import type { ChatTranscriptRowHeightMemory } from "./chat-transcript-row-height-memory";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
@@ -312,6 +312,15 @@ export const ChatTimeline = memo(function ChatTimeline({
     };
   }, [followLatch, followLatchRef]);
 
+  // A row whose MCP App is fullscreen stays mounted wherever the list scrolls:
+  // unmounting it would destroy the app's document (`overlay-owner.ts`).
+  const pinnedRowKeys = useFullscreenPinnedRowKeys();
+  const alwaysRender = useMemo(
+    () =>
+      pinnedRowKeys.length === 0 ? undefined : { keys: [...pinnedRowKeys] },
+    [pinnedRowKeys],
+  );
+
   const navigationHighlightStore = useNavigationHighlightStore(
     navigationHighlightedMessageId,
     navigationHighlightedBlockId,
@@ -465,6 +474,7 @@ export const ChatTimeline = memo(function ChatTimeline({
           getItemType={timelineItemType}
           renderItem={renderItem}
           estimatedItemSize={90}
+          alwaysRender={alwaysRender}
           // Keep LegendList's proximity threshold explicit for onEndReached and
           // presentation consumers. Follow ownership deliberately reads only
           // fresh DOM geometry inside the latch; this 10% band can never

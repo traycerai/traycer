@@ -340,6 +340,52 @@ through `oxlint-config-adapter.mjs` too):
 Exemptions are per file with a stated reason in `eslint.config.mjs`; the
 nested-focus dimension still bans the raw store actions underneath.
 
+## Sandboxed pages and MCP Apps
+
+Agent pages, wireframes and MCP Apps all render in ONE frame component,
+`components/sandbox/sandbox-frame.tsx`. Don't frame agent or app HTML any
+other way.
+
+- **One frame, one loader.** The frame is `sandbox="allow-scripts
+allow-forms"`, never `allow-same-origin`, on the loader's own origin
+  (`lib/sandbox/sandbox-url.ts`: `traycer-sandbox:` on desktop, `/sandbox/`
+  elsewhere). The loader (`lib/sandbox/sandbox-loader.ts`, built alone into a
+  classic script) waits for the resource, then `document.write`s it over
+  itself in the same frame; there is no inner frame.
+- **Policies.** A page's network policy (`open` / `https-only`) comes from
+  the host's `epic.readFile` answer and is passed through unchanged. An app's
+  CSP is built deny-by-default from normalized metadata (`lib/sandbox/mcp-csp.ts`);
+  its `allow` attribute only from the `SANDBOX_PERMISSIONS` enum.
+- **Bridge** (`lib/sandbox/bridge-host.ts`). Trust is `event.source ===
+frame.contentWindow` (the origin is always `"null"`), armed by the loader's
+  nonce; any later document disposes the bridge. App methods go to
+  `lib/sandbox/mcp-app-bridge.ts`, which reaches the host through the
+  `McpAppRpc` seam (`lib/sandbox/mcp-app-rpc.ts`).
+- **Links.** Every `ui/open-link` shows `SandboxLinkConfirm` (D42), on every
+  client: the frame cannot prove the reader clicked. Never open a frame's link
+  without it.
+- **Fullscreen** (`lib/sandbox/overlay-owner.ts`). One app per window. It is
+  refused, or ends, while anything needs the reader: an approval or download
+  confirm, a link confirm, an agent question, any dialog, composer focus. The
+  row stays mounted while fullscreen. The surface is a manual popover (moving
+  the frame reloads the app), insets the safe area itself, claims the blocking
+  layer, and leaves on Escape, which is how the phone's back button reaches it.
+  An Escape pressed inside the app reaches it too: while the host context
+  says `fullscreen`, the bootstrap forwards bare Escape on the shortcut
+  channel, and the bridge accepts it only from the proven page in that mode.
+- **Phones.** An inline app row has a fixed height; a page reserves the
+  stamp's measured height nearest its width. A coarse pointer gets the "…"
+  sheet (`components/chat/segments/touch-actions-sheet.tsx`) instead of the
+  hover bar.
+- **Native guards** are a second layer behind the parent `frame-src`, not a
+  substitute: desktop `will-frame-navigate` and the scheme handler
+  (`desktop/src/electron-main/app/`), iOS `SandboxBridgeGuard.swift` (only
+  the main frame on the app origin reaches the Capacitor bridge), Android the
+  `@capacitor/android` patch that removes the `addJavascriptInterface`
+  fallbacks.
+- **Bytes** come only through `lib/files/epic-file-rpc.ts` (the tab host's
+  `epic.*File` methods) or a signed https URL. Never a host loopback URL.
+
 ## Routing
 
 - Auth/redirects → route `beforeLoad`; search → `validateSearch`; critical

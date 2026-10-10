@@ -13,6 +13,7 @@ import {
   GRACE_COUNTDOWN_IMMINENT,
   createSharedClock,
   formatClockTime,
+  formatCompactRelativeTime,
   formatFullTimestamp,
   formatGraceCountdown,
   formatMessageTime,
@@ -113,6 +114,27 @@ describe("formatRelativeTimestamp", () => {
       day: "numeric",
     });
     expect(formatRelativeTimestamp(lastWeek, now)).toBe(expectedWeek);
+  });
+
+  it("adds the year to a short date from another year, and only then", () => {
+    // Local calendar dates: the year boundary is the viewer's.
+    const today = new Date(2026, 3, 23, 12, 0, 0).getTime();
+    const lastYear = new Date(2025, 10, 3, 12, 0, 0).getTime();
+    const earlierThisYear = new Date(2026, 0, 9, 12, 0, 0).getTime();
+    const withYear = new Date(lastYear).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const withoutYear = new Date(earlierThisYear).toLocaleDateString(
+      undefined,
+      { month: "short", day: "numeric" },
+    );
+
+    expect(formatRelativeTimestamp(lastYear, today)).toBe(withYear);
+    expect(formatCompactRelativeTime(lastYear, today)).toBe(withYear);
+    expect(formatRelativeTimestamp(earlierThisYear, today)).toBe(withoutYear);
+    expect(formatCompactRelativeTime(earlierThisYear, today)).toBe(withoutYear);
   });
 
   it("clamps future timestamps to 'Just now' rather than rendering negative deltas", () => {

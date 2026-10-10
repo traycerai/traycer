@@ -10,6 +10,12 @@ import type {
 } from "@/lib/layout/layout-arrangement";
 import type { LayoutValues } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
+import type {
+  LayoutFacts,
+  RegionRule,
+  RowDependency,
+  ShellGate,
+} from "@/components/layout-editor/regions/row-availability";
 
 /**
  * The grammar every region's section is written in (L-08), and the few row
@@ -64,10 +70,11 @@ export interface SegmentOption {
  * How one detail row is operated.
  *
  * `switch` is an independent boolean feature; a `Visibility` is a `segment`
- * like every other visibility choice. `checks` is one boolean key per option, for fields shown at
- * the same time; an option can require another key to be on, and is disabled
- * while it is off. `field-checks` is the other shape a check list has: ONE key
- * holding the list of what is checked.
+ * like every other visibility choice. `checks` is one boolean key per option,
+ * for fields shown at the same time. `field-checks` is the other shape a check
+ * list has: ONE key holding the set of what is checked, drawn as a sortable
+ * list whose order is `arrangement.pinnedContextFieldOrder` (C2) - the pinned
+ * breakdown's rows are the one list of its kind.
  */
 export type ControlSpec<K extends RegionId> =
   | { readonly kind: "switch"; readonly key: keyof LayoutValues[K] & string }
@@ -103,17 +110,11 @@ export interface FineTuneRow<K extends RegionId> {
    */
   readonly pinsTransient: boolean;
   /**
-   * A boolean key of the same region this row only means something with: the
-   * row stays visible and disabled while it is off. `null` for most rows.
+   * The row it sits under and when it applies (P1, `row-availability.ts`),
+   * including whether it stays live while its region is Hidden
+   * (`liveOutsideGate`).
    */
-  readonly requires: (keyof LayoutValues[K] & string) | null;
-  /**
-   * A boolean key of the same region that keeps this row editable while the
-   * region is Hidden: something other than the region itself still reads the
-   * row (the Resource monitor's Metrics, which agent rows follow, L-174).
-   * `null` for most rows, which grey with their region.
-   */
-  readonly liveWhileHidden: (keyof LayoutValues[K] & string) | null;
+  readonly depends: RowDependency;
   readonly control: ControlSpec<K>;
 }
 
@@ -124,11 +125,23 @@ export interface StyleExample<K extends RegionId> {
   readonly patch: Partial<LayoutValues[K]>;
 }
 
+/**
+ * The ids a region's detail rows go by among themselves, which is what a
+ * `depends.under` names: a fine-tune row's `id`, a style row's `key`, and
+ * these two for the position rows.
+ */
+export const LOCATION_ROW_ID = "location";
+export const SIDE_ROW_ID = "side";
+
 export type GrammarRow<K extends RegionId> =
   // A bar reading's one Location picker (a bar and an end of it, in one row).
-  | { readonly kind: "position-host" }
+  | { readonly kind: "position-host"; readonly depends: RowDependency }
   // The minimap's edge of the transcript.
-  | { readonly kind: "position-side"; readonly description: string }
+  | {
+      readonly kind: "position-side";
+      readonly description: string;
+      readonly depends: RowDependency;
+    }
   // Names its group and nothing else: how the list is operated, whether its
   // boundaries are items and what is pinned inside it are facts about the
   // GROUP, and they live once in `surface-groups.ts` rather than once per
@@ -147,6 +160,7 @@ export type GrammarRow<K extends RegionId> =
        */
       readonly labelPlacement: "end" | "above";
       readonly examples: ReadonlyArray<StyleExample<K>>;
+      readonly depends: RowDependency;
     }
   | { readonly kind: "fine-tune"; readonly rows: ReadonlyArray<FineTuneRow<K>> }
   | { readonly kind: "children"; readonly level: "usage-providers" };
@@ -172,10 +186,27 @@ export interface LayoutRegion<K extends RegionId> {
   readonly hint: string | null;
   readonly keywords: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<GrammarRow<K>>;
+  /**
+   * Whether this shell can ever draw the region. Where it says no, the region
+   * is no row in its list and no search result: the form and search both read
+   * this, and nothing else answers it.
+   */
+  readonly shellGate: ShellGate;
+  /**
+   * When the region's own row applies (P1) where its gate lets it be drawn:
+   * `disabled` greys its display control with the reason.
+   */
+  readonly availability: RegionRule;
   readonly quickVerbs: ReadonlyArray<QuickVerbId>;
+  /**
+   * The region's state in a word or two. It reads the same facts its row's
+   * rule does, so the canvas chip and Find never call a region Shown while
+   * its row says it is off (the Microphone with Voice input off).
+   */
   readonly stateWord: (
     values: LayoutValues[K],
     arrangement: LayoutArrangement,
+    facts: LayoutFacts,
   ) => string;
 }
 
@@ -250,7 +281,10 @@ export const SIDE_STRIP_VIEW_OPTIONS: ReadonlyArray<{
 
 /** Why Side tab view does nothing at the top: its row and the canvas both say it. */
 export const SIDE_STRIP_VIEW_AT_TOP =
-  "Available when tabs are on the left or right.";
+  "Set Placement to Left or Right to use this.";
+
+/** Why Tab overflow does nothing while the tabs are a side strip. */
+export const TAB_OVERFLOW_AT_SIDE = "Set Placement to Top to use this.";
 
 /** Why it shows nothing on the collapsed rail, which the canvas says. */
 export const SIDE_STRIP_VIEW_COLLAPSED =

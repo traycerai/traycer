@@ -43,9 +43,9 @@ Tabs depend on the provider. A provider opens on its first tab.
 | **Env**               | [Environment variables](#environment-variables) for that provider.                                     | Every provider                                                                |
 | **Permissions**       | Who reviews that provider's commands in Auto mode.                                                     | Every provider                                                                |
 | **Model Providers**   | The [upstream model providers](#model-providers) OpenCode can reach.                                   | OpenCode                                                                      |
-| **MCP**               | [MCP servers](/settings/providers/mcp-servers).                                                        | Every provider except Devin, Pi, Reasonix, and Antigravity                    |
-| **Plugins**           | [Plugins](#plugins) installed from a source.                                                           | Every provider except Kiro, Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, and Antigravity |
-| **Skills**            | [Skills](/settings/providers/skills).                                                                  | Every provider except Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, and Antigravity |
+| **MCP**               | [MCP servers](/settings/providers/mcp-servers).                                                        | Every provider except Devin, Pi, Reasonix, Antigravity, and Command Code      |
+| **Plugins**           | [Plugins](#plugins) installed from a source.                                                           | Every provider except Kiro, Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, Antigravity, and Command Code |
+| **Skills**            | [Skills](/settings/providers/skills).                                                                  | Every provider except Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, Antigravity, and Command Code |
 
 Usage limits and the banners that appear when a limit is reached are covered in [Usage limits and model routing](/agents-and-models/usage-limits-and-routing).
 
@@ -104,6 +104,23 @@ To pick a profile for the next turn, use the profile dropdown in the composer's 
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/provider-profile-add.mp4" label="Add a managed provider profile" />
 
+### Sync Profiles Across Devices
+
+Use **Sync profiles…** on **Profiles & Limits** to copy the profiles on the host selected in Settings to your other devices. Sync covers Claude Code, Codex, Grok, and Antigravity profiles. It copies the sign-in itself, so a synced profile is ready to use on the other device without signing in again.
+
+The dialog lists your other devices. For each one:
+
+- **Sync now** copies every supported profile to that device once.
+- **Keep in sync** also sends profiles you add later, and name and color changes, as they happen. Turning it off keeps the profiles already on the device. An offline device catches up when it connects.
+
+Closing the dialog doesn't stop a sync. A Terminal account arrives as a regular profile, and the other device's own Terminal account is never changed. Once a profile is synced, a sign-in that refreshes on one device is passed to the other, so neither is signed out.
+
+Under each device, every profile has one status: **Synced**, **Syncing**, **Sign in needed**, **Device offline**, **Update needed**, or **Can't sync** with the reason. Profiles that need attention are listed first, and **Show all** lists the rest. After you fix a **Can't sync** reason, click **Sync now** to try again.
+
+- **Sign in needed**: the profile is signed out on the device you are syncing from. The button on that row opens its sign-in there.
+- **Is now signed in to a different account**: you switched the account on the device the profile was synced from. The other device keeps the old account until you click **Sync the new account**.
+- **Are signed in to different accounts**: the account was switched on the device that received the profile. Sync never replaces either account. Sign in to the same account on both devices to resume.
+
 ## Signing In Again
 
 When a provider is signed out, the composer shows a banner above the input.
@@ -131,9 +148,17 @@ For CLIs that Traycer manages, open the version menu on the managed row to see t
 - **Use** pins that version. A pinned provider shows "Pinned to" its version; **Use latest automatically** removes the pin.
 - **Check for updates** looks for a newer version, and **Auto-download updates** downloads new versions as they come out.
 
-Traycer does not manage the Amp or Hermes Agent CLIs; install them yourself, then pick the detected copy or add its path.
+Traycer does not manage the Amp, Hermes Agent, or Command Code CLIs; install them yourself, then pick the detected copy or add its path.
 
 For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps its own permissions, so Traycer leaves those flags out.
+
+### Model List Timeout
+
+The **Model list** group on the **CLI & Args** tab sets how long Traycer waits for the provider to list its models: when you open the model picker, and when an agent creates another agent. **Timeout** offers **60 s** (the default), **90 s**, **120 s**, and **180 s**. Pick a longer one on a slow or heavily loaded machine, where a provider can take more than a minute to answer.
+
+With **Same for all providers** on, the timeout is shared: changing it changes every provider whose switch is also on. Turn the switch off to give this provider its own timeout, which starts at the shared value; turn it back on to follow the shared value again.
+
+A change applies from the next model list the host reads, and a model list that arrives after the wait is still kept for the next request. The group is hidden on a host running a version without per-provider timeouts.
 
 ## Environment Variables
 

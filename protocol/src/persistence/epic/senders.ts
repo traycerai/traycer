@@ -626,6 +626,25 @@ export type AntigravityChatSessionAnchor = z.infer<
   typeof antigravityChatSessionAnchorSchema
 >;
 
+// Command Code (`cmd acp`) resumes at session granularity only — `session/load`
+// reloads the whole ACP session, with no per-message truncation/fork point — so
+// the anchor carries just the ACP session id. `sessionId` is that ACP session
+// id.
+export const commandCodeChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("commandcode"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
+export type CommandCodeChatSessionAnchor = z.infer<
+  typeof commandCodeChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = lazySchema(() =>
   z.discriminatedUnion("harnessId", [
     claudeChatSessionAnchorSchema,
@@ -649,6 +668,7 @@ export const chatSessionAnchorSchema = lazySchema(() =>
     huggingFaceChatSessionAnchorSchema,
     reasonixChatSessionAnchorSchema,
     antigravityChatSessionAnchorSchema,
+    commandCodeChatSessionAnchorSchema,
   ]),
 );
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
@@ -714,4 +734,45 @@ export const chatSessionAnchorSchemaPreAntigravity = lazySchema(() =>
 );
 export type ChatSessionAnchorPreAntigravity = z.infer<
   typeof chatSessionAnchorSchemaPreAntigravity
+>;
+
+/**
+ * Wire-freeze copy of the anchor union as the 1.5.0 tags shipped it: every
+ * live arm through Antigravity, without the Command Code one. Bound by the
+ * `rowContext` of `chat.subscribe@1.9` through `@1.20`
+ * (`transcriptRowContextSchemaPreCommandCode`); `@1.21` is where a later arm
+ * rides.
+ *
+ * Hand-listed from the live arms rather than derived from the pre-Antigravity
+ * freeze above, whose grok arm is the pre-`grokPromptIndex` copy: these lines
+ * shipped the field. A variant added to the live union is excluded here by
+ * construction - it has to be added to this list to reach a released line.
+ */
+export const chatSessionAnchorSchemaPreCommandCode = lazySchema(() =>
+  z.discriminatedUnion("harnessId", [
+    claudeChatSessionAnchorSchema,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+    reasonixChatSessionAnchorSchema,
+    antigravityChatSessionAnchorSchema,
+  ]),
+);
+export type ChatSessionAnchorPreCommandCode = z.infer<
+  typeof chatSessionAnchorSchemaPreCommandCode
 >;

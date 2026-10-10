@@ -27,7 +27,6 @@ import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-a
 import type {
   AgentMode,
   ChatRunSettings,
-  Message,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
@@ -77,6 +76,8 @@ import {
 } from "./types";
 import { displayTitle } from "@/lib/display-title";
 import { DEFAULT_SORT_MODE, makeNodeComparator } from "@/lib/epic-sort";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 // ─── Type-narrow Y.Doc readers ────────────────────────────────────────────
 
@@ -401,7 +402,7 @@ export function projectTerminalAgent(
  *   - user      → `user:<messageId>`
  *   - assistant → `assistant:<turnId>` (fallback `assistant:ts:<ts>:<index>`)
  */
-export function messageRowId(message: Message, index: number): string {
+export function messageRowId(message: OpenMessage, index: number): string {
   if (message.role === "user") return `user:${message.messageId}`;
   if (message.turnId !== null) return `assistant:${message.turnId}`;
   return `assistant:ts:${message.timestamp}:${index}`;

@@ -108,17 +108,32 @@ describe("<AboutDetailsDialog />", () => {
 
     expect(writeText).toHaveBeenCalledWith(
       [
-        "Version: 1.1.8",
+        "App version: 1.1.8",
         "Signed In: Pranshu Gupta <pranshu@traycer.ai>",
         "Support: support@traycer.ai",
         "Platform: darwin arm64",
         "Electron: 42.7.1",
         "Chrome: 148.0.7778.280",
         "Node: 24.18.0",
-        "Host: 1.1.8 (pid 12257)",
+        "Host version: 1.1.8 (pid 12257)",
       ].join("\n"),
     );
     screen.getByRole("button", { name: "Copied details" });
+  });
+
+  it("labels the app and host versions separately in the details grid", async () => {
+    render(
+      <AboutDetailsDialog
+        open
+        onOpenChange={() => {}}
+        support={readySupport()}
+      />,
+    );
+
+    await screen.findByText("App version");
+    screen.getByText("Host version");
+    expect(screen.queryByText("Version")).toBeNull();
+    expect(screen.queryByText("Host")).toBeNull();
   });
 
   it("hides the copy action while details are unavailable", async () => {

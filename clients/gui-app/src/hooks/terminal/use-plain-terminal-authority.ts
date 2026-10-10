@@ -602,9 +602,9 @@ export function usePlainTerminalAuthority(args: {
           scope: stableScope,
           callbacks: {
             onState: (frame) => {
-              // Remote LogicalStream delivers the current generation's first
-              // frame immediately before its open transition. Accept that
-              // replacement, but require the ensuing open before settlement.
+              // A state frame is accepted in any phase but `closed`. The
+              // replacement settles only once this connection episode is
+              // open, whichever of the two arrives first.
               if (connectionPhase === "closed") return;
               if (!scopesMatch(frame.state)) return;
               const current =

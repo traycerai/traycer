@@ -94,20 +94,20 @@ function hidePanel(railRegion: "railBrowsers"): void {
 }
 
 describe("the sample sidebar's icon rail", () => {
-  it("is nine icons and nothing else by default (L-155, L-166, L-181)", () => {
+  it("is ten icons and nothing else by default (L-155, L-166, L-181)", () => {
     render(<SampleWorkspaceSidebar />);
 
     const nodes = railEntries();
-    // Eight things in the toolbar, because the shipped stack draws as ONE
-    // group icon (G3) - nine panels all the same.
-    expect(nodes).toHaveLength(8);
+    // Nine things in the toolbar, because the shipped stack draws as ONE
+    // group icon (G3) - ten panels all the same.
+    expect(nodes).toHaveLength(9);
     expect(screen.getAllByTestId("epic-rail-stack")).toHaveLength(1);
     expect(
       screen
         .getByTestId("epic-rail-stack")
         .querySelectorAll("[data-layout-region]"),
     ).toHaveLength(1);
-    expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(8);
+    expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(9);
     expect(screen.queryAllByTestId("epic-rail-divider")).toHaveLength(0);
   });
 
@@ -262,6 +262,9 @@ describe("the sample sidebar's body", () => {
   });
 
   it("shows a resource usage chip on each agent row when agent rows readings are on", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { agentRows: true });
     render(<SampleWorkspaceSidebar />);
 
     const chips = sidebarBody().querySelectorAll(
@@ -270,10 +273,7 @@ describe("the sample sidebar's body", () => {
     expect(chips).toHaveLength(SAMPLE_SIDEBAR_AGENTS.length);
   });
 
-  it("shows no resource usage chip when agent rows readings are off", () => {
-    useLayoutStore
-      .getState()
-      .setRegionValues("resourceMonitor", { agentRows: false });
+  it("shows no resource usage chip when agent rows readings are off (the default)", () => {
     render(<SampleWorkspaceSidebar />);
 
     const chips = sidebarBody().querySelectorAll(

@@ -1,8 +1,13 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/senders";
 
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 
 /**
  * # The row projection's persisted fold state, and the vocabulary of its increment
@@ -39,8 +44,17 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
  * without ever holding the chat.
  */
 
-/** A record together with its place in first-insert order. */
-export interface PositionedMessage {
+/**
+ * A record together with its place in first-insert order.
+ *
+ * Closed by default: the host folds the records it wrote, and a bare
+ * `PositionedMessage` is one of those. A `chat.subscribe@1.22` client folds
+ * the open records it decoded (`open-harness-records.ts`) and instantiates
+ * these with `OpenMessage` / `OpenChatEvent`; the fold entry points in
+ * `row-projection.ts` carry the parameter through, so each caller gets its own
+ * record type back.
+ */
+export interface PositionedMessage<M extends OpenMessage = Message> {
   /**
    * First-insert order. The array index in the whole-array entry; the
    * store's `insert_seq` (reset when a tombstoned record is re-inserted, which
@@ -48,12 +62,12 @@ export interface PositionedMessage {
    * meaningful.
    */
   readonly position: number;
-  readonly message: Message;
+  readonly message: M;
 }
 
-export interface PositionedEvent {
+export interface PositionedEvent<E extends OpenChatEvent = ChatEvent> {
   readonly position: number;
-  readonly event: ChatEvent;
+  readonly event: E;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,10 +464,10 @@ export interface TranscriptTurnUnitState {
 // The increment's input, loads and output
 // ---------------------------------------------------------------------------
 
-export interface TranscriptMessageTouch {
+export interface TranscriptMessageTouch<M extends OpenMessage = Message> {
   readonly position: number;
   /** The record as it stands after the change. */
-  readonly message: Message;
+  readonly message: M;
   /**
    * The record as it stood BEFORE the change when it was live then - its
    * position and fold facts. `null` for a record that is new, or re-inserted
@@ -472,11 +486,11 @@ export interface TranscriptMessageRemoval {
   readonly facts: TranscriptMessageFoldFacts;
 }
 
-export interface TranscriptEventTouch {
+export interface TranscriptEventTouch<E extends OpenChatEvent = ChatEvent> {
   readonly position: number;
-  readonly event: ChatEvent;
+  readonly event: E;
   /** The body the id held before, when the append replaced one in place. */
-  readonly previous: ChatEvent | null;
+  readonly previous: E | null;
 }
 
 /**
@@ -484,13 +498,16 @@ export interface TranscriptEventTouch {
  * in one change appears once, with the `previous` from before the change; an
  * event appended then replaced within the change appears once, as new.
  */
-export interface TranscriptFoldChange {
+export interface TranscriptFoldChange<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
   readonly chatId: string;
   readonly activeTurnId: string | null;
-  readonly upsertedMessages: readonly TranscriptMessageTouch[];
+  readonly upsertedMessages: readonly TranscriptMessageTouch<M>[];
   readonly removedMessages: readonly TranscriptMessageRemoval[];
   /** In position order. */
-  readonly appendedEvents: readonly TranscriptEventTouch[];
+  readonly appendedEvents: readonly TranscriptEventTouch<E>[];
 }
 
 /** An index row as the store holds it. */
@@ -541,7 +558,7 @@ export type TranscriptFoldLoad =
   | {
       /** Every event of these types, the change's own included. */
       readonly kind: "events-by-type";
-      readonly types: readonly ChatEvent["type"][];
+      readonly types: readonly OpenChatEvent["type"][];
     }
   | {
       /**
@@ -584,7 +601,9 @@ export type TranscriptFoldLoad =
     };
 
 /** An event as the store holds it, with the turn it was stored as decorating. */
-export interface PositionedTurnEvent extends PositionedEvent {
+export interface PositionedTurnEvent<
+  E extends OpenChatEvent = ChatEvent,
+> extends PositionedEvent<E> {
   readonly rowTurnKey: string;
 }
 
@@ -623,20 +642,23 @@ export interface PositionedMessageFacts {
   readonly facts: TranscriptMessageFoldFacts;
 }
 
-export type TranscriptFoldLoadResult =
+export type TranscriptFoldLoadResult<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> =
   | {
       readonly kind: "messages";
-      readonly messages: readonly PositionedMessage[];
+      readonly messages: readonly PositionedMessage<M>[];
     }
   | {
       readonly kind: "facts";
       readonly facts: readonly PositionedMessageFacts[];
     }
-  | { readonly kind: "events"; readonly events: readonly PositionedEvent[] }
+  | { readonly kind: "events"; readonly events: readonly PositionedEvent<E>[] }
   | {
       /** The answer to `events-of-turns`. */
       readonly kind: "turn-events";
-      readonly events: readonly PositionedTurnEvent[];
+      readonly events: readonly PositionedTurnEvent<E>[];
     }
   | { readonly kind: "pause-open"; readonly turnId: string | null }
   | {
@@ -657,16 +679,22 @@ export interface TranscriptFoldRow {
 }
 
 /** One re-described unit: the rows that replace the unit's stored rows. */
-export interface TranscriptFoldUnit {
+export interface TranscriptFoldUnit<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> {
   readonly unitKey: string;
   /** Empty when the unit no longer produces a row. */
   readonly rows: readonly TranscriptFoldRow[];
   /** The records the rows render from - a skeleton is computed over these. */
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+  readonly messages: readonly M[];
+  readonly events: readonly E[];
 }
 
-export type TranscriptFoldResult =
+export type TranscriptFoldResult<
+  M extends OpenMessage = Message,
+  E extends OpenChatEvent = ChatEvent,
+> =
   | {
       readonly continued: false;
       /** Why the increment declined; the caller runs the full projection. */
@@ -675,7 +703,7 @@ export type TranscriptFoldResult =
   | {
       readonly continued: true;
       readonly state: TranscriptFoldState;
-      readonly units: readonly TranscriptFoldUnit[];
+      readonly units: readonly TranscriptFoldUnit<M, E>[];
       /** The stored rows of every unit in {@link units}, as loaded. */
       readonly previousRows: readonly StoredTranscriptRow[];
       /** The turn each newly appended event decorates, for events that decorate one. */

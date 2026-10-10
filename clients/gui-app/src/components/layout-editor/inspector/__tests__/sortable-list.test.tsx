@@ -24,6 +24,7 @@ import {
 import { SurfaceSection } from "@/components/layout-editor/inspector/surface-section";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
 import { regionFacts } from "@/components/layout-editor/regions/region-facts";
+import { LIVE } from "@/components/layout-editor/regions/row-availability";
 import {
   ORDER_GROUPS,
   orderGroupInstruction,
@@ -794,6 +795,7 @@ function testItem(id: string, movable: boolean): SortableListItem<string> {
     removeLabel: null,
     onStack: null,
     stackMembers: null,
+    availability: LIVE,
   };
 }
 
@@ -879,6 +881,7 @@ describe("a keyboard step goes past a row that cannot move (G6)", () => {
       "railArtifacts",
       "stack:railArtifacts+railAgents",
       "railAgents",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
@@ -933,6 +936,7 @@ describe("a pointer press inside the grab arms the drag (G6)", () => {
       removeLabel: null,
       onStack: options.onStack,
       stackMembers: null,
+      availability: LIVE,
     };
   }
 

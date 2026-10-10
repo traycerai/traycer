@@ -1,7 +1,9 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
   providersFallbackPolicyGetV11,
+  providersFallbackPolicyGetV20,
   providersFallbackPolicyPreviewTierGroupsV11,
+  providersFallbackPolicyPreviewTierGroupsV20,
 } from "@traycer/protocol/host/fallback-policy";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
@@ -15,6 +17,9 @@ import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-metho
  * `previewTierGroups` exactly as a 1.1 host does, so a presence check would
  * put a pattern editor in front of a host whose word matcher never matches
  * `*opus*`.
+ *
+ * "1.1 or later" below includes major 2 of each method, which is the 1.1 line
+ * over a wider harness id set and keeps both behaviours.
  *
  *  - `patterns` - `providers.fallbackPolicy.get` is on 1.1 or later, so the
  *    host reads a tier row's `modelFamily` as a pattern (`modelMatchesPattern`).
@@ -53,25 +58,35 @@ export function useFallbackPolicyPatternLines(): FallbackPolicyPatternLines {
     providersFallbackPolicyPreviewTierGroupsV11.method,
   );
   return {
-    patterns: lineReaches(getLine, providersFallbackPolicyGetV11.schemaVersion),
+    patterns: lineReaches(
+      getLine,
+      providersFallbackPolicyGetV11.schemaVersion,
+      providersFallbackPolicyGetV20.schemaVersion,
+    ),
     blankPreviewRows: lineReaches(
       previewLine,
       providersFallbackPolicyPreviewTierGroupsV11.schemaVersion,
+      providersFallbackPolicyPreviewTierGroupsV20.schemaVersion,
     ),
   };
 }
 
 /**
- * Whether a negotiated line is on `wanted`'s major at or above its minor.
+ * Whether a negotiated line is on `wanted`'s major at or above its minor, or
+ * anywhere on `widened`'s major.
  *
  * A different major is a different contract, so it answers no rather than
- * comparing minors across it - the same rule `catalogLineKnowsAutoMode` applies.
+ * comparing minors across it - the same rule `catalogLineKnowsAutoMode`
+ * applies. `widened` is the one later major NAMED as keeping the behaviour:
+ * major 2 of both methods is the 1.1 line over a wider harness id set.
  */
 function lineReaches(
   negotiated: SchemaVersion | null,
   wanted: SchemaVersion,
+  widened: SchemaVersion,
 ): boolean {
   if (negotiated === null) return false;
+  if (negotiated.major === widened.major) return true;
   if (negotiated.major !== wanted.major) return false;
   return negotiated.minor >= wanted.minor;
 }

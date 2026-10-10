@@ -46,6 +46,76 @@ export async function probeHostActivityBusy(
 }
 
 /**
+ * What one `GET /activity` read says, for a caller that needs more than the
+ * busy boolean and has to tell a host that did not say from one that could
+ * not be asked.
+ *
+ * `answered`: something served the request. `busy` follows
+ * `probeHostActivityBusy`'s rule exactly - `false` only on an explicit
+ * `{ "busy": false }`, `true` for every other answer (a pre-feature host's
+ * 404, a malformed body). `terminalsInUse` is the host's count of plain
+ * terminals whose shell is alive and that a person has entered a line in, or
+ * `null` when the host does not report it: an older host, a host with no
+ * terminal subsystem, a non-OK answer, or a value that is not a non-negative
+ * integer. `null` is never zero - "not reported" must not read as "none".
+ *
+ * `unreachable`: nothing answered - a connect error, a malformed URL, or the
+ * timeout.
+ */
+export type HostActivityProbe =
+  | {
+      readonly kind: "answered";
+      readonly busy: boolean;
+      readonly terminalsInUse: number | null;
+    }
+  | { readonly kind: "unreachable" };
+
+/**
+ * One `GET /activity` read as a {@link HostActivityProbe}. Resolves, never
+ * rejects.
+ *
+ * Deliberately NOT `probeHostActivityBusy`, whose callers gate a teardown on
+ * one boolean and need "can't tell" folded into busy. This reader's caller is
+ * a quit deciding whether to ASK before an idle-only stop: it needs the count
+ * the host reports beside `busy`, and must not ask on a host that reports
+ * none, so "not reported" and "unreachable" each stay distinct from zero.
+ */
+export async function probeHostActivity(
+  websocketUrl: string,
+): Promise<HostActivityProbe> {
+  let response: Response;
+  try {
+    response = await fetch(toActivityUrl(websocketUrl), {
+      signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
+    });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (!response.ok) {
+    return { kind: "answered", busy: true, terminalsInUse: null };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: "answered", busy: true, terminalsInUse: null };
+  }
+  if (typeof body !== "object" || body === null) {
+    return { kind: "answered", busy: true, terminalsInUse: null };
+  }
+  const busy =
+    "busy" in body && typeof body.busy === "boolean" ? body.busy : true;
+  const terminalsInUse =
+    "terminalsInUse" in body &&
+    typeof body.terminalsInUse === "number" &&
+    Number.isSafeInteger(body.terminalsInUse) &&
+    body.terminalsInUse >= 0
+      ? body.terminalsInUse
+      : null;
+  return { kind: "answered", busy, terminalsInUse };
+}
+
+/**
  * Returns `true` when SOMETHING is serving HTTP on the host's loopback
  * endpoint - any status code counts, including a pre-feature host's 404.
  * Connect errors, malformed URLs, and timeouts return `false`.
@@ -71,7 +141,7 @@ export async function probeHostReachable(
 
 // `ws://127.0.0.1:<port>/rpc` -> `http://127.0.0.1:<port>/activity`. The host
 // binds loopback HTTP (not TLS). A malformed URL throws and is caught above as
-// the busy fail-safe.
+// the busy fail-safe (`probeHostActivity`: as unreachable).
 function toActivityUrl(websocketUrl: string): string {
   const url = new URL(websocketUrl);
   return `http://${url.host}/activity`;

@@ -39,6 +39,8 @@ import {
   providerNoticeNormalizedMetadataSchema,
   providerNoticeToneSchema,
   toolCallManagedCommandSchema,
+  toolCallMcpAppStampSchema,
+  toolCallPageStampSchema,
   workflowActivityEntrySchema,
   type AgentFailureReason,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -577,11 +579,39 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // shape the live broadcast did. Defaulted so an old emitter that never
     // sends this reproduces today's shipped (image-free) behavior.
     imageResults: z.array(imageGenerationResultSchema).default([]),
+    // The page this call showed, or the MCP App it rendered
+    // (`chat.subscribe@1.23`; see `toolCallPageStampSchema` /
+    // `toolCallMcpAppStampSchema`). Optional rather than defaulted, like
+    // `managedCommand`: the host stamps them on completion, every adapter
+    // omits them, and an omission is "nothing to say" - a re-completion must
+    // not erase a stamp the first completion carried. Not on the hand-frozen
+    // `toolCallCompletedEventSchemaPrePage` below.
+    page: toolCallPageStampSchema.nullable().optional(),
+    mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
   }),
 );
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` as every `chat.subscribe`
+// line from `@1.7` to `@1.21` ships it: the live event without the `page` /
+// `mcpApp` stamps `1.23` added. Bound by every runtime-event union that used
+// to reference the live event. Hand-frozen, NOT derived from the live shape.
+export const toolCallCompletedEventSchemaPrePage = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.completed"),
+    toolName: z.string(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+  }),
+);
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.6`
 // shipped it in `host-v1.2.0`: image results present, `agentMessageReceipt`
@@ -1600,6 +1630,16 @@ export const antigravityUserMessageAnchorResolvedSchema = lazySchema(() =>
   }),
 );
 
+export const commandCodeUserMessageAnchorResolvedSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("commandcode"),
+    sessionId: z.string(),
+    // The ACP session id the `cmd acp` process assigned for this turn.
+    // Null until `session/new` resolves; used to resume the same ACP session.
+    commandcodeSessionId: z.string().nullable(),
+  }),
+);
+
 export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
@@ -1627,6 +1667,7 @@ export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
       huggingFaceUserMessageAnchorResolvedSchema,
       reasonixUserMessageAnchorResolvedSchema,
       antigravityUserMessageAnchorResolvedSchema,
+      commandCodeUserMessageAnchorResolvedSchema,
     ]),
   }),
 );
@@ -2013,10 +2054,64 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     reasoningDeltaEventSchema,
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
-    toolCallCompletedEventSchema,
+    toolCallCompletedEventSchemaPrePage,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
+    approvalResolvedEventSchema,
+    todoUpdatedEventSchema,
+    planDeltaEventSchema,
+    planUpdatedEventSchema,
+    planCompletedEventSchema,
+    compactionStartedEventSchema,
+    compactionCompletedEventSchema,
+    compactionErroredEventSchema,
+    interviewRequestedEventSchema,
+    interviewResolvedEventSchema,
+    interviewErroredEventSchema,
+    subAgentStartedEventSchema,
+    subAgentProgressEventSchema,
+    subAgentCompletedEventSchema,
+    fileChangeStartedEventSchema,
+    fileChangeCompletedEventSchema,
+    artifactOperationEventSchema,
+    commandStartedEventSchema,
+    commandCompletedEventSchema,
+    sessionCreatedEventSchema,
+    sessionResumedEventSchema,
+    turnStartedEventSchema,
+    userMessageAnchorResolvedEventSchema,
+    turnCompletedEventSchema,
+    turnStoppedEventSchema,
+    turnInterruptedEventSchema,
+    steerSubmittedEventSchema,
+    usageUpdatedEventSchema,
+    errorEventSchema,
+    workflowStartedEventSchema,
+    workflowProgressEventSchema,
+    workflowCompletedEventSchema,
+    providerNoticeUpsertEventSchema,
+    imageResolutionUpdatedEventSchema,
+    userMessageAnchorTailUpdatedEventSchema,
+  ]),
+);
+
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.20`/`@1.21`
+// ship it: every live member, with `tool_call.completed` swapped for its
+// pre-page freeze so neither line can observe a tool call's `page` / `mcpApp`
+// stamps (`1.23`). Explicitly listed rather than derived from the live union,
+// for the reason `runtimeEventSchemaPreImage` gives.
+export const runtimeEventSchemaPrePage = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textDeltaEventSchema,
+    textCompletedEventSchema,
+    reasoningDeltaEventSchema,
+    reasoningCompletedEventSchema,
+    toolCallStartedEventSchema,
+    toolCallCompletedEventSchemaPrePage,
+    toolCallErroredEventSchema,
+    toolCallProgressEventSchema,
+    approvalRequestedEventSchema,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
     planDeltaEventSchema,
@@ -2066,7 +2161,7 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     reasoningDeltaEventSchema,
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
-    toolCallCompletedEventSchema,
+    toolCallCompletedEventSchemaPrePage,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
@@ -2303,7 +2398,7 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     reasoningDeltaEventSchema,
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
-    toolCallCompletedEventSchema,
+    toolCallCompletedEventSchemaPrePage,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,

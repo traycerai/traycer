@@ -1,17 +1,173 @@
 ---
-title: "IDE Extension"
-description: "Docs for the Traycer IDE extension. New Desktop docs live in the main navigation."
-sidebarTitle: "IDE Extension"
+title: "We're Retiring the IDE Extension"
+description: "Traycer is retiring the IDE extension on October 31, 2026, and focusing fully on Traycer Desktop. Your existing work and paid plan continue on Desktop."
+sidebarTitle: "Retirement Notice"
+keywords:
+  [
+    "traycer extension",
+    "extension retirement",
+    "extension discontinued",
+    "migrate to desktop",
+    "traycer desktop",
+    "legacy plans",
+  ]
 ---
 
-These docs are for the Traycer IDE extension.
+<Info>
+  **The Traycer IDE extension will be retired on October 31, 2026.** Your
+  existing work continues in [Traycer Desktop](/install).
+</Info>
 
-If you are using Traycer Desktop, start with the [Quickstart](/quickstart). The extension docs are preserved here so existing users and old links keep working.
+Traycer started as an IDE extension. But an extension can only do what the editor around it allows, and those limits held us back from building the workspace we wanted: one place where your coding agents, terminals, files, git diff, and plans all live side by side.
 
-## Extension Areas
+So Traycer has evolved into a full desktop app. We're retiring the extension and shifting our focus fully to **Traycer Desktop**.
+
+**Your existing work comes with you.** Sign in to Desktop with the same Traycer account, and the work you did in the extension continues there.
 
 <CardGroup cols={2}>
-  <Card title="Task workflows" icon="list-checks" href="/extension/tasks/index">
+  <Card title="Download Traycer Desktop" icon="download" href="/install">
+    macOS, Windows, and Linux. Free for individuals.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first Task and run your first agent in a few minutes.
+  </Card>
+</CardGroup>
+
+## Traycer Desktop in Short
+
+Traycer Desktop is a workspace for working with coding agents. You organize work into **Tasks**. Inside a Task, you run agents through a Chat or Terminal interface, right next to the files, terminals, git diff, and artifacts (specs, tickets, stories, and reviews) that belong to that work.
+
+**Free with the AI subscriptions you already have.** Connect your existing subscriptions, such as Claude Code, Codex, or Cursor, directly to Traycer Desktop and use it for free. Don't have one? You can use Traycer credits instead. See [Agents & Models](/agents-and-models/coding-agents) for the supported agents.
+
+### How to Do What You Did in the Extension
+
+**Epics, Phases, and Plans.** These now live in a [Task](/concepts/tasks-and-workspace-folders) that holds [artifacts](/panels/artifacts) such as specs, tickets, and reviews. See the [artifact workflow](/concepts/artifact-workflow).
+
+**Planning.** Agents now create plan documents as artifacts inside your Task. For larger features, use the [planning skills](/concepts/artifact-workflow#built-in-skills), such as `traycer-epic-brief`, `traycer-tech-plan`, and `traycer-ticket-breakdown`. Pick a skill with `$` in the composer, or type `/` and the skill name.
+
+**Phase breakdown.** You no longer need to break work into phases by hand. Traycer automatically splits the work into multiple steps, or launches multiple [sub-agents](/concepts/agent-to-agent) that work on different sub-tasks in parallel wherever needed. You can also ask it to create a phase-by-phase artifact directly, which agents always refer to as they work.
+
+**Review.** Ask an agent to review your changes with the `traycer-review` skill, and inspect every change yourself in the [Git Diff](/panels/git-diff) panel.
+
+And a few things the extension could never do:
+
+<Columns cols={2}>
+  <Card title="Agent-to-Agent" icon="diagram-project" href="/concepts/agent-to-agent">
+    Agents delegate work, create child agents, and share results inside the
+    same Task.
+  </Card>
+  <Card title="Worktrees" icon="code-branch" href="/concepts/worktrees">
+    Run agent work in an isolated git worktree without touching your main
+    folder.
+  </Card>
+  <Card title="Terminals" icon="terminal" href="/panels/terminals">
+    Run terminals and terminal agents right inside the Task.
+  </Card>
+  <Card title="Remote Hosts" icon="server" href="/concepts/hosts">
+    Connect Desktop to a workspace on another machine.
+  </Card>
+</Columns>
+
+## Moving to Desktop
+
+<Steps>
+  <Step title="Install Traycer Desktop">
+    Download it for your operating system from the [Install](/install) page.
+  </Step>
+  <Step title="Sign in with the same account">
+    Use the Traycer account you used in the extension, so your existing work
+    and plan come with you.
+  </Step>
+  <Step title="Set up a coding agent">
+    Connect Claude Code, Codex, OpenCode, Cursor, or another agent in [Agents &
+    Models](/agents-and-models/coding-agents).
+  </Step>
+  <Step title="Open your project and keep going">
+    Choose your workspace folder, then open your earlier work from
+    [History](/concepts/history) or start a new Task with the
+    [Quickstart](/quickstart).
+  </Step>
+</Steps>
+
+## What Changes for Your Plan
+
+**If you're on a free plan**, nothing to pay for. Traycer Desktop is free to use with your existing AI subscriptions, such as Claude Code, Codex, or Cursor, because you connect them directly. Otherwise, you can use Traycer credits.
+
+**If you're on a paid plan**, it continues on Desktop, but it works differently. Instead of rate-limited artifacts, you receive **monthly inference credits** to run models through the Traycer provider.
+
+As a thank-you to early users, your current plan includes **50% extra credits every month, forever**. For example, a \$20/month plan gives you **\$30 in inference credits each month**. These credits expire at the end of each month and do not roll over.
+
+Using your own coding agents, such as Claude Code, Codex, OpenCode, or Cursor, does not consume Traycer credits. See [Pricing](/account/pricing) for how credits and plans work on Desktop.
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="When will the extension be retired?">
+    On **October 31, 2026**. We recommend moving to Traycer Desktop before
+    then so your workflow is not interrupted.
+  </Accordion>
+  <Accordion title="Will I lose my existing work?">
+    No. Sign in to Traycer Desktop with the same account you used in the
+    extension, and your existing work continues there as Tasks. Plans come
+    over as specs, and your conversations come over with them.
+  </Accordion>
+  <Accordion title="Do I have to stop using my editor?">
+    No. Traycer Desktop works on the same project folder on disk, so you can
+    keep your editor open alongside it.
+  </Accordion>
+  <Accordion title="Which coding agents does Desktop support?">
+    Claude Code, Codex, OpenCode, Cursor, and many more. See the full list in
+    [Agents & Models](/agents-and-models/coding-agents).
+  </Accordion>
+  <Accordion title="Is Traycer Desktop free?">
+    Yes, if you have an existing AI subscription. Connect Claude Code, Codex,
+    Cursor, or another supported agent directly, and use Traycer Desktop for
+    free. Otherwise, you can use Traycer credits to run models through Traycer.
+    See [Agents & Models](/agents-and-models/coding-agents) and
+    [Pricing](/account/pricing).
+  </Accordion>
+  <Accordion title="What happens to my paid plan?">
+    It continues on Desktop with monthly inference credits instead of
+    rate-limited artifacts, plus 50% extra credits every month as an early
+    user. See [What Changes for Your Plan](#what-changes-for-your-plan).
+  </Accordion>
+  <Accordion title="Which platforms does Desktop run on?">
+    macOS (Apple Silicon and Intel), Windows, and Linux, including Windows via
+    WSL. See [Install](/install).
+  </Accordion>
+  <Accordion title="Can my team use Traycer Desktop?">
+    Yes. Cloud sync and sharing Tasks with individual people work on every
+    plan. To share a Task with your whole team, the team needs the Sync plan.
+    See [Pricing](/account/pricing) and [Teams](/account/teams).
+  </Accordion>
+  <Accordion title="Something isn't working in Desktop. Where do I look?">
+    Start with [Troubleshooting](/reference/troubleshooting). If that does not
+    help, reach out to us using one of the options below.
+  </Accordion>
+</AccordionGroup>
+
+## Still Have Questions?
+
+We're happy to help you move over.
+
+<CardGroup cols={3}>
+  <Card title="Discord" icon="discord" href="https://traycer.ai/discord">
+    Ask the team and community.
+  </Card>
+  <Card title="Contact Us" icon="envelope" href="https://traycer.ai/contact-us">
+    Send us a message.
+  </Card>
+  <Card title="Email" icon="at" href="mailto:support@traycer.ai">
+    support@traycer.ai
+  </Card>
+</CardGroup>
+
+## Extension Docs
+
+Until the extension is retired, its docs stay available here for reference.
+
+<CardGroup cols={2}>
+  <Card title="Task workflows" icon="list-check" href="/extension/tasks/index">
     Plan, Phases, Review, Epic, verification, history, and extension workflows.
   </Card>
   <Card title="Integrations" icon="plug" href="/extension/integrations/agents">

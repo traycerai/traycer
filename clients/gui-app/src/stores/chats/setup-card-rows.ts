@@ -1,4 +1,3 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
 import {
   worktreeFolderIntentSchema,
   type WorktreeBindingOwnerKind,
@@ -22,6 +21,8 @@ import type {
   SetupCardWorkspace,
   SetupWorkspaceState,
 } from "@/components/chat/segments/setup-card-segment";
+
+import type { OpenChatEvent } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * Chat-tile binding identity for the setup card. `epicId`/`ownerId`/`ownerKind`
@@ -104,7 +105,7 @@ export interface SetupCardRow {
  * without dragging component types into the protocol package.
  */
 export function buildSetupCardRows(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
   binding: SetupCardBinding,
   /**
    * The host's whole-log partition, when this client is on the windowed line.
@@ -145,7 +146,7 @@ export function buildSetupCardRows(
  * merely benefiting from it.
  */
 function observedBoundaries(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<number> {
   return events
     .filter((event) => event.type === "worktree.missing")
@@ -156,7 +157,7 @@ function observedBoundaries(
 /** One card to draw: whose lifecycle it is, and the events the slice holds. */
 interface AlignedSetupCardWindow {
   readonly identity: SetupCardWindowIdentity;
-  readonly events: ReadonlyArray<ChatEvent>;
+  readonly events: ReadonlyArray<OpenChatEvent>;
   readonly triggeringMessageId: string | null;
 }
 
@@ -233,7 +234,7 @@ interface AlignedSetupCardWindow {
  * is sound.
  */
 function belongsToPrecedingWindow(input: {
-  readonly window: SetupCardWindow;
+  readonly window: SetupCardWindow<OpenChatEvent>;
   readonly preceding: SetupCardWindowIdentity;
   readonly precedingBucketEmpty: boolean;
   /**
@@ -295,10 +296,10 @@ function observedBoundaryClosing(
  * which is a degradation and not a loss.
  */
 function bucketWindowEvents(input: {
-  readonly window: SetupCardWindow;
+  readonly window: SetupCardWindow<OpenChatEvent>;
   readonly wholeLog: ReadonlyArray<SetupCardWindowIdentity>;
   readonly anchor: number;
-  readonly held: ChatEvent[][];
+  readonly held: OpenChatEvent[][];
 }): number {
   const { window, wholeLog, anchor, held } = input;
   const anchoredAt = wholeLog[anchor].createdAt;
@@ -373,7 +374,7 @@ function bucketWindowEvents(input: {
  * anchored to it rather than numbered past the end.
  */
 function alignToWholeLog(
-  local: ReadonlyArray<SetupCardWindow>,
+  local: ReadonlyArray<SetupCardWindow<OpenChatEvent>>,
   wholeLog: ReadonlyArray<SetupCardWindowIdentity>,
   observed: ReadonlyArray<number>,
 ): ReadonlyArray<AlignedSetupCardWindow> {
@@ -394,8 +395,8 @@ function alignToWholeLog(
     }));
   }
 
-  const held: ChatEvent[][] = wholeLog.map(() => []);
-  const live: SetupCardWindow[] = [];
+  const held: OpenChatEvent[][] = wholeLog.map(() => []);
+  const live: SetupCardWindow<OpenChatEvent>[] = [];
   let cursor = 0;
   for (const window of local) {
     while (
@@ -490,7 +491,7 @@ function alignToWholeLog(
  * send, so the first match is authoritative.
  */
 function triggeringMessageIdOf(
-  windowEvents: ReadonlyArray<ChatEvent>,
+  windowEvents: ReadonlyArray<OpenChatEvent>,
 ): string | null {
   const creating = windowEvents.find(
     (event) => event.type === "setup.creating",
@@ -509,14 +510,14 @@ function triggeringMessageIdOf(
  * projection exists to prevent.
  */
 function deriveViewModel(
-  windowEvents: ReadonlyArray<ChatEvent>,
+  windowEvents: ReadonlyArray<OpenChatEvent>,
   binding: SetupCardBinding,
   createdAt: number,
   isActive: boolean,
 ): SetupCardViewModel {
   // Group by `workspacePath`, preserving first-seen order so the consolidated
   // card lists workspaces in the order their lifecycle began.
-  const groups = new Map<string, ChatEvent[]>();
+  const groups = new Map<string, OpenChatEvent[]>();
   for (const event of windowEvents) {
     const key = readMetadataString(event, "workspacePath") ?? "";
     const bucket = groups.get(key);
@@ -549,7 +550,7 @@ function deriveViewModel(
 
 function deriveWorkspace(
   workspacePath: string,
-  groupEvents: ReadonlyArray<ChatEvent>,
+  groupEvents: ReadonlyArray<OpenChatEvent>,
 ): SetupCardWorkspace {
   // The host appends setup events in order, so the last one in array order is
   // the workspace's current state - a retry's `setup.running` lands after an
@@ -593,7 +594,9 @@ function deriveWorkspace(
  * missing/malformed value (older hosts) yields null and the caller falls back
  * to the script-retry path.
  */
-function readRetryFolderIntent(event: ChatEvent): WorktreeFolderIntent | null {
+function readRetryFolderIntent(
+  event: OpenChatEvent,
+): WorktreeFolderIntent | null {
   const parsed = worktreeFolderIntentSchema.safeParse(
     readMetadataValue(event, "folderIntent"),
   );
@@ -609,7 +612,7 @@ function readRetryFolderIntent(event: ChatEvent): WorktreeFolderIntent | null {
  * over a prior lifecycle's because the scan starts at the latest event.
  */
 function latestMetadataString(
-  groupEvents: ReadonlyArray<ChatEvent>,
+  groupEvents: ReadonlyArray<OpenChatEvent>,
   key: string,
 ): string | null {
   for (let index = groupEvents.length - 1; index >= 0; index -= 1) {
@@ -619,7 +622,7 @@ function latestMetadataString(
   return null;
 }
 
-function workspaceStateFor(type: ChatEvent["type"]): SetupWorkspaceState {
+function workspaceStateFor(type: OpenChatEvent["type"]): SetupWorkspaceState {
   switch (type) {
     case "setup.creating":
       // `git worktree add` is in flight (emitted before the add starts). The

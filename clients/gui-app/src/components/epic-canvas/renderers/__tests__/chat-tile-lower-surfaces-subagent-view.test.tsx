@@ -58,6 +58,7 @@ import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state"
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { SubagentContinueAsChatContext } from "@/components/chat/segments/subagent-continue-as-chat";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -375,6 +376,37 @@ describe("subagent view lower surface", () => {
     expect(noticeText()).toContain(
       "You're viewing a subagent's conversation. Subagents can't take messages.",
     );
+  });
+
+  it("draws Continue as chat in the notice, next to Back to chat, when it is offered", () => {
+    render(
+      <SubagentContinueAsChatContext.Provider
+        value={{ run: () => undefined, isPending: false }}
+      >
+        <ChatLowerInteractionSurfaces
+          {...dockWorthyProps(view("Mendel", 0, () => undefined))}
+        />
+      </SubagentContinueAsChatContext.Provider>,
+    );
+
+    const notice = screen.getByTestId("subagent-view-notice");
+    const continueButton = screen.getByTestId("subagent-view-notice-continue");
+    expect(notice.contains(continueButton)).toBe(true);
+    expect(continueButton.textContent).toContain("Continue as chat");
+    expect(
+      notice.contains(screen.getByRole("button", { name: "Back to chat" })),
+    ).toBe(true);
+  });
+
+  it("draws no Continue as chat without the action, and keeps Back to chat", () => {
+    render(
+      <ChatLowerInteractionSurfaces
+        {...dockWorthyProps(view("Mendel", 0, () => undefined))}
+      />,
+    );
+
+    expect(screen.queryByTestId("subagent-view-notice-continue")).toBeNull();
+    expect(screen.getByRole("button", { name: "Back to chat" })).not.toBeNull();
   });
 
   it("closes the subagent view from Back to chat", async () => {

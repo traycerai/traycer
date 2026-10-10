@@ -1,16 +1,12 @@
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
 import {
   imageResolutionEntriesEqual,
   type ImageWitnessStore,
 } from "@/stores/chats/image-witness-store";
 import type {
   ChatIndexChange,
-  ChatRangeResponse,
+  OpenChatRangeResponse,
   ChatSkeletonChunk,
-  ChatTranscriptWindow,
+  OpenChatTranscriptWindow,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
@@ -163,8 +159,8 @@ interface LedgerRecordEntry<T> {
  * a merge that changes what a span's records can back still invalidates.
  */
 export interface RecordLedger {
-  readonly messages: ReadonlyMap<string, LedgerRecordEntry<Message>>;
-  readonly events: ReadonlyMap<string, LedgerRecordEntry<ChatEvent>>;
+  readonly messages: ReadonlyMap<string, LedgerRecordEntry<OpenMessage>>;
+  readonly events: ReadonlyMap<string, LedgerRecordEntry<OpenChatEvent>>;
   readonly revision: number;
 }
 
@@ -340,8 +336,8 @@ export interface TranscriptWindow {
    * because neither is bound to an ordinal and either interactive frame can
    * overtake the bulk snapshot. Other live records clear.
    */
-  readonly liveMessages: readonly Message[];
-  readonly liveEvents: readonly ChatEvent[];
+  readonly liveMessages: readonly OpenMessage[];
+  readonly liveEvents: readonly OpenChatEvent[];
   /**
    * Live messages carried across the latest snapshot boundary.
    *
@@ -488,6 +484,11 @@ export interface OrdinalRange {
 export { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
 import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
 
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 /**
  * How large a span may grow by absorbing the span NEXT to it.
  *
@@ -577,8 +578,8 @@ export function emptyTranscriptWindow(): TranscriptWindow {
 export function spanMessages(
   window: TranscriptWindow,
   span: HydratedSpan,
-): readonly Message[] {
-  const out: Message[] = [];
+): readonly OpenMessage[] {
+  const out: OpenMessage[] = [];
   for (const id of span.messageIds) {
     const entry = window.records.messages.get(id);
     if (entry !== undefined) out.push(entry.record);
@@ -590,8 +591,8 @@ export function spanMessages(
 export function spanEvents(
   window: TranscriptWindow,
   span: HydratedSpan,
-): readonly ChatEvent[] {
-  const out: ChatEvent[] = [];
+): readonly OpenChatEvent[] {
+  const out: OpenChatEvent[] = [];
   for (const id of span.eventIds) {
     const entry = window.records.events.get(id);
     if (entry !== undefined) out.push(entry.record);
@@ -616,8 +617,8 @@ export function spanEvents(
  */
 function seatLedgerRecords(
   ledger: RecordLedger,
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
   clock: number,
 ): RecordLedger {
   if (messages.length === 0 && events.length === 0) return ledger;
@@ -789,8 +790,8 @@ function freshTierBytes(
  */
 function liveRewriteByteDelta(
   charge: "now" | "deferred",
-  before: readonly Message[],
-  after: readonly Message[],
+  before: readonly OpenMessage[],
+  after: readonly OpenMessage[],
   index: number,
 ): number {
   if (charge !== "now" || index < 0) return 0;
@@ -801,8 +802,8 @@ function liveRewriteByteDelta(
 }
 
 function recordsByteLength(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
 ): number {
   let bytes = 0;
   for (const message of messages) bytes += recordByteLength(message);
@@ -827,8 +828,8 @@ function recordsByteLength(
 function chargedWindowBytes(
   ledger: RecordLedger,
   spans: readonly HydratedSpan[],
-  liveMessages: readonly Message[],
-  liveEvents: readonly ChatEvent[],
+  liveMessages: readonly OpenMessage[],
+  liveEvents: readonly OpenChatEvent[],
 ): number {
   return (
     freshTierBytes(ledger, spans) + recordsByteLength(liveMessages, liveEvents)
@@ -1110,8 +1111,8 @@ export function spanChargeBytes(
  */
 export function addRecordBackedRowIds(
   into: Set<string>,
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
 ): void {
   for (const message of messages) into.add(message.messageId);
   for (const event of events) {
@@ -1144,8 +1145,8 @@ export function addRecordBackedRowIds(
 export function appendLiveRecords(
   window: TranscriptWindow,
   input: {
-    readonly messages: readonly Message[];
-    readonly events: readonly ChatEvent[];
+    readonly messages: readonly OpenMessage[];
+    readonly events: readonly OpenChatEvent[];
   },
 ): TranscriptWindow {
   const knownMessages = new Set<string>(
@@ -1213,7 +1214,7 @@ function pruneSupersededLiveRecords(
   window: TranscriptWindow,
   freshlyServedAssistantTurns: ReadonlyMap<
     string,
-    Extract<Message, { role: "assistant" }>
+    Extract<OpenMessage, { role: "assistant" }>
   >,
 ): TranscriptWindow {
   if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
@@ -1287,8 +1288,8 @@ function pruneSupersededLiveRecords(
 }
 
 function assistantRenderBodyEqual(
-  left: Extract<Message, { role: "assistant" }>,
-  right: Extract<Message, { role: "assistant" }>,
+  left: Extract<OpenMessage, { role: "assistant" }>,
+  right: Extract<OpenMessage, { role: "assistant" }>,
 ): boolean {
   return (
     stableJsonStringify([
@@ -1328,12 +1329,12 @@ function stableJsonStringify(value: unknown): string {
 
 function servedAssistantTurns(
   rowIds: readonly string[],
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
-): ReadonlyMap<string, Extract<Message, { role: "assistant" }>> {
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
+): ReadonlyMap<string, Extract<OpenMessage, { role: "assistant" }>> {
   const assistantMessages = new Map<
     string,
-    Extract<Message, { role: "assistant" }>
+    Extract<OpenMessage, { role: "assistant" }>
   >();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
@@ -1365,7 +1366,7 @@ function servedAssistantTurns(
       ],
     });
   }
-  const turns = new Map<string, Extract<Message, { role: "assistant" }>>();
+  const turns = new Map<string, Extract<OpenMessage, { role: "assistant" }>>();
   for (const turnKey of assistantTurnKeysForServedRows(
     rowIds,
     messages,
@@ -1379,8 +1380,8 @@ function servedAssistantTurns(
 
 function assistantTurnKeysForServedRows(
   rowIds: readonly string[],
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
 ): ReadonlySet<string> {
   const turnKeys = new Set<string>();
   const projectedRows = new Map(
@@ -1487,13 +1488,13 @@ function completeServedRowIds(
 }
 
 function recordsForRowIds(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
   rowIds: ReadonlySet<string>,
   setupRowOffset: number,
 ): {
-  readonly messages: Message[];
-  readonly events: ChatEvent[];
+  readonly messages: OpenMessage[];
+  readonly events: OpenChatEvent[];
 } {
   const setupRowIds = [...rowIds].filter((rowId) =>
     rowId.startsWith("setup-card:"),
@@ -1536,7 +1537,7 @@ function recordsForRowIds(
 }
 
 function declaredCompleteTailRowIds(
-  tail: ChatTranscriptWindow,
+  tail: OpenChatTranscriptWindow,
 ): readonly string[] {
   // A legacy tail with no declared identities is seated positionally from the
   // retained skeleton. During a rebuild that skeleton may be stale, so those
@@ -1557,7 +1558,7 @@ function declaredCompleteTailRowIds(
 export function updateWindowMessage(
   window: TranscriptWindow,
   messageId: string,
-  update: (message: Message) => Message,
+  update: (message: OpenMessage) => OpenMessage,
   witnesses: ImageWitnessStore | null,
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
   return rewriteWindowMessage(window, messageId, update, {
@@ -1579,7 +1580,7 @@ export function updateWindowMessage(
 export function streamWindowMessage(
   window: TranscriptWindow,
   messageId: string,
-  update: (message: Message) => Message,
+  update: (message: OpenMessage) => OpenMessage,
   witnesses: ImageWitnessStore | null,
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
   return rewriteWindowMessage(window, messageId, update, {
@@ -1606,7 +1607,7 @@ export function streamWindowMessage(
  */
 export function mapWindowMessages(
   window: TranscriptWindow,
-  update: (message: Message) => Message,
+  update: (message: OpenMessage) => OpenMessage,
   witnesses: ImageWitnessStore | null,
 ): TranscriptWindow {
   // ONE pass over the ledger, because the ledger holds the one copy of every
@@ -1615,7 +1616,7 @@ export function mapWindowMessages(
   // explicitly off the streaming path, so it can afford what the deferred
   // charge exists to avoid.
   let ledgerChanged = false;
-  const nextEntries = new Map<string, LedgerRecordEntry<Message>>();
+  const nextEntries = new Map<string, LedgerRecordEntry<OpenMessage>>();
   for (const [id, entry] of window.records.messages) {
     const record = update(entry.record);
     if (record === entry.record) {
@@ -1787,7 +1788,7 @@ function boundStaleTierToBudget(window: TranscriptWindow): TranscriptWindow {
 function rewriteWindowMessage(
   window: TranscriptWindow,
   messageId: string,
-  update: (message: Message) => Message,
+  update: (message: OpenMessage) => OpenMessage,
   apply: {
     readonly charge: "now" | "deferred";
     readonly witnesses: ImageWitnessStore | null;
@@ -2167,7 +2168,7 @@ function provisionalLiveMessagesForSnapshot(input: {
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
   readonly rebuilding: boolean;
-}): readonly Message[] {
+}): readonly OpenMessage[] {
   return input.window.liveMessages.filter(
     (message) =>
       (message.role === "assistant" &&
@@ -2185,7 +2186,7 @@ function provisionalLiveEventsForSnapshot(input: {
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
   readonly rebuilding: boolean;
-}): readonly ChatEvent[] {
+}): readonly OpenChatEvent[] {
   return input.rebased ||
     input.missedDeltas ||
     input.window.invalidated ||
@@ -2269,8 +2270,8 @@ function setupEventIdsNamedBySkeleton(
 }
 
 function rowProducingEventIds(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
 ): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const row of projectTranscriptRows({
@@ -2364,7 +2365,7 @@ export function applyWindowedSnapshot(
      * compare. See the field's doc on the wire schema.
      */
     readonly indexRevision: number | null;
-    readonly tail: ChatTranscriptWindow;
+    readonly tail: OpenChatTranscriptWindow;
   },
   /**
    * The streaming turn, if any. A bulk snapshot serialized before newer block
@@ -2696,7 +2697,7 @@ export function applyWindowedSnapshot(
  */
 function stampSeatedMessages(
   witnesses: ImageWitnessStore | null,
-  messages: readonly Message[],
+  messages: readonly OpenMessage[],
 ): void {
   if (witnesses === null) return;
   for (const message of messages) witnesses.stampSeatedCopy(message);
@@ -2704,7 +2705,7 @@ function stampSeatedMessages(
 
 function seatSnapshotTailSpan(input: {
   readonly base: TranscriptWindow;
-  readonly tail: ChatTranscriptWindow;
+  readonly tail: OpenChatTranscriptWindow;
   readonly rowIds: readonly string[];
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly clock: number;
@@ -2803,7 +2804,7 @@ function seatSnapshotTailSpan(input: {
 function seatNonConflictingTailRuns(
   input: {
     readonly base: TranscriptWindow;
-    readonly tail: ChatTranscriptWindow;
+    readonly tail: OpenChatTranscriptWindow;
     readonly rowIds: readonly string[];
     readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
     readonly clock: number;
@@ -2968,7 +2969,7 @@ function tailRowIdsFor(
   base: TranscriptWindow,
   input: {
     readonly rowCount: number;
-    readonly tail: ChatTranscriptWindow;
+    readonly tail: OpenChatTranscriptWindow;
   },
 ): readonly string[] | null {
   const extent = input.rowCount - input.tail.fromOrdinal;
@@ -3351,7 +3352,7 @@ function reconcileSpansWithSkeleton(
   const kept: HydratedSpan[] = [];
   const adoptedAssistantTurns = new Map<
     string,
-    Extract<Message, { role: "assistant" }>
+    Extract<OpenMessage, { role: "assistant" }>
   >();
   for (const span of window.spans) {
     const disjoint =
@@ -3873,8 +3874,8 @@ function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
  */
 function servedTurnMembership(
   rowIds: readonly string[],
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  messages: readonly OpenMessage[],
+  events: readonly OpenChatEvent[],
 ): ReadonlyMap<string, ReadonlySet<string>> {
   const membership = new Map<string, Set<string>>();
   for (const turnKey of assistantTurnKeysForServedRows(
@@ -3954,7 +3955,7 @@ function reconcileServedTurnMembership(
     return window;
   }
   const freshReferenced = referencedRecordIds([window.spans]).messageIds;
-  const retired = (message: Message): boolean => {
+  const retired = (message: OpenMessage): boolean => {
     if (message.role !== "assistant") return false;
     if (freshReferenced.has(message.messageId)) return false;
     const turnKey = assistantTurnKey(message);
@@ -4551,7 +4552,7 @@ function dropSpansForUpdatedOrdinals(
 function heldMessageCopy(
   window: TranscriptWindow,
   messageId: string,
-): Message | null {
+): OpenMessage | null {
   const entry = window.records.messages.get(messageId);
   if (entry !== undefined) return entry.record;
   for (const message of window.liveMessages) {
@@ -4614,7 +4615,7 @@ export function holdsActiveTurnAssistantMessage(
  * it, before the records are looked at.
  */
 export function rangeSeatsActiveTurn(
-  response: ChatRangeResponse,
+  response: OpenChatRangeResponse,
   activeTurnId: string | null,
 ): boolean {
   if (activeTurnId === null) return false;
@@ -4647,7 +4648,7 @@ export function rangeSeatsActiveTurn(
  * reads these ordinals.
  */
 export function activeTurnOrdinalsOf(
-  response: ChatRangeResponse,
+  response: OpenChatRangeResponse,
   activeTurnId: string | null,
 ): readonly number[] {
   if (activeTurnId === null) return [];
@@ -4676,7 +4677,7 @@ export function activeTurnOrdinalsOf(
  */
 export function rangeRecordsInstalled(
   window: TranscriptWindow,
-  messages: readonly Message[],
+  messages: readonly OpenMessage[],
   activeTurnId: string | null,
 ): boolean {
   if (activeTurnId === null) return false;
@@ -4690,7 +4691,7 @@ export function rangeRecordsInstalled(
 
 const assistantMessageOfTurn =
   (turnId: string) =>
-  (message: Message): boolean =>
+  (message: OpenMessage): boolean =>
     message.role === "assistant" && assistantTurnKey(message) === turnId;
 
 /**
@@ -4751,14 +4752,14 @@ const assistantMessageOfTurn =
  */
 function preferFresherHeldMessages(
   window: TranscriptWindow,
-  messages: readonly Message[],
+  messages: readonly OpenMessage[],
   activeTurnId: string | null,
   witnesses: ImageWitnessStore | null,
-): readonly Message[] {
+): readonly OpenMessage[] {
   // A Map rather than a copied-array-in-a-closure: an assignment inside a
   // callback is invisible to control-flow narrowing, which this module has
   // paid for before (see {@link rewriteWindowMessage}).
-  const substitutions = new Map<number, Message>();
+  const substitutions = new Map<number, OpenMessage>();
   messages.forEach((message, index) => {
     if (message.role !== "assistant") return;
     const active =
@@ -4802,8 +4803,8 @@ function preferFresherHeldMessages(
  * the safe default for a record the client is not authoring.
  */
 function heldCopyIsAheadOfServed(
-  held: Message,
-  served: Message,
+  held: OpenMessage,
+  served: OpenMessage,
   witnesses: ImageWitnessStore | null,
 ): boolean {
   if (held.role !== "assistant" || served.role !== "assistant") return false;
@@ -4838,8 +4839,8 @@ function heldCopyIsAheadOfServed(
  * exactly the update that moved it.
  */
 function differingImageSources(
-  held: Extract<Message, { role: "assistant" }>,
-  served: Extract<Message, { role: "assistant" }>,
+  held: Extract<OpenMessage, { role: "assistant" }>,
+  served: Extract<OpenMessage, { role: "assistant" }>,
 ): readonly string[] {
   const heldBySource = new Map(
     held.imageResolutions.map((entry) => [entry.canonicalSource, entry]),
@@ -4896,8 +4897,8 @@ function differingImageSources(
  *    next revision-gap void - never a guess.
  */
 function imageEvidenceSaysHeldAhead(
-  held: Extract<Message, { role: "assistant" }>,
-  served: Extract<Message, { role: "assistant" }>,
+  held: Extract<OpenMessage, { role: "assistant" }>,
+  served: Extract<OpenMessage, { role: "assistant" }>,
   witnesses: ImageWitnessStore | null,
 ): boolean {
   const differing = differingImageSources(held, served);
@@ -4950,7 +4951,10 @@ function imageEvidenceSaysHeldAhead(
  * prevent. So an unanswerable comparison keeps the previous behaviour and only
  * a strictly lower version overrides it.
  */
-function heldCopyIsBehindServed(held: Message, served: Message): boolean {
+function heldCopyIsBehindServed(
+  held: OpenMessage,
+  served: OpenMessage,
+): boolean {
   if (held.role !== "assistant" || served.role !== "assistant") return false;
   const heldVersion = held.blocksVersion;
   const servedVersion = served.blocksVersion;
@@ -4999,7 +5003,7 @@ function heldCopyIsBehindServed(held: Message, served: Message): boolean {
  */
 function admitRangeResponse(
   window: TranscriptWindow,
-  response: ChatRangeResponse,
+  response: OpenChatRangeResponse,
 ): "seat" | "drop" | "void" {
   if (response.epoch < window.epoch) return "drop";
   // Before the body is even looked at: the epoch alone is the evidence, and an
@@ -5018,7 +5022,7 @@ function admitRangeResponse(
  */
 export function applyRangeResponse(
   window: TranscriptWindow,
-  response: ChatRangeResponse,
+  response: OpenChatRangeResponse,
   /** The streaming turn, if any - see {@link preferFresherHeldMessages}. */
   activeTurnId: string | null,
   /**
@@ -5364,8 +5368,8 @@ function coversThroughEnd(
  * at all.
  */
 export function hydratedRecords(window: TranscriptWindow): {
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
+  readonly messages: readonly OpenMessage[];
+  readonly events: readonly OpenChatEvent[];
   /**
    * What these rows render WITH - returned HERE rather than read separately so
    * a consumer cannot publish the records without the context that describes
@@ -5409,7 +5413,9 @@ export function hydratedRecords(window: TranscriptWindow): {
 }
 
 /** Message-only projection for a rewrite that changed no events or context. */
-export function hydratedMessages(window: TranscriptWindow): readonly Message[] {
+export function hydratedMessages(
+  window: TranscriptWindow,
+): readonly OpenMessage[] {
   const spans =
     window.staleSpans.length === 0
       ? window.spans

@@ -83,6 +83,7 @@ import type { StatusBarResourceMetricView } from "@/lib/resources/status-bar-res
 import { UsageGlyph } from "@/components/layout/header/rate-limit-icon";
 import { StatusBarMetric } from "@/components/layout/status-bar/status-bar-resource-segment";
 import { resolvedReadingDensity } from "@/lib/layout/reading-density";
+import { LayoutOverrideProvider } from "@/providers/layout-override-provider";
 
 /**
  * The only way a region is drawn outside the canvas (L-11).
@@ -111,6 +112,11 @@ import { resolvedReadingDensity } from "@/lib/layout/reading-density";
  * value in, one picture out. That is the passivity contract `lib/layout-overrides.ts`
  * spells out, and it is why the specimen data below is static rather than the
  * watched host's own numbers.
+ *
+ * "Value in" holds for a leaf that reads through the override seam too: every
+ * entry point here lays the values it was handed over its leaf, so the toolbar
+ * chips' chrome, which each chip reads off `model.toolbarStyle` itself, is the
+ * picture's answer and never the store's.
  */
 
 export type { HostContextId };
@@ -188,6 +194,7 @@ const HOST_BY_REGION: Readonly<Record<RegionId, HostContextId>> = {
   railTerminals: "rail",
   railBrowsers: "rail",
   railArtifacts: "rail",
+  railFiles: "rail",
   railGitDiff: "rail",
   railPullRequests: "rail",
   railFileTree: "rail",
@@ -210,17 +217,29 @@ export function depictRegion<K extends RegionId>(
   arrangement: LayoutArrangement,
 ): ReactNode {
   const depict = REGION_DEPICTIONS[regionId];
+  // The leaf is drawn under the values it is a picture of, so a real
+  // component that reads its own region through the override seam draws
+  // them rather than the store's.
   return (
-    <HostContextFrame host={hostContextFor(regionId, values, arrangement)}>
-      {depict(values, arrangement)}
-    </HostContextFrame>
+    <LayoutOverrideProvider
+      value={{ values: { [regionId]: values }, arrangement }}
+    >
+      <HostContextFrame host={hostContextFor(regionId, values, arrangement)}>
+        {depict(values, arrangement)}
+      </HostContextFrame>
+    </LayoutOverrideProvider>
   );
 }
 
 /**
  * {@link depictRegion}, for a caller holding a whole `LayoutValues` rather
- * than one region's bag - the inspector's sections and its Style examples,
- * which walk the map and draw whichever region is open.
+ * than one region's bag - the inspector's sections, its Style examples and
+ * the preset miniatures, which walk the map and draw whichever region is open.
+ *
+ * The whole map is laid over the leaf, not just its region's bag: the toolbar
+ * chips all draw their chrome from `model.toolbarStyle` (`toolbar-buttons.tsx`),
+ * so a picture of the mic under a preset or a Toolbar style example has to
+ * carry the model's answer too, or it draws the live setting.
  *
  * It lives here and not in the registry: `regions/` is the registry layer
  * (G1-11), and a depiction import there closes a module cycle back through
@@ -233,7 +252,11 @@ export function regionDepiction<K extends RegionId>(
   values: LayoutValues,
   arrangement: LayoutArrangement,
 ): ReactNode {
-  return depictRegion(region, values[region], arrangement);
+  return (
+    <LayoutOverrideProvider value={{ values }}>
+      {depictRegion(region, values[region], arrangement)}
+    </LayoutOverrideProvider>
+  );
 }
 
 /**
@@ -285,22 +308,24 @@ export function depictDockRows(
   arrangement: LayoutArrangement,
 ): ReactNode {
   return (
-    <HostContextFrame host="dock">
-      {rows.map((regionId, index) => (
-        <div
-          key={regionId}
-          // The same hairline `ChatLowerDock` gives a panel it draws below
-          // another one (`separated`), which is what tells two rows apart
-          // inside one frame now that the gap between two cards is gone.
-          //
-          // `undefined` and not `cn(null)`, which is the empty string: the
-          // first row was shipping a bare `class=""` (R2-10).
-          className={index === 0 ? undefined : "border-t border-border/50"}
-        >
-          {depictDockRow(regionId, values[regionId], arrangement)}
-        </div>
-      ))}
-    </HostContextFrame>
+    <LayoutOverrideProvider value={{ values, arrangement }}>
+      <HostContextFrame host="dock">
+        {rows.map((regionId, index) => (
+          <div
+            key={regionId}
+            // The same hairline `ChatLowerDock` gives a panel it draws below
+            // another one (`separated`), which is what tells two rows apart
+            // inside one frame now that the gap between two cards is gone.
+            //
+            // `undefined` and not `cn(null)`, which is the empty string: the
+            // first row was shipping a bare `class=""` (R2-10).
+            className={index === 0 ? undefined : "border-t border-border/50"}
+          >
+            {depictDockRow(regionId, values[regionId], arrangement)}
+          </div>
+        ))}
+      </HostContextFrame>
+    </LayoutOverrideProvider>
   );
 }
 
@@ -493,7 +518,7 @@ const RESOURCE_SPECIMEN: ReadonlyArray<StatusBarResourceMetricView> = (
 }));
 
 /**
- * Compact is the CPU icon and its percent whatever Metrics says; Detailed is
+ * Compact is the CPU icon alone whatever Metrics says; Detailed is
  * the chosen metrics, as the live reading resolves its density at its spot.
  */
 function depictResourceMonitor(
@@ -507,23 +532,21 @@ function depictResourceMonitor(
   return (
     <span className="inline-flex h-6 max-w-full shrink-0 items-center gap-1.5 px-2 text-muted-foreground">
       <Cpu className="size-3 shrink-0" aria-hidden />
-      {compact ? (
-        <span>{SAMPLE_RESOURCE_VALUES.cpu}</span>
-      ) : (
-        readings.map((view, index) => (
-          <span
-            key={view.metric}
-            className="inline-flex min-w-0 items-center gap-1"
-          >
-            {index === 0 ? null : (
-              <span aria-hidden className="text-muted-foreground/60">
-                ·
-              </span>
-            )}
-            <StatusBarMetric view={view} warning={false} />
-          </span>
-        ))
-      )}
+      {compact
+        ? null
+        : readings.map((view, index) => (
+            <span
+              key={view.metric}
+              className="inline-flex min-w-0 items-center gap-1"
+            >
+              {index === 0 ? null : (
+                <span aria-hidden className="text-muted-foreground/60">
+                  ·
+                </span>
+              )}
+              <StatusBarMetric view={view} warning={false} />
+            </span>
+          ))}
     </span>
   );
 }
@@ -877,6 +900,7 @@ const REGION_DEPICTIONS: {
   railTerminals: () => depictRailPanel("railTerminals"),
   railBrowsers: () => depictRailPanel("railBrowsers"),
   railArtifacts: () => depictRailPanel("railArtifacts"),
+  railFiles: () => depictRailPanel("railFiles"),
   railGitDiff: () => depictRailPanel("railGitDiff"),
   railPullRequests: () => depictRailPanel("railPullRequests"),
   railFileTree: () => depictRailPanel("railFileTree"),

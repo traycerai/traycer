@@ -5,21 +5,15 @@ import {
 import { createSelector, createStructuredSelector, lruMemoize } from "reselect";
 import { shallow } from "zustand/shallow";
 import type {
-  AgentSender,
-  AssistantMessage,
   AssistantTurnProfile,
-  ChatEvent,
   ChatSessionAnchor,
-  Message,
-  UserMessage,
-  UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
-  ChatQueuedPromptItem,
+  OpenChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
@@ -125,14 +119,23 @@ import {
   mergeSnapshotSourceBlockIds,
   singleSnapshotSourceBlockId,
 } from "@/lib/chat/snapshot-source-block-ids";
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
 
-type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
+import type {
+  OpenAgentSender,
+  OpenAssistantMessage,
+  OpenChatEvent,
+  OpenContentBlock,
+  OpenMessage,
+  OpenUserMessage,
+  OpenUserMessageSender,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
+type PlanContentBlock = Extract<OpenContentBlock, { type: "plan" }>;
 
 /**
  * Fallback React row key for the pre-turn assistant placeholder when the host
@@ -154,22 +157,22 @@ function isRenderablePlanBlock(block: PlanContentBlock): boolean {
 }
 
 export interface RenderedMessagesDisplayContext {
-  readonly resolveUserSenderLabel: (sender: UserMessageSender) => string;
+  readonly resolveUserSenderLabel: (sender: OpenUserMessageSender) => string;
   readonly resolveAgentSenderDisplay: (
-    sender: AgentSender,
+    sender: OpenAgentSender,
   ) => AgentSenderDisplay;
   readonly resolveAgentReasoningLabel: (
-    sender: AgentSender,
+    sender: OpenAgentSender,
     reasoningEffort: string | null,
   ) => string | null;
   readonly contentBlocksPreview: (
-    blocks: ReadonlyArray<ContentBlock>,
+    blocks: ReadonlyArray<OpenContentBlock>,
   ) => string;
 }
 
 export interface RenderedMessagesInput {
-  readonly messages: ReadonlyArray<Message>;
-  readonly events: ReadonlyArray<ChatEvent>;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly events: ReadonlyArray<OpenChatEvent>;
   /**
    * `ChatSessionState.transcriptRowContext` - what the host says each hydrated
    * row renders WITH, by row id (`row-context.ts`).
@@ -226,6 +229,15 @@ export interface RenderedMessagesInput {
    */
   readonly runStatus: ChatRunStatus;
   /**
+   * Whether the host reports the chat as anything but idle - the RAW
+   * `runStatus` that {@link RenderedMessagesInput.runStatus} deliberately is
+   * not. Read for one thing: a background-outcome note at the transcript's
+   * tail does not say "Agent not resumed" while the host is still working
+   * toward handing that outcome to the agent (`withOwedAutonomousResume`).
+   * Absent means idle, so a caller with no live session draws every ending.
+   */
+  readonly chatWorking?: boolean;
+  /**
    * Chat-tile binding identity, threaded straight into `buildSetupCardRows` so
    * a synthesized setup-card row can route its per-workspace retry mutation and
    * scope the terminal-liveness query. These are tile-owned and stable across
@@ -248,13 +260,13 @@ interface AssistantTurnCacheEntry {
   models: ReadonlyArray<ChatMessageModel>;
 }
 interface RenderedMessageCache {
-  users: WeakMap<Message, ChatMessageModel>;
+  users: WeakMap<OpenMessage, ChatMessageModel>;
   readonly turns: Map<string, AssistantTurnCacheEntry>;
 }
 const TURN_SIGNATURE_HASH_OFFSET = 2166136261;
 const TURN_SIGNATURE_HASH_PRIME = 16777619;
 
-function turnSignature(blocks: ReadonlyArray<ContentBlock>): string {
+function turnSignature(blocks: ReadonlyArray<OpenContentBlock>): string {
   if (blocks.length === 0) return "0";
 
   let hash = hashNumberField(TURN_SIGNATURE_HASH_OFFSET, blocks.length);
@@ -272,7 +284,7 @@ function turnSignature(blocks: ReadonlyArray<ContentBlock>): string {
   return `${blocks.length}:${hash}`;
 }
 
-function blockContentVersion(block: ContentBlock): number {
+function blockContentVersion(block: OpenContentBlock): number {
   // `text.delta` / `reasoning.delta` only ever append to `text` / `content`, so
   // length alone catches every accumulator update. Avoid hashing the full body
   // — this signature runs once per block per render during streaming.
@@ -293,7 +305,7 @@ function blockContentVersion(block: ContentBlock): number {
 }
 
 function errorBlockContentVersion(
-  block: Extract<ContentBlock, { type: "error" }>,
+  block: Extract<OpenContentBlock, { type: "error" }>,
 ): number {
   let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, block.code ?? "");
   hash = hashStringField(hash, block.message);
@@ -326,7 +338,7 @@ function errorBlockContentVersion(
  * hiding the message it now has to show.
  */
 function textBlockContentVersion(
-  block: Extract<ContentBlock, { type: "text" }>,
+  block: Extract<OpenContentBlock, { type: "text" }>,
 ): number {
   if (block.browserSession !== undefined) {
     return hashStringField(
@@ -353,7 +365,7 @@ function textBlockContentVersion(
 }
 
 function planBlockContentVersion(
-  block: Extract<ContentBlock, { type: "plan" }>,
+  block: Extract<OpenContentBlock, { type: "plan" }>,
 ): number {
   let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, block.planStatus);
   hash = hashStringField(hash, planContentIdentity(block));
@@ -458,7 +470,7 @@ interface TurnLifecycleTiming {
  * window is ignored (the host's terminal latch makes that defensive only).
  */
 function turnLifecycleTimingFromEvents(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyMap<string, TurnLifecycleTiming> {
   const out = new Map<string, TurnLifecycleTiming>();
   for (const event of events) {
@@ -511,8 +523,8 @@ function retryTurnHasEnded(
 }
 
 function nestedSteeredUsersSignature(
-  blocks: ReadonlyArray<ContentBlock>,
-  userMessagesById: ReadonlyMap<string, UserMessage>,
+  blocks: ReadonlyArray<OpenContentBlock>,
+  userMessagesById: ReadonlyMap<string, OpenUserMessage>,
 ): string {
   const parts = blocks.flatMap((block) => {
     if (block.type !== "steer") return [];
@@ -536,7 +548,7 @@ function completedSteerBadge(
 }
 
 // Identity-stable empties for the head/tail partition's no-merge fast path.
-const NO_MESSAGES: ReadonlyArray<Message> = [];
+const NO_MESSAGES: ReadonlyArray<OpenMessage> = [];
 const NO_RENDERED_MESSAGES: ReadonlyArray<ChatMessageModel> = [];
 const NO_DEDUPLICATED_IMAGE_TARGETS: ReadonlyMap<
   string,
@@ -567,7 +579,7 @@ interface PendingPauseRequest {
 }
 
 interface PendingTurnMetaInput {
-  readonly harnessId: AgentSender["harnessId"] | null;
+  readonly harnessId: OpenAgentSender["harnessId"] | null;
   readonly model: string | null;
   readonly profileLabel: string | null;
   readonly reasoningEffort: string | null;
@@ -629,7 +641,7 @@ interface WalkedTurnProfile {
   /** The anchor in effect at this turn, from the running walk. */
   walkedAnchor: ChatSessionAnchor | null;
   /** The turn's own sender harness, for the anchor-agreement gate. */
-  harnessId: AgentSender["harnessId"];
+  harnessId: OpenAgentSender["harnessId"];
 }
 
 /**
@@ -678,11 +690,11 @@ interface WalkedTurnProfile {
  * ambient login records `{ profileId: null }` and is labelled from it.
  */
 function profileLabelsByTurnKeyFromMessages(input: {
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
   readonly activeTurnId: string | null;
   readonly activeTurnUserMessageId: string | null;
-  readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
+  readonly activeTurnHarnessId: OpenAgentSender["harnessId"] | null;
   readonly activeTurnProfileId: string | null;
 }): ReadonlyMap<string, string> {
   const labels = new Map<string, string>();
@@ -719,7 +731,7 @@ function profileLabelsByTurnKeyFromMessages(input: {
  * budget - the rules are documented on the caller.
  */
 function walkTurnProfiles(input: {
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
   readonly activeTurnUserMessageId: string | null;
 }): {
@@ -790,7 +802,7 @@ function activeTurnProfileLabel(input: {
   readonly turns: ReadonlyMap<string, WalkedTurnProfile>;
   readonly activeTurnAnchor: ChatSessionAnchor | null;
   readonly activeTurnId: string | null;
-  readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
+  readonly activeTurnHarnessId: OpenAgentSender["harnessId"] | null;
   readonly activeTurnProfileId: string | null;
 }): { readonly turnKey: string; readonly label: string } | null {
   const anchor = input.activeTurnAnchor;
@@ -810,7 +822,7 @@ function activeTurnProfileLabel(input: {
 }
 
 function buildTurnPauseAccounting(input: {
-  readonly events: ReadonlyArray<ChatEvent>;
+  readonly events: ReadonlyArray<OpenChatEvent>;
   readonly activeTurnId: string | null;
   readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
@@ -1029,7 +1041,7 @@ function interviewPauseKey(blockId: string): string {
   return `interview:${blockId}`;
 }
 
-function isApprovalWaitEndEvent(event: ChatEvent): boolean {
+function isApprovalWaitEndEvent(event: OpenChatEvent): boolean {
   return (
     event.type === "approval.resolved" ||
     event.type === "approval.denied" ||
@@ -1037,7 +1049,7 @@ function isApprovalWaitEndEvent(event: ChatEvent): boolean {
   );
 }
 
-function isInterviewWaitEndEvent(event: ChatEvent): boolean {
+function isInterviewWaitEndEvent(event: OpenChatEvent): boolean {
   return (
     event.type === "interview.resolved" || event.type === "interview.errored"
   );
@@ -1463,7 +1475,7 @@ export function createRenderedMessagesProjector(): RenderedMessagesProjector {
       const keys = new Set(
         inputMessages
           .filter(
-            (message): message is AssistantMessage =>
+            (message): message is OpenAssistantMessage =>
               message.role === "assistant",
           )
           .map(assistantTurnKey),
@@ -1942,14 +1954,66 @@ export function createRenderedMessagesProjector(): RenderedMessagesProjector {
     { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
   let previousContext: RenderedMessagesDisplayContext | null = null;
+  // A memo of its own, off the one above: `chatWorking` flips with every
+  // background edge and must not rebuild the row list to restamp one row.
+  let owedFrom: ReadonlyArray<ChatMessageModel> | null = null;
+  let owedResult: ReadonlyArray<ChatMessageModel> | null = null;
   return (input, context) => {
     if (previousContext !== context) {
       cache.users = new WeakMap();
       cache.turns.clear();
       previousContext = context;
     }
-    return selectRows(input, context);
+    const rows = selectRows(input, context);
+    // The restamp is a pure function of `rows` while the chat is working, so
+    // the same rows hand back the same restamped array.
+    if (
+      owedResult !== null &&
+      owedFrom === rows &&
+      input.chatWorking === true
+    ) {
+      return owedResult;
+    }
+    const stamped = withOwedAutonomousResume(rows, input.chatWorking ?? false);
+    if (stamped !== rows) {
+      owedFrom = rows;
+      owedResult = stamped;
+    }
+    return stamped;
   };
+}
+
+/**
+ * Marks a background-outcome note at the transcript's tail as still owed to
+ * the agent while the host reports the chat working.
+ *
+ * A notification row no provider turn has adopted is the same row whether the
+ * resume is still coming or never will: nothing durable tells the two apart.
+ * The chat's own run state does. The host counts a settled outcome it has yet
+ * to hand over as work, so while that reads true the row has not ended and
+ * must not say it did; once the chat goes idle, or anything follows the row,
+ * it has.
+ *
+ * Only the last row is read. Background work unrelated to the note also keeps
+ * the chat working, and that is why this holds the ending back rather than
+ * asserting a resume: all it knows is that the agent may yet be woken.
+ */
+function withOwedAutonomousResume(
+  rows: ReadonlyArray<ChatMessageModel>,
+  chatWorking: boolean,
+): ReadonlyArray<ChatMessageModel> {
+  if (!chatWorking) return rows;
+  const last = rows.at(-1);
+  if (
+    last === undefined ||
+    last.role !== "assistant" ||
+    last.turnHasOnlyAutonomousResumeSegments !== true ||
+    last.showCompletionFooter !== false ||
+    last.stopped !== null
+  ) {
+    return rows;
+  }
+  return [...rows.slice(0, -1), { ...last, autonomousResumeOwed: true }];
 }
 
 interface RankedMessage {
@@ -2090,7 +2154,7 @@ function buildSetupCardMessage(
 }
 
 function buildForkedChatLinkMessages(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
   viewTabId: string,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
@@ -2166,7 +2230,7 @@ function pinImportedChatMarkers(
  * `session-import.md` §8e).
  */
 function buildImportedChatMarkerMessages(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
     const source = importedChatMarkerRowSource(event);
@@ -2213,7 +2277,7 @@ function buildImportedChatMarkerMessages(
  * row so notification activation has an exact, stable transcript destination.
  */
 function buildNotificationAnchorMessages(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
     // Shared with the host's ordinal numbering - see the forked-link builder.
@@ -2274,7 +2338,7 @@ function buildNotificationAnchorMessages(
  * here but not there is exactly what a windowed transcript loses.
  */
 function buildAutoJudgeUnattendedDenialMessages(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
     const denial = autoJudgeUnattendedDenialRowSource(event);
@@ -2331,7 +2395,7 @@ function buildAutoJudgeUnattendedDenialMessages(
  * pinned-todo pass withholds.
  */
 function buildAutoJudgeNoticeMessages(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
     const notice = autoJudgeNoticeRowSource(event);
@@ -2381,7 +2445,7 @@ function pendingTurnMeta(
   ctx: RenderedMessagesDisplayContext,
 ): AssistantTurnMeta | null {
   if (turn.harnessId === null) return null;
-  const sender: AgentSender = {
+  const sender: OpenAgentSender = {
     type: "agent",
     harnessId: turn.harnessId,
     agentId: turn.model ?? turn.harnessId,
@@ -2439,7 +2503,7 @@ interface AssistantTurnAccumulator {
    * the run metadata above.
    */
   turnId: string | null;
-  sender: AgentSender;
+  sender: OpenAgentSender;
   /**
    * Earliest wall-clock the host attributed to this turn. Sourced from
    * `message.startedAt` (schema field, never rewritten); when multiple
@@ -2455,14 +2519,14 @@ interface AssistantTurnAccumulator {
    * not just the first record's last delta.
    */
   timestamp: number;
-  blocks: ReadonlyArray<ContentBlock>;
+  blocks: ReadonlyArray<OpenContentBlock>;
   /**
    * Null while `blocks` still ALIASES a contributing record's own array.
    * Every mutation goes through `ownedTurnBlocks` first, so the common
    * single-record turn never pays an array copy on a render pass - which it
    * used to, once per turn, making each pass O(blocks in the transcript).
    */
-  ownedBlocks: ContentBlock[] | null;
+  ownedBlocks: OpenContentBlock[] | null;
   /**
    * One signature fragment per contributing record (plus one for appended
    * live blocks). Each fragment is derived per record and memoized on that
@@ -2498,12 +2562,12 @@ interface AssistantTurnAccumulator {
 interface PersistedMessagesRenderInput {
   readonly cache: RenderedMessageCache;
   /** Records whose rows this call emits (one head/tail partition). */
-  readonly messages: ReadonlyArray<Message>;
+  readonly messages: ReadonlyArray<OpenMessage>;
   /**
    * Snapshot-wide user lookup (steered user records render inside assistant
    * turns that may live in the other partition).
    */
-  readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  readonly userMessagesById: ReadonlyMap<string, OpenUserMessage>;
   /** Immutable profile-label snapshots keyed by assistant turn identity. */
   readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
   /**
@@ -2544,7 +2608,7 @@ interface PersistedMessagesRenderInput {
 interface RenderLiveAssistantInput {
   readonly liveAssistant: LiveAssistantMessage | null;
   /** Snapshot-wide user lookup for steer rows nested in the live turn. */
-  readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  readonly userMessagesById: ReadonlyMap<string, OpenUserMessage>;
   /** Immutable profile-label snapshots keyed by assistant turn identity. */
   readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
   // Whether a persisted assistant message already shares the live turnId; the
@@ -2645,11 +2709,11 @@ function sweepAssistantTurnCache(
  * discrete event) invalidates the settled head.
  */
 function activeTurnSteeredIdsContentKey(
-  activeTurnRecords: ReadonlyArray<Message>,
+  activeTurnRecords: ReadonlyArray<OpenMessage>,
   liveAssistant: LiveAssistantMessage | null,
 ): string {
   const ids = new Set<string>();
-  const collect = (blocks: ReadonlyArray<ContentBlock>): void => {
+  const collect = (blocks: ReadonlyArray<OpenContentBlock>): void => {
     for (const block of blocks) {
       if (block.type === "steer") ids.add(block.messageId);
     }
@@ -2662,9 +2726,9 @@ function activeTurnSteeredIdsContentKey(
 }
 
 function userMessagesByIdFromMessages(
-  messages: ReadonlyArray<Message>,
-): ReadonlyMap<string, UserMessage> {
-  const usersById = new Map<string, UserMessage>();
+  messages: ReadonlyArray<OpenMessage>,
+): ReadonlyMap<string, OpenUserMessage> {
+  const usersById = new Map<string, OpenUserMessage>();
   for (const message of messages) {
     if (message.role === "user") {
       usersById.set(message.messageId, message);
@@ -2706,7 +2770,7 @@ function userMessagesByIdFromMessages(
  * badge from all cold history, which is the bug.
  */
 function completedSteerMessageIds(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
   rowContext: Readonly<Record<string, TranscriptRowContext>>,
 ): ReadonlySet<string> {
   const folded = steeredMessageIdsFromEvents(events);
@@ -2723,15 +2787,15 @@ function completedSteerMessageIds(
 
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
-  usersById: ReadonlyMap<string, UserMessage>,
+  usersById: ReadonlyMap<string, OpenUserMessage>,
 ): ReadonlySet<string> {
   return nestedSteeredMessageIds(turnAccumulator.values(), usersById);
 }
 
 function renderPersistedUserMessage(
-  message: UserMessage,
+  message: OpenUserMessage,
   input: PersistedMessagesRenderInput,
-  userCache: WeakMap<Message, ChatMessageModel>,
+  userCache: WeakMap<OpenMessage, ChatMessageModel>,
 ): ChatMessageModel {
   const steerBadge = input.steeredMessageIds.has(message.messageId)
     ? completedSteerBadge(null)
@@ -2747,17 +2811,17 @@ function renderPersistedUserMessage(
 }
 
 interface PersistedAssistantTurnRenderInput {
-  readonly message: AssistantMessage;
+  readonly message: OpenAssistantMessage;
   readonly input: PersistedMessagesRenderInput;
   readonly turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>;
   readonly emittedTurns: Set<string>;
   readonly turnCache: Map<string, AssistantTurnCacheEntry>;
-  readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  readonly userMessagesById: ReadonlyMap<string, OpenUserMessage>;
   readonly lastUserTimestamp: number | null;
 }
 
 function hasOnlyAutonomousResumeAssistantBlocks(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): boolean {
   let foundAutonomousResume = false;
   for (const block of blocks) {
@@ -2776,7 +2840,7 @@ function hasOnlyAutonomousResumeAssistantBlocks(
  * back to the pre-resume persisted timestamp once output arrives.
  */
 function turnInitiatedByAutonomousResume(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): boolean {
   return autonomousResumeNotifiedAt(blocks) !== null;
 }
@@ -2788,7 +2852,7 @@ function turnInitiatedByAutonomousResume(
  * provider had not produced any other block when it arrived.
  */
 function autonomousResumeNotifiedAt(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): number | null {
   for (const block of blocks) {
     if (block.type === "steer") continue;
@@ -2812,7 +2876,7 @@ function autonomousResumeNotifiedAt(
  */
 function lifecycleWindowSinceResume(
   timing: TurnLifecycleTiming | null,
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): TurnLifecycleTiming | null {
   if (timing === null || timing.startedAt === null) return timing;
   const notifiedAt = autonomousResumeNotifiedAt(blocks);
@@ -2823,7 +2887,7 @@ function lifecycleWindowSinceResume(
 function isNotificationOnlyAutonomousResume(
   turnComplete: boolean,
   hasCompletedLifecycle: boolean,
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): boolean {
   return (
     turnComplete &&
@@ -2834,7 +2898,7 @@ function isNotificationOnlyAutonomousResume(
 
 interface AssistantTurnTimingInput {
   readonly lifecycle: TurnLifecycleTiming | null;
-  readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly blocks: ReadonlyArray<OpenContentBlock>;
   readonly persistedStartedAt: number | null;
   /**
    * The projection's own anchor for a turn persisted before `startedAt`
@@ -3039,7 +3103,7 @@ function renderPersistedAssistantMessageTurn(
 
 function addAssistantMessageToAccumulator(
   turnAccumulator: Map<string, AssistantTurnAccumulator>,
-  message: AssistantMessage,
+  message: OpenAssistantMessage,
   profileLabel: string | null,
 ): void {
   const turnKey = assistantTurnKey(message);
@@ -3121,7 +3185,7 @@ function addAssistantMessageToAccumulator(
 
 function addAssistantImageProjection(
   acc: AssistantTurnAccumulator,
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
 ): void {
   for (const block of blocks) {
@@ -3202,7 +3266,7 @@ function addLiveAssistantImageProjection(
  * accumulator aliases the contributing record's own array; aliasing is safe
  * only because every mutation site routes through here.
  */
-function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
+function ownedTurnBlocks(acc: AssistantTurnAccumulator): OpenContentBlock[] {
   if (acc.ownedBlocks !== null) return acc.ownedBlocks;
   const blocks = [...acc.blocks];
   acc.blocks = blocks;
@@ -3221,7 +3285,10 @@ function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
  * new message object rather than mutating in place. Keying on "the turn is
  * complete" would have been wrong; keying on identity is not.
  */
-const assistantRecordSignatureCache = new WeakMap<AssistantMessage, string>();
+const assistantRecordSignatureCache = new WeakMap<
+  OpenAssistantMessage,
+  string
+>();
 
 /**
  * Stable per-array identity token.
@@ -3239,8 +3306,8 @@ const assistantRecordSignatureCache = new WeakMap<AssistantMessage, string>();
  * a new array is a replacement regardless of what the counter says.
  */
 let blocksIdentityCounter = 0;
-const blocksIdentity = new WeakMap<ReadonlyArray<ContentBlock>, number>();
-function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
+const blocksIdentity = new WeakMap<ReadonlyArray<OpenContentBlock>, number>();
+function blocksIdentityToken(blocks: ReadonlyArray<OpenContentBlock>): number {
   const existing = blocksIdentity.get(blocks);
   if (existing !== undefined) return existing;
   blocksIdentityCounter += 1;
@@ -3260,7 +3327,8 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
  * (`AssistantMarkdownImageResolution`, entries already paired with their owning
  * message id). This one is the empty PERSISTED list a record carries.
  */
-const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
+const NO_PERSISTED_IMAGE_RESOLUTIONS: OpenAssistantMessage["imageResolutions"] =
+  [];
 
 /**
  * `imageResolutions` for a persisted assistant record, tolerating one that
@@ -3283,8 +3351,8 @@ const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
  * through structurally unchanged.
  */
 function assistantImageResolutions(
-  message: AssistantMessage,
-): AssistantMessage["imageResolutions"] {
+  message: OpenAssistantMessage,
+): OpenAssistantMessage["imageResolutions"] {
   // Read through `unknown` deliberately. The declared field type is not
   // optional, so annotating a local `| undefined` does not survive: TypeScript
   // narrows a `const` to its initializer's type and `no-unnecessary-condition`
@@ -3298,11 +3366,11 @@ function assistantImageResolutions(
 
 let imageResolutionsIdentityCounter = 0;
 const imageResolutionsIdentity = new WeakMap<
-  AssistantMessage["imageResolutions"],
+  OpenAssistantMessage["imageResolutions"],
   number
 >();
 function imageResolutionsIdentityToken(
-  imageResolutions: AssistantMessage["imageResolutions"],
+  imageResolutions: OpenAssistantMessage["imageResolutions"],
 ): number {
   const existing = imageResolutionsIdentity.get(imageResolutions);
   if (existing !== undefined) return existing;
@@ -3314,7 +3382,7 @@ function imageResolutionsIdentityToken(
   return imageResolutionsIdentityCounter;
 }
 
-function assistantRecordSignature(message: AssistantMessage): string {
+function assistantRecordSignature(message: OpenAssistantMessage): string {
   const imageIdentity = imageResolutionsIdentityToken(
     assistantImageResolutions(message),
   );
@@ -3364,7 +3432,7 @@ interface AssistantTurnRenderInput {
   readonly pause: TurnPauseAccounting;
   /** `turn.stopped` event info for this turn, if any. See `withTurnCompletion`. */
   readonly stopped: TurnStoppedEventInfo | null;
-  readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  readonly userMessagesById: ReadonlyMap<string, OpenUserMessage>;
   /** Stable transcript-sort anchor for every row this turn emits. */
   readonly rowAnchorAt: number;
   /** Wall-clock turn start used only for elapsed-duration calculations. */
@@ -3376,10 +3444,10 @@ interface AssistantTurnRenderInput {
 
 /** Infer legacy placement before steer boundaries split a turn into rows. */
 function resolveResumeDeliveryPlacements(
-  blocks: ReadonlyArray<ContentBlock>,
-): ReadonlyArray<ContentBlock> {
+  blocks: ReadonlyArray<OpenContentBlock>,
+): ReadonlyArray<OpenContentBlock> {
   let hasAssistantWork = false;
-  let resolved: ContentBlock[] | null = null;
+  let resolved: OpenContentBlock[] | null = null;
   for (const [index, block] of blocks.entries()) {
     if (block.type === "autonomous_resume") {
       if ((block.deliveryPlacement ?? null) !== null) continue;
@@ -3685,7 +3753,7 @@ const NO_HOMED_SLICES: ReadonlyMap<number, ReadonlyArray<number>> = new Map();
  */
 function sliceBlockIndicesHomedToCards(
   plan: AssistantTurnRowPlan,
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): ReadonlyMap<number, ReadonlyArray<number>> {
   if (!plan.split) return NO_HOMED_SLICES;
   const sliceByIndex = new Map<number, number>();
@@ -3716,7 +3784,7 @@ function sliceBlockIndicesHomedToCards(
  * `withToolCardParents`). A subagent wins an id it shares with a tool call.
  */
 function cardBlockIndexById(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
 ): ReadonlyMap<string, number> {
   const byId = new Map<string, number>();
   blocks.forEach((block, index) => {
@@ -3738,7 +3806,7 @@ function cardBlockIndexById(
  * counterpart of `isSubagentChildSegment`. A cycle stops where it closes.
  */
 function rootCardBlockIndex(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   cardIndexById: ReadonlyMap<string, number>,
   start: number,
 ): number {
@@ -3757,7 +3825,7 @@ function rootCardBlockIndex(
   }
 }
 
-function nestsUnderCard(block: ContentBlock): boolean {
+function nestsUnderCard(block: OpenContentBlock): boolean {
   switch (block.type) {
     case "text":
     case "reasoning":
@@ -3781,7 +3849,7 @@ function nestsUnderCard(block: ContentBlock): boolean {
 function assistantRowIdsByBlockId(
   plan: AssistantTurnRowPlan,
   homedSlices: ReadonlyMap<number, ReadonlyArray<number>>,
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   turnKey: string,
 ): ReadonlyMap<string, string> {
   const rowIdByBlockId = new Map<string, string>();
@@ -3806,7 +3874,7 @@ interface AssistantTurnSliceRenderInput {
   readonly runState: ChatMessageRunState | null;
   readonly pause: TurnPauseAccounting;
   readonly ctx: RenderedMessagesDisplayContext;
-  readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly blocks: ReadonlyArray<OpenContentBlock>;
   readonly chunkIndex: number;
   readonly split: boolean;
   readonly rowAnchorAt: number | null;
@@ -4011,9 +4079,9 @@ function lastAssistantRowIndex(rows: ReadonlyArray<ChatMessageModel>): number {
  * and render as a "you" row exactly as before.
  */
 function renderSteerBlockUserMessage(
-  block: Extract<ContentBlock, { type: "steer" }>,
+  block: Extract<OpenContentBlock, { type: "steer" }>,
   ctx: RenderedMessagesDisplayContext,
-  userMessage: UserMessage | null,
+  userMessage: OpenUserMessage | null,
 ): ChatMessageModel {
   if (userMessage !== null) {
     return renderUserMessage(userMessage, ctx, completedSteerBadge(block.mode));
@@ -4036,10 +4104,10 @@ function renderSteerBlockUserMessage(
 
 function renderSteeredUserMessage(input: {
   readonly id: string;
-  readonly content: ChatQueuedPromptItem["message"]["content"];
+  readonly content: OpenChatQueuedPromptItem["message"]["content"];
   readonly timestamp: number;
   readonly persistentMessageId: string | null;
-  readonly sender: UserMessageSender | null;
+  readonly sender: OpenUserMessageSender | null;
   readonly senderLabel: string | null;
   readonly settings: ChatMessageModel["settings"];
   readonly steerBadge: ChatMessageSteerBadge;
@@ -4088,7 +4156,7 @@ function renderSteeredUserMessage(input: {
  * Returns `null` for human senders.
  */
 function agentSenderInfoFromSender(
-  sender: UserMessageSender,
+  sender: OpenUserMessageSender,
 ): ChatMessageModel["agentSenderInfo"] {
   if (sender.type !== "agent") return null;
   return {
@@ -4100,7 +4168,7 @@ function agentSenderInfoFromSender(
 }
 
 function renderUserMessage(
-  message: UserMessage,
+  message: OpenUserMessage,
   ctx: RenderedMessagesDisplayContext,
   steerBadge: ChatMessageSteerBadge | null,
 ): ChatMessageModel {
@@ -4409,7 +4477,7 @@ const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
   [];
 
 function buildAssistantSegments(
-  blocks: ReadonlyArray<ContentBlock>,
+  blocks: ReadonlyArray<OpenContentBlock>,
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
   imageProjection: {
@@ -4954,7 +5022,7 @@ interface CheckpointManifestView {
  * either line.
  */
 function checkpointManifestViewsFromEvents(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
   contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
 ): ReadonlyMap<string, CheckpointManifestView> {
   // Select from the RAW events, then parse what survived - see
@@ -4986,7 +5054,7 @@ function checkpointManifestViewsFromEvents(
 }
 
 function checkpointManifestFromEvent(
-  event: ChatEvent,
+  event: OpenChatEvent,
 ): ParsedCheckpointManifest | null {
   if (event.type !== "checkpoint.captured") return null;
   if (event.turnId === null || event.metadata === null) return null;
@@ -5120,7 +5188,7 @@ function isRealFileChange(segment: FileChangeSegment): boolean {
 // streaming/completed/errored lifecycle carries no end-state. Exhaustive switch
 // (no default): adding a new block status fails to compile here until it is
 // explicitly classified, so a new terminal state can't silently render nothing.
-function segmentEndState(status: ContentBlock["status"]): SegmentEndState {
+function segmentEndState(status: OpenContentBlock["status"]): SegmentEndState {
   switch (status) {
     case "interrupted":
     case "superseded":
@@ -5142,7 +5210,7 @@ function segmentEndState(status: ContentBlock["status"]): SegmentEndState {
  * sub-agent handlers so their duration semantics stay identical.
  */
 function completedDurationMs(
-  status: ContentBlock["status"],
+  status: OpenContentBlock["status"],
   startedAt: number | null,
   timestamp: number,
 ): number | null {
@@ -5151,7 +5219,7 @@ function completedDurationMs(
 }
 
 function backgroundToolDurationMs(
-  block: Extract<ContentBlock, { type: "tool_call" }>,
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
 ): number | null {
   if (!block.backgroundTask) return null;
   if (block.status !== "completed" && block.status !== "errored") return null;
@@ -5166,7 +5234,7 @@ function backgroundToolDurationMs(
  * without ids.
  */
 function todoItemsFromBlock(
-  block: Extract<ContentBlock, { type: "todo" }>,
+  block: Extract<OpenContentBlock, { type: "todo" }>,
 ): ReadonlyArray<SegmentTodoItem> {
   return block.items.map((item, index) => ({
     id: item.id ?? `${block.blockId}:item:${index}`,
@@ -5194,9 +5262,33 @@ function parentIdField(parentBlockId: string | null | undefined): {
     : { parentId: parentBlockId };
 }
 
+/**
+ * A tool call's page stamp, or `null` for a record that never carried the
+ * field. Same hazard as `assistantImageResolutions`: a snapshot taken on a
+ * SHALLOW parse path (`ChatStreamClient`, live and `1.6` lines alike) runs no
+ * zod defaults, so a block a pre-pages host stored arrives typed as carrying
+ * `page: null` and genuinely `undefined` - and every `page !== null` check
+ * downstream would promote it to a page row with no page.
+ */
+function toolCallPageStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["page"] {
+  // Read through `unknown` for the reason `assistantImageResolutions` gives.
+  const page: unknown = block.page;
+  return page === undefined ? null : block.page;
+}
+
+/** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+function toolCallMcpAppStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["mcpApp"] {
+  const mcpApp: unknown = block.mcpApp;
+  return mcpApp === undefined ? null : block.mcpApp;
+}
+
 const BLOCK_HANDLERS: {
-  [K in ContentBlock["type"]]: (
-    block: Extract<ContentBlock, { type: K }>,
+  [K in OpenContentBlock["type"]]: (
+    block: Extract<OpenContentBlock, { type: K }>,
   ) => Omit<MessageSegment, "id"> | null;
 } = {
   text: (block) => {
@@ -5268,6 +5360,8 @@ const BLOCK_HANDLERS: {
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
+    page: toolCallPageStamp(block),
+    mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",
@@ -5436,7 +5530,7 @@ const BLOCK_HANDLERS: {
 };
 
 function planContentIdentity(
-  block: Extract<ContentBlock, { type: "plan" }>,
+  block: Extract<OpenContentBlock, { type: "plan" }>,
 ): string {
   if (block.fullContentRef !== null) return block.fullContentRef.hash;
   const planRevision = block.metadata?.["planRevision"];
@@ -5446,9 +5540,9 @@ function planContentIdentity(
   return String(block.timestamp);
 }
 
-function blockToSegment(block: ContentBlock): MessageSegment | null {
+function blockToSegment(block: OpenContentBlock): MessageSegment | null {
   const handler = BLOCK_HANDLERS[block.type] as
-    | ((b: ContentBlock) => Omit<MessageSegment, "id"> | null)
+    | ((b: OpenContentBlock) => Omit<MessageSegment, "id"> | null)
     | undefined;
   if (handler === undefined) {
     // Forward-compat: a newer host may emit a block.type the current GUI

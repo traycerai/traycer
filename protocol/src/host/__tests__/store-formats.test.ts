@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   HOST_OLDER_THAN_DATA_FATAL_CODE,
+  NEWEST_TASK_STORE_FORMAT,
   NO_CHAT_STORE,
   SOURCE_TREE_HOST_VERSION,
   decideStoreFormatFloor,
@@ -11,8 +12,17 @@ import {
   storeFloorApplicability,
   storeFloorClearedByFormats,
   storeFormatsFromReleasedTable,
+  TASK_STORE_FORMAT_FLOOR_REASON,
+  taskStoreFloorBlock,
+  taskStoreFormatReadBy,
   type HostStoreFormatsKnowledge,
+  type NewestTaskStoreFormat,
 } from "../store-formats";
+import {
+  CANONICAL_RC_VERSION_PATTERN,
+  STABLE_VERSION_PATTERN,
+  isCanonicalReleaseVersion,
+} from "../version-order";
 
 describe("storeFormatsFromReleasedTable", () => {
   it.each([
@@ -517,4 +527,95 @@ describe("declaredStoreFormatsFromSidecar", () => {
       ).toEqual({ kind: "malformed" });
     },
   );
+});
+
+describe("isCanonicalReleaseVersion", () => {
+  it.each(["1.4.2", "1.5.0", "1.5.0-rc.1", "0.0.0"])("accepts %s", (v) => {
+    expect(isCanonicalReleaseVersion(v)).toBe(true);
+  });
+
+  it.each([
+    "1.4.3-staging.92.g8b2f6ce",
+    "0.0.0-dev",
+    "1.5.0-beta.1",
+    "1.5.0+build",
+    "1.05.0",
+    "1.5.0-rc.01",
+    "local-1.4.2.1700000000000.abc1234",
+    "",
+  ])("rejects %j", (v) => {
+    expect(isCanonicalReleaseVersion(v)).toBe(false);
+  });
+
+  it("exports the two shape patterns", () => {
+    expect(STABLE_VERSION_PATTERN.test("1.2.3")).toBe(true);
+    expect(CANONICAL_RC_VERSION_PATTERN.exec("1.2.3-rc.4")?.[1]).toBe("1.2.3");
+  });
+});
+
+describe("taskStoreFormatReadBy", () => {
+  it.each([
+    ["0.0.0", 2],
+    ["1.3.1", 2],
+    ["1.4.0", 2],
+    ["1.4.2", 2],
+    ["1.5.0-rc.1", 4],
+    ["1.5.0-rc.2", 4],
+    ["1.5.0", 4],
+    ["1.6.0", 4],
+  ])("%s reads task store format %s", (version, reads) => {
+    expect(taskStoreFormatReadBy(version)).toBe(reads);
+  });
+
+  it.each([
+    "1.4.3-staging.92.g8b2f6ce",
+    "0.0.0-dev",
+    "1.5.0-beta.1",
+    "1.5.0+build",
+    "1.05.0",
+    "local-1.4.2.1700000000000.abc1234",
+    "not-a-version",
+  ])("does not judge %j", (version) => {
+    expect(taskStoreFormatReadBy(version)).toBeNull();
+  });
+});
+
+describe("taskStoreFloorBlock", () => {
+  it("blocks a target that reads less than the disk holds", () => {
+    expect(taskStoreFloorBlock("1.4.2", 4)).toEqual({
+      targetReads: 2,
+      onDisk: 4,
+    });
+  });
+
+  it("clears a target that reads the disk's format or newer", () => {
+    expect(taskStoreFloorBlock("1.5.0-rc.1", 4)).toBeNull();
+    expect(taskStoreFloorBlock("1.5.0", 4)).toBeNull();
+    expect(taskStoreFloorBlock("1.4.2", 2)).toBeNull();
+    expect(taskStoreFloorBlock("1.4.2", 0)).toBeNull();
+  });
+
+  it("does not judge a staging target", () => {
+    expect(taskStoreFloorBlock("1.4.3-staging.92.g8b2f6ce", 4)).toBeNull();
+  });
+
+  it("caps the on-disk format at the newest known before comparing", () => {
+    expect(taskStoreFloorBlock("1.5.0", 5)).toBeNull();
+    expect(taskStoreFloorBlock("1.4.2", 5)).toEqual({
+      targetReads: 2,
+      onDisk: 5,
+    });
+  });
+
+  it("types the newest format as the table's last row", () => {
+    const ok: NewestTaskStoreFormat = 4;
+    // @ts-expect-error 5 is not the newest format the table knows
+    const tooNew: NewestTaskStoreFormat = 5;
+    expect(ok).toBe(NEWEST_TASK_STORE_FORMAT);
+    expect(tooNew).toBe(5);
+  });
+
+  it("names the host's refusal reason", () => {
+    expect(TASK_STORE_FORMAT_FLOOR_REASON).toBe("task-store-format-floor");
+  });
 });

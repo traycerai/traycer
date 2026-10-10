@@ -36,6 +36,7 @@ import {
 } from "../host/host-paths";
 import { backfillSubstrateOwnerAtLaunch } from "../host/substrate-backfill-contender";
 import { HostLifecyclePolicyStore } from "../host/host-lifecycle-policy";
+import { probeLocalHostActivity } from "../host/host-state";
 import {
   HOST_LIFECYCLE_OBSERVATION_POLL_MS,
   HostLifecycleService,
@@ -187,6 +188,7 @@ import {
   installAppProtocolHandler,
   registerAppScheme,
 } from "../app/app-protocol";
+import { installSandboxProtocolHandler } from "../app/sandbox-protocol";
 import { applyHardwareAccelerationPreference } from "../app/gpu-acceleration";
 import { configureHostResolverDoH } from "../app/host-resolver";
 import { configureUserAgent, preconnectTraycerHosts } from "../app/network";
@@ -494,6 +496,9 @@ async function runOnReady(state: BootState): Promise<void> {
 
   await Promise.all([
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
+    timed("on-ready", "sandbox-protocol", () =>
+      installSandboxProtocolHandler(),
+    ),
     timed("on-ready", "app-identity", () =>
       configureAppIdentity(state.config.iconPath),
     ),
@@ -1449,6 +1454,8 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     isLocalHostRunning: () => isLocalHostRunningForQuit(services.host),
     isForegroundHostRun: async () =>
       (await services.hostLifecycle.readRunAdmission()) === "foreground",
+    probeHostActivity: () =>
+      probeLocalHostActivity(getHostFsLayout(state.config.environment)),
     requestDecision: (prompt) =>
       services.bridge.requestHostQuitDecision(prompt),
     withdrawDecision: (error) => {

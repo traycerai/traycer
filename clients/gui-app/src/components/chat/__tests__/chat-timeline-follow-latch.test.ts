@@ -9,6 +9,7 @@ import {
   type Mock,
 } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
+import { SANDBOX_SCROLL_GESTURE_EVENT } from "@/lib/sandbox/bridge-host";
 import {
   CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
   isChatTimelineAtStrictBottom,
@@ -604,6 +605,60 @@ describe("useChatTimelineFollowLatch", () => {
 
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  describe("a scroll over a sandbox frame", () => {
+    // A wheel inside an agent page or MCP App happens in the frame's own
+    // document, so the node sees no wheel event, only the scroll it chains to.
+    function scrollAwayFromTail(frameGesture: string | null): {
+      readonly scrollToEnd: Mock<() => Promise<void>>;
+      readonly onFollowIntentChange: Mock<(follow: boolean) => void>;
+    } {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const frame = document.createElement("iframe");
+      node.appendChild(frame);
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      if (frameGesture !== null) {
+        frame.dispatchEvent(
+          new CustomEvent(SANDBOX_SCROLL_GESTURE_EVENT, {
+            bubbles: true,
+            detail: frameGesture,
+          }),
+        );
+      }
+      shim.setGeometry(node, { scrollTop: 850 });
+      fireNativeScroll(node);
+      result.current.followEndIfPermitted();
+      return { scrollToEnd: listRef.scrollToEnd, onFollowIntentChange };
+    }
+
+    it("reads the relayed gesture as the reader's, so follow is released and not corrected", () => {
+      const { scrollToEnd, onFollowIntentChange } =
+        scrollAwayFromTail("away-from-end");
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("corrects the same scroll back to the tail when no gesture was relayed", () => {
+      const { scrollToEnd } = scrollAwayFromTail(null);
+      expect(scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("ignores a gesture event whose detail is not a direction", () => {
+      const { scrollToEnd } = scrollAwayFromTail("sideways");
+      expect(scrollToEnd).toHaveBeenCalled();
+    });
   });
 
   it("preserves a movable wheel arm through a strict-bottom maintain pass", () => {

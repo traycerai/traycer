@@ -12,6 +12,9 @@ import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 
+// The frame's link opener is a mutation hook; none of these tests open a link.
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
+
 const HTML = "<div><h1>Hello</h1><p>World</p></div>";
 
 function mountWireframeEditor(opts: {
@@ -55,7 +58,7 @@ beforeEach(() => {
 });
 
 describe("WireframeNodeView", () => {
-  it("renders an interactive, opaque-origin iframe with the height reporter appended", async () => {
+  it("renders an interactive, opaque-origin iframe on the sandbox loader", async () => {
     const editor = mountWireframeEditor({
       htmlContent: HTML,
       title: "Demo",
@@ -71,10 +74,11 @@ describe("WireframeNodeView", () => {
       if (found === null) throw new Error("iframe not mounted yet");
       return found;
     });
-    expect(el.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(el.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
     expect(el.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    expect(el.getAttribute("srcdoc")?.endsWith(HTML)).toBe(true);
-    expect(el.getAttribute("srcdoc")).toContain("traycer:wireframe:height:v1");
+    // The document is handed over the bridge, never written into the frame.
+    expect(el.getAttribute("srcdoc")).toBeNull();
+    expect(el.getAttribute("src")).toContain("/sandbox/index.html");
     expect(el.getAttribute("title")).toBe("Demo");
     editor.destroy();
   });

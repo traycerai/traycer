@@ -74,12 +74,13 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
   it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
-    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata),
+    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
+    // and `@1.2` (the epic files arm),
     // `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0, and
     // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
     // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
-      ["epic.state.subscribe", 1],
+      ["epic.state.subscribe", 2],
       ["epic.status.subscribe", 1],
       ["artifact.subscribe", 1],
     ] as const) {

@@ -6,8 +6,10 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
-  AgentSender,
-  UserMessageSender,
+  OpenAgentSender,
+  OpenUserMessageSender,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import type {
   ApprovalDecision,
   ChatSessionAnchor,
   GuiHarnessId,
@@ -28,14 +30,12 @@ import type {
   ArtifactOperationAction,
   BackgroundTaskOutput,
   BrowserSessionReference,
-  ContentBlock,
   DiffSource,
   FileEditReason,
   PlanAction,
   PlanContentRef,
   AutonomousResumeTrigger,
   AutonomousResumeDeliveryPlacement,
-  PlanSource,
   PlanStatus,
   PlanStep,
   AgentFailure,
@@ -44,6 +44,8 @@ import type {
   ProviderNoticeReceipt,
   ProviderNoticeTone,
   ToolCallManagedCommand,
+  ToolCallMcpAppStamp,
+  ToolCallPageStamp,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -65,6 +67,11 @@ import type {
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 
+import type {
+  OpenContentBlock,
+  OpenPlanSource,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
 export type ChatMessageRole = "user" | "assistant" | "system";
 
 // Terminal outcome for an action segment whose turn ended before its own
@@ -75,7 +82,7 @@ export type ChatMessageRole = "user" | "assistant" | "system";
 // Extract) so it stays in lockstep with it - a renamed/removed status fails to
 // compile here rather than silently dropping a badge.
 export type SegmentEndState = Extract<
-  ContentBlock["status"],
+  OpenContentBlock["status"],
   "interrupted" | "superseded"
 > | null;
 
@@ -183,6 +190,13 @@ export interface ToolSegment {
   parentId: string | null;
   /** Generated images carried by chat.subscribe@1.6. Normalized at projection. */
   imageResults: ReadonlyArray<ImageGenerationResult>;
+  // The page a `traycer_show_page` call showed, stamped by the host when the
+  // call completes (`chat.subscribe@1.22`). Null for every other call, and for
+  // a show-page call that is still running or failed.
+  page: ToolCallPageStamp | null;
+  // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
+  // Null for every other call, and on a harness without app support.
+  mcpApp: ToolCallMcpAppStamp | null;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
@@ -356,7 +370,7 @@ export interface PlanSegmentModel {
   planId: string;
   planStatus: PlanStatus;
   harnessId: string;
-  source: PlanSource;
+  source: OpenPlanSource;
   title: string | null;
   summary: string | null;
   markdownPreview: string;
@@ -634,9 +648,14 @@ export interface ChatMessageSteerBadge {
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
 export interface AssistantTurnMeta {
-  readonly sender?: AgentSender;
-  /** Raw harness id, used to pick the provider's mono icon for the footer. */
-  readonly provider: GuiHarnessId;
+  readonly sender?: OpenAgentSender;
+  /**
+   * Raw harness id, used to pick the provider's mono icon for the footer. An
+   * open string: a transcript row's sender may name a harness this build does
+   * not know (`chat.subscribe@1.22`), and `HarnessIcon` draws a neutral square
+   * for one.
+   */
+  readonly provider: string;
   readonly providerLabel: string;
   /** Profile label snapshotted when the turn's provider session was minted. */
   readonly profileLabel: string | null;
@@ -713,7 +732,7 @@ export interface ChatMessageStoppedInfo {
 }
 
 export interface ChatMessage {
-  readonly sender?: UserMessageSender | null;
+  readonly sender?: OpenUserMessageSender | null;
   id: string;
   role: ChatMessageRole;
   content: string;
@@ -747,6 +766,14 @@ export interface ChatMessage {
    * row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
+  /**
+   * Set on the transcript's last row when it is a background-outcome note no
+   * provider turn has adopted AND the host still reports the chat working:
+   * the outcome may yet be handed to the agent, so the row does not say how
+   * it ended. Absent everywhere else, including on the same row once the chat
+   * goes idle - at which point it reads "Agent not resumed".
+   */
+  autonomousResumeOwed?: boolean;
   /**
    * The host turn this assistant row belongs to. Absent on user rows, on
    * synthesized event rows, and on records persisted before `turnId` existed.

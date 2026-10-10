@@ -1,4 +1,5 @@
 import {
+  defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
@@ -8,6 +9,8 @@ import {
   draftsDeleteResponseSchema,
   draftsListRequestSchema,
   draftsListResponseSchema,
+  draftsListResponseSchemaV10,
+  draftDocumentSchemaV10,
   draftsPutBlobRequestSchema,
   draftsPutBlobRequestSchemaV11,
   draftsPutBlobResponseSchema,
@@ -19,8 +22,10 @@ import {
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
+  draftsSubscribeServerFrameSchemaV11,
   draftsUpsertRequestSchema,
   draftsUpsertResponseSchema,
+  draftsUpsertResponseSchemaV10,
 } from "./schemas";
 
 /**
@@ -29,15 +34,64 @@ import {
  * `degrade: { kind: "unsupported" }`.
  *
  * A host that predates them answers `E_HOST_UNSUPPORTED` and the client
- * keeps today's device-local drafts. This is the unreleased first minor
- * of the drafts family — freely editable until a release pins it.
+ * keeps today's device-local drafts.
+ *
+ * The 1.5.0 tags shipped this family, so its first lines are RELEASED and
+ * pinned. A line that carries a draft document (`upsert`, `list`, the
+ * subscribe stream) is frozen at the document those tags shipped, and a newer
+ * line carries the live one.
  */
 
 export const draftsUpsertV10 = defineRpcContract({
   method: "drafts.upsert",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: draftsUpsertRequestSchema,
+  // Frozen at the document the 1.5.0 tags shipped. The REQUEST stays live: it
+  // is a client→host slot.
+  responseSchema: draftsUpsertResponseSchemaV10,
+});
+
+// The LIVE line: the echo carries the live document.
+export const draftsUpsertV20 = defineRpcContract({
+  method: "drafts.upsert",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: draftsUpsertRequestSchema,
   responseSchema: draftsUpsertResponseSchema,
+});
+
+export const draftsUpsertUpgradeV10ToV20 = defineUpgradePath<
+  typeof draftsUpsertV10,
+  typeof draftsUpsertV20
+>({
+  from: draftsUpsertV10.schemaVersion,
+  to: draftsUpsertV20.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const draftsUpsertDowngradeV20ToV10 = defineDowngradePath<
+  typeof draftsUpsertV20,
+  typeof draftsUpsertV10
+>({
+  from: draftsUpsertV20.schemaVersion,
+  to: draftsUpsertV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // The response echoes the one document the caller just wrote, so there is
+    // nothing to filter: pass through or refuse. A 1.0 caller writes only what
+    // its own schema can spell, so the echo of its own write always fits.
+    const parsed = draftsUpsertResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "This draft requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const draftsDeleteV10 = defineRpcContract({
@@ -58,7 +112,60 @@ export const draftsListV10 = defineRpcContract({
   method: "drafts.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: draftsListRequestSchema,
+  // Frozen at the document the 1.5.0 tags shipped.
+  responseSchema: draftsListResponseSchemaV10,
+});
+
+// The LIVE line: rows carry the live document.
+export const draftsListV20 = defineRpcContract({
+  method: "drafts.list",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: draftsListRequestSchema,
   responseSchema: draftsListResponseSchema,
+});
+
+export const draftsListUpgradeV10ToV20 = defineUpgradePath<
+  typeof draftsListV10,
+  typeof draftsListV20
+>({
+  from: draftsListV10.schemaVersion,
+  to: draftsListV20.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * Omits each live row the 1.0 document cannot represent; everything else is
+ * untouched, `tombstones` and `snapshotSeq` included.
+ *
+ * Omission is the honest arm here because of what this listing already means
+ * to its reader: "absence from `drafts` is not a delete". A 1.0 client that is
+ * not shown a row neither deletes it nor writes over it - it has no id to
+ * address it by. The alternatives both rewrite the user's draft: clearing
+ * `runSettings` hands the client a draft it would save back with the choice
+ * gone, and refusing the whole listing takes every other draft away with it.
+ *
+ * The frontier holds. `snapshotSeq` still bounds every mutation the response
+ * reflects; a withheld row is simply one this subscriber is also never sent an
+ * `upsert` for (`drafts.subscribe@1.0`), so nothing later contradicts it.
+ */
+export const draftsListDowngradeV20ToV10 = defineDowngradePath<
+  typeof draftsListV20,
+  typeof draftsListV10
+>({
+  from: draftsListV20.schemaVersion,
+  to: draftsListV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      ...response,
+      drafts: response.drafts.flatMap((draft) => {
+        const parsed = draftDocumentSchemaV10.safeParse(draft);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
 });
 
 /**
@@ -179,6 +286,21 @@ export const draftsSubscribeV10 = defineStreamRpcContract({
   method: "drafts.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
+  // Frozen at the document the 1.5.0 tags shipped.
   serverFrameSchema: draftsSubscribeServerFrameSchemaV10,
+  clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * `@1.1` is the first minor whose `upsert` frames may carry a draft naming a
+ * harness added after 1.5.0 (Command Code is the first). Nothing else changes:
+ * the capability signal is the negotiated minor, and the host withholds such
+ * an `upsert` from a `@1.0` subscriber.
+ */
+export const draftsSubscribeV11 = defineStreamRpcContract({
+  method: "drafts.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: draftsSubscribeServerFrameSchemaV11,
   clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
 });

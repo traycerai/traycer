@@ -130,7 +130,7 @@ Options for these commands:
 | `--no-service-register` | `install`, `ensure` | Install the files only, without registering or starting the OS service. `host install` does not support it on Windows. |
 | `--keep-installed` | `ensure` | Keep whichever host version is installed instead of moving to this CLI's default. |
 | `--no-linger` | `install`, `ensure`, `host service install` | Linux only: skip `loginctl enable-linger`. |
-| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats on this machine were saved in a newer format than it can read. Those chats are unavailable while that host is installed. |
+| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats or local tasks on this machine were saved in a newer format than it can read. Those chats and local tasks are unavailable while that host is installed. |
 
 The CLI reads the host's connection details from `~/.traycer/host/`.
 
@@ -145,6 +145,16 @@ The `host service` commands manage the OS registration that keeps the host runni
 | `traycer host service start` | Start the registered service in the background and return. |
 | `traycer host service status` | Show the registration and whether the host is running. It only reads. |
 | `traycer host service uninstall` | Deregister the service, which also asks the host to stop. The host files stay installed; `traycer host uninstall` removes them. |
+
+### Host Lifecycle
+
+`traycer host lifecycle get` shows the current mode, whether Desktop is open, how the host was started, and whether its supervisor supports the chosen mode.
+
+`traycer host lifecycle set <mode>` accepts `background`, `linked`, `ask`, `stop-if-idle`, or `none`. See [When you quit Traycer](/settings/general#when-you-quit-traycer) for the corresponding behavior.
+
+Setting a mode does **not** start or stop the host. Startup changes apply to the next automatic start. Quit behavior can update while Desktop is open, but a quit already in progress keeps its earlier choice. A running host with an older supervisor may need a restart; the command reports this.
+
+In particular, `set none` leaves a running host alone and switches Desktop to remote hosts on its next launch. This differs from choosing **Don't run a host** in Settings, which can ask you to confirm stopping the local host. Manually started foreground hosts remain unaffected when Desktop quits.
 
 ## CLI Commands
 
@@ -242,6 +252,9 @@ Agent commands are for agents that Traycer launches. They read the Task and the 
 | --- | --- |
 | `traycer agent list` | List your agents in the Task, with the settings each one runs with. |
 | `traycer agent list --all` | Include other people's agents in the Task. |
+| `traycer agent list --live` | Leave archived agents out. If the host is too old to report which agents are archived, the command fails and says so; update the host, or run it without `--live`. |
+| `traycer agent list --compact` | Print one short line per agent, without folders, model, or session detail. |
+| `traycer agent list --json` | Each agent carries `archived`: `true`, `false`, or `null` when the host is too old to report it. |
 | `traycer agent create` | Create a child agent of the calling agent. See [Create Options](#create-options). |
 | `traycer agent fork --agent-id <id>` | Copy an agent on this host into a new agent, starting from its latest checkpoint. Works for Chat-interface agents and Claude Code Terminal agents. See [Fork Options](#fork-options). |
 | `traycer agent configure` | Change the coding agent, model, and account a Chat-interface agent uses from its next turn. See [Configure Options](#configure-options). |

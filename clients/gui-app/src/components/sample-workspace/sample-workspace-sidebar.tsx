@@ -1,4 +1,11 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { railContentWidthPx } from "@/lib/layout/rail-content-width";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { useLayoutSurface } from "@/components/layout-editor/use-layout-surface";
 import { LAYOUT_CLUSTER_ATTRIBUTE } from "@/components/layout-editor/canvas/canvas-attributes";
@@ -62,7 +69,11 @@ import type { RailRegionId } from "@/lib/layout/region-id";
 import type { LeftPanelId } from "@/lib/left-panel-ids";
 import { cn } from "@/lib/utils";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
-import { useSidebarWidthPx } from "@/stores/epics/left-panel-store";
+import {
+  useSidebarWidthPx,
+  useMinSidebarWidthPx,
+} from "@/stores/epics/left-panel-store";
+import { useSidebarRailWidthStore } from "@/stores/epics/sidebar-rail-width-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   SAMPLE_COMMENT_THREADS,
@@ -101,7 +112,14 @@ export function SampleWorkspaceSidebar(): ReactNode {
   const sidebarSide = useArrangementValue("sidebarSide");
   const dividersEditing = useRailDividersEditing();
   const surfaceRef = useLayoutSurface("sidebar");
-  const widthPx = useSidebarWidthPx();
+  const widthPx = Math.max(useSidebarWidthPx(), useMinSidebarWidthPx());
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const setRailWidth = useSidebarRailWidthStore(
+    (state) => state.setRailNaturalWidthPx,
+  );
+  const clearRailWidth = useSidebarRailWidthStore(
+    (state) => state.clearRailNaturalWidthPx,
+  );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const hovered = useLayoutEditorStore((state) => state.hovered);
   const selected = useLayoutEditorStore((state) => state.selected);
@@ -119,7 +137,22 @@ export function SampleWorkspaceSidebar(): ReactNode {
     );
   const drawn = (regionId: RailRegionId): boolean =>
     panelShown(regionId) || regionId === hovered || regionId === selected;
-  const entries = railDisplayEntries(rail, drawn);
+  const entries = railDisplayEntries(
+    rail,
+    drawn,
+    dividersEditing ? "handles" : "spacing",
+  );
+  // The Customize sample owns a rail too: measure the same unclamped content
+  // as the live column so newly visible icons remain reachable.
+  useLayoutEffect(() => {
+    if (railRef.current !== null) {
+      setRailWidth(SAMPLE_VIEW_TAB_ID, railContentWidthPx(railRef.current));
+    }
+  }, [entries, setRailWidth]);
+  useLayoutEffect(
+    () => () => clearRailWidth(SAMPLE_VIEW_TAB_ID),
+    [clearRailWidth],
+  );
   const displayedRegion =
     RAIL_REGION_IDS.find((id) => id === selected && drawn(id)) ??
     firstPanel(entries);
@@ -152,6 +185,7 @@ export function SampleWorkspaceSidebar(): ReactNode {
             }}
           >
             <div
+              ref={railRef}
               role="toolbar"
               aria-label="Sample sidebar panels"
               aria-orientation="horizontal"
@@ -306,6 +340,7 @@ function samplePanelDefinition(panelId: LeftPanelId): LeftPanelDefinition {
 const SAMPLE_PANEL_BODIES: Readonly<Record<LeftPanelId, () => ReactNode>> = {
   chats: SampleAgentsBody,
   artifacts: SampleArtifactsBody,
+  files: sampleEmptyBody("files"),
   terminals: sampleEmptyBody("terminals"),
   browsers: sampleEmptyBody("browsers"),
   "git-diff": sampleEmptyBody("git-diff"),

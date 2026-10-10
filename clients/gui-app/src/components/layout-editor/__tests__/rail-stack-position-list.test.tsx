@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,8 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorShell } from "@/components/layout-editor/inspector/inspector-shell";
 import { SurfaceSection } from "@/components/layout-editor/inspector/surface-section";
 import {
+  DEFAULT_ARRANGEMENT,
   insertRailDivider,
   stackRailPanels,
+  unstackRail,
 } from "@/lib/layout/layout-arrangement";
 import { railStackId, type RailEntry } from "@/lib/layout/rail";
 import type { RegionId } from "@/lib/layout/region-id";
@@ -189,6 +192,7 @@ describe("the stack link as its own Position-list row (L-166, L-168)", () => {
       "railAgents",
       "railTerminals",
       "railArtifacts",
+      "railFiles",
       "railBrowsers",
       "railGitDiff",
       "railPullRequests",
@@ -380,6 +384,46 @@ describe("the rail list on a phone, which has no rail", () => {
   });
 });
 
+describe("the stack row while the rail does not draw the stack (T3)", () => {
+  const linkId = railStackId(["railAgents", "railArtifacts"]);
+
+  /** A row reads as off through its line's muted text, as a hidden panel's does. */
+  function dimmed(id: string): boolean {
+    return (
+      row(id)
+        .querySelector("[data-row-line]")
+        ?.classList.contains("text-muted-foreground") ?? false
+    );
+  }
+
+  it("reads as live while two of its members are shown", () => {
+    render(section("railAgents", vi.fn()));
+
+    expect(dimmed(linkId)).toBe(false);
+  });
+
+  it("dims once fewer than two members are shown, since the rail draws the lone one on its own, and wakes with the second", () => {
+    render(section("railAgents", vi.fn()));
+
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("railArtifacts", { shown: "hidden" });
+    });
+    expect(dimmed(linkId)).toBe(true);
+    // The member's own row is the one that says Hidden; the Agents row is not
+    // dimmed by it.
+    expect(dimmed("railAgents")).toBe(false);
+
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("railArtifacts", { shown: "shown" });
+    });
+    expect(dimmed(linkId)).toBe(false);
+  });
+});
+
 describe("the rail list's own header revert (R3-11)", () => {
   it("shows a revert on the group header only once its order has moved", () => {
     render(section("railAgents", vi.fn()));
@@ -393,5 +437,42 @@ describe("the rail list's own header revert (R3-11)", () => {
     expect(
       screen.getByRole("button", { name: "Revert Sidebar panels order" }),
     ).toBeDefined();
+  });
+
+  it("is the only revert after one panel moved: no member row shows one, and it puts back the order, the dividers and the stacks (T2)", () => {
+    render(section("railAgents", vi.fn()));
+    fireEvent.keyDown(row("railTerminals"), { key: "ArrowUp", altKey: true });
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setArrangement(
+          insertRailDivider(useLayoutStore.getState().arrangement, 3),
+        );
+    });
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setArrangement(
+          unstackRail(
+            useLayoutStore.getState().arrangement,
+            railStackId(["railAgents", "railArtifacts"]),
+          ),
+        );
+    });
+    expect(panelIds(rail())).not.toEqual(panelIds(DEFAULT_ARRANGEMENT.rail));
+
+    // Not one dot or revert on a member row: every panel's own row is quiet,
+    // so the header's is the one way back for the whole list.
+    expect(
+      screen
+        .getAllByRole("button", { name: /^Revert / })
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Revert Sidebar panels order"]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Revert Sidebar panels order" }),
+    );
+
+    expect(rail()).toEqual(DEFAULT_ARRANGEMENT.rail);
   });
 });

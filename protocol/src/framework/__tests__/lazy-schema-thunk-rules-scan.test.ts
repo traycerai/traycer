@@ -144,17 +144,17 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
   [
     "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.catch (protocol/src/host/provider-schemas.ts)",
     {
-      count: 3,
+      count: 4,
       reason:
-        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones (the third site is the listHarnesses@9.1 freeze copy)",
+        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones (the third site is the listHarnesses@9.1 freeze copy, the fourth the listHarnesses@9.2 freeze copy)",
     },
   ],
   [
     "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.optional (protocol/src/host/provider-schemas.ts)",
     {
-      count: 3,
+      count: 4,
       reason:
-        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones (the third site is the listHarnesses@9.1 freeze copy)",
+        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones (the third site is the listHarnesses@9.1 freeze copy, the fourth the listHarnesses@9.2 freeze copy)",
     },
   ],
   [

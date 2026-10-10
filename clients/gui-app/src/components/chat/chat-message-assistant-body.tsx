@@ -27,6 +27,7 @@ import { use, useCallback, useMemo } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
+import { knownHarnessId } from "@/lib/chat/sender-display";
 import { formatClockDuration } from "@/lib/format-duration";
 import {
   formatMessageTimeWithSeconds,
@@ -87,6 +88,8 @@ interface AssistantBodyProps {
   elapsedStartedAt: number;
   /** Whether the complete turn contains only autonomous-resume dividers. */
   turnHasOnlyAutonomousResumeSegments: boolean;
+  /** See `ChatMessage.autonomousResumeOwed`. */
+  autonomousResumeOwed: boolean;
   /** Whether this terminal row should render its elapsed completion footer. */
   showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
@@ -231,6 +234,7 @@ export function AssistantMessageBody({
   messageId,
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
+  autonomousResumeOwed,
   showCompletionFooter,
   pausedDurationMs,
   pausedSinceMs,
@@ -299,12 +303,20 @@ export function AssistantMessageBody({
     [segments, stopped],
   );
   // A completed turn whose only visible segment is the autonomous-resume
-  // divider genuinely woke the agent but produced no reply. Give that case
-  // explicit footer copy so it cannot be mistaken for the notification-only
-  // row that exists when the provider never resumed (that row suppresses its
-  // footer while retaining a terminal `completedAt`).
+  // divider is a note about an earlier call, and it always says how it ended.
+  // Two endings draw no reply and are told apart by the footer flag: a
+  // provider turn that ran and said nothing keeps its elapsed footer
+  // ("Resumed · no response"), and a notification no provider turn adopted
+  // carries no timing to report, so it gets a line of its own instead.
   const silentAutonomousResume =
     stopped === null && turnHasOnlyAutonomousResumeSegments;
+  const agentNotResumed = isAgentNotResumed({
+    silentAutonomousResume,
+    showCompletionFooter,
+    autonomousResumeOwed,
+    runState,
+    completedAt,
+  });
   const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
   const showElapsedFooter =
     !stoppedBeforeResponding &&
@@ -402,7 +414,7 @@ export function AssistantMessageBody({
               // even when the transcript is scrolled back to a turn from a harness
               // the chat has since switched away from. `null` on legacy turns with
               // no metadata; the affordance then falls back to the section root.
-              harnessId={meta?.provider ?? null}
+              harnessId={meta === null ? null : knownHarnessId(meta.provider)}
               // ONE segment, not every error row on the turn, and not one per
               // row of a split turn. A failed turn routinely carries several
               // error blocks that all share this `turnId` - the queue-pause
@@ -425,6 +437,9 @@ export function AssistantMessageBody({
               turnId={recovery.turnId}
               settledNotice={recovery.settledNotice}
               settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
+              autonomousResumeVariant={
+                turnHasOnlyAutonomousResumeSegments ? "note" : "card"
+              }
             />
           </ChatBlockNavigationAnchor>
         );
@@ -442,6 +457,7 @@ export function AssistantMessageBody({
         />
       ) : null}
       {stoppedBeforeResponding ? <StoppedBeforeResponding /> : null}
+      {agentNotResumed ? <AgentNotResumed /> : null}
       {showElapsedFooter ? (
         <AssistantElapsedFooter
           messageId={messageId}
@@ -527,6 +543,47 @@ function StoppedBeforeResponding() {
     >
       <StopBadge />
       <span>Stopped before responding</span>
+    </div>
+  );
+}
+
+/**
+ * Whether a finished note-only turn ended without the agent being resumed.
+ *
+ * Held back while the host still owes the outcome to the agent
+ * (`autonomousResumeOwed`): until then "not resumed" would be a verdict on
+ * something that has not ended.
+ */
+function isAgentNotResumed(input: {
+  readonly silentAutonomousResume: boolean;
+  readonly showCompletionFooter: boolean;
+  readonly autonomousResumeOwed: boolean;
+  readonly runState: ChatMessageRunState | null;
+  readonly completedAt: number | null;
+}): boolean {
+  return (
+    input.silentAutonomousResume &&
+    !input.showCompletionFooter &&
+    !input.autonomousResumeOwed &&
+    input.runState === null &&
+    input.completedAt !== null
+  );
+}
+
+/**
+ * The ending of a background outcome that no provider turn picked up: the CLI
+ * had already delivered it, or the host's retries for it ran out. Without this
+ * line the note above is the last thing in the transcript and nothing says the
+ * agent is finished.
+ */
+function AgentNotResumed() {
+  return (
+    <div
+      role="status"
+      data-testid="assistant-agent-not-resumed"
+      className="flex w-fit items-center py-0.5 text-ui-sm leading-5 text-muted-foreground/70"
+    >
+      Agent not resumed
     </div>
   );
 }
@@ -1120,6 +1177,11 @@ export interface AssistantSegmentProps {
   /** The settled notice the anchor error absorbs; `null` on every other item. */
   settledNotice: RoutingSettledNotice | null;
   settledNoticeFindUnitId: string | null;
+  /**
+   * How an `autonomous_resume` divider is drawn: `note` when it is all a
+   * finished turn holds, `card` otherwise. Read by no other segment kind.
+   */
+  autonomousResumeVariant: "card" | "note";
 }
 
 function ApprovalSegmentCard({
@@ -1162,6 +1224,7 @@ export function AssistantSegment({
   turnId,
   settledNotice,
   settledNoticeFindUnitId,
+  autonomousResumeVariant,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -1220,6 +1283,8 @@ export function AssistantSegment({
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
+          page={segment.page}
+          mcpApp={segment.mcpApp}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null
@@ -1349,7 +1414,12 @@ export function AssistantSegment({
         />
       );
     case "autonomous_resume":
-      return <AutonomousResumeSegment triggers={segment.triggers} />;
+      return (
+        <AutonomousResumeSegment
+          triggers={segment.triggers}
+          variant={autonomousResumeVariant}
+        />
+      );
     case "interview":
       return (
         <InterviewSegment

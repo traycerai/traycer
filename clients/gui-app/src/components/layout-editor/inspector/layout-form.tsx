@@ -14,6 +14,7 @@ import {
 } from "@/components/layout-editor/inspector/presets-block";
 import { RegionFilter } from "@/components/layout-editor/inspector/region-filter";
 import { SurfaceSection } from "@/components/layout-editor/inspector/surface-section";
+import { useLayoutFormContext } from "@/components/layout-editor/inspector/use-layout-form-context";
 import {
   layoutFindResults,
   type LayoutFindResult,
@@ -57,7 +58,8 @@ export function LayoutAllSettings(): ReactNode {
   const filterRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const finding = filter.trim().length > 0;
-  const results = layoutFindResults(filter, snapshot);
+  const { facts } = useLayoutFormContext();
+  const results = layoutFindResults(filter, snapshot, facts);
 
   const openArea = (area: LayoutAreaId): void => {
     if (area !== "presets")

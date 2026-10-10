@@ -446,6 +446,8 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
+          page={segment.page}
+          mcpApp={segment.mcpApp}
           variant="row"
           headerFindUnitId={
             segment.agentMessageSend === null ? headerFindUnitId : null

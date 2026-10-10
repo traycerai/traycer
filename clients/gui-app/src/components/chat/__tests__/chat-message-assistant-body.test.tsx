@@ -93,6 +93,24 @@ const AUTONOMOUS_RESUME_SEGMENT: MessageSegment = {
   ],
 };
 
+const MCP_FAILED_RESUME_SEGMENT: MessageSegment = {
+  id: "seg-resume-mcp",
+  kind: "autonomous_resume",
+  triggers: [
+    {
+      kind: "monitor",
+      title: "ignored when mcp is set",
+      status: "failed",
+      live: false,
+      summary: "Connection reset.",
+      blockId: "mcp-1",
+      outputFile: null,
+      mcp: { serverName: "docs", toolName: "search" },
+      managedCommand: null,
+    },
+  ],
+};
+
 const ERROR_SEGMENT: MessageSegment = {
   id: "seg-2",
   kind: "error",
@@ -171,6 +189,7 @@ interface BodyPropsOverrides {
   readonly elapsedStartedAt?: number;
   readonly turnHasOnlyAutonomousResumeSegments?: boolean;
   readonly showCompletionFooter?: boolean;
+  readonly autonomousResumeOwed?: boolean;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
   readonly meta?: AssistantTurnMeta | null;
@@ -185,6 +204,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     elapsedStartedAt: overrides.elapsedStartedAt ?? 0,
     turnHasOnlyAutonomousResumeSegments:
       overrides.turnHasOnlyAutonomousResumeSegments ?? false,
+    autonomousResumeOwed: overrides.autonomousResumeOwed ?? false,
     showCompletionFooter: overrides.showCompletionFooter ?? true,
     pausedDurationMs: 0,
     pausedSinceMs: null,
@@ -255,6 +275,104 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(footer.textContent).toMatch(/ for 5s$/);
     expect(footer.textContent).not.toContain("Resumed · no response");
   });
+
+  it('draws a never-resumed notification as a compact note ending in "Agent not resumed"', () => {
+    const { container } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [MCP_FAILED_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(container.querySelector("[data-row-header]")).not.toBeNull();
+    expect(screen.getByText("Background MCP tool failed")).toBeTruthy();
+    expect(screen.getByTestId("assistant-agent-not-resumed").textContent).toBe(
+      "Agent not resumed",
+    );
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it('keeps the resumed-no-response footer under the compact note and omits "Agent not resumed"', () => {
+    const { container } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: true,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(container.querySelector("[data-row-header]")).not.toBeNull();
+    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toBe(
+      "Resumed · no response · 5s",
+    );
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
+
+  it("keeps the card divider and normal footer when the resumed agent replied", () => {
+    const { container } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT, TEXT_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Here is the answer.")).toBeTruthy();
+    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toMatch(
+      / for 5s$/,
+    );
+    expect(container.querySelector("[data-row-header]")).toBeNull();
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
+
+  it("holds the ending back while the resume is still owed", () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [MCP_FAILED_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          autonomousResumeOwed: true,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it('never says "Agent not resumed" on a stopped notification row', () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [MCP_FAILED_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          completedAt: 8_000,
+          stopped: STOPPED,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
 });
 
 describe("AssistantMessageBody promoted subagent controls", () => {
@@ -283,6 +401,32 @@ describe("AssistantMessageBody promoted subagent controls", () => {
       openedId: PROMOTED_SUBAGENT_SEGMENT.id,
       focusControl: button,
     });
+  });
+});
+
+describe("AssistantMessageBody reply-only promoted subagent", () => {
+  it("offers Open as chat on a finished card with no nested activity", () => {
+    const open = vi.fn<OpenSubagentAsChat>();
+    const replyOnly: SubagentSegmentModel = {
+      ...PROMOTED_SUBAGENT_SEGMENT,
+      id: "reply-only-subagent",
+      result: "All done.",
+      children: [],
+    };
+    render(
+      <OpenSubagentAsChatContext.Provider value={open}>
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({ segments: [replyOnly] })}
+        />
+      </OpenSubagentAsChatContext.Provider>,
+    );
+
+    fireEvent.click(
+      screen.getByTestId("subagent-open-as-chat-reply-only-subagent"),
+    );
+
+    expect(open).toHaveBeenCalledWith("reply-only-subagent");
   });
 });
 
@@ -852,6 +996,8 @@ const SHARED_TOOL: ToolSegment = {
   durationMs: null,
   parentId: null,
   imageResults: [],
+  page: null,
+  mcpApp: null,
 };
 
 const SHARED_APPROVAL: ApprovalSegment = {

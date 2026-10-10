@@ -265,7 +265,7 @@ export type ChatImportedMetadata = z.infer<typeof chatImportedMetadataSchema>;
  * imported" costs a provenance row; throwing would cost the whole transcript.
  */
 export function importedProvenance(
-  events: readonly ChatEvent[],
+  events: readonly Pick<ChatEvent, "type" | "metadata">[],
 ): ChatImportedMetadata | null {
   for (const event of events) {
     if (event.type !== "chat.imported") continue;

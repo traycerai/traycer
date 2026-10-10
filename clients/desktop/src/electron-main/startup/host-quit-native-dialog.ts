@@ -16,21 +16,44 @@ interface NativeQuitCopy {
   readonly message: string;
   readonly detail: string;
   readonly stopLabel: string;
+  /**
+   * `force` of the Stop this round offers. Main cannot see what the host is
+   * running, so every round's Stop is the force its label discloses - except
+   * `terminals-in-use`, whose count discloses no working agent: that Stop is
+   * idle-only, and a host that turns out busy is asked about again.
+   */
+  readonly stopForce: boolean;
 }
 
 /**
  * One copy per round. Only `busy-retry` says something started meanwhile:
- * `busy` is Stop-if-idle's first ask, after a stop nobody was shown was
- * refused, so there was no earlier moment for the work to have started after.
+ * `busy` is Stop-if-idle's first ask, after the host has just answered busy -
+ * by refusing a stop nobody was shown, or to the quit's own probe - so there
+ * was no earlier moment for the work to have started after.
+ * `terminals-in-use` carries the modal's wording for the same round.
  */
-function nativeQuitCopy(round: HostQuitPrompt["round"]): NativeQuitCopy {
-  switch (round) {
+function nativeQuitCopy(prompt: HostQuitPrompt): NativeQuitCopy {
+  switch (prompt.round) {
+    case "terminals-in-use": {
+      const one = prompt.terminalsInUse === 1;
+      return {
+        message: one
+          ? "1 terminal is still in use"
+          : `${prompt.terminalsInUse} terminals are still in use`,
+        detail: one
+          ? "Stopping the host ends it. Quitting Traycer can keep the host running so it carries on, or stop it now."
+          : "Stopping the host ends them. Quitting Traycer can keep the host running so they carry on, or stop it now.",
+        stopLabel: "Stop Host and Quit",
+        stopForce: false,
+      };
+    }
     case "busy":
       return {
         message: "The host is still working",
         detail:
           "Keep it running so that work carries on, or stop it now, which ends it.",
         stopLabel: "Stop Host and Quit",
+        stopForce: true,
       };
     case "busy-retry":
       return {
@@ -38,6 +61,7 @@ function nativeQuitCopy(round: HostQuitPrompt["round"]): NativeQuitCopy {
         detail:
           "Something started on the host while it was being stopped. Keep it running so that work carries on, or stop it now, which ends it.",
         stopLabel: "Stop Host and Quit",
+        stopForce: true,
       };
     case "initial":
       return {
@@ -45,6 +69,7 @@ function nativeQuitCopy(round: HostQuitPrompt["round"]): NativeQuitCopy {
         detail:
           "Traycer can't check the host right now. Keep it running so any agents, terminals and shells carry on, or stop it, which ends anything still running.",
         stopLabel: "Stop Host Anyway and Quit",
+        stopForce: true,
       };
   }
 }
@@ -55,7 +80,9 @@ function nativeQuitCopy(round: HostQuitPrompt["round"]): NativeQuitCopy {
  * closed mid-question. Same three choices as the modal, but main cannot see
  * what the host is running, so the copy says so and - like the modal's
  * "can't tell" state - Keep is the default and Stop is the force, its label
- * carrying the consequence. No list, no Remember.
+ * carrying the consequence. No list, no Remember. The `terminals-in-use`
+ * round is the exception: it says what the host counted, and its Stop is the
+ * idle-only stop, as in the modal.
  *
  * Resolves, never rejects: a dialog that cannot be shown answers Keep, the
  * choice that never loses work.
@@ -65,7 +92,7 @@ export async function askHostQuitNatively(
   signal: AbortSignal,
   showMessageBox: ShowMessageBox,
 ): Promise<HostQuitDecision> {
-  const copy = nativeQuitCopy(prompt.round);
+  const copy = nativeQuitCopy(prompt);
   let response: number;
   try {
     ({ response } = await showMessageBox({
@@ -89,7 +116,7 @@ export async function askHostQuitNatively(
   }
   switch (response) {
     case STOP:
-      return { kind: "stop", force: true, remember: false };
+      return { kind: "stop", force: copy.stopForce, remember: false };
     case CANCEL:
       return { kind: "cancel" };
     default:

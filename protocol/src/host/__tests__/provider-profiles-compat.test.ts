@@ -346,7 +346,7 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
     // `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      9,
+      10,
       2,
       providersListResponseSchema.parse({
         providers: [stateWithProfile],
@@ -406,7 +406,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      9,
+      10,
       3,
       providersListResponseSchema.parse({
         providers: [stateWithProfile],

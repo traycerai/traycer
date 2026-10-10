@@ -266,6 +266,11 @@ predicates; it never imports the assembled index or the search consumer.
   `null` / `false` / `""` rendering the bare label. The theme slots pass
   `"Active"` there ("Light theme · Active"); the definition's label stays the
   searchable copy.
+- **`details` is the row's full-width tail.** Options a row's control
+  governs go in `details`, drawn on a line of their own under the label and
+  the control, across the row's whole width; `null` / `false` draw nothing,
+  which is how a row hides its options while its switch is off. Archive idle
+  agents automatically is the caller.
 - **Hand-built regions read the definition too.** The branch-prefix row keeps
   its bespoke layout (the input and its live preview share a line) and writes
   `data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}` and its
@@ -600,23 +605,15 @@ to join.
   the row alone and gates it, and the panel draws the group. The panel gates
   nothing; the group holds the branch prefix in every shell, so it is never a
   heading over an empty card.
-- **Layout's "Show the status bar on small screens" ROW** - a
-  surface-level row of the layout form (L-51), and the only Layout row the
-  installed mobile app ADDS.
-  The installed mobile app draws no footer strip until it is switched on; every
-  other build draws the strip whenever the usage host says so, so the switch
-  would pick between two identical outcomes and is withheld
-  (`isMobileFooterRowAvailable = mobileApp`).
-  It is available in BOTH of that build's states, on and off: it is the control
-  that flips the gate, so a predicate that went away with the surface it
-  governs would leave no way back.
-  The other gate on the page runs the other way: the installed mobile app
-  withholds the Tabs card's `Position` and the Sidebar card's `Side`, which
-  place things that build never draws.
-  Every REGION section renders in every shell, because a region the strip does
-  not host is hosted by the header instead - `MobileAppHeader` draws the usage
-  gauge and the resource monitor whatever the strip does - so there is no
-  region whose settings would configure an absent surface.
+- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
+  The installed mobile app is the phone layout at every width, so nothing can make them apply there.
+  A narrow BROWSER tab keeps them, live, with the note "Applies on wider windows." (the Minimap's: "Shows on wider windows with a mouse."), because widening the window is the way back - the layout form's shell rule (Layout, below).
+- **The exception: Layout's "Status bar on small screens" ROW is keyed on the phone LAYOUT, not the build** (`isMobileFooterRowAvailable = phoneLayout`, L-51, U1).
+  It is the switch the phone layout's footer mounts from (`useStatusBarVisible`), so it exists wherever that layout is drawn - the installed app, and a browser tab below 768px - and the desktop app (window floor 960px) never shows it.
+  `SettingsAvailabilityContext.phoneLayout` is `useIsMobileViewport()`, so the row, its search entry and the footer read one predicate.
+  It is available in both states, on and off: it is the control that flips the gate.
+  It is the FIRST row of Usage and resources, and while it is off the area says once, under it, that the reading rows below do nothing ("Turn on Status bar on small screens to use these. Show still decides the header icons.").
+  Every reading detail row and the Profiles list are then disabled and point `aria-describedby` at that line; both Show switches stay live, because they still decide the header's icons (`MobileAppHeader`).
   The `app.status-bar.toggle` ACTION still collapses in that build:
   `desktopOnly: true` in `ACTION_META` drops its palette row
   (`actions.source.ts`) and stops `StatusBarKeybindingBridge` registering its
@@ -796,7 +793,15 @@ Supporting pieces, all viewport-agnostic where possible:
 - `src/components/layout-editor/region-quick-verbs.tsx` The right-click menu on
   the app's own chrome (L-19) - a region's quick verbs with their Undo toast,
   plus the way in. `customize-layout-menu-item.tsx` is that last item alone,
-  for a menu that wants no verbs.
+  for a menu that wants no verbs; while another window holds the editor it
+  is off, its reason as the item's description (T6). An off menu item that
+  says why (this one, the rail's last shown panel) goes through
+  `explained-menu-item.tsx`: `aria-disabled` rather than Radix `disabled`, so
+  it stays in keyboard focus and its reason is heard, with the press refused.
+  While Voice input is off, the sample scene's dimmed mic offers
+  "Turn on Voice input" instead of Show or Hide (C4). That verb writes a
+  General setting, not the layout, so the editor's Undo and Discard do not
+  take it back; its own toast's Undo does.
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
 - `src/stores/settings/settings-store.ts` Persisted local settings state.
 - `src/providers/settings-density-context.ts` `SettingsDensityContext` /
@@ -1104,8 +1109,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       no alias for it (nothing stores an anchor token, so there is nothing an
       alias would redirect).
   - **Agents** (anchor `general-agents`, `data-testid="settings-general-agents"`):
-    Prevent sleep while running, When you quit Traycer, Worktree branch prefix
-    and Agent roles. These were four groups of one setting each (Running
+    Prevent sleep while running, When you quit Traycer, Worktree branch prefix,
+    Agent roles and Archive idle agents automatically. These were four groups of one setting each (Running
     agents, When you quit Traycer, Worktrees, Experimental), which drew four
     headings and four borders around four settings. The rule now is the one
     under "Page shapes": a group holds at least two rows. Each row gates
@@ -1167,6 +1172,58 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       feature-settings bridge) and marked with the muted xs **Experimental**
       badge the permission modes use, in place of an Experimental heading over
       one row.
+    - **Archive idle agents automatically** (`ChatAutoArchiveSettingsRow` in
+      `panels/chat-auto-archive-settings-row.tsx`, definition
+      `chatAutoArchive`): the ACCOUNT-wide chat auto-archive setting, read and
+      written through the app-wide host (`chatAutoArchive.get` / `.set`,
+      hooks under `hooks/chat-auto-archive/`), which proxies one cloud row
+      every host the user runs applies. Rendered only when that host
+      advertises BOTH methods (two `useHostMethodSupport` calls); otherwise
+      absent. Gated on the selected host, so it has no search entry of its
+      own: its label and keywords (archive, idle, inactive, auto, cleanup,
+      timer) contribute to the Agents group. Controls: the main switch
+      (`enabled`), alone in the control slot. Its options sit in the row's
+      `details` slot, an inset group (`bg-foreground/3`, one option per line,
+      label and hint left, control right) drawn only while the policy has
+      loaded and the switch is on; closing it writes nothing. "Archive after"
+      is a preset picker (1 hour, 6 hours, 1 day, 3 days, 7 days, 30 days,
+      filtered to the host's `bounds`) that commits on pick, plus "Custom…",
+      which writes nothing and opens a number-and-unit field: minutes, hours
+      and days, with seconds listed only when the shown value needs them,
+      in the largest unit that states the shown seconds exactly (the shown
+      threshold is the newest save's while one is in flight, else the saved
+      one). A shown value that is no preset is Custom with the field open, and
+      picking a preset drops the field's draft. The presets and the custom
+      field are one value, so one action is one write: the custom value
+      commits on a unit pick, on Enter (not an Enter that confirms an IME
+      composition), and when focus leaves the whole threshold control -
+      moving between the number, the unit picker, the preset picker or
+      either portalled list is not leaving. A value outside `bounds` shows an
+      inline error and writes nothing, and a commit that matches the shown
+      threshold sends nothing. "Include chats I started" (`includeUserCreated`, off by
+      default; terminal agent chats count as the user's) is the second line.
+      Under the group, a footnote: "Archived when a host next opens the task.
+      A new message brings a chat back." A never-saved account shows 3600
+      clamped into `bounds`, which is also what the switches write. Every
+      write sends all three fields. A failed read adds "Couldn't read the
+      auto-archive setting from this host." under the description. Controls
+      stay disabled with no error until the viewer id resolves and the read
+      lands. While a save is pending they stay LIVE, unlike the usual
+      disabled-while-pending rule, with `AgentSpinningDots` beside the main
+      switch: saves queue in order (`chatAutoArchiveWriteScope`), the row
+      shows the newest save's policy, and a disabled switch would swallow the
+      click that lands right after the threshold field saved on its way out.
+      Every write is built at event time on the newest unsettled write the
+      row sent (a ref, cleared when that write settles), not on the rendered
+      policy: a touch tap delivers the field's leave-blur and the switch's
+      click in one task, before React has re-rendered. When the newest save
+      is rejected the row drops back to the saved policy; a rejected older
+      save does not, because the newer save queued behind it re-sends its
+      fields. The row body is keyed by the viewer, so an account switch with
+      Settings open drops the outgoing account's draft and stops following
+      its in-flight save. The client never schedules archiving: the
+      host's sweep does, and a task nothing holds open is swept when a host
+      next opens it, which is why the copy makes no wall-clock promise.
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
     your work and Data migration used to share this group under the name
     "Setup & migration"; both moved to the scoped host's **Overview**, because
@@ -1604,9 +1661,24 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Comments only, `Full row · Chip · Hidden` where the region has a size, and
     `Shown · Hidden` everywhere else. Location, Side, Style and the detail rows
     open behind the row's own disclosure, disabled but readable while the
-    region is Hidden. Every row reserves its grip, revert, extra and chevron
-    slots (L-122), so controls share one right edge and never shift. At the
-    inspector's 320px the control wraps under the label.
+    region is Hidden, under a hint ("Show <region> to change these
+    settings.") that every greyed row points `aria-describedby` at; the
+    Profiles list greys with them rather than leaving. Every row reserves its
+    grip, revert, extra and chevron slots (L-122), so controls share one right
+    edge and never shift. At the inspector's 320px the control wraps under the
+    label.
+  - **One way to say a row depends on something (P1, `layout-editor/regions/row-availability.ts`).**
+    Every row that can depend on another row, the window or a runtime fact declares it beside itself in the registry - a region's detail rows in `regions/*-regions.ts`, a region's own row as `availability`, an area's own rows in `regions/area-rows.ts` - as `depends: { under, availability }`.
+    `under` names the row it sits under, which nests it one level and places it right after that row.
+    The order is the DECLARED order and nothing else, so a row never moves under the pointer when a value changes; the dependent that is live at the shipped default is declared first.
+    `availability` is a pure rule over ONE context (`{ values, arrangement, shell, facts }`, built by `inspector/use-layout-form-context.ts`) answering a closed union.
+    `live` may carry a NOTE for a runtime fact the form cannot know (effort levels, a harness that can compact), and never disables for one.
+    `disabled` carries a REASON that names the controller and the value to pick ("Set Placement to Left or Right to use this.") and an optional link that lands on the controller where it is out of sight.
+    `absent` means nothing on this device can ever make the row apply.
+    For a region's own row that is never its rule's answer (`RegionRule` cannot say it): the region declares a `shellGate`, and the form's lists and settings search both read that one predicate, so the Microphone and the Minimap leave both together.
+    A layout row keys on the PHONE LAYOUT (`shell.phoneLayout`, the renderer's own `useIsMobileViewport()`), never on the product alone - see Responsive Behavior above.
+    ONE row shell draws the answer for every kind of row (`LayoutFormRow` for form rows, `SortableRowLine` for list rows, both through `inspector/rows/row-availability-line.tsx`): the reason or note in the description slot at the host's description size, the control in a `fieldset` that is really disabled and described by the reason, and the label greyed.
+    A link to another Settings page (Microphone's "Open General settings") is drawn on this page only: from the editor it would end the session being edited, so there the reason's words name the page instead.
   - **Usage and resources is two sections, not two rows**
     (`ReadingSection`, `inspector/surface-section.tsx`). Usage limits and the
     Resource monitor each get a header with a **Show switch**, then their rows,
@@ -1617,27 +1689,46 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     kept for the way back; a status bar spot writes the host and the end
     (`regions/reading-placement.ts`). **Density** is Auto / Compact / Detailed
     in every placement, and its description says what Auto resolves to at the
-    current spot (`densityDescription`). The rows the RESOLVED density ignores
-    are hidden (`compactIgnoredRows`): with Compact, Percent shows, Reset time
-    and Metrics go. "Percent shows" is `amount` and "Reset time" is the `reset`
-    switch. **Reading style** (`readingStyle`: Bar, Percent, Bar and percent,
-    Everything) is a pictured style row between Density and Percent shows. It
-    is drawn only while the status bar's Detailed form is (`readingStyleApplies`),
-    so it is hidden under Compact and whenever usage is in a tab strip. A phone's footer draws no Location or Density row and hides none.
+    current spot (`densityDescription`).
+    The rows only the Detailed form reads sit under Density (U3) and stay in place, disabled with "Set Density to Detailed to use this." while the RESOLVED density is Compact: Reading style, Percent shows and Reset time under Usage limits, Metrics under the Resource monitor.
+    All three Usage limits rows sit one level under Density, side by side, though Percent shows also reads Reading style: rows nest one level only (`orderedRows`), and a second level for one row would cost every list and the row shell a depth they never otherwise need. Percent shows says what Bar changes in its note instead (U4).
+    "Percent shows" is `amount` and "Reset time" is the `reset` switch.
+    **Reading style** (`readingStyle`: Bar, Percent, Bar and percent, Everything) is a pictured style row that applies in the status bar's Detailed form only, so it is also disabled while usage is in a tab strip ("Set Location to the status bar to use this.").
+    Under Bar, Percent shows keeps working for the profiles running low and the tooltip, so it stays live with a note (U4).
+    Metrics stays live under Compact while the readings on agent rows are on, with a note: the Compact monitor is CPU alone, but agent rows read the metrics picked here, all but RAM share (U2).
+    While agent rows print, Metrics also stays live with the monitor Hidden: its rule answers `liveOutsideGate`, so the gate exception and the note come from one rule.
+    The phone layout draws no agent rows, so there Metrics follows the monitor alone, and the footer gate and Hidden turn it off like every other row.
+    In the phone layout the footer is the status bar wherever a reading names, so Location applies on wider windows only, and Density and its rows follow the status bar's rules.
     The **Profiles** list sits under Usage limits (`inspector/usage-profiles.tsx`):
     one row per provider, dragged to order (`usageProviders`), an eye on the
     provider (`hiddenProviders`) and, for a provider with several profiles, an
     eye on each profile (`shownProfiles` for the watched host, never emptied:
-    the last drawn profile stays).
+    the last drawn profile stays, and says "One profile stays shown. Hide the
+    provider instead.").
+    On Settings > Providers the provider's limits grey with a reason and an "Open Layout" link while Usage limits or that provider is hidden here (U5).
+    The link lands on the controller itself: Usage limits' Show switch, or that provider's own row in the Profiles list (`navigateToLayoutRegionRow`).
   - **Presets and resets.** The Presets block (`inspector/presets-block.tsx`)
     applies a preset in one click, replacing visibility and style values and
     keeping placement, order and providers, with an Undo toast. Its status
-    reads `<Preset> · Modified` with a View changes list grouped Styles and
-    Arrangement, each line with its own revert (`lib/layout/layout-diff.ts`
-    builds it, `inspector/layout-change-lines.ts` words it). `Reset layout…`
+    reads `<Preset> · Modified` only while a VALUE differs from the applied
+    preset (`layoutModified`, T5), the one kind of change a preset puts back;
+    the Presets area's dot reads the same flag. The View changes list is
+    offered for any change, grouped Styles and Arrangement, each line with its
+    own revert (`lib/layout/layout-diff.ts` builds it,
+    `inspector/layout-change-lines.ts` words it). While Arrangement has lines,
+    a note under the status says presets keep the arrangement, with the count
+    of those lines, and the applied card is described by it. `Reset layout…`
     confirms in both hosts (L-108 overturned); on this page it is the Presets
     area's last card, `tone="danger"`. Every row and order list has its own
-    revert.
+    revert. A row's dot and revert cover its own values, host and side, never
+    its place in a list (T2): one drag moves the index of every row below it,
+    so the order is the list header's dot and revert alone, for the rail, the
+    dock, both toolbar lists and Profiles. Context usage's breakdown order is
+    not a list's: it is a detail of that row, so the row's dot and revert
+    cover it (C2). A value kept in one region's bag but set by an area row
+    (`isOffRegionValue` in `regions/surface-diff.ts`: the readings on agent
+    rows, Toolbar style) counts on that area's dot and is left out of the
+    region row's dot and revert (T4).
   - **Landing on a region.** Below the editor's width threshold the door
     redirects here, and `navigateToLayoutRegion` (`lib/settings-navigation.ts`)
     carries the target through: the page takes the pending region, opens that
@@ -1667,24 +1758,27 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     registry (`components/layout-editor/layout-search.definitions.ts`), so a region added
     without a hand-written entry is still findable.
   - **Surface rows.**
-    Five rows belong to a SURFACE rather than to a region, because what they place is not a region.
-    The Tabs card opens with **`Position`** (`arrangement.tabStripPlacement`: Top, Left or Right; keywords "vertical tabs" and "side tabs"), then **`Side tab view`** (`arrangement.sideStripView`: Tabs only or Tabs and agents), then `Task tab layout`.
+    Some rows belong to a SURFACE rather than to a region, because what they place is not a region; `regions/area-rows.ts` lists them in order with what each depends on, and `inspector/rows/surface-placement-rows.tsx` draws them.
+    The Tabs card opens with **`Placement`** (`arrangement.tabStripPlacement`: Top, Left or Right; keywords "vertical tabs" and "side tabs"), and under it **`Tab overflow`** (`taskTabLayout`) then **`Side tab view`** (`arrangement.sideStripView`: Tabs only or Tabs and agents), in that order whatever Placement is (T1).
     `Side tab view` picks between two pictures of the strip drawn from the real rows and the sample agents, one with the open task's live agents under its tab and one without.
-    It is disabled while the tabs are at the top, with the reason "Available when tabs are on the left or right." in place of its description, and its stored value is kept.
+    It is disabled while the tabs are at the top - "Set Placement to Left or Right to use this.", which the canvas chip says too - and `Tab overflow` is disabled while they sit at a side - "Set Placement to Top to use this."; each stored value is kept.
     In the editor its canvas part is the live agents list under the sample tab: hovering or pressing the row lights or rings that list (ghosted while the value is Tabs only), a press on the list selects the row, and with no room for the list the canvas chip on the strip says why.
-    `Task tab layout` is disabled while the tabs sit at a side, with the reason "Applies when tabs are at the top." in place of its description, and its stored value is kept.
-    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right).
-    `Position`, `View` and `Side` are `TabStripPositionRow`, `SideStripViewRow` and `SidebarSideRow` in `components/layout-editor/inspector/rows/surface-placement-rows.tsx`.
-    The docked inspector draws the same three rows under its Tabs and Sidebar headings.
-    Each host frames them its own way: an `InspectorRow` in the dock, and on this page a `SettingsRow` that carries its search anchor.
-    Both write one recorded gesture and revert against the shipped arrangement.
-    The page's filter and the dock's filter both match these rows by their own label and keywords, so "vertical tabs" finds `Position` there as it does in Settings search.
-    The installed mobile app withholds `Position` and `Side`, because it always draws its own header and no sidebar, and there `Task tab layout` is never disabled.
+    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right) and ends with **`Readings on agent rows`**.
+    Chat opens with **`Reading width`** and, under it, **`Wide column width`**, which stays in place while Comfortable, disabled with "Set Reading width to Wide to use this." (C5); the column is never wider than the pane it is in.
+    Composer opens with **`Toolbar style`** (`model.toolbarStyle`, Flat or Bordered, drawn as the real buttons): it styles every toolbar button, so it is an area row rather than a detail of the Model region it is stored on (C3).
+    Usage and resources opens with **`Status bar on small screens`** where the phone layout is drawn (see Responsive Behavior).
+    The docked inspector draws the same rows; both write one recorded gesture and revert against the shipped arrangement.
+    The page's filter and the dock's filter both match these rows by their own label and keywords, so "vertical tabs" finds `Placement` there as it does in Settings search.
+    The installed mobile app withholds every desktop-layout row; a narrow browser tab keeps them with "Applies on wider windows.".
     The Tabs card was called "Top bar"; its id is still `topBar`, and search still finds it by "top bar" and "title bar".
     Wherever a label names the place, it is the tab strip: "Tab strip - left of the tabs", a reading's `Position` of Status bar or Tab strip, and "Tab strip, left" in the index.
-  - **`Show the status bar on small screens`** (`arrangement.mobileFooter`, L-51) is the fourth surface row.
-    It decides whether the strip exists at all on a narrow viewport.
-    It is drawn only in the installed mobile app, since every other build draws the footer whenever a reading still names the status bar.
+  - **Composer, Chat and Sidebar details.**
+    The phone layout's toolbar lists are what it draws, unordered: Attach image on the left, Model (Reasoning control; Style applies on wider windows) and the Microphone on the right; a list with no member is not drawn.
+    Model's Style and Reasoning control say they matter only for models with several effort levels; the Compact conversation button says it shows only for harnesses that can compact.
+    While General > Voice input is off, the Microphone row is dimmed and disabled with "Turn on Voice input in General settings to use this." (C4).
+    Context usage opens with Pin breakdown, then under it Chip style (disabled while pinned) and Breakdown rows (disabled while not pinned); its state word is "Pinned" while pinned (C1).
+    In the phone layout the Minimap row says "Shows on wider windows with a mouse.", once: its Side row adds nothing of its own. The installed app has no Minimap row.
+    On the rail, the last panel shown cannot be hidden or set to Auto ("One panel always stays shown.", the rail menu's rule too), and a stack row is dimmed while fewer than two of its panels are shown (T3).
 
   The rules below describe the CHROME these controls configure. They live here
   because the chrome has no other doc, not because this page owns them.
@@ -1783,11 +1877,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     a display preference: no density preset carries it. The Layout form's
     Profiles list edits it too, for the watched host.
     - **The eye exists only while the strip is on screen**, which is ONE
-      predicate, `statusBarShown` / `useStatusBarShown`
-      (`stores/layout/layout-store.ts`): on a desktop viewport, EITHER reading
-      still naming the status bar (L-156), `mobileFooter` on a mobile one - the
-      same read `AppShell` mounts the strip on. A hidden provider hides the eye
-      only.
+      predicate, `useStatusBarVisible` (`lib/layout-overrides.ts`): on a
+      desktop viewport, a reading that names the status bar (L-156) and is
+      shown, `mobileFooter` on a phone-layout one with a reading shown, and in
+      a session anything hosted there - the read `AppShell` mounts the strip
+      on and the task frame drops its bottom border on. A hidden provider
+      hides the eye only.
     - **Nothing checked draws ONE account**, resolved by
       `resolveStatusBarProfileIds`
       (`hooks/rate-limits/use-rate-limit-profile-selection.ts`): the profile
@@ -1804,6 +1899,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       not, the checks have no control, so the glyph resolves without them.
     - The dot and the name are drawn only for a provider with two or more
       profiles - the composer rail's rule, and for the same reason.
+  - **The strip's right-click menu** (`status-bar-visibility-menu.tsx`) gives
+    each reading the strip is drawing the same Show checkbox, Usage limits
+    with its providers under it, then Move to tab strip and the editor door,
+    with a rule only between groups that drew something.
   - **The strip's right-click menu deliberately has no per-limit items.** Its
     provider rows are `ContextMenuCheckboxItem`s - a one-click visibility
     toggle each - and a checkbox item cannot also host a sub-menu trigger, so
@@ -1814,7 +1913,11 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     a strip with no figures is what the `pinBreakdown` switch is for) and
     `arrangement.pinnedContextFieldOrder` is the COMPLETE order over every
     field, including the unselected ones, which is what makes a field's place
-    survive being unchecked and checked again. The leading `Context N% left` is
+    survive being unchecked and checked again. Both are written by Context
+    usage's Breakdown rows, a sortable check list: a check writes the set, a
+    drag writes the order, and the row's revert puts both back in one step.
+    The order is on the change list
+    (`pinnedFieldOrder`) and on the Chat area's dot (C2). The leading `Context N% left` is
     not a field and always prints, so the strip is never blank. A selected
     field the current turn cannot produce simply does not print
     (`buildContextUsageRows` omits the cache rows until a harness reports
@@ -1885,6 +1988,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     actions and Pause, under the pill row and every other row. It has no
     Size, no Shown and no dock position; stale stored values for it are
     dropped on rehydrate. It empties to nothing, leaving no gap.
+    Its fold is remembered per host and chat in `chat-dock-open-store.ts`
+    (#2441), because the panel unmounts whenever the queue drains and a fold
+    kept in the panel came back open with the next queued message; chat ids
+    are host-minted, so the host is part of the key. A received agent row is
+    one line (its sender chip and the message as plain text, ellipsized; a
+    held reason waits for the unfold) until its text is clicked, and the
+    header splits the count: `2 messages · 12 from agents`.
   - **Received A2A queue rows follow the Running agents mode**, and fold into
     the same chip with their own count. That is also why the chip exists
     whenever those rows do, even with no sub-agent running: without it, folding
@@ -1925,7 +2035,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       The user reads it as a "Divider", adds it, drags it and removes it, and
       the sidebar draws it as a gap at rest (L-140).
       The shipped rail carries none.
-    - A STACK joins two to four ADJACENT panels (L-166, L-181): they share
+    - A STACK joins two or more ADJACENT panels (L-166, L-181): they share
       the sidebar body, top to bottom, with a resize handle between each two
       and a per-section collapse. The entry sits right after its first member
       and its id names every member in order (`stack:A+B+C`), so a stored pair
@@ -1942,13 +2052,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       stand side by side, in any order and re-minted for that order: members
       trading places keeps the stack, a member taken away leaves it (a pair
       dissolves), a divider or another panel moved between members splits it
-      there, a run over four keeps its first four, and a panel belongs to one
-      stack. Membership is explicit in the writers, so a member carried out of
+      there, and a panel belongs to one stack. Membership is explicit in the writers, so a member carried out of
       its stack leaves it even when it lands right beside it.
       A rail drag says what it CARRIES (`RailDragCarry`): the rail's icon
       carries its whole stack, a SECTION header carries one panel.
-      Four is the cap because of the BODY, not the rail: at the window's 600px
-      minimum height, four sections still show a header and three rows each.
+      A stack has no cap. It had one of four (each section keeping three rows
+      at the 600px minimum height), but the sidebar's groups never had one, so
+      a stack refusing a fifth panel was a regression. A deep stack shrinks
+      each section toward its header, and a section's body scrolls.
       A HIDDEN panel drops out of its stack for display only - the rest stand
       as a smaller stack, or alone, on the rail and in the body, and showing the
       panel again puts it back.
@@ -1962,6 +2073,19 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       miniature - so the capsule rule and the hidden-member rule are written
       once; `visibleRailPanelIds` beside it is the one visibility filter for the
       body's choice of panel and the PR retention.
+      At rest (`"spacing"`) it also drops a divider at either end and one right
+      after another, since with the panels around it hidden it would space
+      nothing; in a session (`"handles"`) every divider is drawn, as a handle.
+      `isRailStackDrawn` says whether a stack still has two shown members.
+      The last shown panel cannot leave `shown`, neither to Hidden nor to
+      Auto: `isLastShownRailPanel` is the one rule, and the rail's menu and
+      the layout form both ask it of the saved values
+      (`railPanelShownByValue`, where an `auto` panel never counts, since the
+      layout must hold in a task with no pull requests or comments). Both say
+      "One panel always stays shown." (T3); the menu's item stays focusable
+      with that reason as its description.
+      So in the form the last shown panel cannot move to Auto either: every option but Shown is off.
+      The menu needs no such lock, since its only write over a Shown panel is the uncheck it already refuses.
       Writes go through `applyRail` (`lib/layout/rail-view.ts`) for the app's own
       drag and through `moveRailEntry` / `insertRailDivider` /
       `removeRailDivider` / `stackRailPanelWithBelow` / `unstackRail` /
@@ -1975,10 +2099,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       On the rail a drop has three bands (L-168): the outer 30% at each end
       reorders, and the middle 40% appends what is carried to the target's
       stack (after its last member), or stacks them with a lone target.
-      `railStackJoin` answers what the middle band would do - `join`, `full`
-      (the result would pass four) or `same` (already stacked together) - and
-      the rail draws the join ring or a red refusal ring on the target icon
-      from that answer; a refused drop commits nothing.
+      `railStackJoin` answers what the middle band would do - `join` or `same`
+      (already stacked together) - and the rail draws the join ring on the
+      target icon from that answer; a `same` drop commits nothing.
       A member leaves its stack by dragging its section header out of the
       body onto the rail, from the stack icon's menu ("Unstack 'Name'" per
       member), or from the Sidebar area's stack row, which lists every member
@@ -1988,10 +2111,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       A drop on the open sidebar BODY means INTO the stack it draws (L-182):
       the body is one droppable naming the stack's top panel, it resolves to
       the same middle-band join as that panel's rail icon, and it draws the
-      same answer on its frame - the join ring, the red refusal for a stack
-      that would pass four, and nothing for a member dropped on its own
-      stack. The editor canvas has no join gesture (L-169), so the body there
-      takes no drop.
+      same answer on its frame, the join ring.
+      A member's own section HEADER is the one exception: joining its own
+      stack means nothing, so inside its body it reorders the stack, landing
+      at the section boundary nearest the pointer (a `left-panel-section`
+      preview, drawn as a line on that boundary), as the sidebar's groups
+      always did. The editor canvas has no join gesture
+      (L-169), so the body there takes no drop.
       The split and the per-section collapse live in the PANEL store
       (`panelSectionWeightsByPanelId`, `panelSectionCollapsedByPanelId`), not in
       the arrangement: they are how a stack is drawn rather than whether it
@@ -2596,6 +2722,47 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
+    CLI & Args: how long the scoped host waits for this provider's model and
+    command lists (`~/.traycer/cli/config.json` on that machine: the shared
+    value in `catalog.probeTimeoutSeconds`, each provider's own in the
+    top-level `catalogOverrides` block, over `config.catalog.get` / `set` at
+    1.1; top-level because a #2450-era binary strips unknown keys INSIDE
+    `catalog` on its next write but carries an unknown top-level block). Two `SettingsRow`s and
+    no other copy. **Timeout** ("How long to wait for the model list.") is a
+    `SettingsSegmentedControl` of 60 / 90 / 120 / 180 s filtered to the
+    `bounds` the host returns, plus the shown value as its own segment when a
+    hand-edited file holds another. **Same for all providers** is a switch.
+    On (the default: no `overrides[harnessId]`), the picker shows and edits the
+    SHARED value (`scope: "all"`), which every provider whose switch is on
+    follows; it never touches another provider's own value. Off, the provider
+    has its own value (`scope: "harness"`) and the picker edits only that.
+    Turning it off writes the shared value as the provider's own, so nothing
+    changes until the picker moves; turning it on clears it (`null`). The
+    override map is keyed by HARNESS id (`GUI_HARNESS_BY_PROVIDER_ID`, so
+    `claude-code` stores under `claude`), because the host reads it per catalog
+    probe, which is keyed by harness. Gate: the panel's `HostScopeGate` (usable
+    scope) plus `resolveAutoCleanupGate` (reachable host, BOTH methods
+    negotiated at 1.1 - `catalogTimeoutRowsSupported`); anything short of
+    `ready` renders nothing, so a 1.0 host (shared value only) has no rows.
+    Writes go through `useConfigCatalogSetMutation`, which cancels any
+    in-flight read, files the host's answer (the re-read state) into the
+    `config.catalog.get` cache and only then settles. The controls are
+    disabled while ANY write is outstanding on the host
+    (`useConfigCatalogSetOutstanding`, `useIsMutating` on the host-keyed
+    `configMutationKeys.catalogSet(hostId)`), including one whose rows have
+    since unmounted, so the next write is never built on the state before the
+    last one (switch off, then a pick, must go out as `scope: "harness"`). The
+    write carries a dispatch-time floor of `config.catalog.set@1.1`
+    (`requiredHostMethodVersion`): a host rolled back to 1.0 after the rows
+    rendered refuses it instead of taking the 1.1 body through the same-major
+    downgrade, which would strip `scope` and move the shared value. A failed first read (malformed config file) replaces
+    the Timeout row's description with the repair sentence; a failed RE-read
+    behind a known value keeps that value. Search: the `modelList` region group
+    (anchor `null`, like every Providers region) with both rows contributing
+    to it. Every provider that advertises CLI & Args (all of them today, amp
+    and cursor included) has the rows. The host reads the value at every
+    catalog probe, so a change applies to the next read without a restart.
   - **Who reviews &lt;provider&gt;'s commands**
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
     tab (icon `ShieldCheck`, since the Account tab already uses `KeyRound`,
@@ -3268,7 +3435,11 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       code rather than becoming a wrong-bug answer: a config the parser rejects
       is a server that failed to start.
     - **The global "All providers" status lives on the panel HEADING row**, and
-      renders only when `isHostScopeUsable(scope.status)`.
+      renders only when `isHostScopeUsable(scope.status)`. The heading row
+      carries STATUS ONLY: a setting is a row in the tab it belongs to. The
+      Model list timeout sat there as a chip for one staging build
+      (traycer#2450) and was moved to each provider's CLI & Args tab, below,
+      because a knob on a status line has no label hierarchy around it.
       `latestProviderCheckedAt` is a max over every provider and Refresh
       re-probes all of them; at the card's top-right it sat inches from the
       selected provider's Enabled toggle and read as that provider's own.
@@ -5711,6 +5882,66 @@ set-state-in-effect` forbids the effect form, and an effect would also
     - **No auto-update caption.** The switch is the next row on the same tab
       and states the policy itself.
 
+  - **Updates ▸ Traycer Desktop row** (`HostOverviewDesktopAppRow` in
+    `host-overview-desktop-app-row.tsx`), under the answer card and above the
+    auto-update row. It is the APP's update, not the host's: the two are
+    separate artifacts that update separately, and this is the page where a
+    host update happens, so a host that just moved to a new version would
+    otherwise sit above an app still on the old one with nothing saying the
+    app has an update of its own.
+    - **Gate.** `host.isLocalMachine` and a desktop updater bridge
+      (`useDesktopAppUpdates().bridge !== null`), decided in the panel. A
+      remote host's page says nothing about the app in this window, and a
+      browser has no app to update. It needs no route to the host, so it
+      stays while the host cannot be reached. Nothing is drawn until the
+      updater's first snapshot names a version.
+    - **One snapshot, no machinery.** It reads the snapshot the header's
+      update button and the update toast read, and runs the same download
+      (`bridge.downloadUpdate()`) and the same guarded restart
+      (`requestAppUpdateInstall`), so the three cannot disagree.
+
+      | Updater state                                         | State line            | Control                             |
+      | ----------------------------------------------------- | --------------------- | ----------------------------------- |
+      | a finished check found nothing                        | `Up to date (vX)`     | none                                |
+      | `available`                                           | `vY available`        | Download                            |
+      | `downloading`                                         | `Downloading N%`      | Download, waiting, with a spinner   |
+      | `ready`                                               | `vY ready`            | Restart                             |
+      | `ready` with `installGuidance`                        | `vY ready`            | Finish update (the guidance dialog) |
+      | `error` with `installGuidance`                        | `Update not finished` | Finish update (the guidance dialog) |
+      | anything else (checking, a plain error, no check yet) | `vX`                  | none                                |
+
+    - **"Up to date" is a claim about a check.** The updater publishes
+      `up-to-date` only for a check the user asked for; an automatic check
+      that finds nothing returns to `idle` with the check time and the feed's
+      latest version set. Both read "Up to date". An `idle` without them, and
+      every other state, shows the version and claims nothing.
+    - **An `error` carrying `installGuidance` keeps Finish update, and
+      names no version.** A Linux deb/rpm install whose privilege prompt
+      failed reports the failure AND the steps that finish the downloaded
+      file by hand, so the row keeps Finish update, as the update toast keeps
+      View instructions. Its state line is "Update not finished", never
+      "vY ready": the updater holds that guidance until the staged update is
+      discarded, so it can outlive the install it came from (a newer version
+      found later replaces `latestVersion`, and if that download fails the
+      guidance is for the older file). The snapshot does not tell the two
+      apart, so the row claims neither. `ready` does name its version. A
+      blocked install (`installBlockedReason`) keeps its control disabled
+      with the reason as the row's line.
+    - **One button, and one standing live region.** Download, Download
+      waiting, and Restart are the same button, so the focus of whoever
+      pressed it is not dropped when the download starts. While it waits
+      (the download, the restart) it is `aria-disabled` with its press
+      ignored, NOT natively `disabled`: Chromium moves the focus to the
+      document the moment a focused button becomes `disabled` and does not
+      return it (measured in the app's engine; jsdom keeps it, so no Vitest
+      case can see the difference). Native `disabled` is only the blocked
+      install. When the control does go (a failed download, a withdrawn
+      candidate) while it holds the focus, the row itself takes it. The
+      row's `role="status"` region is always mounted and empty when quiet,
+      for the reason the answer card's is; it says the download began (never
+      its percentage), that the update is ready (and, when it is, that
+      finishing needs a manual step), and that the restart began. A failure
+      is the update toast's to report, here as everywhere.
   - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
     stays at panel level, so it opens over whichever tab is showing.
   - **One component per tab**, each drawing what the panel hands it; the
@@ -5724,12 +5955,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
     badges (the Ports count, the Installation dot) hang on `HostOverviewTabs`'
     `badges`.
 
-    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-    | ------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last |
-    | Updates      | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                           |
-    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                              |
-    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                               |
+    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+    | ------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                      |
+    | Updates      | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal |
+    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                                                                                                                   |
+    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                                                                                                                    |
 
   - **Ports is on every host, in every state.** There used to be a card that
     was absent whenever nothing was forwarded and on hosts without port

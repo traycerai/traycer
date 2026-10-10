@@ -48,12 +48,23 @@ export const SETUP_DERIVATION_EVENT_TYPES: readonly ChatEvent["type"][] = [
 ];
 
 /**
+ * What the fold reads of an event: its type, its stamp and its metadata bag.
+ * A `Pick` rather than the record, so the host's closed events and a
+ * `chat.subscribe@1.22` client's open ones (`OpenChatEvent`) both fold here,
+ * and each caller gets its own event type back in the windows.
+ */
+export type SetupWindowEvent = Pick<
+  ChatEvent,
+  "type" | "timestamp" | "metadata"
+>;
+
+/**
  * One setup lifecycle: the events that formed it, plus the three facts the
  * transcript needs to place its row.
  */
-export interface SetupCardWindow {
+export interface SetupCardWindow<E extends SetupWindowEvent = ChatEvent> {
   /** The window's events, in input order. Never empty. */
-  readonly events: readonly ChatEvent[];
+  readonly events: readonly E[];
   /**
    * The EARLIEST setup-event timestamp in the window - by value, not by array
    * position, so an out-of-order arrival still anchors at the true start.
@@ -109,17 +120,17 @@ export interface SetupCardWindow {
  * to `setting-up`. (A cross-host re-bind clones the chat artifact, so that case
  * never reaches one log.)
  */
-export function partitionSetupCardWindows(
-  events: readonly ChatEvent[],
-): readonly SetupCardWindow[] {
-  const windows: ChatEvent[][] = [];
+export function partitionSetupCardWindows<E extends SetupWindowEvent>(
+  events: readonly E[],
+): readonly SetupCardWindow<E>[] {
+  const windows: E[][] = [];
   // The stamp of the event that CLOSED each window, by window index. The
   // boundary is not part of the window it ends - it is either not a setup event
   // at all (`worktree.missing`) or the first event of the NEXT lifecycle - so a
   // client re-partitioning a slice can never derive it. See `closedAt` on the
   // wire identity for what it settles.
   const closedAt: (number | null)[] = [];
-  let current: ChatEvent[] | null = null;
+  let current: E[] | null = null;
   const closeCurrent = (at: number): void => {
     if (current !== null) closedAt[windows.length - 1] = at;
     current = null;
@@ -180,7 +191,7 @@ export function isGenesisSetupWindow(input: {
   readonly windowIndex: number;
   readonly hasCreatingEvent: boolean;
   readonly createdAt: number;
-  readonly events: readonly ChatEvent[];
+  readonly events: readonly SetupWindowEvent[];
 }): boolean {
   return (
     input.windowIndex === 0 &&
@@ -210,9 +221,9 @@ export function isGenesisSetupWindow(input: {
  * A `failed`/`cancelled` -> `running` retry has no boundary: it supersedes in
  * place, within the same window.
  */
-function closesWindow(
-  windowEvents: readonly ChatEvent[],
-  event: ChatEvent,
+function closesWindow<E extends SetupWindowEvent>(
+  windowEvents: readonly E[],
+  event: E,
   workspacePath: string,
 ): boolean {
   if (event.type === "setup.running") {
@@ -228,7 +239,7 @@ function closesWindow(
 }
 
 function windowHasForPath(
-  windowEvents: readonly ChatEvent[],
+  windowEvents: readonly SetupWindowEvent[],
   type: ChatEvent["type"],
   workspacePath: string,
 ): boolean {
@@ -239,11 +250,11 @@ function windowHasForPath(
   );
 }
 
-function describeWindow(
-  windowEvents: readonly ChatEvent[],
+function describeWindow<E extends SetupWindowEvent>(
+  windowEvents: readonly E[],
   isActive: boolean,
   closedAt: number | null,
-): Omit<SetupCardWindow, "isGenesisPin"> {
+): Omit<SetupCardWindow<E>, "isGenesisPin"> {
   const createdAt = windowEvents.reduce(
     (earliest, event) => Math.min(earliest, event.timestamp),
     windowEvents[0].timestamp,

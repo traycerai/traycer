@@ -155,6 +155,24 @@ export const hostQueryKeys = {
       userId,
     ] as const,
   /**
+   * The account chat auto-archive read, for ONE viewer - the write side of
+   * `useChatAutoArchivePolicyQuery`'s viewer partition, for the reason
+   * `autoPolicyForViewer` above gives: a write-through on the bare method scope
+   * is a prefix match and would land in every viewer's entry under the host.
+   *
+   * `["host", hostId, method, params, userId]` with the `{}` params
+   * `CHAT_AUTO_ARCHIVE_GET_PARAMS` sends. Keep the two in step.
+   */
+  chatAutoArchiveForViewer: (hostId: string | null, userId: string) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "chatAutoArchive.get">(
+        hostId,
+        "chatAutoArchive.get",
+        {},
+      ),
+      userId,
+    ] as const,
+  /**
    * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
    * what `useHostQuery` / `useHostQueries` produce for that method with
    * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.

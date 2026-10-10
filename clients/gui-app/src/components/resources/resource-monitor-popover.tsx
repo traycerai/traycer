@@ -163,6 +163,7 @@ import {
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
 import { cn } from "@/lib/utils";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
 import {
   CpuReading,
   StatusBarMetric,
@@ -579,9 +580,12 @@ function ScopedResourceMonitorPopover(props: {
       props.trigger.trigger === "header-button" &&
       isCompactForm(props.trigger.form),
   });
-  const tooltipLabel = watchesNamedHost(scope, props.hasExplicitPick)
-    ? `Resources · ${scope.hostLabel}`
-    : "Resources";
+  const tooltipLabel = resourceTooltipLabel(
+    scope,
+    props.hasExplicitPick,
+    props.trigger,
+    views.find((view) => view.metric === "cpu") ?? null,
+  );
   const tooltip =
     chord === null
       ? tooltipLabel
@@ -5199,7 +5203,30 @@ function countLabel(count: number, singular: string, plural: string): string {
   return `${formatProcessCount(count)} ${count === 1 ? singular : plural}`;
 }
 
-/** The forms that draw the CPU icon and its percent, whatever Metrics says. */
+/**
+ * The strip's icon draws no number, so its hover carries the CPU reading - or
+ * why there is none, which the bare icon would otherwise hide.
+ */
+function resourceTooltipLabel(
+  scope: HostScope,
+  hasExplicitPick: boolean,
+  trigger: ResourceMonitorPopoverTrigger,
+  cpuView: StatusBarResourceMetricView | null,
+): string {
+  const label = watchesNamedHost(scope, hasExplicitPick)
+    ? `Resources · ${scope.hostLabel}`
+    : "Resources";
+  if (trigger.trigger !== "header-button" || trigger.form !== "strip") {
+    return label;
+  }
+  if (cpuView === null) return label;
+  if (cpuView.value !== null) return `${label} · CPU ${cpuView.value}`;
+  return cpuView.unavailableReason === null
+    ? label
+    : `${label} · ${cpuView.unavailableReason}`;
+}
+
+/** The Compact forms: one CPU reading, whatever Metrics says. */
 function isCompactForm(form: BarReadingForm): boolean {
   return form === "strip" || form === "readout";
 }
@@ -5211,7 +5238,7 @@ function printsReadings(form: BarReadingForm): boolean {
 
 /**
  * How the header button draws in each form: the glyph alone (phone header),
- * the rail's outlined tile, the top strip's ghost CPU reading, the expanded
+ * the rail's outlined tile, the top strip's CPU icon (warning-colored when hot), the expanded
  * strip's outlined "cpu N%" tile, or - Detailed - the chosen metrics, in the
  * top strip's bounded share of the header or as the side strip's full-width
  * block.
@@ -5243,15 +5270,16 @@ function readingButtonLook(
       };
     case "strip":
       return {
-        variant: "ghost",
-        size: "sm",
+        variant: "muted",
+        size: "icon-sm",
         "aria-label": "Resources",
         className: undefined,
         children: (
-          <CpuReading
-            view={views[0]}
-            cpuPercent={cpuPercent}
-            withLabel={false}
+          <Cpu
+            className={cn(
+              "size-3.5",
+              isCpuWarning(cpuPercent) && RUNNING_LOW_TEXT_CLASS_NAME,
+            )}
           />
         ),
       };
@@ -5261,9 +5289,7 @@ function readingButtonLook(
         size: "sm",
         "aria-label": statusBarResourceSegmentLabel(views),
         className: "w-full shadow-xs",
-        children: (
-          <CpuReading view={views[0]} cpuPercent={cpuPercent} withLabel />
-        ),
+        children: <CpuReading view={views[0]} cpuPercent={cpuPercent} />,
       };
     case "inline":
       return {

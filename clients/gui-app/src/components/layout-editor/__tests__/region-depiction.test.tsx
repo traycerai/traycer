@@ -1,11 +1,16 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { SHIPPED_DEFAULT_VALUES } from "@/lib/layout/layout-presets";
 import {
   depictRegion,
+  regionDepiction,
   type HostContextId,
 } from "@/components/layout-editor/region-depiction";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
 import type { LayoutValues } from "@/lib/layout/layout-values";
@@ -139,7 +144,7 @@ describe("what a depiction draws", () => {
     expect(text).not.toContain("ram");
   });
 
-  it("draws Compact as CPU alone, whatever Metrics says, as the live reading does", () => {
+  it("draws Compact as the CPU icon alone, whatever Metrics says, as the live reading does", () => {
     const { container } = render(
       depictRegion(
         "resourceMonitor",
@@ -155,7 +160,9 @@ describe("what a depiction draws", () => {
         DEFAULT_ARRANGEMENT,
       ),
     );
-    expect(frameOf("resourceMonitor", container).textContent).toBe("12%");
+    const frame = frameOf("resourceMonitor", container);
+    expect(frame.textContent).toBe("");
+    expect(frame.querySelector("svg")).not.toBeNull();
   });
 
   it("draws Usage limits as the glyph where it resolves to Compact", () => {
@@ -246,6 +253,33 @@ describe("what a depiction draws", () => {
     expect(hostOf("railGitDiff", container)).toBe("rail");
   });
 
+  it("draws Reset time on the calm profile under every reading style", () => {
+    const calmResets = (
+      reset: boolean,
+      readingStyle: "bar" | "percent" | "both",
+    ) => {
+      const { container } = render(
+        depictRegion(
+          "usageLimits",
+          { ...SHIPPED_DEFAULT_VALUES.usageLimits, reset, readingStyle },
+          DEFAULT_ARRANGEMENT,
+        ),
+      );
+      // The first windowed provider's specimen is the one calm (35%) reading.
+      const calm = container.querySelector("[data-provider-id]");
+      const count =
+        calm?.querySelectorAll('[data-testid^="status-bar-window-reset-"]')
+          .length ?? -1;
+      cleanup();
+      return count;
+    };
+
+    for (const readingStyle of ["bar", "percent", "both"] as const) {
+      expect(calmResets(true, readingStyle)).toBe(1);
+      expect(calmResets(false, readingStyle)).toBe(0);
+    }
+  });
+
   it("draws every provider the arrangement still shows", () => {
     const visible = DEFAULT_ARRANGEMENT.usageProviders;
     // Only windowed providers get a picture (non-windowed ones report a
@@ -332,5 +366,52 @@ describe("what a depiction draws", () => {
     );
     expect(repeatedNeighbour).toHaveLength(0);
     expect(new Set(fills).size).toBe(3);
+  });
+});
+
+/**
+ * A picture is drawn from the values it is handed, never from the store
+ * (`lib/layout-overrides.ts`): the toolbar chips read `model.toolbarStyle`
+ * through the override seam, so a picture of the mic in a preset miniature,
+ * or of the model chip in a Toolbar style example, carries the model's answer
+ * with it.
+ */
+describe("a depiction's toolbar chrome", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  function chipBordered(container: HTMLElement): boolean {
+    const chip = container.querySelector("[data-layout-depiction] button");
+    if (!(chip instanceof HTMLButtonElement)) {
+      throw new Error("the depiction draws no toolbar chip");
+    }
+    return chip.className.split(/\s+/).includes("border-border");
+  }
+
+  it("follows the region's own values, not the stored Toolbar style", () => {
+    useLayoutStore.getState().setRegionValues("model", {
+      toolbarStyle: "bordered",
+    });
+    const { container } = render(
+      depictRegion(
+        "model",
+        { ...SHIPPED_DEFAULT_VALUES.model, toolbarStyle: "flat" },
+        DEFAULT_ARRANGEMENT,
+      ),
+    );
+    expect(chipBordered(container)).toBe(false);
+  });
+
+  it("follows the whole layout for a chip whose chrome is another region's", () => {
+    const bordered: LayoutValues = {
+      ...SHIPPED_DEFAULT_VALUES,
+      model: { ...SHIPPED_DEFAULT_VALUES.model, toolbarStyle: "bordered" },
+    };
+    const { container } = render(
+      regionDepiction("mic", bordered, DEFAULT_ARRANGEMENT),
+    );
+    expect(chipBordered(container)).toBe(true);
   });
 });

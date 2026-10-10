@@ -7,6 +7,7 @@ import { VoiceSettingsSection } from "@/components/settings/voice-settings-secti
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { HostLifecycleSettingsRow } from "@/components/settings/host-lifecycle-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { ChatAutoArchiveSettingsRow } from "@/components/settings/panels/chat-auto-archive-settings-row";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -137,6 +138,7 @@ export function GeneralSettingsPanel() {
               }
             />
           ) : null}
+          <ChatAutoArchiveSettingsRow />
         </SettingsGroup>
 
         <DangerZoneSection />

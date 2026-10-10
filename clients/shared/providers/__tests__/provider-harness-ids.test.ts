@@ -28,6 +28,15 @@ describe("providerIdFromHarnessOrProviderName", () => {
     }
   });
 
+  it("resolves commandcode, whose harness id and provider id are the same name", () => {
+    expect(GUI_HARNESS_BY_PROVIDER_ID.commandcode).toBe("commandcode");
+    expect(providerIdFromHarnessOrProviderName("commandcode")).toBe(
+      "commandcode",
+    );
+    // Positive control: the one provider whose ids differ still maps by harness id.
+    expect(providerIdFromHarnessOrProviderName("claude")).toBe("claude-code");
+  });
+
   it("returns null for a name that is neither", () => {
     expect(providerIdFromHarnessOrProviderName("not-a-provider")).toBeNull();
   });

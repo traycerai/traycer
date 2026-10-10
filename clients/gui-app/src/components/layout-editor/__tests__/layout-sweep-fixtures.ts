@@ -186,6 +186,8 @@ export function resetToShippedLayout(): void {
     memory: true,
     processes: false,
     ramShare: true,
+    // Rows ship off; the sweep needs their readings drawn to see these change.
+    agentRows: true,
   });
   useSideTabStripStore.getState().setCollapsed(false);
 }

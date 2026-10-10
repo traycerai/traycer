@@ -1,16 +1,14 @@
 import type {
   ChatErrorNotice,
   ChatQueueDeliveryPolicy,
-  ChatQueueState,
+  OpenChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   restoreResultManifestSchema,
   type RestoreResultManifest,
@@ -29,6 +27,11 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
+
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
@@ -73,10 +76,50 @@ export const SEND_RESTORED_NOTICE_CODE = "SEND_RESTORED";
  * is exactly when the user is likely to be looking somewhere else.
  */
 export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
+  return noticeCarriesOnlyCopy(notice) || noticeIsHeldUntilDelivered(notice);
+}
+
+/**
+ * Whether this notice is kept in the ring until the toast layer has shown it,
+ * and ages like any other warning after that.
+ *
+ * Not a last-copy notice - the text it is about is safe somewhere the user can
+ * see - but it is the only telling of something they have to know before they
+ * act on that text: what a restored prompt will resend under, or that a draft
+ * handed back to them duplicates a prompt the host already saved. The ring is
+ * the only replay source, so one that could be evicted by ordinary history
+ * before an unfocused pane came back would never be told at all.
+ */
+export function noticeIsHeldUntilDelivered(notice: ChatErrorNotice): boolean {
   return (
-    noticeCarriesOnlyCopy(notice) || notice.code === SEND_RESTORED_NOTICE_CODE
+    notice.code === SEND_RESTORED_NOTICE_CODE ||
+    notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE ||
+    notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE
   );
 }
+
+/**
+ * Notice code for an edit to a queued prompt whose text the host refused
+ * while it took the settings change or the steer sent with it.
+ *
+ * Held like the one below, and for the same reason: the draft handed back
+ * says the edit was not saved, and this is the only telling that the queued
+ * message went ahead with its earlier text regardless.
+ */
+export const QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE =
+  "QUEUE_EDIT_FOLLOW_UP_ALONE";
+
+/**
+ * Notice code for an edit to a queued prompt that was handed back as
+ * unconfirmed and that the host has since shown it DID save.
+ *
+ * It must survive an unfocused pane for the reason `SEND_RESTORED` does: it
+ * arrives around a reconnect, and it is the only thing telling the user that
+ * the draft sitting in their composer is a duplicate of a prompt the host
+ * already holds.
+ */
+export const QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE =
+  "QUEUE_EDIT_SAVED_AFTER_RETURN";
 
 /**
  * Whether this notice inlines content nothing else holds any more. Both passes
@@ -100,7 +143,7 @@ export function noticeCarriesOnlyCopy(notice: ChatErrorNotice): boolean {
 export type ReconcileQueueInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
-  readonly queue: ChatQueueState;
+  readonly queue: OpenChatQueueState;
   /**
    * Accepted records, because this frame confirms sends that are no longer
    * pending. See the stamping pass in {@link reconcileQueueChange}.
@@ -134,8 +177,8 @@ export type ReconcileQueuePatch = {
 export type ReconcileSnapshotInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
-  readonly messages: ReadonlyArray<Message>;
-  readonly queue: ChatQueueState;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly queue: OpenChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /**
    * The connection this snapshot arrived on. Absence from a snapshot is only
@@ -454,6 +497,36 @@ export function unrecoverableSendNotice(
     ),
     severity: "warning",
     clientActionId,
+  };
+}
+
+/**
+ * The statement for a queue-edit submission the host applied only in part: the
+ * text was saved, and the settings or the steer were not.
+ *
+ * A last-copy notice, and deliberately not a restoration. The text is on the
+ * host, so putting it back in the composer would present a saved prompt as an
+ * unsent one. But the SUBMISSION - the document as the user composed it, with
+ * its annotation cards - is held nowhere else once the custody record settles,
+ * so it gets the durability every last-copy record has: never evicted, shown
+ * until dismissed, and stashed with its sidecar at teardown.
+ *
+ * Says "do not send it again" where the other two say "resend", because that
+ * is the one way this copy can do harm.
+ */
+export function keptQueueEditSubmissionNotice(
+  send: UnrecoverableSend,
+): ChatErrorNotice {
+  const draft = quotedDraftOf(send.content);
+  const said = `${send.circumstance}.`;
+  return {
+    code: SEND_NOT_RECORDED_NOTICE_CODE,
+    message:
+      draft === null
+        ? said
+        : `${said}\n\nWhat you submitted is kept below to copy. It is already saved on the queued message, so do not send it again:\n${draft}`,
+    severity: "warning",
+    clientActionId: send.clientActionId,
   };
 }
 
@@ -800,6 +873,27 @@ function settingsDriftClause(
   ];
   if (named.length === 0) return "";
   return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
+}
+
+/**
+ * What a submission asked a queued row to change, named the way a drift is:
+ * each setting that differs from what the row held, with the value asked for.
+ * Empty when the row already held everything requested.
+ *
+ * For the one statement that has to say what was NOT applied - a queue edit
+ * whose text the host saved and whose settings it did not - so the user can
+ * see what to set again without the composer having kept it.
+ */
+export function namedSettingsChanges(input: {
+  readonly requested: ChatRunSettings;
+  readonly held: ChatRunSettings;
+  readonly requestedAccount: AccountContext;
+  readonly heldAccount: AccountContext;
+}): ReadonlyArray<string> {
+  return [
+    ...runSettingsDrift(input.requested, input.held),
+    ...accountDrift(input.requestedAccount, input.heldAccount),
+  ];
 }
 
 /** Nothing to compare when either side is absent - unlike billing. */
@@ -1437,8 +1531,8 @@ export type ReconcileTurnSettledInput = {
    */
   readonly recoveringActionIds: ReadonlySet<string>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
-  readonly messages: ReadonlyArray<Message>;
-  readonly queue: ChatQueueState;
+  readonly messages: ReadonlyArray<OpenMessage>;
+  readonly queue: OpenChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /** See {@link ReconcileSnapshotInput.currentSettings}. */
   readonly currentSettings: ChatRunSettings | null;
@@ -1729,7 +1823,7 @@ export function sweepStalePendingActions(
 function pendingActionIdsForQueuedMessages(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   pendingUserMessages: ReadonlyArray<PendingUserMessage>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): Set<string> {
   const pendingUsersByAction = new Map(
     pendingUserMessages.map((message) => [message.clientActionId, message]),
@@ -1813,7 +1907,7 @@ function pendingUserMessageFromPendingAction(
  * equality for pending messages not yet assigned an id by the host.
  */
 function queueContainsPendingSend(
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
   pendingMessageId: string,
   pendingUser: PendingUserMessage | undefined,
 ): boolean {
@@ -1844,7 +1938,7 @@ function queueContainsPendingSend(
  * pending actions have been confirmed by the host.
  */
 function confirmedMessageIdsForMessages(
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<OpenMessage>,
 ): Set<string> {
   return new Set(
     messages.flatMap((message) => {
@@ -1991,7 +2085,7 @@ export function pruneAcceptedActions(
  */
 export function withoutResolvedAcceptedQueueCancellations(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): Readonly<Record<string, AcceptedChatAction>> {
   const queueItemIds = new Set(queue.items.map((item) => item.queueItemId));
   const retained = Object.values(acceptedActions).filter(
@@ -2020,7 +2114,7 @@ export function withoutResolvedAcceptedQueueCancellations(
  * the held prompts the status stays `running` and a status-keyed verdict
  * would never settle.
  */
-export function queuePauseSettled(queue: ChatQueueState): boolean {
+export function queuePauseSettled(queue: OpenChatQueueState): boolean {
   return !queue.items.some(queueItemCanPauseFromQueueHeader);
 }
 
@@ -2032,7 +2126,7 @@ export function queuePauseSettled(queue: ChatQueueState): boolean {
  * `idle` or `running` can still carry paused rows, and a resume accepted
  * against it is not settled until they are released.
  */
-export function queueResumeSettled(queue: ChatQueueState): boolean {
+export function queueResumeSettled(queue: OpenChatQueueState): boolean {
   return !queue.items.some((item) => item.status === "paused");
 }
 
@@ -2055,7 +2149,7 @@ export function queueResumeSettled(queue: ChatQueueState): boolean {
  */
 export function withoutSettledAcceptedQueueStatusActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  queue: ChatQueueState,
+  queue: OpenChatQueueState,
 ): Readonly<Record<string, AcceptedChatAction>> {
   return withoutAcceptedActions(acceptedActions, (action) => {
     if (action.action === "pauseQueue") return queuePauseSettled(queue);
@@ -2152,7 +2246,7 @@ export type RestoreAttemptEvidence =
  * the record retires, the spinner is cleared rather than completed.
  */
 export function restoreOutcomesFrom(
-  events: ReadonlyArray<ChatEvent>,
+  events: ReadonlyArray<OpenChatEvent>,
 ): ReadonlyArray<RestoreAttemptEvidence> {
   const evidence: RestoreAttemptEvidence[] = [];
   for (const event of events) {
@@ -2505,7 +2599,7 @@ export function acceptedActionHoldsUnrecoveredSend(
 
 /** The live state an accepted action's settlement is judged against. */
 export interface AcceptedActionSettlementContext {
-  readonly queue: ChatQueueState;
+  readonly queue: OpenChatQueueState;
 }
 
 /**

@@ -34,6 +34,18 @@ describe("agentAppearance", () => {
     );
   });
 
+  it("gives commandcode its own warm neutral accent, distinct from every other harness", () => {
+    expect(HARNESS_ACCENT.commandcode).toBe("#a8a29e");
+    expect(agentAppearance("a", "terminal-agent", "commandcode").accent).toBe(
+      "#a8a29e",
+    );
+    const sharing = Object.entries(HARNESS_ACCENT).filter(
+      ([, accent]) => accent === HARNESS_ACCENT.commandcode,
+    );
+    expect(sharing.map(([harnessId]) => harnessId)).toEqual(["commandcode"]);
+    expect(HARNESS_ACCENT.commandcode).not.toBe(HARNESS_ACCENT.grok);
+  });
+
   it("carries the harness brand color as its accent", () => {
     expect(agentAppearance("a", "terminal-agent", "codex").accent).toBe(
       HARNESS_ACCENT.codex,

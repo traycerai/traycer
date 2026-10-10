@@ -769,6 +769,20 @@ describe("<EpicShell />", () => {
       expect(canvasFrame().className).not.toContain("md:border-b-0");
     });
 
+    it("keeps its own bottom border when both readings name the status bar but both are hidden, since no strip is mounted to draw one", () => {
+      // Placement says the footer hosts them; the shell mounts nothing for two
+      // hidden readings (U1), so the frame is the only bottom edge.
+      useLayoutStore.getState().setRegionValues("usageLimits", {
+        shown: "hidden",
+      });
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        shown: "hidden",
+      });
+      render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
+
+      expect(canvasFrame().className).not.toContain("md:border-b-0");
+    });
+
     // `seam = stripEdge === sidebarSide ? null : stripEdge`: only a side strip
     // on the side AWAY from the sidebar meets the canvas, and only that edge
     // drops its border. `suppressed: null` rows keep the full frame.

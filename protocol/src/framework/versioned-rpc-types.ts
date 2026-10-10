@@ -188,6 +188,13 @@ export const RPC_ERROR_CODES = [
   // narrows it to RPC_ERROR (`isRpcErrorCode`) while keeping the 409 and the
   // message, which is exactly what it does today.
   "IDEMPOTENCY_KEY_REUSE",
+  // The host machine ran out of disk space (or its disk quota) while serving
+  // the request. Its own code because the only useful next step, freeing
+  // space on the HOST machine, is invisible behind RPC_ERROR's generic copy,
+  // and the host may not be the machine the user is sitting at. Same additive
+  // degrade story as E_INVALID_ARGUMENT: a client that does not know this code
+  // shows its generic failure, exactly as it did before the code existed.
+  "E_HOST_STORAGE_FULL",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

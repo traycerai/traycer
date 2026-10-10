@@ -86,6 +86,18 @@ export function navigateToLayoutRegion(regionId: RegionId): boolean {
   return navigateToLayoutLanding({ kind: "region", regionId });
 }
 
+/**
+ * One list row inside a region's own section, by its `data-sortable-id`: the
+ * controller a reason names when that is not the region itself (a provider
+ * in Usage limits' Profiles list, U5).
+ */
+export function navigateToLayoutRegionRow(
+  regionId: RegionId,
+  row: string,
+): boolean {
+  return navigateToLayoutLanding({ kind: "region-row", regionId, row });
+}
+
 /** `null` is the Presets area. */
 export function navigateToLayoutArea(area: SurfaceGroupId | null): boolean {
   return navigateToLayoutLanding({ kind: "area", area });
@@ -100,6 +112,11 @@ function navigateToLayoutLanding(target: LayoutLandingTarget): boolean {
 
 export type LayoutLandingTarget =
   | { readonly kind: "region"; readonly regionId: RegionId }
+  | {
+      readonly kind: "region-row";
+      readonly regionId: RegionId;
+      readonly row: string;
+    }
   | { readonly kind: "area"; readonly area: SurfaceGroupId | null };
 
 export interface PendingLayoutLanding {

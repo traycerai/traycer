@@ -501,7 +501,12 @@ describe("EpicSidebarCloudChatRow", () => {
  */
 describe("EpicSidebarCloudChatRow on a mounting surface", () => {
   function surfaceValue(onRowActivated: () => void): ChatTreeSurface {
-    return { onRowActivated, revealRowControls: true, searchQuery: null };
+    return {
+      onRowActivated,
+      revealRowControls: true,
+      searchQuery: null,
+      startNewChat: () => undefined,
+    };
   }
 
   it("dismisses the surface when the row is tapped", () => {

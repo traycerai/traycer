@@ -21,14 +21,10 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
-import type {
-  InterviewAnswer,
-  UserMessageSender,
-} from "@traycer/protocol/persistence/epic/schemas";
-
+import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BackgroundItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -49,6 +45,7 @@ import {
 } from "@/components/chat/chat-diff-target";
 import {
   ChatScrollToBlockContext,
+  ChatScrollToPageContext,
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
 import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
@@ -141,11 +138,17 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   dispatchedWorktreeIntentForDisplay,
+  unconfirmedSendActionIdsOf,
   type ChatSessionState,
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
 import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
+import { queueItemsInFlight } from "@/stores/chats/queue-edit-custody";
+import {
+  QueuedMessageStagesContext,
+  type QueuedMessageStages,
+} from "@/components/chat/queued-message-stages";
 import type { OrdinalRange } from "@/stores/chats/transcript-window";
 import {
   chatTranscriptEventRowId,
@@ -154,6 +157,10 @@ import {
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import {
+  SubagentContinueAsChatContext,
+  useSubagentContinueAsChat,
+} from "@/components/chat/segments/subagent-continue-as-chat";
 import {
   useSubagentDockView,
   useSubagentDrillIn,
@@ -169,6 +176,7 @@ import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
   messageIdForBlock,
+  pageBlockIdForRef,
   isStreamingInterviewBlock,
   landingBlockIdForJumpTarget,
   resolveApprovalJumpLanding,
@@ -244,7 +252,7 @@ import {
   effectiveMissingWorktreePaths,
   type WorkspaceComposerAvailability,
 } from "@/lib/composer/workspace-composer-availability";
-import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useChatSendGateWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -320,6 +328,8 @@ import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -981,6 +991,20 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     subagentDockMessages,
     view.lower.backgroundItems,
   );
+  // "Continue as chat" for the open card. Built here, beside the drill-in,
+  // because both places that draw it - the view's header and the dock's
+  // notice - sit under this tile.
+  const subagentContinueAsChat = useSubagentContinueAsChat({
+    drillIn: subagentDrillIn,
+    messages: subagentDockMessages,
+    epicId: view.currentEpicId,
+    chatId: view.node.id,
+    hostId,
+    viewTabId: view.viewTabId,
+    settings: view.lower.composer.sessionSettingsSeed,
+    canAct: view.lower.access.canAct,
+    isLiveSession: props.isLiveSession,
+  });
   const pendingComposerInterviewBlockId =
     view.lower.interview.pending?.blockId ?? null;
   // The composer + queue/pinned/agents/background dock now overlays the
@@ -1038,6 +1062,18 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       props.node.instanceId,
       viewHandle.rows,
     ],
+  );
+  const scrollToPage = useCallback(
+    (pageRef: string): boolean => {
+      const blockId = pageBlockIdForRef(
+        viewHandle.rows.getState().messages,
+        pageRef,
+      );
+      if (blockId === null) return false;
+      scrollToBlock(blockId, "plan");
+      return true;
+    },
+    [scrollToBlock, viewHandle.rows],
   );
   const scrollToBackgroundItem = useCallback(
     (item: BackgroundItem): void => {
@@ -1508,171 +1544,187 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       <ChatQueueBlobRepair handle={view.handle} />
       <ChatDiffTargetContext.Provider value={diffOpener}>
         <ChatScrollToBlockContext.Provider value={scrollToBlock}>
-          <div
-            data-testid="chat-tile"
-            data-node-id={view.node.id}
-            data-chat-keyboard-scroll-scope=""
-            data-active={props.isActive ? "true" : "false"}
-            className="flex h-full min-h-0 flex-col"
-            onPointerDownCapture={clearComposerHighlight}
-          >
-            {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
-             * transcript root relies on `flex-1` from ITS immediate parent to
-             * get a definite height (h-full on LegendList needs a real
-             * containing block all the way up). The overlay dock below is
-             * absolutely positioned, so it does not participate in this flex
-             * layout regardless. The definite flex height also makes this a
-             * size container for the dock panel's proportional height. */}
-            <div
-              data-chat-pane=""
-              className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+          <ChatScrollToPageContext.Provider value={scrollToPage}>
+            <SubagentContinueAsChatContext.Provider
+              value={subagentContinueAsChat}
             >
-              <TranscriptQueuePauseReasonSupportContext
-                value={queuePauseReasonSupport}
+              <div
+                data-testid="chat-tile"
+                data-node-id={view.node.id}
+                data-chat-keyboard-scroll-scope=""
+                data-active={props.isActive ? "true" : "false"}
+                className="flex h-full min-h-0 flex-col"
+                onPointerDownCapture={clearComposerHighlight}
               >
-                <ChatPrewarmContext.Provider value={prewarmEligible}>
-                  <ChatSessionMessagesSurface
-                    snapshotLoaded={view.snapshotLoaded}
-                    thinkingTokensSource={view.handle.store}
-                    connectionStatus={view.connectionStatus}
-                    fatalClose={view.fatalClose}
-                    preSnapshotRetries={view.preSnapshotRetries}
-                    preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
-                    onRetry={view.onChatRetryFromUser}
-                    preContent={view.preContent}
-                    restoreContext={view.restoreContext}
-                    node={view.node}
-                    taskTitle={view.taskTitle}
-                    epicId={view.currentEpicId}
-                    viewTabId={view.viewTabId}
-                    tabHostId={view.tabHostId}
-                    workspaceRoots={view.linkResolutionRoots}
-                    handle={view.handle}
-                    inlineEditMessage={view.inlineEditMessage}
-                    rowPresentation={view.rowPresentation}
-                    activeTurnId={view.activeTurnId}
-                    onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
-                    onFindReadOrdinalChange={onFindReadOrdinalChange}
-                    backgroundItems={view.lower.backgroundItems}
-                    scrollRequest={backgroundScrollRequest}
-                    onScrollRequestSettled={onScrollRequestSettled}
-                    surfaceVisible={view.surfaceVisible}
-                    systemOverlayActive={systemOverlayActive}
-                    getMessageActions={view.getMessageActions}
-                    nextStepActions={view.nextStepActions}
-                    planActions={view.planActions}
-                    composerOverlayHeight={
-                      lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
-                    }
-                    subagentDrillIn={subagentDrillIn}
-                  />
-                </ChatPrewarmContext.Provider>
-              </TranscriptQueuePauseReasonSupportContext>
-              {/*
-               * SurfaceActivityProvider narrows catalog/provider query subscriptions
-               * to the one focused pane+tab. A visible split partner keeps rendering
-               * its transcript and scroll state, but releases catalog/provider query
-               * observers and cannot own palette/composer-global work.
-               *
-               * Absolutely overlays the transcript (decision log #3) instead of
-               * pushing its height via flex, so streamed replies flow visually
-               * behind it; `lowerSurfacesHeight` (measured here) feeds the
-               * transcript's bottom content inset. The full-width positioning
-               * layer must remain both pointer- and paint-transparent so it
-               * cannot cover the transcript scrollbar or its edge lanes.
-               * Centered lower surfaces opt back into pointer handling and own
-               * their opaque backplates (including the bottom seam seal), so
-               * transcript content cannot show through the actual chrome.
-               */}
-              {view.snapshotLoaded ? (
+                {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
+                 * transcript root relies on `flex-1` from ITS immediate parent to
+                 * get a definite height (h-full on LegendList needs a real
+                 * containing block all the way up). The overlay dock below is
+                 * absolutely positioned, so it does not participate in this flex
+                 * layout regardless. The definite flex height also makes this a
+                 * size container for the dock panel's proportional height. */}
                 <div
-                  ref={setLowerSurfacesElement}
-                  className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
-                  data-chat-lower-surfaces-overlay=""
+                  data-chat-pane=""
+                  className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
                 >
-                  <div className="pointer-events-none">
-                    <SurfaceActivityProvider active={view.surfaceFocused}>
-                      {/*
-                       * Above the dock and outside the lower surfaces: this row
-                       * is a turn-tail status line, not composer chrome, and it
-                       * belongs to the transcript side of the seam. It renders
-                       * `null` for every traversal state but `retrying`, so it
-                       * is mounted unconditionally and owns the predicate.
-                       */}
-                      <FallbackRetryRow
-                        pending={view.lower.fallback.pending}
-                        // The tile's one routed client, already resolved above
-                        // for attachments. Re-resolving it would add a second
-                        // directory-query subscription for the same answer.
-                        client={attachmentHostClient}
-                      />
-                      <ChatLowerInteractionSurfaces
+                  <TranscriptQueuePauseReasonSupportContext
+                    value={queuePauseReasonSupport}
+                  >
+                    <ChatPrewarmContext.Provider value={prewarmEligible}>
+                      <ChatSessionMessagesSurface
+                        snapshotLoaded={view.snapshotLoaded}
+                        thinkingTokensSource={view.handle.store}
+                        connectionStatus={view.connectionStatus}
+                        fatalClose={view.fatalClose}
+                        preSnapshotRetries={view.preSnapshotRetries}
+                        preSnapshotReloadStartedAt={
+                          view.preSnapshotReloadStartedAt
+                        }
+                        onRetry={view.onChatRetryFromUser}
+                        preContent={view.preContent}
+                        restoreContext={view.restoreContext}
+                        node={view.node}
+                        taskTitle={view.taskTitle}
                         epicId={view.currentEpicId}
                         viewTabId={view.viewTabId}
-                        chatId={view.node.id}
-                        hostId={hostId}
-                        runtime={view.lower.runtime}
-                        access={view.lower.access}
-                        turn={view.lower.turn}
-                        interview={view.lower.interview}
-                        approvals={view.lower.approvals}
-                        queue={view.lower.queue}
-                        composer={view.lower.composer}
-                        todo={view.todo}
-                        restoreContext={view.restoreContext}
-                        providerFallback={view.lower.fallback}
+                        tabHostId={view.tabHostId}
+                        workspaceRoots={view.linkResolutionRoots}
+                        handle={view.handle}
+                        inlineEditMessage={view.inlineEditMessage}
+                        rowPresentation={view.rowPresentation}
+                        activeTurnId={view.activeTurnId}
+                        onVisibleOrdinalRangeChange={
+                          onVisibleOrdinalRangeChange
+                        }
+                        onFindReadOrdinalChange={onFindReadOrdinalChange}
                         backgroundItems={view.lower.backgroundItems}
-                        backgroundStopPendingTaskIds={
-                          view.lower.backgroundStopPendingTaskIds
+                        scrollRequest={backgroundScrollRequest}
+                        onScrollRequestSettled={onScrollRequestSettled}
+                        surfaceVisible={view.surfaceVisible}
+                        systemOverlayActive={systemOverlayActive}
+                        getMessageActions={view.getMessageActions}
+                        nextStepActions={view.nextStepActions}
+                        planActions={view.planActions}
+                        composerOverlayHeight={
+                          lowerSurfacesElement === null
+                            ? 0
+                            : lowerSurfacesHeight
                         }
-                        backgroundStopAllPending={
-                          view.lower.backgroundStopAllPending
-                        }
-                        backgroundSessionStopPending={
-                          view.lower.backgroundSessionStopPending
-                        }
-                        onBackgroundItemClick={scrollToBackgroundItem}
-                        subagentView={subagentDockView}
+                        subagentDrillIn={subagentDrillIn}
                       />
-                    </SurfaceActivityProvider>
-                  </div>
+                    </ChatPrewarmContext.Provider>
+                  </TranscriptQueuePauseReasonSupportContext>
+                  {/*
+                   * SurfaceActivityProvider narrows catalog/provider query subscriptions
+                   * to the one focused pane+tab. A visible split partner keeps rendering
+                   * its transcript and scroll state, but releases catalog/provider query
+                   * observers and cannot own palette/composer-global work.
+                   *
+                   * Absolutely overlays the transcript (decision log #3) instead of
+                   * pushing its height via flex, so streamed replies flow visually
+                   * behind it; `lowerSurfacesHeight` (measured here) feeds the
+                   * transcript's bottom content inset. The full-width positioning
+                   * layer must remain both pointer- and paint-transparent so it
+                   * cannot cover the transcript scrollbar or its edge lanes.
+                   * Centered lower surfaces opt back into pointer handling and own
+                   * their opaque backplates (including the bottom seam seal), so
+                   * transcript content cannot show through the actual chrome.
+                   */}
+                  {view.snapshotLoaded ? (
+                    <div
+                      ref={setLowerSurfacesElement}
+                      className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+                      data-chat-lower-surfaces-overlay=""
+                    >
+                      <div className="pointer-events-none">
+                        <SurfaceActivityProvider active={view.surfaceFocused}>
+                          {/*
+                           * Above the dock and outside the lower surfaces: this row
+                           * is a turn-tail status line, not composer chrome, and it
+                           * belongs to the transcript side of the seam. It renders
+                           * `null` for every traversal state but `retrying`, so it
+                           * is mounted unconditionally and owns the predicate.
+                           */}
+                          <FallbackRetryRow
+                            pending={view.lower.fallback.pending}
+                            // The tile's one routed client, already resolved above
+                            // for attachments. Re-resolving it would add a second
+                            // directory-query subscription for the same answer.
+                            client={attachmentHostClient}
+                          />
+                          <QueuedMessageStagesContext
+                            value={view.lower.queueStages}
+                          >
+                            <ChatLowerInteractionSurfaces
+                              epicId={view.currentEpicId}
+                              viewTabId={view.viewTabId}
+                              chatId={view.node.id}
+                              hostId={hostId}
+                              runtime={view.lower.runtime}
+                              access={view.lower.access}
+                              turn={view.lower.turn}
+                              interview={view.lower.interview}
+                              approvals={view.lower.approvals}
+                              queue={view.lower.queue}
+                              composer={view.lower.composer}
+                              todo={view.todo}
+                              restoreContext={view.restoreContext}
+                              providerFallback={view.lower.fallback}
+                              backgroundItems={view.lower.backgroundItems}
+                              backgroundStopPendingTaskIds={
+                                view.lower.backgroundStopPendingTaskIds
+                              }
+                              backgroundStopAllPending={
+                                view.lower.backgroundStopAllPending
+                              }
+                              backgroundSessionStopPending={
+                                view.lower.backgroundSessionStopPending
+                              }
+                              onBackgroundItemClick={scrollToBackgroundItem}
+                              subagentView={subagentDockView}
+                            />
+                          </QueuedMessageStagesContext>
+                        </SurfaceActivityProvider>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-            <ChatTileErrorNoticeToasts handle={view.handle} />
-            <ChatTileRestoreResultToasts handle={view.handle} />
-            <RevertOnEditDialog
-              open={view.revertOnEdit.open}
-              onOpenChange={view.revertOnEdit.onOpenChange}
-              onRevert={view.revertOnEdit.onRevert}
-              onDontRevert={view.revertOnEdit.onDontRevert}
-              artifactCount={view.revertOnEdit.artifactCount}
-              queuedCount={view.revertOnEdit.queuedCount}
-            />
-            <SteerSettingsConflictDialog
-              open={view.steerRestart.open}
-              onOpenChange={view.steerRestart.onOpenChange}
-              onRestart={view.steerRestart.onRestart}
-              changed={view.steerRestart.changed}
-            />
-            <TeardownCommitDialog
-              open={view.teardownCommit.open}
-              choice={view.teardownCommit.choice}
-              holders={view.teardownCommit.holders}
-              immediateDisabled={view.teardownCommit.immediateDisabled}
-              refusalReason={view.teardownCommit.refusalReason}
-              onImmediate={view.teardownCommit.onImmediate}
-              onDefer={view.teardownCommit.onDismiss}
-              onDismiss={view.teardownCommit.onDismiss}
-            />
-            <ChatForkDialog
-              open={view.fork.open}
-              target={view.fork.target}
-              epicId={view.currentEpicId}
-              tabId={view.viewTabId}
-              onOpenChange={view.fork.onOpenChange}
-            />
-          </div>
+                <ChatTileErrorNoticeToasts handle={view.handle} />
+                <ChatTileRestoreResultToasts handle={view.handle} />
+                <RevertOnEditDialog
+                  open={view.revertOnEdit.open}
+                  onOpenChange={view.revertOnEdit.onOpenChange}
+                  onRevert={view.revertOnEdit.onRevert}
+                  onDontRevert={view.revertOnEdit.onDontRevert}
+                  artifactCount={view.revertOnEdit.artifactCount}
+                  queuedCount={view.revertOnEdit.queuedCount}
+                />
+                <SteerSettingsConflictDialog
+                  open={view.steerRestart.open}
+                  onOpenChange={view.steerRestart.onOpenChange}
+                  onRestart={view.steerRestart.onRestart}
+                  changed={view.steerRestart.changed}
+                />
+                <TeardownCommitDialog
+                  open={view.teardownCommit.open}
+                  choice={view.teardownCommit.choice}
+                  holders={view.teardownCommit.holders}
+                  immediateDisabled={view.teardownCommit.immediateDisabled}
+                  refusalReason={view.teardownCommit.refusalReason}
+                  onImmediate={view.teardownCommit.onImmediate}
+                  onDefer={view.teardownCommit.onDismiss}
+                  onDismiss={view.teardownCommit.onDismiss}
+                />
+                <ChatForkDialog
+                  open={view.fork.open}
+                  target={view.fork.target}
+                  epicId={view.currentEpicId}
+                  tabId={view.viewTabId}
+                  onOpenChange={view.fork.onOpenChange}
+                />
+              </div>
+            </SubagentContinueAsChatContext.Provider>
+          </ChatScrollToPageContext.Provider>
         </ChatScrollToBlockContext.Provider>
       </ChatDiffTargetContext.Provider>
     </ChatAttachmentScopeContext.Provider>
@@ -1897,6 +1949,7 @@ function useChatTileSessionViewModel(
       pendingBackgroundSessionStop: s.pendingBackgroundSessionStop,
       restore: s.restore,
       pendingActions: s.pendingActions,
+      unconfirmedSendActionIds: s.unconfirmedSendActionIds,
       acceptedActions: s.acceptedActions,
       currentComposerSettings: s.currentComposerSettings,
       worktreeBinding: s.worktreeBinding,
@@ -2087,7 +2140,7 @@ function useChatTileSessionViewModel(
   // could supply.
   const editingQueueItem =
     projectedQueue.items.find(
-      (item): item is ChatQueuedPromptItem =>
+      (item): item is OpenChatQueuedPromptItem =>
         item.kind === "prompt" &&
         item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
@@ -2665,32 +2718,24 @@ function useChatTileSessionViewModel(
       if (!canAct) return false;
       if (profile === null) return false;
       if (activeEditingQueueItemId !== null) {
-        const actionId = chatActions.queueEdit(
-          activeEditingQueueItemId,
-          input.content,
-        );
-        if (actionId === null) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
         // carries the settings and the host picks safe-point vs interrupt-restart
         // (any drift was already confirmed by the composer's steer dialog).
         // Plain Enter just saves the edit with its restamped settings.
-        if (input.deliveryPolicy === "after_safe_point") {
-          if (
-            chatActions.queueSteerNow(
-              activeEditingQueueItemId,
-              input.settings,
-            ) === null
-          ) {
-            return false;
-          }
-        } else if (
-          chatActions.queueSettingsUpdate(
-            activeEditingQueueItemId,
-            input.settings,
-          ) === null
-        ) {
-          return false;
-        }
+        //
+        // ONE call for both frames, so the store holds the whole submission -
+        // text, annotation cards, settings, intent - from before this returns
+        // `true` and the composer clears. A `null` means nothing is held, and
+        // the draft stays where it is.
+        const actionId = chatActions.submitQueueEdit({
+          queueItemId: activeEditingQueueItemId,
+          content: input.content,
+          restore: input.restore,
+          settings: input.settings,
+          intent:
+            input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
+        });
+        if (actionId === null) return false;
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
@@ -3353,6 +3398,32 @@ function useChatTileSessionViewModel(
     };
   }, [state.pendingActions, state.queue.items]);
 
+  // Local facts about this client's own unanswered frames, for the queue rows
+  // and the line beside the composer. Derived from the pending actions, so
+  // they clear on the ack or the reconnect sweep and on nothing else.
+  const queueStages = useMemo<QueuedMessageStages>(
+    () => ({
+      inFlight: queueItemsInFlight(state.pendingActions),
+      unconfirmedSendActionIds: unconfirmedSendActionIdsOf({
+        unconfirmedSendActionIds: state.unconfirmedSendActionIds,
+        pendingActions: state.pendingActions,
+      }),
+      onCheckDelivery: chatActions.checkSendDelivery,
+      streamReconnecting:
+        state.snapshotLoaded &&
+        state.connectionStatus !== "open" &&
+        state.fatalClose === null,
+    }),
+    [
+      chatActions.checkSendDelivery,
+      state.connectionStatus,
+      state.fatalClose,
+      state.pendingActions,
+      state.snapshotLoaded,
+      state.unconfirmedSendActionIds,
+    ],
+  );
+
   const lowerQueue = useMemo(
     () => ({
       editingItem: editingQueueItem,
@@ -3507,6 +3578,7 @@ function useChatTileSessionViewModel(
       interview: lowerInterview,
       approvals: lowerApprovals,
       queue: lowerQueue,
+      queueStages,
       composer: lowerComposer,
       backgroundItems: state.backgroundItems,
       backgroundStopPendingTaskIds,
@@ -3970,7 +4042,7 @@ function useChatWorkspaceAvailability(
   missingWorktreePaths: ReadonlyArray<string>,
 ): WorkspaceComposerAvailability {
   const client = useTabHostClient();
-  const epicWorkspaces = useWorktreeListBindingsForEpicForClient({
+  const epicWorkspaces = useChatSendGateWorkspaceBindingsForClient({
     client,
     epicId: currentEpicId,
     enabled: client !== null,
@@ -3981,7 +4053,7 @@ function useChatWorkspaceAvailability(
   return deriveWorktreeBindingWorkspaceAvailability(
     worktreeBinding,
     snapshotLoaded,
-    epicWorkspaceCount,
+    { count: epicWorkspaceCount, didResolutionFail: epicWorkspaces.isError },
     missingWorktreePaths,
   );
 }

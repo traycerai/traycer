@@ -13,6 +13,8 @@ import {
   type AnyGrammarRow,
 } from "@/components/layout-editor/regions/region-facts";
 import { orderGroupListLabel } from "@/components/layout-editor/regions/surface-groups";
+import { isOffRegionValue } from "@/components/layout-editor/regions/surface-diff";
+import { TOOLBAR_STYLE_EXAMPLES } from "@/components/layout-editor/regions/composer-regions";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
 import {
@@ -197,6 +199,13 @@ function sessionArrangementWords(
         before: null,
         after: "Reordered",
       };
+    case "pinnedFieldOrder":
+      return {
+        key: "pinnedFieldOrder",
+        label: PINNED_FIELD_ORDER_LABEL,
+        before: null,
+        after: "Reordered",
+      };
     case "provider":
       return {
         key: `provider.${change.providerId}`,
@@ -243,6 +252,14 @@ export function arrangementChangeLine(
         baseline: "Default order",
         changes: [change],
       };
+    case "pinnedFieldOrder":
+      return {
+        key: "pinnedFieldOrder",
+        label: PINNED_FIELD_ORDER_LABEL,
+        current: "Reordered",
+        baseline: "Default order",
+        changes: [change],
+      };
     case "provider":
       return {
         key: `provider.${change.providerId}`,
@@ -269,14 +286,21 @@ function displayWord(region: RegionId, bag: LayoutValues[RegionId]): string {
 }
 
 /**
+ * The pinned breakdown's field order, named for the row that drags it
+ * (Context usage > Breakdown rows, C2).
+ */
+const PINNED_FIELD_ORDER_LABEL = "Context usage: Breakdown order";
+
+/**
  * A value stored in a region's bag but set by a row outside that region's
- * grammar, named the way that row is. The readings on agent rows sit beside
- * the Resource monitor's values and are a Sidebar switch.
+ * grammar (`isOffRegionValue`), named the way that row is: the readings on
+ * agent rows are a Sidebar switch, and the toolbar's style a Composer row.
  */
 function offGrammarLabel(region: RegionId, key: string): string | null {
-  if (region === "resourceMonitor" && key === "agentRows")
-    return LAYOUT.definitions.resourceReadings.label;
-  return null;
+  if (!isOffRegionValue(region, key)) return null;
+  return key === "agentRows"
+    ? LAYOUT.definitions.resourceReadings.label
+    : LAYOUT.definitions.toolbarStyle.label;
 }
 
 /** A detail or style row's label, found by the key its control writes. */
@@ -315,13 +339,26 @@ function styleExampleLabel(
   key: string,
   value: LayoutValueLeaf,
 ): string | null {
+  const example = styleRowExamples(region, key)?.find(
+    (entry) => Reflect.get(entry.patch, key) === value,
+  );
+  return example?.label ?? null;
+}
+
+/**
+ * The examples of the style row that writes `key`: a region's own, or the
+ * Composer's Toolbar style, an area row that writes Model's bag (C3).
+ */
+function styleRowExamples(
+  region: RegionId,
+  key: string,
+): ReadonlyArray<{ readonly label: string; readonly patch: object }> | null {
+  if (region === "model" && key === "toolbarStyle") {
+    return TOOLBAR_STYLE_EXAMPLES;
+  }
   const rows: ReadonlyArray<AnyGrammarRow> = LAYOUT_REGIONS[region].rows;
   for (const row of rows) {
-    if (row.kind !== "style" || row.key !== key) continue;
-    const example = row.examples.find(
-      (entry) => Reflect.get(entry.patch, key) === value,
-    );
-    return example?.label ?? null;
+    if (row.kind === "style" && row.key === key) return row.examples;
   }
   return null;
 }

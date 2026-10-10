@@ -22,8 +22,7 @@ import type { AutoRailRegionId, RailRegionId } from "@/lib/layout/region-id";
  * removes it, and the rail draws it as a gap at rest (L-140). It groups
  * nothing, and the shipped rail ships with none.
  *
- * A STACK joins two to {@link MAX_RAIL_STACK_MEMBERS} adjacent panels that
- * share the sidebar body, top to bottom, with a resize handle between each two
+ * A STACK joins two or more adjacent panels that share the sidebar body, top to bottom, with a resize handle between each two
  * (L-166, L-181). It is an entry rather than a flag on a panel so that both
  * lists the user reads - the inspector index and the Position list - get its
  * row for free, and so `moveCanvasOrderMember` keeps placing one member by id
@@ -44,6 +43,7 @@ export type RailEntry =
 export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
   "railAgents",
   "railArtifacts",
+  "railFiles",
   "railTerminals",
   "railBrowsers",
   "railGitDiff",
@@ -63,6 +63,7 @@ export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
 const PANEL_BY_RAIL_REGION: Readonly<Record<RailRegionId, LeftPanelId>> = {
   railAgents: "chats",
   railArtifacts: "artifacts",
+  railFiles: "files",
   railTerminals: "terminals",
   railBrowsers: "browsers",
   railGitDiff: "git-diff",
@@ -81,6 +82,7 @@ export const RAIL_REGION_BY_PANEL: Readonly<Record<LeftPanelId, RailRegionId>> =
   {
     chats: "railAgents",
     artifacts: "railArtifacts",
+    files: "railFiles",
     terminals: "railTerminals",
     browsers: "railBrowsers",
     "git-diff": "railGitDiff",
@@ -138,6 +140,42 @@ export function railVisibilityFor(override: boolean): Visibility {
   return override ? "shown" : "hidden";
 }
 
+/**
+ * Whether this panel is the last one the rail draws, so it cannot be hidden
+ * (T3): the sidebar body always draws some panel, and an empty rail would
+ * leave the two disagreeing with no icon to click back.
+ *
+ * ONE rule for every surface that offers Hidden - the layout form and the
+ * rail's menu - and both pass {@link railPanelShownByValue}: the saved layout
+ * has to hold in a task with no pull requests or comments, so the menu does
+ * not count what this task happens to draw.
+ */
+export function isLastShownRailPanel(
+  regionId: RailRegionId,
+  isShown: (candidate: RailRegionId) => boolean,
+): boolean {
+  return (
+    isShown(regionId) &&
+    RAIL_REGION_IDS.every(
+      (candidate) => candidate === regionId || !isShown(candidate),
+    )
+  );
+}
+
+/**
+ * Whether a panel is drawn whatever the task holds, read off the values: an
+ * `auto` panel may draw nothing (L-47), so the form counts on `shown` alone.
+ */
+export function railPanelShownByValue(
+  values: Pick<LayoutValues, RailRegionId>,
+  regionId: RailRegionId,
+): boolean {
+  return values[regionId].shown === "shown";
+}
+
+/** Why the last shown panel's Hidden is off, wherever it is offered. */
+export const LAST_RAIL_PANEL_REASON = "One panel always stays shown.";
+
 /** A divider id is always this shape, so it can never collide with a panel id. */
 const DIVIDER_ID_PREFIX = "divider:";
 
@@ -168,17 +206,6 @@ export function highestDividerSeq(rail: ReadonlyArray<RailEntry>): number {
  */
 const STACK_ID_PREFIX = "stack:";
 const STACK_ID_SEPARATOR = "+";
-
-/**
- * The most panels one stack holds (L-181).
- *
- * The rail is not what limits it - a stack draws one icon per member, which is
- * the room those panels take standing alone. The body is: every member is a
- * section with a 32px header, and at the window's 600px minimum height the
- * sidebar body has about 460px, so four sections still show a header and three
- * rows each, and a fifth would leave some with one row.
- */
-export const MAX_RAIL_STACK_MEMBERS = 4;
 
 export function railStackId(members: ReadonlyArray<RailRegionId>): string {
   return `${STACK_ID_PREFIX}${members.join(STACK_ID_SEPARATOR)}`;
@@ -266,6 +293,12 @@ export function visibleRailPanelIds(
  * visible partner stands alone" one rule instead of three (L-166). The member
  * itself stays in the model: hiding a panel is not unstacking it, and showing
  * it again puts it back.
+ *
+ * Dividers follow the same rule (T3). At rest a divider is space BETWEEN two
+ * drawn icons (L-140), so `"spacing"` drops one at either end and one right
+ * after another: with the panels around it hidden it would only pad an edge or
+ * widen a gap nothing marks. While customizing every divider is a handle the
+ * user grabs, so `"handles"` draws each one wherever it sits.
  */
 export type RailDisplayEntry =
   | { readonly kind: "panel"; readonly id: RailRegionId }
@@ -278,6 +311,39 @@ export type RailDisplayEntry =
     };
 
 export function railDisplayEntries(
+  rail: ReadonlyArray<RailEntry>,
+  isVisible: (regionId: RailRegionId) => boolean,
+  dividers: "spacing" | "handles",
+): ReadonlyArray<RailDisplayEntry> {
+  const entries = railDisplayEntriesWithEveryDivider(rail, isVisible);
+  if (dividers === "handles") return entries;
+  const spaced: RailDisplayEntry[] = [];
+  for (const entry of entries) {
+    const previous = spaced.at(-1);
+    if (
+      entry.kind === "divider" &&
+      (previous === undefined || previous.kind === "divider")
+    )
+      continue;
+    spaced.push(entry);
+  }
+  while (spaced.at(-1)?.kind === "divider") spaced.pop();
+  return spaced;
+}
+
+/**
+ * Whether a stack draws as a stack: two or more of its members are shown.
+ * Fewer and its lone shown member stands alone, or nothing does, so the
+ * stack's own row has nothing to act on (T3).
+ */
+export function isRailStackDrawn(
+  stackId: string,
+  isVisible: (regionId: RailRegionId) => boolean,
+): boolean {
+  return (railStackMembers(stackId) ?? []).filter(isVisible).length >= 2;
+}
+
+function railDisplayEntriesWithEveryDivider(
   rail: ReadonlyArray<RailEntry>,
   isVisible: (regionId: RailRegionId) => boolean,
 ): ReadonlyArray<RailDisplayEntry> {
@@ -318,7 +384,7 @@ export function railStackMembersFor(
   regionId: RailRegionId,
   isVisible: (candidate: RailRegionId) => boolean,
 ): ReadonlyArray<RailRegionId> {
-  for (const entry of railDisplayEntries(rail, isVisible)) {
+  for (const entry of railDisplayEntriesWithEveryDivider(rail, isVisible)) {
     if (entry.kind === "stack" && entry.members.includes(regionId))
       return entry.members;
   }
@@ -371,12 +437,21 @@ export function areRailsEqual(
 export function railFromPanelIdOrder(
   panelIds: ReadonlyArray<string>,
 ): ReadonlyArray<RailEntry> {
-  return normalizeRail(
-    panelIds.flatMap((panelId): RailEntry[] => {
-      const regionId = railRegionForPanelId(panelId);
-      return regionId === null ? [] : [{ kind: "panel", id: regionId }];
-    }),
-  );
+  return normalizeRail(railPanelEntriesFromIds(panelIds));
+}
+
+/**
+ * A stored panel order as raw panel entries, unknown ids dropped and nothing
+ * put back. For a caller that adds stack links before it normalizes, so that a
+ * panel the record never named is placed knowing which stacks to keep whole.
+ */
+export function railPanelEntriesFromIds(
+  panelIds: ReadonlyArray<string>,
+): ReadonlyArray<RailEntry> {
+  return panelIds.flatMap((panelId): RailEntry[] => {
+    const regionId = railRegionForPanelId(panelId);
+    return regionId === null ? [] : [{ kind: "panel", id: regionId }];
+  });
 }
 
 function railRegionForPanelId(panelId: string): RailRegionId | null {
@@ -429,12 +504,38 @@ function railJoins(
   });
 }
 
+/**
+ * Where a panel the stored rail never named may go: `at`, unless that would
+ * land between two members of one stack the user made, in which case after the
+ * run. A panel a build adds is never a reason to split a stack - without this a
+ * stored Agents + Artifacts + Terminals stack came back as two pieces the day
+ * Files appeared between Artifacts and Terminals.
+ */
+function afterStackRun(
+  entries: ReadonlyArray<RailEntry>,
+  at: number,
+  joins: ReadonlyArray<ReadonlyArray<RailRegionId>>,
+): number {
+  let index = at;
+  while (index > 0 && index < entries.length) {
+    const before = entries[index - 1];
+    const after = entries[index];
+    if (before.kind !== "panel" || after.kind !== "panel") break;
+    if (!joins.some((m) => m.includes(before.id) && m.includes(after.id))) {
+      break;
+    }
+    index += 1;
+  }
+  return index;
+}
+
 function normalizedPanelsAndDividers(
   rail: ReadonlyArray<RailEntry>,
 ): ReadonlyArray<RailEntry> {
   const seenPanels = new Set<RailRegionId>();
   const seenDividers = new Set<string>();
   const entries: RailEntry[] = [];
+  const joins = railJoins(rail);
   for (const entry of rail) {
     if (entry.kind === "stack") continue;
     if (entry.kind === "divider") {
@@ -461,7 +562,10 @@ function normalizedPanelsAndDividers(
         : entries.findIndex(
             (entry) => entry.kind === "panel" && entry.id === anchor,
           );
-    entries.splice(anchorIndex + 1, 0, { kind: "panel", id: regionId });
+    entries.splice(afterStackRun(entries, anchorIndex + 1, joins), 0, {
+      kind: "panel",
+      id: regionId,
+    });
     seenPanels.add(regionId);
   }
   return entries;
@@ -473,8 +577,13 @@ function normalizedPanelsAndDividers(
  * Every maximal run of a stack's members standing side by side, in any order,
  * is a stack of its own, re-minted for the order the members now stand in: a
  * stack is a view group, and reordering members within it is how the user
- * picks which panel sits on top. A run longer than
- * {@link MAX_RAIL_STACK_MEMBERS} keeps its first members; the rest stand alone.
+ * picks which panel sits on top.
+ *
+ * A stack has no cap (L-181). It had one of four, so each section kept three
+ * rows at the window's 600px minimum height, but the sidebar's groups never
+ * had one and users stack more: the split shrinks each section toward its
+ * header, and a section's own body scrolls. All nine 36px headers fit the
+ * minimum height's ~460px body.
  */
 function withRailStacks(
   entries: ReadonlyArray<RailEntry>,
@@ -485,10 +594,9 @@ function withRailStacks(
   for (const members of joins) {
     let run: RailRegionId[] = [];
     const close = (): void => {
-      const kept = run.slice(0, MAX_RAIL_STACK_MEMBERS);
-      if (kept.length >= 2) {
-        for (const member of kept) claimed.add(member);
-        stackByFirst.set(kept[0], kept);
+      if (run.length >= 2) {
+        for (const member of run) claimed.add(member);
+        stackByFirst.set(run[0], run);
       }
       run = [];
     };

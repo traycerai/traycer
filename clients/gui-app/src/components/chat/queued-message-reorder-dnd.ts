@@ -18,7 +18,7 @@ import {
 } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS, type Transform } from "@dnd-kit/utilities";
-import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpenChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 const QUEUED_MESSAGE_DND_TYPE = "queued-message";
 
@@ -91,9 +91,9 @@ export interface ResolveQueuedMessageDropPreviewInput {
 }
 
 interface UseQueuedMessageReorderDndOptions {
-  readonly items: ReadonlyArray<ChatQueuedItem>;
+  readonly items: ReadonlyArray<OpenChatQueuedItem>;
   readonly onReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
 }
@@ -191,7 +191,7 @@ export function useQueuedMessageReorderDnd(
     [items],
   );
   const itemById = useMemo(() => {
-    const map = new Map<string, ChatQueuedItem>();
+    const map = new Map<string, OpenChatQueuedItem>();
     items.forEach((item) => {
       map.set(item.queueItemId, item);
     });

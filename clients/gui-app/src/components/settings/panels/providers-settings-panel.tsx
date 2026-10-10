@@ -17,6 +17,7 @@ import {
   SettingsMasterSelect,
 } from "@/components/settings/settings-master-detail";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { ProviderCatalogTimeoutGroup } from "@/components/settings/panels/provider-catalog-timeout-group";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -75,8 +76,6 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
-import { ProfileCopyIncomingSection } from "./profile-copy/profile-copy-incoming-section";
-import { ProfileCopyRecentSection } from "./profile-copy/profile-copy-recent-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
@@ -247,6 +246,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
   antigravity:
     "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in or switch its Google account, but never signs it out.",
+  commandcode:
+    "Command Code - a coding CLI via your Command Code account; install it yourself and sign in from a terminal.",
 };
 
 function hasPendingProviderProbe(
@@ -453,6 +454,9 @@ function ProvidersSettingsPanelInner({
       // override precisely because the ambient client already IS the scoped
       // host's. Gating on `ready` alone would hide the control in the ordinary
       // no-explicit-pick case.
+      //
+      // Status only: settings live in the body, as rows in the tab they
+      // belong to (the Model list timeout is in each provider's CLI & Args).
       headerAction={
         isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : undefined
       }
@@ -1127,10 +1131,20 @@ function ProviderDetail({
     state,
     isSelectedHostLocal,
   );
+  // A focus intent names a profile by its wire `profileId`, while the selection
+  // holds its commit id - `null` for the Terminal account, whose wire id is
+  // the "ambient" sentinel. Comparing the two raw values made a sign-in link
+  // to the Terminal account select the row and then never open its sign-in.
+  const focusedProfile =
+    initialProfileId === null
+      ? null
+      : (state.profiles.find(
+          (profile) => profile.profileId === initialProfileId,
+        ) ?? null);
   const shouldStartInReauth =
     initialSignIn &&
-    initialProfileId !== null &&
-    selectedProfileId === initialProfileId &&
+    focusedProfile !== null &&
+    selectedProfileId === profileCommitId(focusedProfile) &&
     canAddProfile;
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
@@ -1418,6 +1432,10 @@ function ProviderTabBody({
             key={state.terminalAgentArgs}
             state={state}
           />
+          <ProviderCatalogTimeoutGroup
+            providerId={state.providerId}
+            hostId={hostId}
+          />
         </div>
       );
     case "permissions":
@@ -1457,18 +1475,6 @@ function ProviderTabBody({
             state={state}
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}
-          />
-          {/* Copies arriving on this host, then copies this window sent from
-              it. Both name hosts by the ids their copies captured; neither
-              follows the scope once a copy is opened. */}
-          <ProfileCopyIncomingSection
-            hostId={profileTab.hostId}
-            providerId={state.providerId}
-          />
-          <ProfileCopyRecentSection
-            hostId={profileTab.hostId}
-            providerId={state.providerId}
-            profiles={state.profiles}
           />
           <div
             className={cn(

@@ -54,7 +54,11 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
  * makes each such record its own turn. Mirrors `assistantTurnKey` in
  * `rendered-messages.ts`, which imports this rather than restating it.
  */
-export function assistantTurnKey(message: AssistantMessage): string {
+// `Pick`, not the record: the key reads two fields that every assistant row -
+// the host's closed one and a `1.22` client's open one - carries identically.
+export function assistantTurnKey(
+  message: Pick<AssistantMessage, "turnId" | "timestamp">,
+): string {
   return message.turnId ?? `ts:${message.timestamp}`;
 }
 

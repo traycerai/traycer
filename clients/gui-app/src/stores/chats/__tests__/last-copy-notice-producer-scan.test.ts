@@ -40,7 +40,11 @@ const FILES = [
   path.join(SRC_DIR, "chat-queue-reconciler.ts"),
 ];
 
-const NOTICE_FNS = ["unrecoverableSendNotice", "displacedRestorationNotice"];
+const NOTICE_FNS = [
+  "unrecoverableSendNotice",
+  "displacedRestorationNotice",
+  "keptQueueEditSubmissionNotice",
+];
 
 /** Callee names that mean "a lastCopyPrompts document was recorded here". */
 const PRODUCER_CALL_NAMES = [

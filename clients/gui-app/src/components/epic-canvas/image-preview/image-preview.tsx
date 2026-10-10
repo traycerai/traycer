@@ -118,6 +118,17 @@ export interface ImagePreviewProps {
    * the caller must react and switch to its own settled placeholder.
    */
   readonly onDecodeError: (() => void) | null;
+  /**
+   * The host surface's own actions (an epic-file tile's Download and More),
+   * drawn at the end of this instance's toolbar so the surface needs no second
+   * bar. `null` adds nothing; ignored when `compact`.
+   */
+  readonly toolbarActions: ReactNode;
+  /**
+   * What the file is called, drawn first in the toolbar (an epic-file tile's
+   * title or name). `null` draws only the size caption; ignored when `compact`.
+   */
+  readonly toolbarLabel: ReactNode;
 }
 
 const COPY_FEEDBACK_RESET_MS = 1500;
@@ -521,7 +532,9 @@ export function ImagePreview(props: ImagePreviewProps) {
     );
   }, []);
 
-  const caption = formatImagePreviewCaption(props.meta);
+  const caption = formatImagePreviewCaption(
+    withDecodedSize(props.meta, metaSize),
+  );
   const aspectRatio = imagePreviewAspectRatio(props.meta);
   const zoomDisabled = props.status !== "ready";
   const zoomOutDisabled =
@@ -653,12 +666,14 @@ export function ImagePreview(props: ImagePreviewProps) {
         <div
           role="toolbar"
           aria-label="Image preview controls"
-          className="relative z-10 flex h-8 shrink-0 items-center justify-between gap-2 border-b border-canvas-border/70 px-2"
+          className="relative z-10 flex min-h-8 shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-canvas-border/70 px-2 py-0.5"
         >
-          <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
-            {caption}
-          </span>
-          <div className="flex shrink-0 items-center gap-1">
+          {/* Keeps a few characters of room: past that the controls wrap. */}
+          <div className="flex min-w-16 grow basis-0 items-center gap-2 text-ui-xs text-muted-foreground">
+            {props.toolbarLabel}
+            <span className="min-w-0 truncate">{caption}</span>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
             <ZoomControls
               ready={!zoomDisabled}
               scalePercent={readoutScalePercent(
@@ -696,6 +711,7 @@ export function ImagePreview(props: ImagePreviewProps) {
                 {copyButtonIcon(copyFeedback)}
               </Button>
             </TooltipWrapper>
+            {props.toolbarActions}
           </div>
         </div>
       )}
@@ -712,6 +728,18 @@ export function ImagePreview(props: ImagePreviewProps) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * A dimensionless `meta` (every SVG, a Blob with no header parse) captioned
+ * with the size the `<img>` decoded, once it has.
+ */
+function withDecodedSize(
+  meta: FileAssetMeta | null,
+  size: ContainerSize | null,
+): FileAssetMeta | null {
+  if (meta === null || size === null) return meta;
+  return { ...meta, width: size.width, height: size.height };
 }
 
 /**

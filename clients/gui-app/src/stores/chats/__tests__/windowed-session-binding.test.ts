@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatAccumulatedFileChangeSummary,
   ChatLoadRangeRequest,
@@ -30,6 +29,8 @@ import {
 } from "@/stores/chats/transcript-window";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { getProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 /**
  * # The wait-for-tail rule
@@ -85,7 +86,7 @@ function acceptedMessage(
   };
 }
 
-function userMessage(messageId: string, timestamp: number): Message {
+function userMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "user",
     messageId,
@@ -103,7 +104,7 @@ function userMessage(messageId: string, timestamp: number): Message {
  * whatever it costs (`read-range.ts`), so a single oversized row is exactly how
  * a window ends up over budget with nothing else to blame.
  */
-function oversizedMessage(messageId: string, timestamp: number): Message {
+function oversizedMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "user",
     messageId,
@@ -131,7 +132,7 @@ function oversizedMessage(messageId: string, timestamp: number): Message {
   };
 }
 
-function assistantMessage(messageId: string, timestamp: number): Message {
+function assistantMessage(messageId: string, timestamp: number): OpenMessage {
   return {
     role: "assistant",
     messageId,
@@ -155,14 +156,14 @@ function assistantMessage(messageId: string, timestamp: number): Message {
   };
 }
 
-type AssistantBlocks = Extract<Message, { role: "assistant" }>["blocks"];
+type AssistantBlocks = Extract<OpenMessage, { role: "assistant" }>["blocks"];
 
 function assistantWithBlocks(
   messageId: string,
   timestamp: number,
   turnId: string,
   blocks: AssistantBlocks,
-): Message {
+): OpenMessage {
   const base = assistantMessage(messageId, timestamp);
   return base.role === "assistant" ? { ...base, turnId, blocks } : base;
 }
@@ -203,7 +204,7 @@ function completeActiveTurn(callbacks: ChatStreamCallbacks): void {
 }
 
 function blockOf(
-  message: Message | undefined,
+  message: OpenMessage | undefined,
   blockId: string,
 ): AssistantBlocks[number] | undefined {
   if (message === undefined || message.role !== "assistant") return undefined;
@@ -410,7 +411,7 @@ function windowedSnapshot(input: {
   readonly epoch: number;
   readonly rowCount: number;
   readonly tailFromOrdinal: number;
-  readonly tailMessages: readonly Message[];
+  readonly tailMessages: readonly OpenMessage[];
   readonly accumulatedFileChangeCount: number;
   /**
    * Defaults to `null` - "the host holds no index for this subscriber and is
@@ -1760,7 +1761,7 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
     readonly epoch: number;
     readonly fromOrdinal: number;
     readonly rowIds: readonly string[];
-    readonly messages: readonly Message[];
+    readonly messages: readonly OpenMessage[];
   }): RangeFrame {
     return {
       kind: "range",
@@ -2022,7 +2023,7 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
    * request's own write mark, which is why the versionless bodies below recover
    * their content just the same. See `versionlessTurnBody`.
    */
-  function turnBodyAt(text: string, blocksVersion: number): Message {
+  function turnBodyAt(text: string, blocksVersion: number): OpenMessage {
     const base = assistantWithBlocks("assistant-10", 10, "t-9", [
       textBlock("b-1", text),
     ]);
@@ -2033,7 +2034,7 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
    * The streaming turn's body with NO `blocksVersion`, which the wire schema
    * still allows and delta writers preserve.
    */
-  function versionlessTurnBody(text: string): Message {
+  function versionlessTurnBody(text: string): OpenMessage {
     return assistantWithBlocks("assistant-10", 10, "t-9", [
       textBlock("b-1", text),
     ]);

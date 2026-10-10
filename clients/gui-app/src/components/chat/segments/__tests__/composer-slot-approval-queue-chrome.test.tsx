@@ -48,7 +48,7 @@ describe("<ComposerSlotApprovalQueue /> chrome", () => {
 
     const container = screen.getByTestId("approval-prompt");
     expect(container.getAttribute("data-chrome")).toBe("quiet");
-    expect(container.className).not.toContain("bg-primary/5");
+    expect(container.className).not.toContain("bg-warning/10");
   });
 
   it("is alert the moment any row is answerable", () => {
@@ -65,7 +65,7 @@ describe("<ComposerSlotApprovalQueue /> chrome", () => {
 
     const container = screen.getByTestId("approval-prompt");
     expect(container.getAttribute("data-chrome")).toBe("alert");
-    expect(container.className).toContain("bg-primary/5");
+    expect(container.className).toContain("bg-warning/10");
   });
 
   it("is alert for a mixed queue - one reviewing row plus one answerable row", () => {
@@ -85,6 +85,6 @@ describe("<ComposerSlotApprovalQueue /> chrome", () => {
 
     const container = screen.getByTestId("approval-prompt");
     expect(container.getAttribute("data-chrome")).toBe("alert");
-    expect(container.className).toContain("bg-primary/5");
+    expect(container.className).toContain("bg-warning/10");
   });
 });

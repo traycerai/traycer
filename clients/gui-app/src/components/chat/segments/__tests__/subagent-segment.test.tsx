@@ -1373,7 +1373,7 @@ describe("<SubagentSegment /> conversation", () => {
     expect(screen.getAllByText("Summary: one bug")).toHaveLength(2);
   });
 
-  it("offers Open as chat only with the context and children, and calls the opener with the card id", () => {
+  it("offers Open as chat only with the context, and calls the opener with the card id", () => {
     const open = vi.fn();
     const { unmount } = render(
       <ConversationCard
@@ -1385,19 +1385,6 @@ describe("<SubagentSegment /> conversation", () => {
     );
     expect(screen.queryByRole("button", { name: "Open as chat" })).toBeNull();
     unmount();
-
-    const withContext = render(
-      <OpenSubagentAsChatContext value={open}>
-        <ConversationCard
-          nested={[]}
-          result={null}
-          progressUpdates={[]}
-          variant="promoted"
-        />
-      </OpenSubagentAsChatContext>,
-    );
-    expect(screen.queryByRole("button", { name: "Open as chat" })).toBeNull();
-    withContext.unmount();
 
     render(
       <OpenSubagentAsChatContext value={open}>
@@ -1431,4 +1418,127 @@ describe("<SubagentSegment /> conversation", () => {
       `subagent-open-as-chat-${cardId}`,
     );
   });
+});
+
+const WORKFLOW_META: NonNullable<SubagentSegmentModel["workflowMeta"]> = {
+  name: "review-workflow",
+  intent: null,
+  activity: [],
+  agentsStarted: 0,
+  agentsFinished: 0,
+  totalTokens: null,
+};
+
+type OpenAsChatVariant = "card" | "row" | "promoted";
+
+function OpenAsChatCard(props: {
+  readonly id: string;
+  readonly variant: OpenAsChatVariant;
+  readonly workflow: boolean;
+  readonly nested: ReadonlyArray<SubagentChildSegment>;
+}) {
+  return (
+    <SubagentSegment
+      id={props.id}
+      cardId={props.id}
+      name="reviewer"
+      agentType={null}
+      task="Review it"
+      progressUpdates={[]}
+      result="Looks fine."
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      workflowMeta={props.workflow ? WORKFLOW_META : null}
+      nested={props.nested}
+      variant={props.variant}
+    />
+  );
+}
+
+describe("<SubagentSegment /> open as chat on a card with no nested activity", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const variants: ReadonlyArray<OpenAsChatVariant> = [
+    "promoted",
+    "card",
+    "row",
+  ];
+
+  it.each(variants)(
+    "draws the control on a finished %s subagent card and opens it by the card id",
+    (variant) => {
+      const open = vi.fn();
+      const id = `reply-only-${variant}`;
+      render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={id}
+            variant={variant}
+            workflow={false}
+            nested={[]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      fireEvent.click(screen.getByTestId(`subagent-open-as-chat-${id}`));
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith(id);
+    },
+  );
+
+  it.each(variants)(
+    "draws nothing on a %s subagent card without the context",
+    (variant) => {
+      const id = `no-context-${variant}`;
+      render(
+        <OpenAsChatCard
+          id={id}
+          variant={variant}
+          workflow={false}
+          nested={[]}
+        />,
+      );
+      expect(screen.queryByTestId(`subagent-open-as-chat-${id}`)).toBeNull();
+    },
+  );
+
+  it.each(["card", "row"] as const)(
+    "draws no control on a %s workflow card with no nested activity, and one with nested activity",
+    (variant) => {
+      const open = vi.fn();
+      const { unmount } = render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={`wf-empty-${variant}`}
+            variant={variant}
+            workflow
+            nested={[]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      expect(
+        screen.queryByTestId(`subagent-open-as-chat-wf-empty-${variant}`),
+      ).toBeNull();
+      unmount();
+
+      render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={`wf-busy-${variant}`}
+            variant={variant}
+            workflow
+            nested={[textChild("t1", "child words")]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      fireEvent.click(
+        screen.getByTestId(`subagent-open-as-chat-wf-busy-${variant}`),
+      );
+      expect(open).toHaveBeenCalledWith(`wf-busy-${variant}`);
+    },
+  );
 });

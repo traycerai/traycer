@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   draftComposerPortableSchema,
+  draftComposerPortableSchemaPreCommandCode,
   draftComposerPortableWriteSchema,
   draftInterviewPortableSchema,
   draftStashPortableSchema,
@@ -177,6 +178,48 @@ export const draftDocumentSchema = lazySchema(() =>
 );
 export type DraftDocument = z.infer<typeof draftDocumentSchema>;
 
+/**
+ * Frozen draft document as the 1.5.0 tags shipped it on `drafts.list@1.0`,
+ * `drafts.upsert@1.0` and `drafts.subscribe@1.0`: the three composer kinds
+ * carry the payload those peers strict-decode
+ * (`draftComposerPortableSchemaPreCommandCode`). The interview and stash kinds
+ * carry no harness id and share their payloads with the live document.
+ *
+ * A draft whose composer names a harness added after 1.5.0 is therefore not
+ * representable on those lines at all. Each line says what it does about that
+ * where its contract is defined; none of them rewrites the draft.
+ */
+export const draftDocumentSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("landing"),
+      portable: draftComposerPortableSchemaPreCommandCode,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("new-chat"),
+      portable: draftComposerPortableSchemaPreCommandCode,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("chat-composer"),
+      portable: draftComposerPortableSchemaPreCommandCode,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("interview"),
+      portable: draftInterviewPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("stash-entry"),
+      portable: draftStashPortableSchema,
+    }),
+  ]),
+);
+export type DraftDocumentV10 = z.infer<typeof draftDocumentSchemaV10>;
+
 export const draftWriteSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -221,6 +264,16 @@ export const draftsUpsertResponseSchema = lazySchema(() =>
   }),
 );
 export type DraftsUpsertResponse = z.infer<typeof draftsUpsertResponseSchema>;
+
+/** Frozen `drafts.upsert@1.0` response: the echo over the 1.5.0 document. */
+export const draftsUpsertResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    draft: draftDocumentSchemaV10,
+  }),
+);
+export type DraftsUpsertResponseV10 = z.infer<
+  typeof draftsUpsertResponseSchemaV10
+>;
 
 export const draftsDeleteRequestSchema = lazySchema(() =>
   z.object({
@@ -298,6 +351,21 @@ export const draftsListResponseSchema = lazySchema(() =>
   }),
 );
 export type DraftsListResponse = z.infer<typeof draftsListResponseSchema>;
+
+/**
+ * Frozen `drafts.list@1.0` response: the 1.5.0 shape over the 1.5.0 document.
+ * See `draftsListResponseSchema` for what each field promises; the frontier
+ * rules there bind this line unchanged.
+ */
+export const draftsListResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    scopeId: z.string().min(1).nullable().optional(),
+    drafts: z.array(draftDocumentSchemaV10),
+    tombstones: z.array(draftListTombstoneSchema),
+    snapshotSeq: z.number().int().nonnegative(),
+  }),
+);
+export type DraftsListResponseV10 = z.infer<typeof draftsListResponseSchemaV10>;
 
 /**
  * Retract the cloud row of a draft this host holds NO row for: a foreign
@@ -528,7 +596,95 @@ const storeSeqField = {
  * MUST (restart): `storeSeq` is durably persisted and strictly
  * monotonic across host restarts. Do not add an epoch field.
  */
+/**
+ * The upsert envelope's two cross-field rules, shared by the frozen and the
+ * live frame so they cannot diverge: an upsert addresses and orders by the row
+ * it carries.
+ */
+function refineDraftsSubscribeUpsertEnvelope(
+  frame:
+    | {
+        readonly kind: "upsert";
+        readonly draftId: string;
+        readonly revision: number;
+        readonly draft: {
+          readonly draftId: string;
+          readonly revision: number;
+        };
+      }
+    | { readonly kind: "delete" | "pong" | "scope" },
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.kind !== "upsert") return;
+  if (frame.draftId !== frame.draft.draftId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["draftId"],
+      message:
+        "An upsert's envelope must address the row it carries - `draftId` must equal `draft.draftId`.",
+    });
+  }
+  if (frame.revision !== frame.draft.revision) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["revision"],
+      message:
+        "An upsert's envelope must order by the row it carries - `revision` must equal `draft.revision`.",
+    });
+  }
+}
+
+/**
+ * Frozen: the `drafts.subscribe@1.0` server frames as the 1.5.0 tags shipped
+ * them. The `upsert` arm carries the 1.5.0 document
+ * (`draftDocumentSchemaV10`), so it cannot name a harness added since.
+ *
+ * Streams carry no downgrade bridge, so the host must WITHHOLD an `upsert`
+ * this schema rejects from a `@1.0` subscriber, the way `drafts.list@1.0`
+ * omits the same row. That is consistent with the merge rule above: the
+ * subscriber never held the row, and a later `delete` for an id it does not
+ * hold is one it already accepts.
+ */
 export const draftsSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        draft: draftDocumentSchemaV10,
+      }),
+      z.object({
+        kind: z.literal("delete"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        revision: z.number().int().positive(),
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("scope"),
+        ...textFrameFields,
+        scopeId: z.string().min(1),
+      }),
+    ])
+    .superRefine(refineDraftsSubscribeUpsertEnvelope),
+);
+export type DraftsSubscribeServerFrameV10 = z.infer<
+  typeof draftsSubscribeServerFrameSchemaV10
+>;
+
+/**
+ * The live (`drafts.subscribe@1.1`) server frames: the same four arms over the
+ * live document. `@1.1` is the first minor whose `upsert` may carry a draft
+ * naming a harness added after 1.5.0.
+ */
+export const draftsSubscribeServerFrameSchemaV11 = lazySchema(() =>
   z
     .discriminatedUnion("kind", [
       z.object({
@@ -563,28 +719,10 @@ export const draftsSubscribeServerFrameSchemaV10 = lazySchema(() =>
         scopeId: z.string().min(1),
       }),
     ])
-    .superRefine((frame, ctx) => {
-      if (frame.kind !== "upsert") return;
-      if (frame.draftId !== frame.draft.draftId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["draftId"],
-          message:
-            "An upsert's envelope must address the row it carries - `draftId` must equal `draft.draftId`.",
-        });
-      }
-      if (frame.revision !== frame.draft.revision) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["revision"],
-          message:
-            "An upsert's envelope must order by the row it carries - `revision` must equal `draft.revision`.",
-        });
-      }
-    }),
+    .superRefine(refineDraftsSubscribeUpsertEnvelope),
 );
-export type DraftsSubscribeServerFrameV10 = z.infer<
-  typeof draftsSubscribeServerFrameSchemaV10
+export type DraftsSubscribeServerFrameV11 = z.infer<
+  typeof draftsSubscribeServerFrameSchemaV11
 >;
 
 /**

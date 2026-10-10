@@ -144,6 +144,31 @@ describe("TERMINAL_SIGN_IN_COPY", () => {
     expect(guidance.manualCommand).toBeNull();
   });
 
+  it("re-words Command Code around the browser page its CLI opens itself, not a printed sign-in code, and keeps the generic labels", () => {
+    const guidance = providerTerminalGuidance("commandcode");
+    expect(providerSetupGuidance("commandcode")).toBeNull();
+    expect(guidance.summary).toBe(
+      "Command Code signs in from a terminal: it opens its sign-in page in a browser and waits in that terminal.",
+    );
+    expect(guidance.stepsAfterAction).toEqual([
+      "Finish the sign-in in the browser page that terminal opens, on the machine it runs on.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.terminalHint).toBe(
+      "Command Code opens its sign-in page in a browser on that machine and waits in the terminal. Finish there, then use Refresh above.",
+    );
+    // Not the generic "prints a sign-in code" sentence, which would be false.
+    expect(guidance.summary).not.toContain("sign-in code");
+    expect(guidance.terminalHint).not.toContain("sign-in code");
+    // The generic labels still apply.
+    expect(guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(guidance.manualCommand).toBeNull();
+    // Positive control: a provider with no override DOES get the generic copy.
+    expect(defaultTerminalSignInGuidance("copilot").summary).toContain(
+      "sign-in code",
+    );
+  });
+
   it("re-words Amp around a printed sign-in link that finishes in the terminal, without promising a code paste or that a browser opens", () => {
     const guidance = providerTerminalGuidance("amp");
     expect(providerSetupGuidance("amp")).toBeNull();
@@ -309,7 +334,7 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.manualCommand).toBe("hermes setup model");
   });
 
-  it.each(["kilocode", "amp", "kiro"] as const)(
+  it.each(["kilocode", "amp", "kiro", "commandcode"] as const)(
     "gives %s the terminal-sign-in copy when the capability is present, and nothing when it is absent",
     (providerId: ProviderId) => {
       const withCapability = resolveProviderTerminalSetup(

@@ -17,6 +17,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { useGuiHarnessModelsQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const hostBindingMock = vi.hoisted(() => ({
   current: null as { readonly hostClient: unknown } | null,
@@ -88,6 +89,8 @@ describe("HarnessCatalogPrefetcher", () => {
     let requestCounter = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
+      // The app's real policy: catalog reads carry its response allowance.
+      schedulingPolicy: hostRpcSchedulingPolicy,
       invalidator: createHostQueryInvalidator(queryClient),
       findHostById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
@@ -145,6 +148,8 @@ describe("HarnessCatalogPrefetcher", () => {
     let requestCounter = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
+      // The app's real policy: catalog reads carry its response allowance.
+      schedulingPolicy: hostRpcSchedulingPolicy,
       invalidator: createHostQueryInvalidator(queryClient),
       findHostById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

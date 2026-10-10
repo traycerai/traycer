@@ -88,7 +88,8 @@ export const epicSchemaSurfaceBaseline = {
                         "omp",
                         "huggingface",
                         "reasonix",
-                        "antigravity"
+                        "antigravity",
+                        "commandcode"
                       ]
                     },
                     "model": {
@@ -186,7 +187,8 @@ export const epicSchemaSurfaceBaseline = {
                         "omp",
                         "huggingface",
                         "reasonix",
-                        "antigravity"
+                        "antigravity",
+                        "commandcode"
                       ]
                     },
                     "sessionId": {
@@ -308,7 +310,8 @@ export const epicSchemaSurfaceBaseline = {
                               "omp",
                               "huggingface",
                               "reasonix",
-                              "antigravity"
+                              "antigravity",
+                              "commandcode"
                             ]
                           },
                           "sessionId": {
@@ -443,7 +446,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "omp",
                                   "huggingface",
                                   "reasonix",
-                                  "antigravity"
+                                  "antigravity",
+                                  "commandcode"
                                 ]
                               },
                               "agentId": {
@@ -3071,6 +3075,109 @@ export const epicSchemaSurfaceBaseline = {
                                   "sessionWorkspaceSnapshot",
                                   "createdAt"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "commandcode"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace"
+                                    ]
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt"
+                                ]
                               }
                             ]
                           },
@@ -3134,7 +3241,8 @@ export const epicSchemaSurfaceBaseline = {
                               "omp",
                               "huggingface",
                               "reasonix",
-                              "antigravity"
+                              "antigravity",
+                              "commandcode"
                             ]
                           },
                           "agentId": {
@@ -3271,7 +3379,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "omp",
                                             "huggingface",
                                             "reasonix",
-                                            "antigravity"
+                                            "antigravity",
+                                            "commandcode"
                                           ]
                                         },
                                         "noticeKind": {
@@ -4231,6 +4340,267 @@ export const epicSchemaSurfaceBaseline = {
                                       "byteLength"
                                     ]
                                   }
+                                },
+                                "page": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "sha256": {
+                                          "type": "string",
+                                          "pattern": "^[0-9a-f]{64}$"
+                                        },
+                                        "title": {
+                                          "type": "string"
+                                        },
+                                        "height": {
+                                          "type": "integer",
+                                          "minimum": 80,
+                                          "maximum": 2000
+                                        },
+                                        "heights": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "width": {
+                                                "type": "integer",
+                                                "exclusiveMinimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "height": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": [
+                                              "width",
+                                              "height"
+                                            ]
+                                          }
+                                        },
+                                        "derivedFrom": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "originChatId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "path",
+                                        "sha256",
+                                        "title",
+                                        "height",
+                                        "heights",
+                                        "derivedFrom",
+                                        "originChatId"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "mcpApp": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "server": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "tool": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "resourceUri": {
+                                          "type": "string",
+                                          "pattern": "^ui:\\/\\/.*"
+                                        },
+                                        "snapshot": {
+                                          "type": "object",
+                                          "properties": {
+                                            "path": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "sha256": {
+                                              "type": "string",
+                                              "pattern": "^[0-9a-f]{64}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sha256"
+                                          ]
+                                        },
+                                        "csp": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "connectDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                },
+                                                "resourceDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                },
+                                                "frameDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                },
+                                                "baseUriDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "connectDomains",
+                                                "resourceDomains",
+                                                "frameDomains",
+                                                "baseUriDomains"
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "permissions": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "enum": [
+                                              "camera",
+                                              "microphone",
+                                              "geolocation",
+                                              "clipboard-write"
+                                            ]
+                                          }
+                                        },
+                                        "prefersBorder": {
+                                          "type": "boolean"
+                                        },
+                                        "toolInput": {},
+                                        "toolResult": {
+                                          "type": "object",
+                                          "properties": {
+                                            "content": {
+                                              "type": "array",
+                                              "items": {}
+                                            },
+                                            "structuredContent": {},
+                                            "isError": {
+                                              "type": "boolean"
+                                            }
+                                          },
+                                          "required": [
+                                            "content"
+                                          ],
+                                          "additionalProperties": {}
+                                        },
+                                        "source": {
+                                          "type": "object",
+                                          "properties": {
+                                            "originChatId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "harnessId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "nativeSessionId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "serverKey": {
+                                              "type": "string",
+                                              "pattern": "^[0-9a-f]{64}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "originChatId",
+                                            "harnessId",
+                                            "nativeSessionId",
+                                            "serverKey"
+                                          ]
+                                        },
+                                        "modelContext": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "text": {
+                                                  "type": "string"
+                                                },
+                                                "updatedAt": {
+                                                  "type": "number"
+                                                }
+                                              },
+                                              "required": [
+                                                "text",
+                                                "updatedAt"
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "server",
+                                        "tool",
+                                        "resourceUri",
+                                        "snapshot",
+                                        "csp",
+                                        "permissions",
+                                        "prefersBorder",
+                                        "toolInput",
+                                        "toolResult",
+                                        "source",
+                                        "modelContext"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -4964,7 +5334,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "omp",
                                     "huggingface",
                                     "reasonix",
-                                    "antigravity"
+                                    "antigravity",
+                                    "commandcode"
                                   ]
                                 },
                                 "source": {
@@ -4993,7 +5364,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "omp",
                                         "huggingface",
                                         "reasonix",
-                                        "antigravity"
+                                        "antigravity",
+                                        "commandcode"
                                       ]
                                     },
                                     "sessionId": {
@@ -5760,7 +6132,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "omp",
                                                 "huggingface",
                                                 "reasonix",
-                                                "antigravity"
+                                                "antigravity",
+                                                "commandcode"
                                               ]
                                             },
                                             "agentId": {
@@ -6841,7 +7214,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "omp",
                                   "huggingface",
                                   "reasonix",
-                                  "antigravity"
+                                  "antigravity",
+                                  "commandcode"
                                 ]
                               },
                               "agentId": {
@@ -8740,7 +9114,8 @@ export const epicSchemaSurfaceBaseline = {
                         "omp",
                         "huggingface",
                         "reasonix",
-                        "antigravity"
+                        "antigravity",
+                        "commandcode"
                       ]
                     },
                     "model": {
@@ -8841,7 +9216,8 @@ export const epicSchemaSurfaceBaseline = {
                         "omp",
                         "huggingface",
                         "reasonix",
-                        "antigravity"
+                        "antigravity",
+                        "commandcode"
                       ]
                     },
                     "sessionId": {
@@ -8968,7 +9344,8 @@ export const epicSchemaSurfaceBaseline = {
                               "omp",
                               "huggingface",
                               "reasonix",
-                              "antigravity"
+                              "antigravity",
+                              "commandcode"
                             ]
                           },
                           "sessionId": {
@@ -9110,7 +9487,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "omp",
                                   "huggingface",
                                   "reasonix",
-                                  "antigravity"
+                                  "antigravity",
+                                  "commandcode"
                                 ]
                               },
                               "agentId": {
@@ -11924,6 +12302,117 @@ export const epicSchemaSurfaceBaseline = {
                                   "accentColor"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "commandcode"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                      "secondaryWorkspaces"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt",
+                                  "coveredUntilMessageId",
+                                  "profileId",
+                                  "labelSnapshot",
+                                  "accountUuid",
+                                  "accentColor"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -11988,7 +12477,8 @@ export const epicSchemaSurfaceBaseline = {
                               "omp",
                               "huggingface",
                               "reasonix",
-                              "antigravity"
+                              "antigravity",
+                              "commandcode"
                             ]
                           },
                           "agentId": {
@@ -12130,7 +12620,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "omp",
                                             "huggingface",
                                             "reasonix",
-                                            "antigravity"
+                                            "antigravity",
+                                            "commandcode"
                                           ]
                                         },
                                         "noticeKind": {
@@ -13124,6 +13615,274 @@ export const epicSchemaSurfaceBaseline = {
                                     ],
                                     "additionalProperties": false
                                   }
+                                },
+                                "page": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "sha256": {
+                                          "type": "string",
+                                          "pattern": "^[0-9a-f]{64}$"
+                                        },
+                                        "title": {
+                                          "type": "string"
+                                        },
+                                        "height": {
+                                          "type": "integer",
+                                          "minimum": 80,
+                                          "maximum": 2000
+                                        },
+                                        "heights": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "width": {
+                                                "type": "integer",
+                                                "exclusiveMinimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "height": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": [
+                                              "width",
+                                              "height"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "derivedFrom": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "originChatId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "path",
+                                        "sha256",
+                                        "title",
+                                        "height",
+                                        "heights",
+                                        "derivedFrom",
+                                        "originChatId"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "mcpApp": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "server": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "tool": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "resourceUri": {
+                                          "type": "string",
+                                          "pattern": "^ui:\\/\\/.*"
+                                        },
+                                        "snapshot": {
+                                          "type": "object",
+                                          "properties": {
+                                            "path": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "sha256": {
+                                              "type": "string",
+                                              "pattern": "^[0-9a-f]{64}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sha256"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        "csp": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "connectDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                },
+                                                "resourceDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                },
+                                                "frameDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                },
+                                                "baseUriDomains": {
+                                                  "maxItems": 32,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string",
+                                                    "pattern": "^(https|wss):\\/\\/(\\*\\.)?[a-z0-9.-]+(:\\d{1,5})?$"
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "connectDomains",
+                                                "resourceDomains",
+                                                "frameDomains",
+                                                "baseUriDomains"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "permissions": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "enum": [
+                                              "camera",
+                                              "microphone",
+                                              "geolocation",
+                                              "clipboard-write"
+                                            ]
+                                          }
+                                        },
+                                        "prefersBorder": {
+                                          "type": "boolean"
+                                        },
+                                        "toolInput": {},
+                                        "toolResult": {
+                                          "type": "object",
+                                          "properties": {
+                                            "content": {
+                                              "type": "array",
+                                              "items": {}
+                                            },
+                                            "structuredContent": {},
+                                            "isError": {
+                                              "type": "boolean"
+                                            }
+                                          },
+                                          "required": [
+                                            "content"
+                                          ],
+                                          "additionalProperties": {}
+                                        },
+                                        "source": {
+                                          "type": "object",
+                                          "properties": {
+                                            "originChatId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "harnessId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "nativeSessionId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "serverKey": {
+                                              "type": "string",
+                                              "pattern": "^[0-9a-f]{64}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "originChatId",
+                                            "harnessId",
+                                            "nativeSessionId",
+                                            "serverKey"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        "modelContext": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "text": {
+                                                  "type": "string"
+                                                },
+                                                "updatedAt": {
+                                                  "type": "number"
+                                                }
+                                              },
+                                              "required": [
+                                                "text",
+                                                "updatedAt"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "server",
+                                        "tool",
+                                        "resourceUri",
+                                        "snapshot",
+                                        "csp",
+                                        "permissions",
+                                        "prefersBorder",
+                                        "toolInput",
+                                        "toolResult",
+                                        "source",
+                                        "modelContext"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -13145,7 +13904,9 @@ export const epicSchemaSurfaceBaseline = {
                                 "endedAt",
                                 "backgroundTask",
                                 "stopped",
-                                "imageResults"
+                                "imageResults",
+                                "page",
+                                "mcpApp"
                               ],
                               "additionalProperties": false
                             },
@@ -13896,7 +14657,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "omp",
                                     "huggingface",
                                     "reasonix",
-                                    "antigravity"
+                                    "antigravity",
+                                    "commandcode"
                                   ]
                                 },
                                 "source": {
@@ -13925,7 +14687,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "omp",
                                         "huggingface",
                                         "reasonix",
-                                        "antigravity"
+                                        "antigravity",
+                                        "commandcode"
                                       ]
                                     },
                                     "sessionId": {
@@ -14673,7 +15436,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "omp",
                                                 "huggingface",
                                                 "reasonix",
-                                                "antigravity"
+                                                "antigravity",
+                                                "commandcode"
                                               ]
                                             },
                                             "agentId": {
@@ -15803,7 +16567,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "omp",
                                   "huggingface",
                                   "reasonix",
-                                  "antigravity"
+                                  "antigravity",
+                                  "commandcode"
                                 ]
                               },
                               "agentId": {

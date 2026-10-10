@@ -2098,6 +2098,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2159,6 +2161,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend,
           managedCommand: null,
           agentMessageReceipt,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2197,6 +2201,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2264,6 +2270,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2320,6 +2328,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2401,6 +2411,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2514,6 +2526,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2633,6 +2647,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
@@ -2655,6 +2671,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
@@ -2677,6 +2695,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2702,6 +2722,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2721,6 +2743,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2843,6 +2867,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3008,6 +3034,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3544,6 +3572,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3600,6 +3630,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          page: null,
+          mcpApp: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -6001,6 +6033,98 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(row?.elapsedStartedAt).toBeUndefined();
   });
 
+  describe("owed autonomous resume", () => {
+    function notificationOnlyAssistant() {
+      return {
+        ...assistantMessage("turn-resume", 10_000),
+        timestamp: 12_000,
+        blocks: [
+          {
+            type: "autonomous_resume" as const,
+            blockId: "resume-1",
+            deliveryPlacement: null,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [],
+          },
+        ],
+      };
+    }
+
+    it("marks a tail notification-only row as owed while the chat is working", () => {
+      const { result } = renderRenderedMessages({
+        messages: [userMessage("m1"), notificationOnlyAssistant()],
+        chatWorking: true,
+      });
+
+      expect(result.current.at(-1)).toMatchObject({
+        role: "assistant",
+        turnHasOnlyAutonomousResumeSegments: true,
+        showCompletionFooter: false,
+        autonomousResumeOwed: true,
+      });
+    });
+
+    it("leaves the row unmarked when the chat is idle or the input is absent", () => {
+      const idle = renderRenderedMessages({
+        messages: [userMessage("m1"), notificationOnlyAssistant()],
+        chatWorking: false,
+      });
+      const absent = renderRenderedMessages({
+        messages: [userMessage("m1"), notificationOnlyAssistant()],
+      });
+
+      expect(idle.result.current.at(-1)?.autonomousResumeOwed).toBeUndefined();
+      expect(
+        absent.result.current.at(-1)?.autonomousResumeOwed,
+      ).toBeUndefined();
+    });
+
+    it("never marks a row that something follows", () => {
+      const { result } = renderRenderedMessages({
+        messages: [
+          userMessage("m1"),
+          notificationOnlyAssistant(),
+          userMessageAt("m2", 20_000),
+        ],
+        chatWorking: true,
+      });
+
+      for (const row of result.current) {
+        expect(row.autonomousResumeOwed).toBeUndefined();
+      }
+    });
+
+    it("never marks a resume row whose provider turn completed", () => {
+      const { result } = renderRenderedMessages({
+        messages: [userMessage("m1"), notificationOnlyAssistant()],
+        events: [
+          terminalEvent({
+            type: "turn.started",
+            timestamp: 12_000,
+            turnId: "turn-resume",
+            message: null,
+            severity: "info",
+            metadata: null,
+          }),
+          terminalEvent({
+            type: "turn.completed",
+            timestamp: 15_000,
+            turnId: "turn-resume",
+            message: "Turn completed.",
+            severity: "info",
+            metadata: null,
+          }),
+        ],
+        chatWorking: true,
+      });
+
+      const row = result.current.at(-1);
+      expect(row?.showCompletionFooter).toBe(true);
+      expect(row?.autonomousResumeOwed).toBeUndefined();
+    });
+  });
+
   it("retains a stopped boundary on an autonomous-resume notification without a start event", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),
@@ -6884,6 +7008,8 @@ function streamedToolBlock(input: {
     startedAt: input.timestamp,
     endedAt: input.endedAt,
     imageResults: input.imageResults,
+    page: null,
+    mcpApp: null,
   };
 }
 
@@ -7705,6 +7831,8 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
       agentMessageSend: null,
       managedCommand: null,
       agentMessageReceipt: null,
+      page: null,
+      mcpApp: null,
       progress: null,
       backgroundOutput: null,
       backgroundTask: false,

@@ -6,8 +6,8 @@ import type {
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
+  OpenChatQueuedItem,
+  OpenChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
@@ -18,6 +18,7 @@ import {
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { SubagentContinueAsChatButton } from "@/components/chat/segments/subagent-continue-as-chat-button";
 import type { SubagentDockView } from "@/components/chat/segments/subagent-open-as-chat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { useFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
@@ -59,6 +61,10 @@ import {
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_STREAM_RECONNECTING_COPY,
+  ChatComposerDeliveryStatus,
+} from "@/components/chat/composer/chat-composer-delivery-status";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -154,7 +160,7 @@ function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
   if (access.readOnlyNotice !== null) return access.readOnlyNotice;
   if (access.isViewer) return "You have view-only access to this chat";
-  return "Reconnecting to the host — sending is paused";
+  return CHAT_STREAM_RECONNECTING_COPY;
 }
 
 export interface ChatLowerTurnState {
@@ -230,25 +236,25 @@ export interface ChatLowerApprovalsState {
 }
 
 export interface ChatLowerQueueState {
-  readonly editingItem: ChatQueuedPromptItem | null;
+  readonly editingItem: OpenChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
   readonly resumeRequested: boolean;
   readonly keepPausedRequested: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedPromptItem) => void;
-  readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
+  readonly onEdit: (item: OpenChatQueuedPromptItem) => void;
+  readonly onCancel: (item: OpenChatQueuedItem) => void;
+  readonly onAbortSteer: (item: OpenChatQueuedPromptItem) => void;
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
   readonly onStopBackgroundSession: () => string | null;
   readonly onReorder: (
-    item: ChatQueuedItem,
+    item: OpenChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
+  readonly onSteerNow: (item: OpenChatQueuedPromptItem) => void;
 }
 
 export interface ChatLowerComposerState {
@@ -443,6 +449,8 @@ export function ChatLowerInteractionSurfaces(
     props.approvals.pendingApprovals,
     props.approvals.pendingFileEditApprovals.length,
   );
+  // No MCP App may be fullscreen while the agent needs something answered.
+  useFullscreenBlocker(hasPendingApprovals || props.interview.pending !== null);
   // Read here rather than inside the dock: the same counts decide the dock's
   // Background section and the spacing of everything below it. Scoped to the
   // tile's bound host - that is the host the tile opened the session under,
@@ -944,7 +952,9 @@ function LiveChatComposer(props: {
       workspaceAvailability={model.composer.workspaceAvailability}
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
-      topSlot={null}
+      // This chat's own stream and delivery state, held beside the composer
+      // for as long as it is true rather than behind a tooltip.
+      topSlot={<ChatComposerDeliveryStatus />}
       suggestedPrompt={model.composer.suggestedPrompt}
     />
   );
@@ -1043,6 +1053,7 @@ function SubagentViewNotice(props: { readonly view: SubagentDockView }) {
           {view.runningCount} running
         </Badge>
       ) : null}
+      <SubagentContinueAsChatButton testId="subagent-view-notice-continue" />
       <Button type="button" variant="outline" size="xs" onClick={view.close}>
         Back to chat
       </Button>

@@ -3,7 +3,7 @@ import { createSelector, createStructuredSelector, lruMemoize } from "reselect";
 import { shallow } from "zustand/shallow";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
-import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpenChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessId } from "@traycer/protocol/host";
 import type { ChatSessionState } from "./chat-session-store";
 import {
@@ -87,7 +87,7 @@ export interface ChatRowSnapshot {
   readonly listEntries: ReadonlyArray<ChatRowListEntry>;
   readonly rowIds: ReadonlyArray<string>;
   readonly byId: ReadonlyMap<string, TranscriptListRow>;
-  readonly queue: ChatQueueState;
+  readonly queue: OpenChatQueueState;
   readonly todo: PinnedTodoSnapshot | null;
   readonly pendingInterview: PendingInterviewView | null;
   readonly unanswerableInterviews: ReadonlyArray<UnanswerableInterviewView>;
@@ -134,6 +134,7 @@ export function createChatRowStore(source: StoreApi<ChatSessionState>): {
         pendingInterviews: (s: ChatSessionState) => s.pendingInterviews,
         runStatus: (s: ChatSessionState) =>
           resolvedTurnStatus(s, composerTurnStatus(s.runStatus)) ?? "idle",
+        chatWorking: (s: ChatSessionState) => s.runStatus !== "idle",
         epicId: (s: ChatSessionState) => s.epicId,
         ownerId: (s: ChatSessionState) => s.chatId,
       }),
@@ -152,6 +153,7 @@ export function createChatRowStore(source: StoreApi<ChatSessionState>): {
       pendingFileEditApprovals,
       pendingInterviews,
       runStatus,
+      chatWorking,
       epicId,
       ownerId,
     }): RenderedMessagesInput => ({
@@ -168,6 +170,7 @@ export function createChatRowStore(source: StoreApi<ChatSessionState>): {
       pendingFileEditApprovals,
       pendingInterviews,
       runStatus,
+      chatWorking,
       epicId,
       ownerId,
       ownerKind: "chat",

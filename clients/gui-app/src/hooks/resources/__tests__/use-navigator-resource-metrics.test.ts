@@ -9,7 +9,8 @@ import {
 /**
  * WHETHER rows print at all is `agentRows`; WHICH readings print is the
  * monitor's own Metrics selection (cpu/memory/processes), in chip order.
- * `ramShare` has no per-row meaning and is always ignored here.
+ * `ramShare` has no per-row meaning and is always ignored here. The helper
+ * turns `agentRows` on (it ships off) unless the patch says otherwise.
  */
 function setResourceMonitor(patch: {
   readonly cpu?: boolean;
@@ -19,7 +20,9 @@ function setResourceMonitor(patch: {
   readonly agentRows?: boolean;
   readonly shown?: "shown" | "hidden";
 }): void {
-  useLayoutStore.getState().setRegionValues("resourceMonitor", patch);
+  useLayoutStore
+    .getState()
+    .setRegionValues("resourceMonitor", { agentRows: true, ...patch });
 }
 
 function resetStore(): void {
@@ -33,7 +36,15 @@ afterEach(() => {
 });
 
 describe("useNavigatorResourceMetrics", () => {
-  it("draws the shipped preset's selection: cpu and processes", () => {
+  it("draws no chips on the shipped preset: agent rows ship off", () => {
+    const { result } = renderHook(() => useNavigatorResourceMetrics());
+
+    expect(result.current).toEqual([]);
+  });
+
+  it("draws the shipped preset's selection once rows are on: cpu and processes", () => {
+    setResourceMonitor({});
+
     const { result } = renderHook(() => useNavigatorResourceMetrics());
 
     expect(result.current).toEqual(["cpu", "processes"]);

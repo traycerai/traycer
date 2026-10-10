@@ -495,6 +495,13 @@ function readOverRect(
   return event.over?.rect ?? null;
 }
 
+/** A droppable's element, for a target that measures what it contains. */
+function findDroppableElement(id: string | number): Element | null {
+  return document.querySelector(
+    `[data-dnd-droppable-id="${CSS.escape(String(id))}"]`,
+  );
+}
+
 type DragUpdateEvent = DragMoveEvent | DragOverEvent | DragEndEvent;
 
 function compatibleCanvasTarget(
@@ -557,6 +564,10 @@ function updateCanvasSourcePreview(
     target,
     point: resolvedPoint,
     targetRect: readOverRect(event),
+    targetElement:
+      target.kind === "left-panel-body" && over !== null
+        ? findDroppableElement(over.id)
+        : null,
     activeRect: event.active.rect.current.translated ?? null,
   });
   if (isLeftPanelDropNoop(source, preview)) {

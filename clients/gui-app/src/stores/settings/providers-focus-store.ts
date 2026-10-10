@@ -32,17 +32,6 @@ interface ProvidersFocusState {
     readonly profileId: string;
     readonly startSignIn: boolean;
   }) => void;
-  /**
-   * A provider on a NAMED host, with no profile in particular - e.g. the
-   * profile-copy flow's "Set up on <device>", which lands on that device's
-   * CLI & Args tab. Carries the host like `setProfileFocus`, so only that
-   * host's rail consumes it.
-   */
-  setHostProviderFocus: (input: {
-    readonly harnessId: GuiHarnessId;
-    readonly hostId: string;
-    readonly tab: string | null;
-  }) => void;
   clearFocusHarnessId: () => void;
   // The HOST half of the intent, clearable on its own the moment the scope
   // applies it. It has to be separable: the harness / profile / tab halves are
@@ -84,15 +73,6 @@ export const useProvidersFocusStore = create<ProvidersFocusState>((set) => ({
       focusTargetHostId: hostId,
       focusProfileId: profileId,
       startSignIn,
-    }),
-  setHostProviderFocus: ({ harnessId, hostId, tab }) =>
-    set({
-      focusHarnessId: harnessId,
-      focusHostId: hostId,
-      focusTargetHostId: hostId,
-      focusProfileId: null,
-      startSignIn: false,
-      focusTab: tab,
     }),
   clearFocusHarnessId: () =>
     set({

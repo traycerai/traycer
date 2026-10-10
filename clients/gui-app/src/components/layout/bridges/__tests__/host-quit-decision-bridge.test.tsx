@@ -1267,3 +1267,149 @@ describe("<HostQuitDecisionBridge /> - end-of-stopping phase when main prompts",
     expect(dialogAfter.dataset.quitState).toBe("stopping");
   });
 });
+
+describe("<HostQuitDecisionBridge /> - the terminals-in-use round", () => {
+  function terminalsInUseRequest(count: number): HostQuitDecisionRequest {
+    return {
+      requestId: "req-1",
+      mode: "stop-if-idle",
+      round: "terminals-in-use",
+      terminalsInUse: count,
+    };
+  }
+
+  function busyLocalStatus(): LocalHostQuitStatus {
+    return {
+      localHostId: "host-a",
+      verdict: {
+        kind: "busy",
+        busySessionCount: 1,
+        breakdown: null,
+        statusMinor: 6,
+      },
+      liveLocalHostIdNow: () => "host-a",
+      recheck: vi.fn(),
+    };
+  }
+
+  it("renders the count and no counts line, and Stop answers the idle-only stop even while the host status reads busy", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = busyLocalStatus();
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(terminalsInUseRequest(2));
+    });
+
+    const dialog = await screen.findByTestId("host-quit-dialog");
+    expect(dialog.dataset.quitState).toBe("terminals-in-use");
+    expect(screen.getByText("2 terminals are still in use")).not.toBeNull();
+    expect(screen.queryByTestId("host-quit-counts")).toBeNull();
+    expect(screen.queryByText(/Nothing is running/)).toBeNull();
+    // Shown at once, and not answered by itself.
+    expect(quit.respondCalls).toEqual([]);
+
+    act(() => {
+      screen.getByTestId("host-quit-stop").click();
+    });
+
+    await waitFor(() => {
+      expect(quit.respondCalls).toHaveLength(1);
+    });
+    expect(quit.respondCalls[0]).toEqual({
+      requestId: "req-1",
+      decision: { kind: "stop", force: false, remember: false },
+    });
+  });
+
+  it("is shown over an idle verdict too, where an initial Stop-if-idle round would have been answered automatically", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = {
+      ...busyLocalStatus(),
+      verdict: {
+        kind: "idle",
+        busySessionCount: 0,
+        breakdown: null,
+        statusMinor: 6,
+      },
+    };
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(terminalsInUseRequest(1));
+    });
+
+    await screen.findByTestId("host-quit-dialog");
+    expect(screen.getByText("1 terminal is still in use")).not.toBeNull();
+    expect(quit.respondCalls).toEqual([]);
+  });
+
+  it("a fresh quit's 'terminals-in-use' round (Stop-if-idle's own first ask) resets Remember, unlike 'busy-retry'", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = busyLocalStatus();
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(initialAskRequest());
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    act(() => {
+      screen.getByTestId("host-quit-remember").click();
+    });
+    expect(screen.getByTestId("host-quit-remember")).toHaveProperty(
+      "dataset.state",
+      "checked",
+    );
+
+    act(() => {
+      screen.getByTestId("host-quit-cancel").click();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-quit-dialog")).toBeNull();
+    });
+
+    act(() => {
+      quit.fireRequest(terminalsInUseRequest(2));
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    expect(screen.getByTestId("host-quit-remember")).toHaveProperty(
+      "dataset.state",
+      "unchecked",
+    );
+  });
+
+  it("the busy-retry round that follows it keeps the Remember the person ticked on this round", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = busyLocalStatus();
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(terminalsInUseRequest(2));
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    act(() => {
+      screen.getByTestId("host-quit-remember").click();
+    });
+    expect(screen.getByTestId("host-quit-remember")).toHaveProperty(
+      "dataset.state",
+      "checked",
+    );
+
+    act(() => {
+      quit.fireRequest({
+        requestId: "req-2",
+        mode: "stop-if-idle",
+        round: "busy-retry",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("host-quit-dialog").dataset.quitState).toBe(
+        "busy-retry",
+      );
+    });
+
+    expect(screen.getByTestId("host-quit-remember")).toHaveProperty(
+      "dataset.state",
+      "checked",
+    );
+  });
+});

@@ -296,7 +296,8 @@ function useRelativeLabel(
  * Pure bucketed relative-time formatter.
  *
  * Buckets: Just now (<1m) / `${n}m ago` / `${n}h ago` / Yesterday
- * (1 day) / short date ("Mar 5") for older. Negative deltas clamp to 0 so a
+ * (1 day) / short date ("Mar 5", with the year when it is not this one) for
+ * older. Negative deltas clamp to 0 so a
  * clock-skewed `createdAt` in the future still renders as "Just now".
  */
 export function formatRelativeTimestamp(
@@ -312,14 +313,23 @@ export function formatRelativeTimestamp(
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days === 1) return "Yesterday";
-  return formatShortDate(createdAt);
+  return formatShortDate(createdAt, now);
 }
 
-function formatShortDate(timestamp: number): string {
-  return formatDateTime(timestamp, undefined, {
-    month: "short",
-    day: "numeric",
-  });
+/**
+ * "Mar 5", and "Mar 5, 2025" once the date is not in `now`'s year: past a few
+ * weeks a bare month and day is as likely last year's as this one's.
+ */
+function formatShortDate(timestamp: number, now: number): string {
+  const sameYear =
+    new Date(timestamp).getFullYear() === new Date(now).getFullYear();
+  return formatDateTime(
+    timestamp,
+    undefined,
+    sameYear
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" },
+  );
 }
 
 /**
@@ -346,7 +356,7 @@ export function formatCompactRelativeTime(
   if (diffMs < COMPACT_WEEKS_CUTOFF_MS) {
     return `${Math.floor(diffMs / WEEK_MS)}w`;
   }
-  return formatShortDate(timestamp);
+  return formatShortDate(timestamp, now);
 }
 
 /**
@@ -543,7 +553,7 @@ function formatDayScopedTime(
       : { hour: "numeric", minute: "2-digit" },
   );
   if (isSameLocalDay(timestamp, now)) return time;
-  return `${formatShortDate(timestamp)}, ${time}`;
+  return `${formatShortDate(timestamp, now)}, ${time}`;
 }
 
 /**
@@ -832,18 +842,23 @@ function createRelativeLabelSelector(
   let date: string | undefined;
   let generation = -1;
   let offset = NaN;
+  let year = NaN;
   return (now: number): string => {
     if (now - timestamp < dateCutoffMs) return format(timestamp, now);
     const nextGeneration = getFormattingGeneration();
     const nextOffset = new Date(timestamp).getTimezoneOffset();
+    // The date carries a year once it is not `now`'s: New Year changes it.
+    const nextYear = new Date(now).getFullYear();
     if (
       date === undefined ||
       generation !== nextGeneration ||
-      offset !== nextOffset
+      offset !== nextOffset ||
+      year !== nextYear
     ) {
       generation = nextGeneration;
       offset = nextOffset;
-      date = formatShortDate(timestamp);
+      year = nextYear;
+      date = formatShortDate(timestamp, now);
     }
     return date;
   };
