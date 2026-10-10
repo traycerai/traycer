@@ -132,7 +132,7 @@ describe("chat-tile lowerSurfacesHeight → composerOverlayHeight (ticket 18 rid
       /setElement:\s*setLowerSurfacesElement,\s*\n\s*element:\s*lowerSurfacesElement,\s*\n\s*height:\s*lowerSurfacesHeight,\s*\n\s*\}\s*=\s*useMeasuredElementHeight\(true\)/,
     );
     expect(source).toMatch(
-      /composerOverlayHeight=\{\s*lowerSurfacesElement === null \? 0 : lowerSurfacesHeight\s*\}/,
+      /composerOverlayHeight=\{\s*lowerSurfacesElement === null\s*\?\s*0\s*:\s*lowerSurfacesHeight\s*\}/,
     );
   });
 
