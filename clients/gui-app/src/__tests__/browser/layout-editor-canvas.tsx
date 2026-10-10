@@ -475,16 +475,18 @@ declare global {
 }
 
 /**
- * Between Artifacts and Terminals, which is where the rail plans aim.
+ * Between Files and Terminals, which is where the rail plans aim: Terminals
+ * stays the icon right after the divider, as before the Files panel joined
+ * the rail between Artifacts and Terminals.
  *
- * Index 3 rather than 2 since L-166: the shipped rail carries a stack LINK
- * between Agents and Artifacts, so the entries are `railAgents`,
- * `stack:railAgents+railArtifacts`, `railArtifacts`, `railTerminals`, and a
- * divider at 2
- * would land inside the stack rather than after it (where `normalizeRail`
- * would then drop the join).
+ * Index 4 rather than 3 or 2: the shipped rail carries a stack LINK between
+ * Agents and Artifacts (L-166), so the entries are `railAgents`,
+ * `stack:railAgents+railArtifacts`, `railArtifacts`, `railFiles`,
+ * `railTerminals`. A divider at 2 would land inside the stack rather than
+ * after it (where `normalizeRail` would then drop the join), and at 3 it would
+ * leave Files, not Terminals, next to it.
  */
-const RAIL_DIVIDER_INDEX = 3;
+const RAIL_DIVIDER_INDEX = 4;
 
 function readVariant(): CanvasVariant {
   const params = new URLSearchParams(window.location.search);

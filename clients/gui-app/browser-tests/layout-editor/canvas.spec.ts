@@ -320,14 +320,15 @@ test.describe("the canvas at the top placement", () => {
   });
 
   test("a real drag of a rail icon across a divider is one history step", async () => {
-    // The tight geometry, on the rail as it is measured: the Agents group 0..36
-    // (a stacked pair draws one icon, G3), a 4px gap, the 8px divider at
-    // 40..48, a 4px gap, Terminals 52..88. Terminals' top edge is aimed at 44 -
-    // 18 = 26 and the pointer placed half a member behind it, at 44, so the
-    // pointer travels 26 and the member 20 (`drag-engine.ts` takes its grab
-    // point at the move that crosses the 6px activation distance). Both the
-    // claim boundary (`drag-model.ts` claims by the LEADING EDGE) and the 12px
-    // travel floor (L-150(4)) are cleared, and one gesture claims one slot.
+    // The tight geometry, on the rail as it is measured: the divider sits
+    // right before Terminals (a 4px gap, an 8px divider, a 4px gap), Files and
+    // the Agents group (a stacked pair draws one icon, G3) before it.
+    // Terminals' leading edge is aimed DROP_OVERSHOOT past the divider and the
+    // pointer placed half a member behind it, so the pointer travels further
+    // than the member (`drag-engine.ts` takes its grab point at the move that
+    // crosses the 6px activation distance). Both the claim boundary
+    // (`drag-model.ts` claims by the LEADING EDGE) and the 12px travel floor
+    // (L-150(4)) are cleared, and one gesture claims one slot.
     const page = getPage();
     await probe(page, "reset()");
     await probe(page, "addRailDivider()");
@@ -974,9 +975,10 @@ const DROP_OVERSHOOT = 18;
  * `railTerminals` ended up above the divider, however the gesture got it there.
  *
  * The shipped rail carries no dividers (L-155), so the rail plan puts one in
- * first through the product's own add-divider action - between Artifacts and
- * Terminals, which is where `divider:1` sat in the rail this wave replaced, so
- * the measured geometry the overshoot is tuned on is unchanged.
+ * first through the product's own add-divider action - between Files and
+ * Terminals, so Terminals is the icon beside the divider as it was before
+ * Files joined the rail, and the measured geometry the overshoot is tuned on
+ * is unchanged.
  *
  * `stack:railAgents+railArtifacts` is the shipped rail's one stack LINK
  * (L-166), named after the PAIR it joins. It is a member of the order like any
@@ -986,6 +988,7 @@ const TERMINALS_ABOVE_THE_DIVIDER = [
   "railAgents",
   "stack:railAgents+railArtifacts",
   "railArtifacts",
+  "railFiles",
   "railTerminals",
   "divider:1",
   "railBrowsers",

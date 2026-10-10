@@ -87,6 +87,10 @@ export function BrowserSettingsSection(props: {
   const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
   const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
   const agentAccessSupported = getSupported === true && setSupported === true;
+  const pagesGetSupported = useHostMethodSupport(hostId, AGENT_PAGES_GET);
+  const pagesSetSupported = useHostMethodSupport(hostId, AGENT_PAGES_SET);
+  const agentPagesSupported =
+    pagesGetSupported === true && pagesSetSupported === true;
 
   return (
     <>
@@ -100,6 +104,7 @@ export function BrowserSettingsSection(props: {
         {agentAccessSupported ? (
           <AgentBrowserAccessRow hostId={hostId} />
         ) : null}
+        {agentPagesSupported ? <AgentPagesRow hostId={hostId} /> : null}
         {props.agentOpenedTabsRow}
         {browserDevOrigins.length > 0 ? (
           <SettingsRow
@@ -122,6 +127,18 @@ const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
 /**
+ * What a sentence calls a host: its directory label, or its id when it has no
+ * label. A blank label is no label - "On ." is not a sentence.
+ */
+function hostNameOf(
+  entry: { readonly label: string } | null,
+  hostId: string | null,
+): string | null {
+  const label = entry?.label.trim() ?? "";
+  return label.length > 0 ? label : hostId;
+}
+
+/**
  * The host-wide "let agents use the in-app browser" switch (plan B08).
  *
  * Off means agent registrations on this host are minted with no browser MCP
@@ -139,8 +156,10 @@ function AgentBrowserAccessRow(props: {
   readonly hostId: string | null;
 }): ReactNode {
   const client = useHostClient();
-  const entry = useHostDirectoryEntry(props.hostId);
-  const hostName = entry?.label ?? props.hostId;
+  const hostName = hostNameOf(
+    useHostDirectoryEntry(props.hostId),
+    props.hostId,
+  );
   const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -171,6 +190,58 @@ function AgentBrowserAccessRow(props: {
           onCheckedChange={(next) => {
             trackSettingChanged("browser", "agentBrowserAccess");
             setAccess.mutate({ agentAccess: next });
+          }}
+        />
+      }
+    />
+  );
+}
+
+const AGENT_PAGES_GET = "config.visualization.get";
+const AGENT_PAGES_SET = "config.visualization.set";
+
+/**
+ * The host-wide "let agents show pages in chat" switch (D04): whether agents
+ * are launched with `traycer_show_page` and `traycer_preview_page`. Read at
+ * agent launch, so a flip applies to agents started after it. Gated and
+ * scoped like {@link AgentBrowserAccessRow}.
+ */
+function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
+  const client = useHostClient();
+  const hostName = hostNameOf(
+    useHostDirectoryEntry(props.hostId),
+    props.hostId,
+  );
+  const query = useHostQuery<HostRpcRegistry, "config.visualization.get">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: AGENT_PAGES_GET,
+    params: {},
+    options: { enabled: true },
+  });
+  const setPages = useHostScopedMutationForClient(client, {
+    method: AGENT_PAGES_SET,
+    mutationKey: configMutationKeys.visualizationSet(),
+    errorMessage: "Couldn't update agent pages",
+    invalidateMethods: [AGENT_PAGES_GET],
+  });
+
+  return (
+    <SettingsRow
+      row={BROWSER.definitions.agentPages}
+      status={
+        query.isError
+          ? "Couldn't read this host's pages setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
+          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentPages.description}`
+      }
+      control={
+        <Switch
+          checked={query.data?.agentPages === true}
+          disabled={query.isPending || query.isError || setPages.isPending}
+          aria-label="Let agents show pages in chat"
+          onCheckedChange={(next) => {
+            trackSettingChanged("browser", "agentPages");
+            setPages.mutate({ agentPages: next });
           }}
         />
       }
@@ -835,8 +906,10 @@ function SavedWebsiteSessionDetails(props: {
     contributedByHostId !== props.localHostId
       ? contributedByHostId
       : null;
-  const entry = useHostDirectoryEntry(remoteHostId);
-  const hostName = entry === null ? remoteHostId : entry.label;
+  const hostName = hostNameOf(
+    useHostDirectoryEntry(remoteHostId),
+    remoteHostId,
+  );
 
   return (
     <div className="min-w-0 flex-1">

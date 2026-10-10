@@ -83,6 +83,18 @@ export function defineConditionPolicy<
   };
 }
 
+/** An epic file the host cannot serve yet; it usually lands on its own. */
+const EPIC_FILE_UNAVAILABLE_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.unavailable",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: 15 * SECOND_MS,
+};
+const EPIC_FILE_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.error",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
+
 export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   id: "providers.pending",
   initialDelayMs: 800,
@@ -1420,6 +1432,57 @@ export const HOST_METHOD_POLL_TABLE = {
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Epic files are content-addressed too: a read names its sha. Download
+  // progress rides the files lane's `localState`, never a poll; only an
+  // unavailable answer is asked again, since an upload landing on another
+  // host reaches no lane here.
+  "epic.readFile": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readFile", {
+      // Three caches share this method: the text and blob reads keep a
+      // `kind` at the top, the signed-URL read keeps it under `result`.
+      classify: (data) => {
+        if (data === undefined) return false;
+        if (data.kind === "unavailable") return EPIC_FILE_UNAVAILABLE_POLL_LANE;
+        if (!("result" in data)) return false;
+        const result = data.result;
+        return typeof result === "object" &&
+          result !== null &&
+          "kind" in result &&
+          result.kind === "unavailable"
+          ? EPIC_FILE_UNAVAILABLE_POLL_LANE
+          : false;
+      },
+      initialErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      staleDataErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
+  "epic.fetchFile": { ...LATEST_SCHEDULING, poll: null },
+  // User actions: each one runs, in order.
+  "epic.cancelFetchFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deleteFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.restoreFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // An MCP App's reads answer from the harness's live server, on demand; the
+  // app asks again when it wants a fresher answer, so nothing polls.
+  "chat.mcpApp.describeTool": { ...LATEST_SCHEDULING, poll: null },
+  "chat.mcpApp.readResource": { ...LATEST_SCHEDULING, poll: null },
+  // A tool call and a model-context update change something: each one runs,
+  // in order.
+  "chat.mcpApp.callTool": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.mcpApp.updateModelContext": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -2203,6 +2266,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
   "config.browser.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.visualization.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

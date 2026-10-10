@@ -132,30 +132,33 @@ describe("chat.subscribe open harness ids on messageAccepted", () => {
     expect(openUserMessageSchema.safeParse(AGENT_ROW).success).toBe(true);
   });
 
-  it("delivers a row from an unknown harness to onMessageAccepted on a negotiated 1.22 session", () => {
-    const { wsStreamClient, session } = stubClientAtVersion({
-      major: 1,
-      minor: 22,
-    });
-    const heard: string[] = [];
-    const client = new ChatStreamClient({
-      wsStreamClient,
-      epicId: "epic-1",
-      chatId: "chat-1",
-      callbacks: noopCallbacks({
-        onMessageAccepted: (frame) => {
-          if (frame.message.sender.type === "agent") {
-            heard.push(frame.message.sender.harnessId);
-          }
-        },
-      }),
-    });
+  it.each([22, 23])(
+    "delivers a row from an unknown harness to onMessageAccepted on a negotiated 1.%i session",
+    (minor) => {
+      const { wsStreamClient, session } = stubClientAtVersion({
+        major: 1,
+        minor,
+      });
+      const heard: string[] = [];
+      const client = new ChatStreamClient({
+        wsStreamClient,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: noopCallbacks({
+          onMessageAccepted: (frame) => {
+            if (frame.message.sender.type === "agent") {
+              heard.push(frame.message.sender.harnessId);
+            }
+          },
+        }),
+      });
 
-    session.deliver(MESSAGE_ACCEPTED_ENVELOPE);
+      session.deliver(MESSAGE_ACCEPTED_ENVELOPE);
 
-    expect(heard).toEqual(["zzz-future"]);
-    client.close();
-  });
+      expect(heard).toEqual(["zzz-future"]);
+      client.close();
+    },
+  );
 
   it("the live windowed union accepts the envelope", () => {
     expect(

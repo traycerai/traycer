@@ -85,6 +85,10 @@ export const RunnerHostInvoke = {
   // the allowlist of paths it saved, so the renderer can only ever open what
   // the user just chose in the native save dialog - never an arbitrary path.
   fileOpenSaved: "runnerHost:file:openSaved",
+  // Downloads an https URL into a file the user names in the native save
+  // dialog, through the session's own download manager, so the bytes go
+  // network → disk and never through the renderer.
+  fileDownloadUrl: "runnerHost:file:downloadUrl",
   clipboardWriteImage: "runnerHost:clipboard:writeImage",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   // The `hostId` in `pid.json`, read as a pure structural parse with no

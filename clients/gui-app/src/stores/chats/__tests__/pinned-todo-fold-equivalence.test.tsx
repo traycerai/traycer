@@ -120,6 +120,8 @@ function taskCreateBlock(
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
+    page: null,
+    mcpApp: null,
     progress: null,
     backgroundOutput: null,
     startedAt: null,

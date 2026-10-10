@@ -347,6 +347,7 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -490,6 +491,8 @@ import {
   configShellSetV10,
   configWorktreesGetV10,
   configWorktreesSetV10,
+  configVisualizationGetV10,
+  configVisualizationSetV10,
   configCatalogGetV10,
   configCatalogGetV11,
   configCatalogGetUpgradeV10ToV11,
@@ -613,6 +616,19 @@ import {
   providersRefreshProfileStatusUpgradeV10ToV20,
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
+import {
+  epicCancelFetchFileV10,
+  epicDeleteFileV10,
+  epicFetchFileV10,
+  epicReadFileV10,
+  epicRestoreFileV10,
+} from "@traycer/protocol/host/epic/files";
+import {
+  chatMcpAppCallToolV10,
+  chatMcpAppDescribeToolV10,
+  chatMcpAppReadResourceV10,
+  chatMcpAppUpdateModelContextV10,
+} from "@traycer/protocol/host/chat/mcp-app";
 import {
   epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
@@ -765,6 +781,7 @@ import {
 import {
   epicStateSubscribeV10,
   epicStateSubscribeV11,
+  epicStateSubscribeV12,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -5832,6 +5849,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "config.visualization.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configVisualizationGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.visualization.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configVisualizationSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "config.worktrees.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8744,6 +8787,119 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicReadChatAttachmentV11,
           upgradeFromPreviousVersion: epicReadChatAttachmentUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The epic files plane (`epic/files.ts`): every byte a client renders, the
+  // explicit download of a big file, and tombstone/restore. Optional and off
+  // the released floor: a new method name is handshake-fatal against a
+  // released peer, and an old host simply hides the files surface.
+  "epic.readFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicReadFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.fetchFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicFetchFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.cancelFetchFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicCancelFetchFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.deleteFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicDeleteFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.restoreFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicRestoreFileV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // An MCP App's requests (`chat/mcp-app.ts`), served through the harness's
+  // own MCP connection behind the host's gate. Optional and off the released
+  // floor: an old host answers `E_HOST_UNSUPPORTED` and the app row renders
+  // read-only from its stored result.
+  "chat.mcpApp.describeTool": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppDescribeToolV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.mcpApp.callTool": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppCallToolV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.mcpApp.readResource": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppReadResourceV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.mcpApp.updateModelContext": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatMcpAppUpdateModelContextV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -12490,7 +12646,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -12500,6 +12656,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // `epicDeletedArtifactRecordSchemaV10`.
         1: {
           contract: epicStateSubscribeV11,
+        },
+        // `@1.2`: the files arm. The host sends it only to a `>=1.2` peer and
+        // projects older peers' frames down (`epic-state-stream-resolver.ts`).
+        2: {
+          contract: epicStateSubscribeV12,
         },
       },
     },
@@ -13246,7 +13407,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 22,
+      latestMinor: 23,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13375,6 +13536,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (Command Code). No shape of its own: a row context's session anchor
         // takes the live union here and the 1.5.0 one on 1.9-1.20, and the
         // host refuses such a chat to a subscriber below this minor.
+        // Frozen at the pre-page message bodies since @1.23 opened above it.
         21: {
           contract: chatSubscribeV121,
         },
@@ -13386,6 +13548,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // refused. The head the peer drives keeps the closed enum.
         22: {
           contract: chatSubscribeV122,
+        },
+        // @1.23 adds agent-page and MCP App stamps; older peers receive neither.
+        23: {
+          contract: chatSubscribeV123,
         },
       },
     },

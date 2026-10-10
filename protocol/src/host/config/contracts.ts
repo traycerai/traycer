@@ -29,6 +29,10 @@ import {
   configWorktreesResponseSchema,
   configWorktreesSetRequestSchema,
   configWorktreesSetResponseSchema,
+  configVisualizationGetRequestSchema,
+  configVisualizationResponseSchema,
+  configVisualizationSetRequestSchema,
+  configVisualizationSetResponseSchema,
   configShellAddResponseSchema,
   configShellGetRequestSchema,
   configShellGetResponseSchema,
@@ -203,6 +207,22 @@ export const configWorktreesSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configWorktreesSetRequestSchema,
   responseSchema: configWorktreesSetResponseSchema,
+});
+
+/** Reads whether agents get the page tools. */
+export const configVisualizationGetV10 = defineRpcContract({
+  method: "config.visualization.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configVisualizationGetRequestSchema,
+  responseSchema: configVisualizationResponseSchema,
+});
+
+/** Turns the page tools on or off for agents launched from now on. */
+export const configVisualizationSetV10 = defineRpcContract({
+  method: "config.visualization.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configVisualizationSetRequestSchema,
+  responseSchema: configVisualizationSetResponseSchema,
 });
 
 /** Reads the shared catalog probe timeout and its bounds. */

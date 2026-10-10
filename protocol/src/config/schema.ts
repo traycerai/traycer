@@ -127,6 +127,25 @@ export const worktreesOnlyConfigSchema = lazySchema(() =>
 );
 
 /**
+ * The `visualization` block in `~/.traycer/cli/config.json`: whether agents get
+ * `traycer_show_page` and `traycer_preview_page`. On unless it says `false`,
+ * and read at agent launch, so a change applies to agents started after it.
+ *
+ * Read and written on its own, never through `cliConfigSchema`: the top level
+ * of that schema is passthrough, so the block survives every other writer, and
+ * an unrelated defect elsewhere in the document cannot decide this gate.
+ */
+export const visualizationOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    visualization: z
+      .object({ agentPages: z.boolean().default(true) })
+      .default({ agentPages: true }),
+  }),
+);
+export type VisualizationConfig = z.infer<
+  typeof visualizationOnlyConfigSchema
+>["visualization"];
+/**
  * Bounds of `catalog.probeTimeoutSeconds`, in whole seconds. The default is
  * the bound the host used before the setting existed, so an install that has
  * never touched Settings behaves as before; it is also the floor, because a

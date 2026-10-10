@@ -201,6 +201,9 @@ vi.mock("../../app/app-protocol", () => ({
   installAppProtocolHandler: () => undefined,
   registerAppScheme: vi.fn(),
 }));
+vi.mock("../../app/sandbox-protocol", () => ({
+  installSandboxProtocolHandler: () => undefined,
+}));
 vi.mock("../../app/gpu-acceleration", () => ({
   applyHardwareAccelerationPreference: () => undefined,
 }));

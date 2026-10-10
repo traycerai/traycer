@@ -141,7 +141,7 @@ export function ComposerSlotApprovalQueue(
         "flex flex-col gap-2 rounded-md border px-3 py-2.5 text-ui-sm",
         awaitingJudgeOnly
           ? "border-border/60"
-          : "border-primary/40 bg-primary/5",
+          : "border-warning/30 bg-warning/10",
       )}
       data-testid="approval-prompt"
       data-chrome={awaitingJudgeOnly ? "quiet" : "alert"}
@@ -155,8 +155,11 @@ export function ComposerSlotApprovalQueue(
       ) : null}
       {awaitingJudgeOnly ? null : (
         <div className="flex items-center gap-2">
-          <ShieldAlert className="size-3.5 shrink-0 text-primary" aria-hidden />
-          <span className="select-none font-medium uppercase text-overline text-primary">
+          <ShieldAlert
+            className="size-3.5 shrink-0 text-warning-foreground"
+            aria-hidden
+          />
+          <span className="select-none font-medium uppercase text-overline text-warning-foreground">
             Approval needed
           </span>
           {showBulk ? (

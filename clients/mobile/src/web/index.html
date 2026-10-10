@@ -16,6 +16,14 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="dark light" />
+    <!-- The app's only frames are the sandbox loader (/sandbox/index.html)
+         that agent pages, wireframes and MCP Apps render in. Keeping frames on
+         this origin stops a sandboxed page navigating its own frame anywhere
+         else. main.tsx narrows this to the loader's own path once it knows
+         the shell's origin, and the native guards (BridgeViewController on
+         iOS, the patched BridgeWebViewClient on Android) hold the same line
+         below the page. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'self'" />
     <title>Traycer</title>
   </head>
   <body>

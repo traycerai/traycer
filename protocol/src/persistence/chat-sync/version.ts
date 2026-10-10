@@ -136,7 +136,17 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // re-publication. No reader floor: an older reader renders the notice from
 // `title` / `message` / `details` exactly as before, which is the divider that
 // notice was until this key existed.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 6 } as const;
+//
+// 1.7 carries `tool_call.page` and `tool_call.mcpApp` (an agent page and an MCP
+// App, stamped on the call that produced them - a `chat.subscribe@1.23` field
+// that lands in a publication). A NEW minor rather than riding 1.6:
+// `host-v1.4.2` shipped chat-sync 1.6. Defaulted `null`, so an older record
+// parses unchanged, and a content block's `raw` re-emission (§2 of
+// `COMPATIBILITY.md`) carries both keys through an older reader's
+// re-publication. No
+// reader floor: an older reader renders the call as the plain tool row it
+// always did, which is what that row was before these keys existed.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 7 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

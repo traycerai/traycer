@@ -7,6 +7,7 @@ import {
   type RefObject,
 } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
+import { SANDBOX_SCROLL_GESTURE_EVENT } from "@/lib/sandbox/bridge-host";
 
 /** Matches the library's own strict-edge tolerance (`EDGE_POSITION_EPSILON`
  *  in `@legendapp/list`), so "at the strict bottom" means the same thing on
@@ -601,6 +602,20 @@ export function useChatTimelineFollowLatch(
         publishesReaderPosition: true,
       });
     };
+    // A wheel or swipe over an agent page or MCP App happens in the frame's
+    // document, so the listeners above never see it, yet it chains to this
+    // node. The frame relays its direction; without it that scroll reads as
+    // layout-owned and is corrected straight back to the tail.
+    const handleFrameScrollGesture = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      const direction: unknown = event.detail;
+      if (direction !== "toward-end" && direction !== "away-from-end") return;
+      noteReaderGesture({
+        direction,
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+    };
     const handleTouchStart = (event: TouchEvent): void => {
       lastTouchClientYRef.current = event.touches.item(0)?.clientY ?? null;
     };
@@ -647,6 +662,10 @@ export function useChatTimelineFollowLatch(
       }
     };
     node.addEventListener("wheel", handleWheel, { passive: true });
+    node.addEventListener(
+      SANDBOX_SCROLL_GESTURE_EVENT,
+      handleFrameScrollGesture,
+    );
     node.addEventListener("touchstart", handleTouchStart, { passive: true });
     node.addEventListener("touchmove", handleTouchMove, { passive: true });
     node.addEventListener("touchend", clearTouch, { passive: true });
@@ -670,6 +689,10 @@ export function useChatTimelineFollowLatch(
     return () => {
       node.removeEventListener("scroll", observeLiveGeometry);
       node.removeEventListener("wheel", handleWheel);
+      node.removeEventListener(
+        SANDBOX_SCROLL_GESTURE_EVENT,
+        handleFrameScrollGesture,
+      );
       node.removeEventListener("touchstart", handleTouchStart);
       node.removeEventListener("touchmove", handleTouchMove);
       node.removeEventListener("touchend", clearTouch);

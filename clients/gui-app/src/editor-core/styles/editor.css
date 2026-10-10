@@ -527,6 +527,23 @@
   pointer-events: auto;
 }
 
+/*
+ * An agent page in the chat (`page-row.tsx`) wears the same bar. A coarse
+ * pointer has no hover to reveal it with, so there the row shows its own
+ * always-visible actions button instead.
+ */
+.tc-node-page:hover > .tc-node-block-toolbar,
+.tc-node-page:focus-within > .tc-node-block-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (pointer: coarse) {
+  .tc-node-page > .tc-node-block-toolbar {
+    display: none;
+  }
+}
+
 .tc-node-block__skeleton {
   display: flex;
   align-items: center;

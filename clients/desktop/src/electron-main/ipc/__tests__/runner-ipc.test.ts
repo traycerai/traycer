@@ -780,6 +780,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.fileDropReadNativeClipboardPaths,
           RunnerHostInvoke.fileSave,
           RunnerHostInvoke.fileOpenSaved,
+          RunnerHostInvoke.fileDownloadUrl,
           RunnerHostInvoke.clipboardWriteImage,
           RunnerHostInvoke.gpuAccelerationGet,
           RunnerHostInvoke.gpuAccelerationSet,
