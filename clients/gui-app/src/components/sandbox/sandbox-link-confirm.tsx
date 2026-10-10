@@ -51,8 +51,7 @@ export function SandboxLinkConfirm(props: SandboxLinkConfirmProps) {
         layout="banded"
         // Never taller than the safe viewport: the URL scrolls, the actions
         // stay in view however long it is (the bridge caps it at 8 KiB).
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-full min-w-0 flex-col overflow-hidden"
-        style={{ maxWidth: "min(92vw, 30rem)" }}
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-full min-w-0 flex-col overflow-hidden sm:max-w-md"
         showCloseButton={false}
       >
         <DialogHeader className="shrink-0 space-y-1">

@@ -149,25 +149,19 @@ function FailedPage(props: { readonly error: string }) {
     <div
       data-find-skip=""
       data-testid="page-row-failed"
-      className="flex items-center gap-2 p-1 text-ui-sm text-destructive"
+      className="flex items-start gap-2 p-1 text-ui-sm text-destructive"
     >
-      <FileCode className="size-3.5 shrink-0" aria-hidden />
+      <FileCode className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <span className="shrink-0 font-mono text-code-sm font-medium">
         {SHOW_PAGE_TOOL_LABEL}
       </span>
       <span aria-hidden className="shrink-0 opacity-40">
         ·
       </span>
-      <TooltipWrapper
-        label={props.error}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <span className="min-w-0 flex-1 truncate font-mono text-code-sm">
-          {props.error}
-        </span>
-      </TooltipWrapper>
+      {/* The whole message, wrapped and bounded: no hover is needed to read it. */}
+      <span className="max-h-24 min-w-0 flex-1 overflow-y-auto font-mono text-code-sm break-words">
+        {props.error}
+      </span>
       <span className="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-1 text-overline font-medium uppercase">
         error
       </span>
@@ -374,7 +368,7 @@ function PageTouchActions(props: {
         },
         {
           icon: <Download aria-hidden />,
-          label: "Save HTML file",
+          label: "Download HTML",
           disabled: actions.downloadPending,
           onSelect: actions.download,
           navigates: false,

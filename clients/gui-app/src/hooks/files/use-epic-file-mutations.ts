@@ -232,7 +232,7 @@ export function useEpicFileDownload(
 
   function saveBlob(blob: Blob): Promise<SavedFile | null> {
     // A shell whose only save route is a share sheet still saves the file
-    // (the phone's "Save HTML file"); everywhere else it downloads.
+    // (the phone's "Download HTML"); everywhere else it downloads.
     return canDownloadToDevice(fileSave)
       ? downloadBlobToDevice(blob, name, fileSave)
       : saveBlobToDisk(blob, name, fileSave);

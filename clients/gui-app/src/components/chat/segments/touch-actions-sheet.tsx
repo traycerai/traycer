@@ -60,7 +60,7 @@ export function TouchActionsSheet(props: {
           variant="muted-outline"
           size="icon-round"
           aria-label={props.triggerLabel}
-          className="absolute -top-0.5 -right-1 z-10 hidden pointer-coarse:inline-flex"
+          className="absolute -top-0.5 -end-1 z-10 hidden pointer-coarse:inline-flex"
           onClick={() => {
             keepFocusAwayRef.current = false;
           }}
@@ -104,7 +104,7 @@ export function TouchActionsSheet(props: {
               key={action.label}
               type="button"
               disabled={action.disabled}
-              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-ui-sm text-foreground transition-colors active:bg-accent/60 disabled:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0"
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-start text-ui-sm text-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:bg-foreground/8 disabled:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0"
               onClick={() => run(action)}
             >
               {action.icon}

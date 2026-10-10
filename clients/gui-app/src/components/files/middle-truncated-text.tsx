@@ -20,7 +20,8 @@ export function MiddleTruncatedText(props: {
     props.tailLength,
   );
   return (
-    <span className={cn("flex min-w-0", props.className)}>
+    // `auto`: a name in a right-to-left script reads from its own start.
+    <span dir="auto" className={cn("flex min-w-0", props.className)}>
       <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre">
         {head}
       </span>

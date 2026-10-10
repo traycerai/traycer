@@ -39,7 +39,7 @@ import { useIsActiveTile } from "@/stores/epics/canvas/canvas-selectors";
 
 /** The note under the header: pages from private chats are visible too (D21). */
 export const FILES_SHARED_NOTE =
-  "Everyone in this task can see these files, also pages from private chats.";
+  "Everyone in this task can see these files, including pages from private chats.";
 
 /** Rows past this many render only what is on screen. */
 export const FILES_VIRTUALIZE_AFTER_ROWS = 150;
@@ -198,40 +198,18 @@ export function FilesPanelBody(props: LeftPanelSlotProps): ReactNode {
           <span>{FILES_SHARED_NOTE}</span>
         </p>
         {rows.length > FILES_VIRTUALIZE_AFTER_ROWS ? (
-          <VirtualFilesTree rows={rows} renderRow={renderRow} />
+          <VirtualFilesList rows={rows} renderRow={renderRow} />
         ) : (
-          <div
-            role="tree"
-            aria-label="Epic files tree"
-            className="space-y-0.5 overflow-y-auto"
-          >
+          // A plain list: a group's button says whether it is open. Not an
+          // ARIA tree, which promises arrow keys this panel does not offer.
+          <ul aria-label="Task files" className="space-y-0.5 overflow-y-auto">
             {rows.map((row) => (
-              <FilesTreeItem key={row.key} row={row}>
-                {renderRow(row)}
-              </FilesTreeItem>
+              <li key={row.key}>{renderRow(row)}</li>
             ))}
-          </div>
+          </ul>
         )}
       </SidebarGroupContent>
     </SidebarGroup>
-  );
-}
-
-/** A flat tree's item: its level says where it sits (WAI-ARIA tree). */
-function FilesTreeItem(props: {
-  readonly row: FilesRow;
-  readonly children: ReactNode;
-}): ReactNode {
-  const { row } = props;
-  return (
-    <div
-      role="treeitem"
-      aria-selected={false}
-      aria-level={row.kind === "group" ? 1 : row.depth + 1}
-      aria-expanded={row.kind === "group" ? row.expanded : undefined}
-    >
-      {props.children}
-    </div>
   );
 }
 
@@ -240,7 +218,7 @@ function FilesTreeItem(props: {
  * pages. Tab still walks the mounted rows in order, and the browser scrolls a
  * focused row into view, which brings the next window in with it.
  */
-function VirtualFilesTree(props: {
+function VirtualFilesList(props: {
   readonly rows: readonly FilesRow[];
   readonly renderRow: (row: FilesRow) => ReactNode;
 }): ReactNode {
@@ -261,30 +239,27 @@ function VirtualFilesTree(props: {
   return (
     <div
       ref={setScroller}
-      role="tree"
-      aria-label="Epic files tree"
       data-testid="epic-files-virtual-tree"
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div
-        role="presentation"
+      <ul
+        aria-label="Task files"
         className="relative w-full"
         style={{ height: virtualizer.getTotalSize() }}
       >
         {virtualizer.getVirtualItems().map((virtual) => {
           const row = rows[virtual.index];
           return (
-            <div
+            <li
               key={virtual.key}
-              role="presentation"
               className="absolute top-0 left-0 w-full"
               style={{ transform: `translateY(${virtual.start}px)` }}
             >
-              <FilesTreeItem row={row}>{props.renderRow(row)}</FilesTreeItem>
-            </div>
+              {props.renderRow(row)}
+            </li>
           );
         })}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -318,6 +293,7 @@ function FilesGroupRow(props: {
           "w-full",
         )}
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
+        aria-expanded={props.expanded}
         onClick={props.onToggle}
       >
         <TreeChevron expanded={props.expanded} onToggle={undefined} />
@@ -349,10 +325,22 @@ function FileRow(props: {
   const openFile = useOpenEpicFileTile(props.epicId, hostId ?? "");
   const isActive = useIsActiveTile(props.tabId, item.path, hostId);
   const Icon = earlier ? FileCode : item.viewer.Icon;
+  const title = epicFileTitle(item.record);
   return (
-    // The full path: the label is a title, or truncated, or both.
+    // What the row may cut: the title in full, and the path under it.
     <TooltipWrapper
-      label={item.path}
+      label={
+        title === null || earlier ? (
+          item.path
+        ) : (
+          <>
+            <span dir="auto" className="block">
+              {title}
+            </span>
+            <span className="block opacity-75">{item.path}</span>
+          </>
+        )
+      }
       side="right"
       sideOffset={undefined}
       align={undefined}
@@ -395,7 +383,7 @@ function FileRow(props: {
         {epicFileDownloadsOnOpen(item.record) ? (
           <CloudDownload
             className="size-3.5 shrink-0 text-muted-foreground"
-            aria-label="Downloads on first open"
+            aria-label="Not on this device yet"
           />
         ) : (
           <FileAge timestamp={item.record.entry.createdAt} muted={!isActive} />
@@ -416,12 +404,18 @@ function FileLabel(props: {
   if (props.earlier) {
     return (
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        Earlier version
+        {props.item.version === null
+          ? "Earlier version"
+          : `Version ${props.item.version}`}
       </span>
     );
   }
   if (epicFileTitle(props.item.record) !== null) {
-    return <span className="min-w-0 flex-1 truncate">{props.item.name}</span>;
+    return (
+      <span dir="auto" className="min-w-0 flex-1 truncate">
+        {props.item.name}
+      </span>
+    );
   }
   return (
     <MiddleTruncatedText

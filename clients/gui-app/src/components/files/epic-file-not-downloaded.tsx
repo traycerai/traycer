@@ -20,20 +20,11 @@ function progressPercent(received: number, total: number): number {
   return Math.min(100, Math.round((received / total) * 100));
 }
 
-/** The line under the heading: what happens next, or how far the copy is. */
-function notDownloadedDetail(
-  noun: string,
-  size: string | null,
-  copy: Pick<EpicFileCopy, "copying" | "progress">,
-): string {
-  if (copy.copying) {
-    return copy.progress === null
-      ? "Downloading to this device…"
-      : `Downloading to this device… ${progressPercent(copy.progress.received, copy.progress.total)}%`;
-  }
-  return size === null
-    ? `This ${noun} downloads when you open it.`
-    : `This ${size} ${noun} downloads when you open it.`;
+/** The line under the heading: what to do, or that it is underway. */
+function notDownloadedDetail(noun: string, copying: boolean): string {
+  return copying
+    ? "Downloading to this device…"
+    : `Download this ${noun} to view it here.`;
 }
 
 /**
@@ -59,15 +50,15 @@ export function EpicFileNotDownloaded(
       data-testid="epic-file-not-downloaded"
       className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center"
     >
-      <span className="flex size-9 items-center justify-center rounded-lg border border-canvas-border/40 bg-foreground/5 text-muted-foreground/60">
+      <span className="flex size-9 items-center justify-center rounded-lg border border-canvas-border/40 bg-foreground/5 text-muted-foreground">
         <CloudDownload className="size-4" aria-hidden />
       </span>
       <div>
-        <p className="text-ui-sm font-medium text-muted-foreground/80">
+        <p className="text-ui-sm font-medium text-foreground">
           Not on this device yet
         </p>
-        <p className="text-ui-sm text-muted-foreground/60">
-          {notDownloadedDetail(props.noun, size, copy)}
+        <p className="text-ui-sm text-muted-foreground">
+          {notDownloadedDetail(props.noun, copy.copying)}
         </p>
       </div>
       {copy.copying ? (
@@ -96,9 +87,8 @@ export function EpicFileNotDownloaded(
           </div>
           <p className="text-ui-xs text-muted-foreground tabular-nums">
             {progress === null
-              ? "Copying to this device"
-              : `${formatByteSize(progress.received)} of ${formatByteSize(progress.total)}`}{" "}
-            ·{" "}
+              ? null
+              : `${formatByteSize(progress.received)} of ${formatByteSize(progress.total)} · `}
             <Button
               variant="link"
               size="inline-xs"

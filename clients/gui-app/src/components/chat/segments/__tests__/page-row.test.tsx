@@ -495,7 +495,7 @@ describe("<PageRow /> when the page cannot be read", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toContain(
-        "Copying it to this device",
+        "Downloading to this device",
       );
     });
     expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
@@ -526,7 +526,7 @@ describe("<PageRow /> when the page cannot be read", () => {
         ).toBeTruthy();
         expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
         expect(screen.getByRole("status").textContent).toContain(
-          "Copying it to this device failed.",
+          "Downloading it to this device failed.",
         );
         expect(rpc.fetchFile).toHaveBeenCalledTimes(round);
       }
@@ -687,7 +687,7 @@ describe("<PageRow /> page_action analytics (D31)", () => {
       readonly [string, "expand" | "download"]
     > = [
       ["Open full screen", "expand"],
-      ["Save HTML file", "download"],
+      ["Download HTML", "download"],
     ];
     for (const [label, action] of sheetActions) {
       fireEvent.click(screen.getByRole("button", { name: "Page actions" }));

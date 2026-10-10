@@ -81,7 +81,7 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
       <EpicFileDownloadButton download={download} disabled={offline} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="muted" size="icon-sm" aria-label="More">
+          <Button variant="muted" size="icon-sm" aria-label="More file actions">
             <MoreHorizontal aria-hidden />
           </Button>
         </DropdownMenuTrigger>
@@ -175,8 +175,8 @@ export function EpicFileTile(props: EpicFileTileProps): ReactNode {
           data-testid="epic-file-tile-offline"
           className="shrink-0 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-ui-xs text-warning-foreground"
         >
-          Host &quot;{reachability.hostLabel}&quot; is unreachable. What is
-          showing stays; its actions come back with the host.
+          &quot;{reachability.hostLabel}&quot; is offline. You can keep viewing
+          this file. Download and other actions come back when it reconnects.
         </p>
       ) : null}
       <div className="min-h-0 flex-1">{renderBody()}</div>
@@ -213,7 +213,7 @@ function PathBar(props: {
           >
             {/* A path differs at its end; a title reads from its start. */}
             {hasTitle ? (
-              <span className="min-w-0 truncate text-foreground/85">
+              <span dir="auto" className="min-w-0 truncate text-foreground/85">
                 {props.title}
               </span>
             ) : (

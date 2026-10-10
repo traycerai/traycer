@@ -185,9 +185,9 @@ function HtmlNotDownloaded(props: {
   let startLabel = size === null ? "Download" : `Download ${size}`;
   if (failed) startLabel = "Retry";
   if (progress !== null) {
-    detail = `Copying it to this device: ${formatByteSize(progress.received)} of ${formatByteSize(progress.total)}.`;
+    detail = `Downloading to this device: ${formatByteSize(progress.received)} of ${formatByteSize(progress.total)}.`;
   } else if (copy.copying) {
-    detail = "Copying it to this device. It shows here when it lands.";
+    detail = "Downloading to this device. It shows here when it lands.";
   }
   const actions: ReactNode = copy.copying ? (
     <Button
@@ -274,12 +274,14 @@ function PageNotice(props: {
           sideOffset={undefined}
           align={undefined}
         >
-          <div className="truncate">{props.title}</div>
+          <div dir="auto" className="truncate">
+            {props.title}
+          </div>
         </TooltipWrapper>
         <div className="text-ui-xs text-muted-foreground">{props.detail}</div>
       </div>
       {props.actions === null ? null : (
-        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+        <div className="ms-auto flex shrink-0 flex-wrap items-center gap-2">
           {props.actions}
         </div>
       )}

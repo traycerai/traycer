@@ -14,16 +14,16 @@ export function AppMessageDraftPill(props: { readonly chatId: string }) {
   if (appName === null) return null;
   return (
     <div
-      className="inline-flex max-w-full items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-ui-xs text-primary"
+      className="inline-flex max-w-full items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-ui-xs text-foreground"
       data-testid="app-message-draft-pill"
     >
-      <AppWindow className="size-3.5 shrink-0" aria-hidden />
+      <AppWindow className="size-3.5 shrink-0 text-primary" aria-hidden />
       <span className="min-w-0 truncate font-medium">
-        From the {appName} app
+        From the <bdi>{appName}</bdi> app
       </span>
       <button
         type="button"
-        className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-primary/85 transition-colors hover:bg-primary/15 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-primary/15 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`Discard the message from the ${appName} app`}
         onClick={() => discardAppMessageDraft(props.chatId)}
       >

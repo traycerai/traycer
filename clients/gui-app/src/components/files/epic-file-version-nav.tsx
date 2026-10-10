@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,14 +41,15 @@ export function EpicFileVersionNav(props: EpicFileVersionNavProps): ReactNode {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="muted-outline"
+          size="xs"
           data-testid="epic-file-version-nav"
-          className="inline-flex h-5.5 shrink-0 items-center gap-1 rounded-full border border-border px-2 text-ui-xs text-muted-foreground hover:text-foreground"
         >
           Version {position} of {chain.length}
-          <ChevronDown className="size-3" aria-hidden />
-        </button>
+          <ChevronDown data-icon="inline-end" aria-hidden />
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {chain

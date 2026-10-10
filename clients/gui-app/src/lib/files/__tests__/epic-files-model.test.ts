@@ -65,6 +65,9 @@ describe("buildEpicFilesGroups", () => {
       PAGE_V2,
       PAGE_V1,
     ]);
+    // Numbered as the version nav counts them; the row itself has none.
+    expect(pages.items[0].earlier.map((item) => item.version)).toEqual([2, 1]);
+    expect(pages.items[0].version).toBeNull();
   });
 
   it("shows a page as its own row when the file that replaced it is deleted", () => {

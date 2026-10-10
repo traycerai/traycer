@@ -495,6 +495,54 @@ describe("<McpAppRow /> on a phone", () => {
   });
 });
 
+describe("<McpAppRow /> full screen from the keyboard", () => {
+  it("moves focus to Exit, keeps Tab inside, leaves on one Escape over a tooltip, and gives focus back to Expand", async () => {
+    stubPopover();
+    await renderRunningApp(makeMcpRpc(), STAMP);
+    // jsdom loads no stylesheet, so its UA rule hides the surface that the
+    // row's own `block` class shows in a browser; nothing hidden takes focus.
+    screen.getByLabelText("Sheets app").removeAttribute("popover");
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    const exit = await screen.findByRole("button", {
+      name: "Exit full screen",
+    });
+    expect(document.activeElement).toBe(exit);
+
+    // Tab past either end of the surface lands on the page behind it, and is
+    // sent round instead. (The stand-in frame has no iframe, so both ends of
+    // the surface are Exit here.)
+    const before = document.createElement("button");
+    const after = document.createElement("button");
+    document.body.prepend(before);
+    document.body.append(after);
+    for (const behind of [after, before]) {
+      act(() => {
+        behind.focus();
+      });
+      expect(document.activeElement).toBe(exit);
+    }
+    before.remove();
+    after.remove();
+
+    // A tooltip's layer answers Escape at the document and marks it handled;
+    // the surface still leaves on that first press.
+    const tooltipTakesEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") event.preventDefault();
+    };
+    document.addEventListener("keydown", tooltipTakesEscape, true);
+    fireEvent.keyDown(exit, { key: "Escape" });
+    document.removeEventListener("keydown", tooltipTakesEscape, true);
+
+    await waitFor(() => {
+      expect(frameProps().height).not.toBeNull();
+    });
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Expand" }),
+    );
+  });
+});
+
 describe("<McpAppRow /> when the app cannot run here", () => {
   it("shows the ordinary tool row to a reader with no chat scope", () => {
     renderRow(makeFileRpc(HTML_RESPONSE), makeMcpRpc(), null, STAMP);

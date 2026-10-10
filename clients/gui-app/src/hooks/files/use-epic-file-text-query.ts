@@ -76,7 +76,7 @@ export function epicFileUnavailableMessage(
     case "local-only":
       return "Its task keeps files on the host that made it. Open it there.";
     case "failed":
-      return "Copying it to this device failed.";
+      return "Downloading it to this device failed.";
   }
 }
 

@@ -20,7 +20,7 @@ export function ViewerToolbar(props: {
       <span className="min-w-16 grow basis-0 truncate text-ui-xs text-muted-foreground">
         {props.caption}
       </span>
-      <div className="ml-auto flex shrink-0 items-center gap-1">
+      <div className="ms-auto flex shrink-0 items-center gap-1">
         {props.actions}
       </div>
     </div>

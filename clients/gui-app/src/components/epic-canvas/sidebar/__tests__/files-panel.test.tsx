@@ -99,7 +99,7 @@ describe("<FilesPanelBody /> groups", () => {
 
     expect(
       screen.getByText(
-        "Everyone in this task can see these files, also pages from private chats.",
+        "Everyone in this task can see these files, including pages from private chats.",
       ),
     ).toBeTruthy();
   });
@@ -118,7 +118,7 @@ describe("<FilesPanelBody /> groups", () => {
 });
 
 describe("<FilesPanelBody /> versions", () => {
-  it("shows a replaced page as an Earlier version under the page that replaced it", () => {
+  it("shows a replaced page as a numbered version under the page that replaced it", () => {
     setFiles([
       fileRecord({ path: PAGE_V1, createdAt: 1000 }),
       fileRecord({ path: PAGE_V2, createdAt: 2000, replaces: PAGE_V1 }),
@@ -127,7 +127,7 @@ describe("<FilesPanelBody /> versions", () => {
     renderPanel();
 
     expect(row(PAGE_V2).textContent).toContain("report-2.html");
-    expect(row(PAGE_V1).textContent).toContain("Earlier version");
+    expect(row(PAGE_V1).textContent).toContain("Version 1");
     expect(screen.queryByText("report.html")).toBeNull();
   });
 });
@@ -143,12 +143,12 @@ describe("<FilesPanelBody /> bytes this host does not hold", () => {
 
     expect(
       row("files/big.mov").querySelector(
-        '[aria-label="Downloads on first open"]',
+        '[aria-label="Not on this device yet"]',
       ),
     ).not.toBeNull();
     expect(
       row("files/here.png").querySelector(
-        '[aria-label="Downloads on first open"]',
+        '[aria-label="Not on this device yet"]',
       ),
     ).toBeNull();
   });

@@ -81,6 +81,7 @@ import { useMcpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 import {
   claimFullscreen,
   holdFullscreenBlocker,
+  isFullscreenBlocked,
   releaseFullscreen,
   yieldFullscreen,
   type FullscreenClaim,
@@ -211,6 +212,8 @@ function LiveMcpApp(props: {
   const [download, setDownload] = useState<PendingDownload | null>(null);
 
   const appRef = useRef<HTMLDivElement | null>(null);
+  const exitRef = useRef<HTMLButtonElement | null>(null);
+  const expandRef = useRef<HTMLButtonElement | null>(null);
   const approvalRef = useRef<HTMLDivElement | null>(null);
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const claimRef = useRef<FullscreenClaim | null>(null);
@@ -364,20 +367,12 @@ function LiveMcpApp(props: {
     [rpc, epicId, chatId, id],
   );
 
-  // The fullscreen surface is a manual popover: the top layer escapes the
-  // transcript row's containment without moving the frame, which would
-  // reload the app. The row keeps its inline height meanwhile, and its
-  // transcript row stays mounted (`useFullscreenPinnedRowKeys`).
-  const shownFullscreenRef = useRef(false);
-  useLayoutEffect(() => {
-    const element = appRef.current;
-    if (element === null) return;
-    const want = displayMode === "fullscreen";
-    if (want === shownFullscreenRef.current) return;
-    shownFullscreenRef.current = want;
-    if (want) element.showPopover();
-    else element.hidePopover();
-  }, [displayMode]);
+  useFullscreenSurface(
+    appRef,
+    exitRef,
+    expandRef,
+    displayMode === "fullscreen",
+  );
 
   // Full screen is a screen of its own, the phone's route for an app: the
   // shell's back gesture stands down while it is up, and the back button
@@ -390,8 +385,11 @@ function LiveMcpApp(props: {
   useEffect(() => {
     if (displayMode !== "fullscreen") return;
     const onKeyDown = (event: KeyboardEvent): void => exitOnEscape(event);
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    // The window's capture phase runs ahead of a tooltip's own Escape, which
+    // would otherwise take the first press. Anything that does need Escape
+    // while an app is fullscreen (a dialog, a confirm) has ended it already.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [displayMode]);
 
   // Unmounting ends the document's requests, answers whatever the app still
@@ -530,10 +528,11 @@ function LiveMcpApp(props: {
               <div className="flex shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3 py-1.5">
                 {label}
                 <Button
+                  ref={exitRef}
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="ml-auto"
+                  className="ms-auto"
                   onClick={leaveFullscreen}
                 >
                   <Minimize2 aria-hidden />
@@ -544,6 +543,7 @@ function LiveMcpApp(props: {
               <>
                 <BlockFloatingToolbar label="App actions">
                   <ToolbarButton
+                    ref={expandRef}
                     icon={<Maximize2 className="size-4" aria-hidden />}
                     label="Expand"
                     active={false}
@@ -620,6 +620,76 @@ function LiveMcpApp(props: {
   );
 }
 
+/**
+ * The fullscreen surface: a manual popover, because the top layer escapes the
+ * transcript row's containment without moving the frame, which would reload
+ * the app. The row keeps its inline height meanwhile, and its transcript row
+ * stays mounted (`useFullscreenPinnedRowKeys`).
+ *
+ * Not a modal `<dialog>`: the same element holds the app inline, and the
+ * confirms that end fullscreen open while it is still up, so the page around
+ * it must not go inert. Focus is kept here instead: it moves to Exit on the
+ * way in; Tab past either end, which lands on the page behind, is sent round
+ * to the other end; and on the way out it comes back to the row's Expand (or
+ * the app), unless the reader already went somewhere that needs them.
+ */
+function useFullscreenSurface(
+  surfaceRef: RefObject<HTMLDivElement | null>,
+  exitRef: RefObject<HTMLButtonElement | null>,
+  expandRef: RefObject<HTMLButtonElement | null>,
+  fullscreen: boolean,
+): void {
+  const shownRef = useRef(false);
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null || fullscreen === shownRef.current) return;
+    shownRef.current = fullscreen;
+    if (fullscreen) {
+      surface.showPopover();
+      exitRef.current?.focus();
+      return;
+    }
+    surface.hidePopover();
+    const active = document.activeElement;
+    if (
+      active === null ||
+      active === document.body ||
+      surface.contains(active)
+    ) {
+      const expand = expandRef.current;
+      expand?.focus();
+      if (expand === null || document.activeElement !== expand) {
+        surface.querySelector("iframe")?.focus();
+      }
+    }
+  }, [surfaceRef, exitRef, expandRef, fullscreen]);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onFocusIn = (event: FocusEvent): void => {
+      const surface = surfaceRef.current;
+      const target = event.target;
+      if (
+        surface === null ||
+        !(target instanceof Node) ||
+        surface.contains(target) ||
+        isFullscreenBlocked()
+      ) {
+        return;
+      }
+      const cameBack =
+        (surface.compareDocumentPosition(target) &
+          Node.DOCUMENT_POSITION_PRECEDING) !==
+        0;
+      (cameBack
+        ? (surface.querySelector("iframe") ?? exitRef.current)
+        : exitRef.current
+      )?.focus();
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => document.removeEventListener("focusin", onFocusIn);
+  }, [surfaceRef, exitRef, fullscreen]);
+}
+
 function AppFigure(props: {
   readonly app: ToolCallMcpAppStamp;
   readonly children: ReactNode;
@@ -659,7 +729,10 @@ function AppLabelLine(props: {
           className="size-3.5 shrink-0 text-[var(--term-ansi-magenta)]"
           aria-hidden
         />
-        <span className="min-w-0 truncate font-medium text-foreground/85">
+        <span
+          dir="auto"
+          className="min-w-0 truncate font-medium text-foreground/85"
+        >
           {props.server}
         </span>
         <span aria-hidden className="shrink-0 opacity-40">
@@ -679,7 +752,7 @@ function AppLabelLine(props: {
             />
           </span>
         ) : (
-          <span className="min-w-0 truncate font-mono text-code-sm">
+          <span dir="auto" className="min-w-0 truncate font-mono text-code-sm">
             {props.tool}
           </span>
         )}
@@ -747,7 +820,7 @@ function AppMoreMenu(props: {
       <DropdownMenuTrigger asChild>
         <ToolbarButton
           icon={<MoreHorizontal className="size-4" aria-hidden />}
-          label="More"
+          label="More app actions"
           active={false}
           className="tc-editor-toolbar-button"
         />
@@ -867,11 +940,14 @@ function AppApprovalCard(props: {
       role="group"
       aria-label={`Approve ${request.tool} for the ${server} app`}
       data-testid="mcp-app-approval"
-      className="flex flex-col gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2.5 text-ui-sm"
+      className="flex flex-col gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2.5 text-ui-sm"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <ShieldAlert className="size-3.5 shrink-0 text-primary" aria-hidden />
-        <span className="shrink-0 select-none whitespace-nowrap font-medium uppercase text-overline text-primary">
+        <ShieldAlert
+          className="size-3.5 shrink-0 text-warning-foreground"
+          aria-hidden
+        />
+        <span className="shrink-0 select-none whitespace-nowrap font-medium uppercase text-overline text-warning-foreground">
           Approval needed
         </span>
         <TooltipWrapper
@@ -978,8 +1054,7 @@ function AppDownloadConfirm(props: {
     >
       <DialogContent
         layout="banded"
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-full min-w-0 flex-col overflow-hidden"
-        style={{ maxWidth: "min(92vw, 30rem)" }}
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-full min-w-0 flex-col overflow-hidden sm:max-w-md"
         showCloseButton={false}
       >
         <DialogHeader className="shrink-0 space-y-1">

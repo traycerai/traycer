@@ -26,6 +26,11 @@ export interface EpicFileItem {
   readonly viewer: EpicFileViewerEntry;
   /** Earlier versions of this file, newest first. Empty for a file with none. */
   readonly earlier: readonly EpicFileItem[];
+  /**
+   * For an earlier version, its number in the file's version chain (1 is the
+   * first), as the version nav counts it; `null` for a file's own row.
+   */
+  readonly version: number | null;
 }
 
 export type EpicFilesGroupKind = "pages" | "mcp-apps" | "folder" | "root";
@@ -128,6 +133,7 @@ export function epicFileVersionChain(
 function itemFor(
   record: EpicStateFileRecord,
   earlier: readonly EpicFileItem[],
+  version: number | null,
 ): EpicFileItem {
   return {
     path: record.path,
@@ -135,6 +141,7 @@ function itemFor(
     record,
     viewer: epicFileViewer(record.path),
     earlier,
+    version,
   };
 }
 
@@ -160,7 +167,7 @@ function newestFirst(a: EpicFileItem, b: EpicFileItem): number {
  *
  * A tombstoned file is hidden. A page edit is a new file naming the old one in
  * `derivedFrom`, so a file that a visible file replaced is shown as that file's
- * "Earlier version" child rather than as a row of its own.
+ * numbered earlier-version child rather than as a row of its own.
  */
 export function buildEpicFilesGroups(
   records: readonly EpicStateFileRecord[],
@@ -176,13 +183,19 @@ export function buildEpicFilesGroups(
   function earlierOf(record: EpicStateFileRecord): readonly EpicFileItem[] {
     const items: EpicFileItem[] = [];
     const seen = new Set<string>([record.path]);
+    // Numbered over every record, deleted ones too, as the version nav is.
+    const chain =
+      derivedFromPath(record) === null
+        ? []
+        : epicFileVersionChain(records, record.path);
     let cursor = record;
     for (;;) {
       const parentPath = derivedFromPath(cursor);
       const parent = parentPath === null ? undefined : byPath.get(parentPath);
       if (parent === undefined || seen.has(parent.path)) break;
       seen.add(parent.path);
-      items.push(itemFor(parent, []));
+      const at = chain.findIndex((version) => version.path === parent.path);
+      items.push(itemFor(parent, [], at < 0 ? null : at + 1));
       cursor = parent;
     }
     return items;
@@ -196,7 +209,7 @@ export function buildEpicFilesGroups(
     const id = kind === "folder" ? epicFileFolder(record.path) : kind;
     groupOrder.set(id, kind);
     const bucket = buckets.get(id) ?? [];
-    bucket.push(itemFor(record, earlierOf(record)));
+    bucket.push(itemFor(record, earlierOf(record), null));
     buckets.set(id, bucket);
   }
 

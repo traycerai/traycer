@@ -437,7 +437,7 @@ describe("<EpicFileTile /> availability is the tile host's", () => {
       await screen.findByRole("button", { name: "Download 100 B" }),
     );
 
-    await screen.findByText(/Copying to this device/);
+    await screen.findByText(/Downloading to this device/);
     expect(screen.getByRole("progressbar").hasAttribute("aria-valuenow")).toBe(
       false,
     );
@@ -469,7 +469,7 @@ describe("<EpicFileTile /> availability is the tile host's", () => {
       await screen.findByRole("button", { name: "Download 100 B" }),
     );
     await waitFor(() => expect(rpc.fetchFile).toHaveBeenCalledTimes(2));
-    await screen.findByText(/Copying to this device/);
+    await screen.findByText(/Downloading to this device/);
   });
 
   it("shows Download again when the lane never saw the copy start", async () => {
@@ -484,7 +484,7 @@ describe("<EpicFileTile /> availability is the tile host's", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Download 100 B" }),
     );
-    await screen.findByText(/Copying to this device/);
+    await screen.findByText(/Downloading to this device/);
 
     await screen.findByRole(
       "button",
