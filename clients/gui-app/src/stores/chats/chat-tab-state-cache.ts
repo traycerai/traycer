@@ -68,7 +68,7 @@ export function restoreChatTabState(
 ): SavedChatTabScrollState {
   const saved = peekSavedChatTabState(identity);
   if (saved === null) return DEFAULT_CHAT_TAB_SCROLL_STATE;
-  if (saved.anchorMessageId === null) return saved;
+  if (saved.anchorMessageId === null) return DEFAULT_CHAT_TAB_SCROLL_STATE;
   if (rowKeys.includes(saved.anchorMessageId)) {
     return saved;
   }

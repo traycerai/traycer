@@ -1236,6 +1236,26 @@ describe("ChatMessages scroll policy", () => {
     expect(isJumpPillVisible()).toBe(false);
   });
 
+  it("follows latest when restored free scroll has no anchor", async () => {
+    const messages = makeTranscript(12);
+    const scrollStateKey = "restored-missing-anchor-key";
+    saveChatTabState({
+      identity: makeDefaultTestIdentity(scrollStateKey),
+      mode: "free-scrolling",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 48,
+    });
+
+    renderChatMessages({ messages, scrollStateKey });
+    await settleLegendList();
+
+    await waitFor(() => {
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+    expect(isJumpPillVisible()).toBe(false);
+  });
+
   it("preserves free-scrolling restored from the scroll-state cache (pill visible)", async () => {
     const messages = makeTranscript(12);
     const scrollStateKey = "restored-free-key";
