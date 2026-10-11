@@ -136,6 +136,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   // Rebuilt every pass for a multi-record turn, so compared by content: an
   // identity check would re-render that turn's rows on every token.
   turnMessageIds: (a, b) => sameMessageIds(a.turnMessageIds, b.turnMessageIds),
+  sender: (a, b) => a.sender === b.sender,
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,

@@ -27,7 +27,8 @@ export function promptSuggestionAllowed(input: {
   readonly workspaceBlocked: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
-  readonly draftContent: JsonContent;
+  /** {@link isSuggestionPlaceholderDocument} of the current draft. */
+  readonly draftIsSuggestionPlaceholder: boolean;
 }): boolean {
   return (
     input.topBannerKind === "none" &&
@@ -35,12 +36,12 @@ export function promptSuggestionAllowed(input: {
     !input.workspaceBlocked &&
     !input.draftHasText &&
     !input.draftHasImages &&
-    isSuggestionPlaceholderDocument(input.draftContent)
+    input.draftIsSuggestionPlaceholder
   );
 }
 
 /** Only the ordinary empty paragraph can display an actionable suggestion. */
-function isSuggestionPlaceholderDocument(content: JsonContent): boolean {
+export function isSuggestionPlaceholderDocument(content: JsonContent): boolean {
   if (content.type !== "doc" || content.content?.length !== 1) return false;
   const paragraph = content.content[0];
   return (

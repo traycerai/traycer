@@ -5412,6 +5412,22 @@ export function hydratedRecords(window: TranscriptWindow): {
   };
 }
 
+/** Message-only projection for a rewrite that changed no events or context. */
+export function hydratedMessages(
+  window: TranscriptWindow,
+): readonly OpenMessage[] {
+  const spans =
+    window.staleSpans.length === 0
+      ? window.spans
+      : mergeSpansByOrdinal(window.spans, window.staleSpans);
+  return dedupeLedgerRecordsInOrder(
+    spans,
+    (span) => span.messageIds,
+    window.records.messages,
+    { items: window.liveMessages, keyOf: (message) => message.messageId },
+  );
+}
+
 /**
  * Merge two ordinal-ordered span tiers, the FIRST winning ties.
  *

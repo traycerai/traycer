@@ -120,7 +120,7 @@ export function AppUpdateToastController(): null {
   });
 
   useEffect(() => {
-    mountedAtMsRef.current ??= Date.now();
+    if (mountedAtMsRef.current === null) mountedAtMsRef.current = Date.now();
     if (bridgeRef.current !== bridge) {
       const isInitialBridge = bridgeRef.current === undefined;
       bridgeRef.current = bridge;

@@ -1,40 +1,4 @@
-import type { HostRpcRegistry } from "@/lib/host";
-
-// Any provider override change can flip a provider's availability (enabled
-// toggle, selecting a binary that can't launch, or setting/clearing an API key
-// like Cursor's), so every provider mutation refreshes the Settings panel,
-// both harness selectors, the generated agent-selection-guide default, and the
-// auto-mode judge's blocker verdict. The guide invalidation recomputes only the
-// generated default; it does not write the user's global guide file.
-//
-// This list is BOTH mechanisms' source of truth, which is why the harness
-// catalogs live here and nowhere else. Mutations that go through
-// `useHostScopedMutation` consume it as `invalidateMethods`; the paths that
-// write `providers.list` DIRECTLY (a login-completion echo, a force-refresh)
-// consume it through `commitAuthoritativeProvidersList`, which invalidates
-// every method here except `providers.list` itself - the one it has just
-// written authoritatively. So a direct-write path needs no hand-rolled
-// catalog invalidation of its own: adding one only marks the freshly refetched
-// catalogs stale again and starts a second, redundant pair of RPCs.
-export const PROVIDER_INVALIDATIONS: ReadonlyArray<
-  keyof HostRpcRegistry & string
-> = [
-  "providers.list",
-  "agent.gui.listHarnesses",
-  "agent.tui.listHarnesses",
-  "agent.selectionGuide.getGlobal",
-  "agent.selectionGuide.getGlobalOnboardingDraft",
-  // `autoJudge.get` answers a `blocked` verdict whose first reason is literally
-  // `provider-disabled`, so the judge's blockers are a FUNCTION of the
-  // configuration these mutations change. Without this entry the response was
-  // cached indefinitely while mounted: enabling the judge's provider left the
-  // Auto row saying no judge would run, and disabling it left the billing copy
-  // promising that provider's account. The other two reads it could reach are
-  // deliberately absent - `autoJudge.set` is a write, and `autoPolicy.get`
-  // proxies an ACCOUNT record (body, stamp, read state, the host's bundled
-  // defaults) that no provider override touches.
-  "autoJudge.get",
-];
+export { PROVIDER_INVALIDATIONS } from "@/lib/query-keys/providers-query-keys";
 
 /**
  * Shared mutation SCOPE for the per-profile API-key pair.

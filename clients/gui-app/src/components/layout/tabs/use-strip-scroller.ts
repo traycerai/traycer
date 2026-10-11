@@ -11,6 +11,7 @@ import {
   revealMemberAlongAxis,
   type StripAxis,
 } from "@/components/epic-canvas/dnd/strip-axis";
+import { registerTabStripGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import { runHeaderStripCommitHandoff } from "./header-strip-commit-handoff";
 import { readTranslate } from "./header-strip-geometry";
 import {
@@ -31,7 +32,7 @@ export function useStripScroller(input: {
   readonly itemCount: number;
   readonly extraRef: ((node: HTMLDivElement | null) => void) | null;
 }): (node: HTMLDivElement | null) => void {
-  const { axis, activeItemId, itemCount, extraRef } = input;
+  const { axis, itemCount, extraRef } = input;
   // Parent layout effects run AFTER every child's, so by here every strip item
   // has registered and published its current target. Driving the re-base from
   // this one boundary is what makes it reach EVERY item whose baseline moved -
@@ -41,54 +42,15 @@ export function useStripScroller(input: {
     runHeaderStripCommitHandoff(axis);
   });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
-  // The strip may not cut the tab that holds the selection in half.
-  //
-  // The scroller overflows along the strip's axis, and nothing scrolled a tab
-  // into view - so with enough tabs open the layout editor's own tab was
-  // appended past the edge and CLIPPED there. That single clip produced all
-  // three things the owner's third live pass reported as one broken tab: the
-  // label read "Sample" because the glyphs past the edge were gone, the amber
-  // outline covered only part of the silhouette, and the mark inside it ended
-  // on a razor edge. None of them was a paint bug; the tab was simply half
-  // off-screen.
-  //
-  // That fix was scoped to the session tab's marker, which left the general
-  // case - any tab that becomes active while clipped - exactly as broken, and
-  // worst where there is no pointer to say where the tab went: a keyboard walk
-  // through the strip, a leader chord, a palette jump, a tab activated by a
-  // close. The reveal is the selection's, not the editing indicator's (L-146).
-  //
-  // Instant, never smooth: activation is frequent and often held down on a
-  // keyboard, and an animated strip under a repeating chord is a strip that is
-  // permanently mid-flight and never at the tab the user is on.
-  const revealActiveMember = useCallback((): void => {
-    const scroller = scrollerRef.current;
-    if (scroller !== null) revealSelectedMember(scroller, axis);
-  }, [axis]);
-  // On the activation CHANGE, and in a layout effect so the reveal lands in
-  // the same paint as the newly active tab. Deliberately NOT on every render:
-  // the strip is a scroller the user also drives by hand, and a per-commit
-  // reveal would haul their position back on every unrelated re-render. The
-  // item count rides along because opening or closing a tab moves the active
-  // one without changing which tab it is.
-  useLayoutEffect(() => {
-    revealActiveMember();
-  }, [activeItemId, itemCount, revealActiveMember]);
-  // The other way a whole tab becomes a clipped one, with no activation to key
-  // on: the strip shrinks under it - a window resize, a panel opening beside
-  // it, a collapse. Writing the scroll offset changes no box, so this cannot
-  // re-enter.
   useEffect(() => {
-    const scroller = scrollerRef.current;
-    if (scroller === null) return;
-    const observer = new ResizeObserver(() => {
-      revealActiveMember();
-    });
-    observer.observe(scroller);
-    return () => {
-      observer.disconnect();
-    };
-  }, [revealActiveMember]);
+    const element = scrollerRef.current;
+    // The horizontal header registers through `useHiddenHeaderTabs`, which
+    // also publishes its edge-menu snapshot. Keyed on the axis, not on
+    // `extraRef`: the side strip takes an `extraRef` of its own (its section
+    // scroll) and still needs its reveal from here.
+    if (element === null || axis.id === "x") return;
+    return registerTabStripGeometry(element, axis, () => {});
+  }, [axis]);
   // Trailing slot: the strip's empty space after the last item accepts drops
   // at index `itemCount` (both reorder and tear-off).
   const trailingSlotData = useMemo<HeaderTabSlotDropData>(

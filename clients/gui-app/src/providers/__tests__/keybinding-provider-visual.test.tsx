@@ -34,7 +34,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
-import type { ReactNode } from "react";
+import { Profiler, type ReactNode } from "react";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
@@ -80,7 +80,6 @@ function LeaderProbe() {
       data-mod-owner={leader.modOwnerScopeId ?? ""}
       data-alt-owner={leader.altOwnerScopeId ?? ""}
       data-mod-shift-owner={leader.modShiftOwnerScopeId ?? ""}
-      data-pathname={leader.pathname}
       data-tab-leader={tabLeader ?? ""}
       data-canvas-leader={canvasLeader ?? ""}
     />
@@ -1488,6 +1487,26 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     });
 
     expectModHintVisible(false);
-    expect(probe().getAttribute("data-pathname")).toBe("/settings/general");
+  });
+
+  it("keeps the same leader context value across a route-only change with no modifier held", () => {
+    const mutable = buildMutableRouterSource("/epics/e1");
+    let commits = 0;
+    render(
+      <Profiler id="leader-probe" onRender={() => (commits += 1)}>
+        <KeybindingProvider router={mutable.router}>
+          <LeaderProbe />
+        </KeybindingProvider>
+      </Profiler>,
+    );
+    const commitsBefore = commits;
+
+    act(() => {
+      mutable.setPathname("/settings/general");
+    });
+
+    // LeaderState dropped `pathname` - with no modifier held, a route-only
+    // change must not produce a new context value, so nothing recommits.
+    expect(commits).toBe(commitsBefore);
   });
 });

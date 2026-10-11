@@ -160,6 +160,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               window: null,
               rendered: [makeMessage(0, "user")],
             })}
+            visible
             taskTitle="Overlay regression transcript"
             backgroundToolBlockIds={new Set()}
             getMessageActions={() => null}

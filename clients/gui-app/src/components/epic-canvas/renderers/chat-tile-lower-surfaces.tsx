@@ -692,17 +692,11 @@ export function ChatLowerInteractionSurfaces(
             turnOnStopTurn();
           }}
         />
-        <ConfirmDestructiveDialog
+        <StopTurnConfirmDialog
           open={stopConfirmation?.kind === "turn"}
           onOpenChange={(open) => {
             if (!open) setStopConfirmation(null);
           }}
-          title="Stop this turn?"
-          description="The agent will stop working on its current response."
-          cascadeSummary={null}
-          actionLabel="Stop"
-          blockedReason={null}
-          isPending={false}
           onConfirm={() => {
             setStopConfirmation(null);
             if (stopConfirmation === null || !isConfirmedTurnCurrent()) return;
@@ -717,6 +711,30 @@ export function ChatLowerInteractionSurfaces(
         />
       </ChatDockCompactStripProvider>
     </ChatComposerBannerPortalProvider>
+  );
+}
+
+/** Mounted on its first open only: a tile that never asks does not pay for the dialog. */
+function StopTurnConfirmDialog(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onConfirm: () => void;
+}) {
+  const [everOpened, setEverOpened] = useState(props.open);
+  if (props.open && !everOpened) setEverOpened(true);
+  if (!props.open && !everOpened) return null;
+  return (
+    <ConfirmDestructiveDialog
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      title="Stop this turn?"
+      description="The agent will stop working on its current response."
+      cascadeSummary={null}
+      actionLabel="Stop"
+      blockedReason={null}
+      isPending={false}
+      onConfirm={props.onConfirm}
+    />
   );
 }
 

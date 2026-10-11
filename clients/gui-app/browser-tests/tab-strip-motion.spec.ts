@@ -607,6 +607,83 @@ test("switching to another tab slides the selection to it", async ({
   await expectSelectionTravelled(page, samples, { from, to });
 });
 
+test("switching to a tab the strip edge partly clips still slides the selection to it, and reveals it", async ({
+  page,
+}) => {
+  // The strip's reveal lands on the frame after the commit that changes the
+  // selection, so the slide is planned against where the strip WILL be. Read
+  // against the live offset, the clipped destination is "out of view" and
+  // the selection would jump instead of sliding.
+  const tabIds = await openStrip(page, OVERFLOWING_TAB_COUNT);
+  // Far enough along that clipping it needs a positive scroll offset.
+  const neighbourTitle = page.getByTestId(
+    `tab-title-epic-${itemAt(tabIds, 6)}`,
+  );
+  const clippedTitle = page.getByTestId(`tab-title-epic-${itemAt(tabIds, 7)}`);
+  const clipped = frameHolding(page, clippedTitle);
+  // Select the left neighbour and let the strip settle on it.
+  await neighbourTitle.click();
+  const from = await itemIdOf(frameHolding(page, neighbourTitle));
+  await expect(selectedFrame(page)).toHaveAttribute("data-strip-item-id", from);
+  await expectResting(page, OVERFLOWING_TAB_COUNT);
+  // Then park the strip so the destination hangs off the right edge by 40%
+  // of its width, with the neighbour wholly in view.
+  await clipped.evaluate((frame) => {
+    const strip = frame.parentElement;
+    if (strip === null) throw new Error("the frame has no strip");
+    const view = strip.getBoundingClientRect();
+    const box = frame.getBoundingClientRect();
+    const right = box.right - view.left + strip.scrollLeft;
+    strip.scrollLeft = right - strip.clientWidth - box.width * 0.4;
+  });
+  await nextFrames(page, 3);
+  const neighbour = await frameHolding(page, neighbourTitle).evaluate(
+    (frame) => {
+      const strip = frame.parentElement;
+      if (strip === null) throw new Error("the frame has no strip");
+      return (
+        frame.getBoundingClientRect().left - strip.getBoundingClientRect().left
+      );
+    },
+  );
+  expect(
+    neighbour,
+    "the neighbour stays wholly in view",
+  ).toBeGreaterThanOrEqual(-SUBPIXEL_PX);
+  const to = await itemIdOf(clipped);
+  const before = await clipped.evaluate((frame) => {
+    const strip = frame.parentElement;
+    if (strip === null) throw new Error("the frame has no strip");
+    const view = strip.getBoundingClientRect();
+    const box = frame.getBoundingClientRect();
+    return {
+      visibleLeft: box.left,
+      visibleRight: Math.min(box.right, view.right),
+      y: box.top + box.height / 2,
+      overhang: box.right - view.right,
+    };
+  });
+  expect(
+    before.overhang,
+    "the destination hangs off the strip's edge",
+  ).toBeGreaterThan(SUBPIXEL_PX);
+
+  const samples = await record(page, OVERFLOWING_TAB_COUNT, async () => {
+    await page.mouse.click(
+      (before.visibleLeft + before.visibleRight) / 2,
+      before.y,
+    );
+    await expect(selectedFrame(page)).toHaveAttribute("data-strip-item-id", to);
+  });
+
+  await expectSelectionTravelled(page, samples, { from, to });
+  const end = itemAt(samples, -1);
+  expect(
+    leftOf(end, to) + widthOf(end, to),
+    "the destination ends wholly in view",
+  ).toBeLessThanOrEqual(end.scrollLeft + end.clientWidth + SUBPIXEL_PX);
+});
+
 test("a reopened batch opens left to right and no slot passes its width, on the shrink layout", async ({
   page,
 }) => {

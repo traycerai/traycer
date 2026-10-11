@@ -16,7 +16,10 @@ import { useValidateTuiForkProfile } from "@/hooks/agent/use-validate-tui-fork-p
 import { useTuiForkProfileSupported } from "@/hooks/agent/use-tui-fork-profile-support";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  useEpicTileNavigation,
+  type EpicTileNavigation,
+} from "@/hooks/epic/use-epic-tile-navigation";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
@@ -225,6 +228,202 @@ export function useCreateTuiAgent(): {
   return useCreateTuiAgentForClient(hostClient, placeholderHostId);
 }
 
+async function createTuiAgentWithPlaceholder({
+  input,
+  placeholderHostId,
+  forkProfilePreflightSupported,
+  openTile,
+  markArtifactPendingCreate,
+  unmarkArtifactPendingCreate,
+  startSession,
+  createTuiAgent,
+  worktreeCreate,
+  validateForkProfile,
+}: {
+  input: CreateTuiAgentInput;
+  placeholderHostId: string;
+  forkProfilePreflightSupported: boolean;
+  openTile: EpicTileNavigation["openTile"];
+  markArtifactPendingCreate: (id: string) => void;
+  unmarkArtifactPendingCreate: (id: string) => void;
+  startSession: (
+    variables: RequestOfMethod<HostRpcRegistry, "agent.tui.prepareLaunch">,
+  ) => Promise<ResponseOfMethod<HostRpcRegistry, "agent.tui.prepareLaunch">>;
+  createTuiAgent: (
+    variables: RequestOfMethod<HostRpcRegistry, "epic.createTuiAgent">,
+  ) => Promise<ResponseOfMethod<HostRpcRegistry, "epic.createTuiAgent">>;
+  worktreeCreate: WorktreeCreateMutateAsync;
+  validateForkProfile: ValidateForkProfileMutateAsync;
+}): Promise<string | null> {
+  const tuiAgentId = uuidv4();
+
+  const opensAfterSessionPrepared = input.forkSourceHarnessSessionId !== null;
+
+  // Object holder, not a bare `let`: `opened` is flipped inside the
+  // `openPlaceholder` closure, and a closure-mutated `let` narrows to its
+  // `false` initializer at the `finally` check (no-unnecessary-condition
+  // would flag it always-false). An object property reflects the mutation.
+  const placeholder = { opened: false };
+  const openPlaceholder = (): void => {
+    // Open the canvas tab placeholder BEFORE normal
+    // `agent.tui.prepareLaunch` waits so the user has a visible
+    // tui-agent surface inside the Epic for the entire setup wait -
+    // including a setup that fails or cancels. Fork creates are the
+    // exception: the source session must be forked first, then the new
+    // terminal session is opened against the forked session id.
+    //
+    // Mark the id as pending-create around the open so the
+    // record→canvas sync effect in `use-epic-route-synchronization`
+    // doesn't immediately close the placeholder for lacking a
+    // projected record (mirrors `use-initial-chat-handoff`'s
+    // mark/unmark pattern).
+    markArtifactPendingCreate(tuiAgentId);
+    placeholder.opened = true;
+    const placeholderRef = {
+      id: tuiAgentId,
+      instanceId: uuidv4(),
+      type: "terminal-agent" as const,
+      name: displayTitle(input.title, "agent"),
+      hostId: placeholderHostId,
+      pendingTuiHarnessId: input.harnessId,
+    };
+    openTile({
+      node: placeholderRef,
+      target: { tabId: input.tabId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: input.placement,
+      dedupe: true,
+      source: "direct_ui",
+    });
+  };
+
+  let clearStashedPreparedLaunch = false;
+  try {
+    // Preflight cross-profile fork admission BEFORE anything else -
+    // including the placeholder tile and worktree/binding work below -
+    // so a rejection leaves NOTHING created (tech plan governing
+    // client-side ordering). See
+    // `resolveForkProfilePreflightTarget` for when this actually applies.
+    const preflightTarget = resolveForkProfilePreflightTarget(
+      input,
+      forkProfilePreflightSupported,
+    );
+    if (preflightTarget !== null) {
+      await preflightForkProfileAdmission({
+        epicId: input.epicId,
+        sourceTuiAgentId: preflightTarget.sourceTuiAgentId,
+        targetProfileId: preflightTarget.targetProfileId,
+        validateForkProfile: validateForkProfile,
+      });
+    }
+    if (!opensAfterSessionPrepared) {
+      openPlaceholder();
+    }
+    // For an explicit intent (a worktree, or a specific Local folder set),
+    // the worktree binding RPC is dispatched BEFORE harness preparation so
+    // `agent.tui.prepareLaunch` reads the user's *intended* binding row -
+    // and, for Worktree mode, so the worktree directory is created and its
+    // setup awaited. Skipping it would leave no binding at prepareLaunch, so
+    // the seam there would seed a *default* Local binding from the epic's
+    // folders, silently discarding the explicit choice. (A null intent has
+    // nothing to dispatch; the seam's default seeding is the intended path.)
+    if (input.worktreeIntent !== null) {
+      if (input.worktreeIntent.entries.length > 0) {
+        input.onStatusChange?.("preparing-workspace");
+      }
+      await dispatchWorktreeIntent({
+        intent: input.worktreeIntent,
+        epicId: input.epicId,
+        tuiAgentId,
+        worktreeCreate: worktreeCreate,
+      });
+    }
+    if (input.forkSourceHarnessSessionId !== null) {
+      input.onStatusChange?.("forking-session");
+    }
+    // Resolver reads the binding for `tuiAgentId` and awaits the
+    // per-owner setup awaiter. Setup failure / cancellation rejects
+    // here with a typed error before any harness work happens - the
+    // catch chain below ensures `epic.createTuiAgent` is never
+    // invoked on that path. For normal launches, the placeholder canvas
+    // tab opened above remains visible alongside the host-opened setup
+    // terminal tab and the mutation hook's error toast. Fork launches
+    // intentionally have no placeholder yet while the source session is
+    // being forked.
+    const session = await startSession({
+      harnessId: input.harnessId,
+      epicId: input.epicId,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      // Epic Mode was removed from the product; the protocol still carries
+      // the field, so state the one remaining mode.
+      agentMode: "regular",
+      tuiAgentId,
+      harnessSessionId: null,
+      forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
+      forkSourceTuiAgentId: input.sourceTuiAgentId,
+      terminalAgentArgs: input.terminalAgentArgs,
+      workspaceMode: input.workspaceMode,
+      profileId: input.profileId,
+    });
+    if (
+      opensAfterSessionPrepared &&
+      session.terminalShellCommand !== null &&
+      session.terminalShellArgs !== null
+    ) {
+      stashPreparedTerminalAgentLaunch(tuiAgentId, {
+        cwd: session.workingDirectory,
+        shellCommand: session.terminalShellCommand,
+        shellArgs: session.terminalShellArgs,
+        worktreeBusyPaths: session.worktreeBusyPaths,
+      });
+      clearStashedPreparedLaunch = true;
+    }
+    input.onStatusChange?.("starting-terminal");
+    if (opensAfterSessionPrepared) {
+      openPlaceholder();
+    }
+    const created = await createTuiAgent({
+      epicId: input.epicId,
+      parentId: input.parentId,
+      title: input.title,
+      harnessId: input.harnessId,
+      harnessSessionId: session.harnessSessionId,
+      terminalAgentArgs: input.terminalAgentArgs,
+      terminalShellCommand: session.terminalShellCommand,
+      terminalShellArgs:
+        session.terminalShellArgs === null
+          ? null
+          : [...session.terminalShellArgs],
+      hostId: session.hostId,
+      workspaceFolders: [...session.workspaceFolders],
+      workspaceMode: input.workspaceMode,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      agentMode: "regular",
+      tuiAgentId,
+      profileId: input.profileId,
+      forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
+    });
+    // Hold the pending-create mark until the record actually projects, so
+    // the close-tile reconcile can't close the optimistic tab in the window
+    // between this RPC resolving and its Y.Doc update streaming back. On the
+    // error paths above the record is never created, so `finally` unmarks
+    // immediately and the reconcile closes the orphan placeholder tab.
+    await waitForTuiAgentProjected(input.epicId, tuiAgentId);
+    clearStashedPreparedLaunch = false;
+    return created.tuiAgentId;
+  } finally {
+    if (clearStashedPreparedLaunch) {
+      clearPreparedTerminalAgentLaunch(tuiAgentId);
+    }
+    if (placeholder.opened) {
+      unmarkArtifactPendingCreate(tuiAgentId);
+    }
+  }
+}
+
 export function useCreateTuiAgentForClient(
   hostClient: HostClient<HostRpcRegistry> | null,
   placeholderHostId: string,
@@ -247,176 +446,19 @@ export function useCreateTuiAgentForClient(
   );
 
   const create = useCallback(
-    async (input: CreateTuiAgentInput): Promise<string | null> => {
-      const tuiAgentId = uuidv4();
-
-      const opensAfterSessionPrepared =
-        input.forkSourceHarnessSessionId !== null;
-
-      // Object holder, not a bare `let`: `opened` is flipped inside the
-      // `openPlaceholder` closure, and a closure-mutated `let` narrows to its
-      // `false` initializer at the `finally` check (no-unnecessary-condition
-      // would flag it always-false). An object property reflects the mutation.
-      const placeholder = { opened: false };
-      const openPlaceholder = (): void => {
-        // Open the canvas tab placeholder BEFORE normal
-        // `agent.tui.prepareLaunch` waits so the user has a visible
-        // tui-agent surface inside the Epic for the entire setup wait -
-        // including a setup that fails or cancels. Fork creates are the
-        // exception: the source session must be forked first, then the new
-        // terminal session is opened against the forked session id.
-        //
-        // Mark the id as pending-create around the open so the
-        // record→canvas sync effect in `use-epic-route-synchronization`
-        // doesn't immediately close the placeholder for lacking a
-        // projected record (mirrors `use-initial-chat-handoff`'s
-        // mark/unmark pattern).
-        markArtifactPendingCreate(tuiAgentId);
-        placeholder.opened = true;
-        const placeholderRef = {
-          id: tuiAgentId,
-          instanceId: uuidv4(),
-          type: "terminal-agent" as const,
-          name: displayTitle(input.title, "agent"),
-          hostId: placeholderHostId,
-          pendingTuiHarnessId: input.harnessId,
-        };
-        openTile({
-          node: placeholderRef,
-          target: { tabId: input.tabId },
-          gesture: "explicit",
-          modifiers: null,
-          placement: input.placement,
-          dedupe: true,
-          source: "direct_ui",
-        });
-      };
-
-      let clearStashedPreparedLaunch = false;
-      try {
-        // Preflight cross-profile fork admission BEFORE anything else -
-        // including the placeholder tile and worktree/binding work below -
-        // so a rejection leaves NOTHING created (tech plan governing
-        // client-side ordering). See
-        // `resolveForkProfilePreflightTarget` for when this actually applies.
-        const preflightTarget = resolveForkProfilePreflightTarget(
-          input,
-          forkProfilePreflightSupported,
-        );
-        if (preflightTarget !== null) {
-          await preflightForkProfileAdmission({
-            epicId: input.epicId,
-            sourceTuiAgentId: preflightTarget.sourceTuiAgentId,
-            targetProfileId: preflightTarget.targetProfileId,
-            validateForkProfile: validateForkProfile.mutateAsync,
-          });
-        }
-        if (!opensAfterSessionPrepared) {
-          openPlaceholder();
-        }
-        // For an explicit intent (a worktree, or a specific Local folder set),
-        // the worktree binding RPC is dispatched BEFORE harness preparation so
-        // `agent.tui.prepareLaunch` reads the user's *intended* binding row -
-        // and, for Worktree mode, so the worktree directory is created and its
-        // setup awaited. Skipping it would leave no binding at prepareLaunch, so
-        // the seam there would seed a *default* Local binding from the epic's
-        // folders, silently discarding the explicit choice. (A null intent has
-        // nothing to dispatch; the seam's default seeding is the intended path.)
-        if (input.worktreeIntent !== null) {
-          if (input.worktreeIntent.entries.length > 0) {
-            input.onStatusChange?.("preparing-workspace");
-          }
-          await dispatchWorktreeIntent({
-            intent: input.worktreeIntent,
-            epicId: input.epicId,
-            tuiAgentId,
-            worktreeCreate: worktreeCreate.mutateAsync,
-          });
-        }
-        if (input.forkSourceHarnessSessionId !== null) {
-          input.onStatusChange?.("forking-session");
-        }
-        // Resolver reads the binding for `tuiAgentId` and awaits the
-        // per-owner setup awaiter. Setup failure / cancellation rejects
-        // here with a typed error before any harness work happens - the
-        // catch chain below ensures `epic.createTuiAgent` is never
-        // invoked on that path. For normal launches, the placeholder canvas
-        // tab opened above remains visible alongside the host-opened setup
-        // terminal tab and the mutation hook's error toast. Fork launches
-        // intentionally have no placeholder yet while the source session is
-        // being forked.
-        const session = await startSession.mutateAsync({
-          harnessId: input.harnessId,
-          epicId: input.epicId,
-          model: input.model,
-          reasoningEffort: input.reasoningEffort,
-          // Epic Mode was removed from the product; the protocol still carries
-          // the field, so state the one remaining mode.
-          agentMode: "regular",
-          tuiAgentId,
-          harnessSessionId: null,
-          forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
-          forkSourceTuiAgentId: input.sourceTuiAgentId,
-          terminalAgentArgs: input.terminalAgentArgs,
-          workspaceMode: input.workspaceMode,
-          profileId: input.profileId,
-        });
-        if (
-          opensAfterSessionPrepared &&
-          session.terminalShellCommand !== null &&
-          session.terminalShellArgs !== null
-        ) {
-          stashPreparedTerminalAgentLaunch(tuiAgentId, {
-            cwd: session.workingDirectory,
-            shellCommand: session.terminalShellCommand,
-            shellArgs: session.terminalShellArgs,
-            worktreeBusyPaths: session.worktreeBusyPaths,
-          });
-          clearStashedPreparedLaunch = true;
-        }
-        input.onStatusChange?.("starting-terminal");
-        if (opensAfterSessionPrepared) {
-          openPlaceholder();
-        }
-        const created = await createTuiAgent.mutateAsync({
-          epicId: input.epicId,
-          parentId: input.parentId,
-          title: input.title,
-          harnessId: input.harnessId,
-          harnessSessionId: session.harnessSessionId,
-          terminalAgentArgs: input.terminalAgentArgs,
-          terminalShellCommand: session.terminalShellCommand,
-          terminalShellArgs:
-            session.terminalShellArgs === null
-              ? null
-              : [...session.terminalShellArgs],
-          hostId: session.hostId,
-          workspaceFolders: [...session.workspaceFolders],
-          workspaceMode: input.workspaceMode,
-          model: input.model,
-          reasoningEffort: input.reasoningEffort,
-          agentMode: "regular",
-          tuiAgentId,
-          profileId: input.profileId,
-          forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
-        });
-        // Hold the pending-create mark until the record actually projects, so
-        // the close-tile reconcile can't close the optimistic tab in the window
-        // between this RPC resolving and its Y.Doc update streaming back. On the
-        // error paths above the record is never created, so `finally` unmarks
-        // immediately and the reconcile closes the orphan placeholder tab.
-        await waitForTuiAgentProjected(input.epicId, tuiAgentId);
-        clearStashedPreparedLaunch = false;
-        return created.tuiAgentId;
-      } finally {
-        if (clearStashedPreparedLaunch) {
-          clearPreparedTerminalAgentLaunch(tuiAgentId);
-        }
-        if (placeholder.opened) {
-          unmarkArtifactPendingCreate(tuiAgentId);
-        }
-      }
-    },
+    (input: CreateTuiAgentInput) =>
+      createTuiAgentWithPlaceholder({
+        input,
+        placeholderHostId,
+        forkProfilePreflightSupported,
+        openTile,
+        markArtifactPendingCreate,
+        unmarkArtifactPendingCreate,
+        startSession: startSession.mutateAsync,
+        createTuiAgent: createTuiAgent.mutateAsync,
+        worktreeCreate: worktreeCreate.mutateAsync,
+        validateForkProfile: validateForkProfile.mutateAsync,
+      }),
     [
       startSession,
       createTuiAgent,

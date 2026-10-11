@@ -43,6 +43,7 @@ import {
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   freshLandingMirrorState,
@@ -444,6 +445,11 @@ afterEach(() => {
   resetLandingImageBudgetReservationsForTesting();
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  // The reset above (persistence re-enabled by the `null` bridge just before
+  // it) schedules a deferred write - cancel it here, not just after a test's
+  // OWN `vi.useRealTimers()`, or it arms a live 100ms timer that fires during
+  // a later test.
+  cancelDeferredJsonWrites();
   vi.useRealTimers();
   // Only the queue-serialization controls install a createImageBitmap
   // double; restoring it unconditionally after every test is a no-op for
@@ -557,6 +563,9 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
       update: (patch) => {
         desktopPatches.push(patch);
         return Promise.resolve();
+      },
+      schedule: (projection) => {
+        desktopPatches.push(projection());
       },
       flush: () => Promise.resolve(),
       dispose: () => undefined,
@@ -745,13 +754,21 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     expect(atoms[0]?.hash).toBeNull();
   });
 
-  // Seam 2 standalone (also covered above while pending): partialize + desktop.
-  it("serialization seams strip pending b64 while the in-memory draft keeps it", async () => {
+  // Seam 2 standalone (also covered above while pending): the desktop
+  // projection. Browser (localStorage) serialization is NOT exercised here -
+  // the bridge is installed before the paste, so local persistence is
+  // disabled for the whole test; the main paste test above already covers
+  // browser-then-desktop-then-browser-again (~509-650), including the actual
+  // localStorage strip.
+  it("desktop projection strips pending b64 while in-memory draft keeps it", async () => {
     const desktopPatches: DesktopPerWindowStatePatch[] = [];
     setLandingDraftDesktopProjectionBridge({
       update: (patch) => {
         desktopPatches.push(patch);
         return Promise.resolve();
+      },
+      schedule: (projection) => {
+        desktopPatches.push(projection());
       },
       flush: () => Promise.resolve(),
       dispose: () => undefined,
@@ -776,16 +793,13 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     );
     expect(inMemoryAtoms[0]?.b64content).not.toBeNull();
 
-    // localStorage partialize strips the pending node entirely.
-    await waitFor(() => {
-      const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
-      expect(raw).not.toBeNull();
-      expect(serializedHasStringB64(raw)).toBe(false);
-      expect(raw).not.toContain("imageAttachment");
-    });
-
-    // Desktop projection strips the pending node entirely.
+    // Desktop projection strips the pending node entirely. Asserted defined
+    // FIRST - `outbound ?? {}` stringifies to a b64-free, attachment-free
+    // blob on its own, so skipping this check would let an empty/missing
+    // patch (the projection never firing at all) pass right along with a
+    // correctly-stripped one.
     const outbound = desktopPatches.at(-1)?.landingDrafts?.[0]?.content;
+    expect(outbound).toBeDefined();
     expect(serializedHasStringB64(JSON.stringify(outbound ?? {}))).toBe(false);
     expect(JSON.stringify(outbound ?? {})).not.toContain("imageAttachment");
   });

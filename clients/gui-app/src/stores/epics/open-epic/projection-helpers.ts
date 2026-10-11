@@ -1225,7 +1225,7 @@ export function projectEpicHeader(doc: Y.Doc): EpicHeader {
 
 // ─── Tree slice (composed from artifacts + chats) ─────────────────────────
 
-interface RawTreeRecord {
+export interface RawTreeRecord {
   readonly id: string;
   readonly parentIdRaw: string | null;
   readonly title: string;
@@ -1235,7 +1235,7 @@ interface RawTreeRecord {
   readonly updatedAt: number;
 }
 
-function collectRawTreeRecords(
+export function collectRawTreeRecords(
   artifacts: ArtifactsSlice,
   chats: ChatsSlice,
   tuiAgents: TerminalAgentsSlice,

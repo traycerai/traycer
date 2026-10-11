@@ -1531,7 +1531,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
   });
 
-  it("keeps Retry enabled during a background read and does not cancel it on ticks", async () => {
+  it("keeps Retry enabled during a background read and backs off after each poll settles", async () => {
     const fixture = createFixture();
     let resolveBackground: ((response: ProvidersListResponse) => void) | null =
       null;
@@ -1557,52 +1557,48 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
       }),
     });
 
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    try {
-      renderTab(fixture, "codex");
-      await screen.findByText("server-a");
-      await act(async () => {
-        vi.advanceTimersByTime(800);
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      });
-      await screen.findByText("Couldn't refresh MCP servers");
+    // Real timers throughout: the poll now reschedules itself via a real
+    // `setTimeout` chain through the same transport the request coordinator
+    // uses, so faking that primitive here would also stall the coordinator.
+    renderTab(fixture, "codex");
+    await screen.findByText("server-a");
 
-      await act(async () => {
-        vi.advanceTimersByTime(800);
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      });
-      expect(fixture.listRequestCount()).toBe(3);
-      const retry = screen.getByRole("button", { name: "Retry" });
-      expect(retry.hasAttribute("disabled")).toBe(false);
+    // The first poll fires ~800ms after mount and errors.
+    await screen.findByText("Couldn't refresh MCP servers", undefined, {
+      timeout: 5_000,
+    });
+    expect(fixture.listRequestCount()).toBe(2);
 
-      await act(async () => {
-        vi.advanceTimersByTime(800);
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      });
-      expect(fixture.listRequestCount()).toBe(3);
+    // The next poll is scheduled only once the previous one settled, and
+    // its delay DOUBLES rather than repeating the initial ~800ms - so the
+    // third request lands as the pending background read.
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(3), {
+      timeout: 5_000,
+    });
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
 
-      fireEvent.click(retry);
-      await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(true));
-      await waitFor(() => expect(fixture.listRequestCount()).toBe(4));
-      await act(async () => {
-        vi.advanceTimersByTime(800);
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      });
-      expect(fixture.listRequestCount()).toBe(4);
-      await act(async () => {
-        resolveBackground?.(listResponse([server("server-a")]));
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      });
-      await act(async () => {
-        resolveRetry?.(listResponse([server("server-b")]));
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      });
-      await screen.findByText("server-b");
-      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    // With this poll's read still outstanding, the next one is not even
+    // scheduled yet (scheduling resumes only once this read settles), so
+    // waiting out another beat fires no duplicate request.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(fixture.listRequestCount()).toBe(3);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(true));
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(4));
+
+    await act(async () => {
+      resolveBackground?.(listResponse([server("server-a")]));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveRetry?.(listResponse([server("server-b")]));
+      await Promise.resolve();
+    });
+    await screen.findByText("server-b");
+    expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+  }, 10_000);
 
   it("does not turn a previously empty successful list into a fresh absence after refresh fails", async () => {
     const fixture = createFixture();

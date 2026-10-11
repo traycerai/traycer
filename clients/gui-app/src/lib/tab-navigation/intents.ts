@@ -63,7 +63,9 @@ export type TabNavigationIntent =
  * route intents. The navigation controller resolves them after taking its
  * rollback snapshot, then delegates only a canonical intent to tab descriptors.
  */
-export type TabActivationIntent =
+export type TabActivationIntent = {
+  readonly demand?: "preview" | "settled";
+} & (
   | TabNavigationIntent
   | {
       readonly kind: "complete-epic-migration";
@@ -105,7 +107,8 @@ export type TabActivationIntent =
       readonly kind: "new-draft";
       readonly settings: ChatRunSettings | null;
       readonly groupId?: string;
-    };
+    }
+);
 
 const DEFAULT_EPIC_FOCUS: EpicRouteFocus = {
   focusedAt: undefined,

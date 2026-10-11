@@ -1,3 +1,4 @@
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { FilePlus2 } from "lucide-react";
@@ -16,6 +17,7 @@ import { commitArtifactImageWithRetry } from "@/hooks/artifacts/commit-artifact-
 import {
   useArtifactImageOperations,
   type ArtifactImagePreparation,
+  type ArtifactImageOperations,
 } from "@/hooks/artifacts/use-artifact-image-operations";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import {
@@ -48,60 +50,14 @@ export function AddImageToArtifactButton(props: {
 
   const addMutation = useMutation<void, Error, string>({
     mutationKey: epicMutationKeys.addImageToArtifact(),
-    mutationFn: async (artifactId) => {
-      let operationId: string | null = null;
-      let rollback: (() => void) | null = null;
-      try {
-        const prepared =
-          props.source.kind === "remote"
-            ? await operations.prepareRemote(props.source.url)
-            : await prepareClientImage(
-                props.source.url,
-                operations.prepareBytes,
-              );
-        operationId = prepared.operationId;
-        // Materializing the body is awaited: today the hold resolves at once,
-        // and once the cold tier lives in the runtime worker it resolves when
-        // that room's bytes have come back across the bridge. The `await` is
-        // here now so the mutation's control flow is already the one it will
-        // have then - the image is prepared before the body is held either
-        // way, and the abort path below already covers a failure after that.
-        const body = await holdArtifactBody(
-          handle,
-          artifactId,
-          // An interactive edit on a body the user is looking at - exactly the
-          // case the cooldown is a good bet for.
-          "linger",
-        ).catch((cause: unknown) => {
-          if (cause instanceof ArtifactBodyUnavailableError) {
-            throw new Error("This artifact is not available for editing.");
-          }
-          throw cause;
-        });
-        try {
-          rollback = appendArtifactImage(body.fragment, {
-            src: prepared.src,
-            alt: props.alt,
-            attachmentHash: prepared.attachmentHash,
-            mediaType: prepared.mediaType,
-          });
-          await commitArtifactImageWithRetry(
-            operations.commit,
-            artifactId,
-            prepared.operationId,
-          );
-          operationId = null;
-        } finally {
-          body.release();
-        }
-      } catch (reason) {
-        rollback?.();
-        if (operationId !== null) {
-          await operations.abort(artifactId, operationId).catch(() => {});
-        }
-        throw reason instanceof Error ? reason : new Error("Please try again.");
-      }
-    },
+    mutationFn: (artifactId) =>
+      addImageToArtifact({
+        artifactId,
+        source: props.source,
+        alt: props.alt,
+        handle,
+        operations,
+      }),
     onSuccess: () => setOpen(false),
   });
 
@@ -171,6 +127,70 @@ export function AddImageToArtifactButton(props: {
       </PopoverContent>
     </Popover>
   );
+}
+
+async function addImageToArtifact({
+  artifactId,
+  source,
+  alt,
+  handle,
+  operations,
+}: {
+  artifactId: string;
+  source: AddToArtifactImageSource;
+  alt: string;
+  handle: OpenEpicStoreHandle;
+  operations: ArtifactImageOperations;
+}): Promise<void> {
+  let operationId: string | null = null;
+  let rollback: (() => void) | null = null;
+  try {
+    const prepared =
+      source.kind === "remote"
+        ? await operations.prepareRemote(source.url)
+        : await prepareClientImage(source.url, operations.prepareBytes);
+    operationId = prepared.operationId;
+    // Materializing the body is awaited: today the hold resolves at once,
+    // and once the cold tier lives in the runtime worker it resolves when
+    // that room's bytes have come back across the bridge. The `await` is
+    // here now so the mutation's control flow is already the one it will
+    // have then - the image is prepared before the body is held either
+    // way, and the abort path below already covers a failure after that.
+    const body = await holdArtifactBody(
+      handle,
+      artifactId,
+      // An interactive edit on a body the user is looking at - exactly the
+      // case the cooldown is a good bet for.
+      "linger",
+    ).catch((cause: unknown) => {
+      if (cause instanceof ArtifactBodyUnavailableError) {
+        throw new Error("This artifact is not available for editing.");
+      }
+      throw cause;
+    });
+    try {
+      rollback = appendArtifactImage(body.fragment, {
+        src: prepared.src,
+        alt: alt,
+        attachmentHash: prepared.attachmentHash,
+        mediaType: prepared.mediaType,
+      });
+      await commitArtifactImageWithRetry(
+        operations.commit,
+        artifactId,
+        prepared.operationId,
+      );
+      operationId = null;
+    } finally {
+      body.release();
+    }
+  } catch (reason) {
+    rollback?.();
+    if (operationId !== null) {
+      await operations.abort(artifactId, operationId).catch(() => {});
+    }
+    throw reason instanceof Error ? reason : new Error("Please try again.");
+  }
 }
 
 async function prepareClientImage(

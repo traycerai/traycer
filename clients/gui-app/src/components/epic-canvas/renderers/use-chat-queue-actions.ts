@@ -237,10 +237,14 @@ export function useChatQueueActions(
   const editQueuedItem = useCallback(
     (item: OpenChatQueuedPromptItem): void => {
       if (item.delivery === "same_turn") {
-        const actionId = chatActions.queueCancel(item.queueItemId);
+        const actionId = chatActions.queueCancel({
+          queueItemId: item.queueItemId,
+          beforeSend: () => {
+            inheritQueuedItemImageCustody(item.message.content);
+            replaceDraftContent(nodeId, item.message.content, null);
+          },
+        });
         if (actionId === null) return;
-        inheritQueuedItemImageCustody(item.message.content);
-        replaceDraftContent(nodeId, item.message.content, null);
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return;
       }

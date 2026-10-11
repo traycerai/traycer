@@ -58,6 +58,7 @@ import {
   useGuiHarnessModelsWarmup,
   useRefreshHarnessCatalog,
   useRefreshHarnessCatalogForClient,
+  type CatalogQueryActivityOptions,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
@@ -125,6 +126,17 @@ function harnessesQuery(queryClient: QueryClient): Query {
     .find((entry) => entry.queryKey.includes("agent.gui.listHarnesses"));
   if (query === undefined) {
     throw new Error("Expected agent.gui.listHarnesses query");
+  }
+  return query;
+}
+
+function modelsQuery(queryClient: QueryClient): Query {
+  const query = queryClient
+    .getQueryCache()
+    .getAll()
+    .find((entry) => entry.queryKey.includes("agent.gui.listModels"));
+  if (query === undefined) {
+    throw new Error("Expected agent.gui.listModels query");
   }
   return query;
 }
@@ -749,39 +761,151 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     expect(reader.result.current.harnesses[0].models[0].label).toBe("Model 0");
   });
 
-  it("detaches a hidden reader: subscribed:false yields no catalog even with a warm cache", async () => {
-    vi.useFakeTimers();
+  // Real timers, deliberately - not `vi.useFakeTimers()`. A cold mount here
+  // is the same two-hop shape as the "pending-availability retention" describe
+  // block below: the model fan-out's observer is only created once the
+  // harnesses fetch's data lands, so its own fetch dispatches one render
+  // later than the harnesses fetch resolves. A fixed `advanceTimersByTimeAsync(0)`
+  // flush races that - `waitFor` (real timers, polling) is the honest wait.
+  it("keeps a continuously-mounted reader's catalog reference across visible->hidden->visible, with zero observers and no extra RPC while hidden", async () => {
+    let harnessCalls = 0;
+    let modelCalls = 0;
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => {
+        harnessCalls += 1;
+        return { harnesses: harnesses(["opencode"]) };
+      },
+      "agent.gui.listModels": () => {
+        modelCalls += 1;
+        return modelsResponse(2);
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      (activity: CatalogQueryActivityOptions) =>
+        useGuiHarnessCatalog(null, activity),
+      {
+        wrapper: fixture.Wrapper,
+        initialProps: {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        },
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models).toHaveLength(2);
+      expect(result.current.harnesses[0]?.modelsLoading).toBe(false);
+    });
+    expect(harnessCalls).toBe(1);
+    expect(modelCalls).toBe(1);
+    expect(result.current.harnesses).toHaveLength(1);
+    const visibleCatalog = result.current;
+
+    // Fully hidden - the real "not torn down, merely offscreen" shape (see
+    // QueryActivityOptions' own doc comment: both flags false to detach).
+    rerender({ enabled: false, subscribed: false, modelsFetch: "cached-only" });
+
+    // The projection must not collapse to empty just because the reader
+    // detached - the whole point of keeping the LAST catalog while hidden.
+    expect(result.current).toBe(visibleCatalog);
+    expect(harnessesQuery(fixture.queryClient).getObserversCount()).toBe(0);
+    expect(modelsQuery(fixture.queryClient).getObserversCount()).toBe(0);
+    expect(harnessCalls).toBe(1);
+    expect(modelCalls).toBe(1);
+
+    // Reveal again: nothing changed underneath, so it re-observes the same
+    // data with no new request.
+    rerender({
+      enabled: true,
+      subscribed: true,
+      modelsFetch: "all-harnesses",
+    });
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models).toHaveLength(2);
+    });
+    // The full round trip - not merely the hidden phase - lands on the
+    // SAME catalog reference: nothing underneath changed, so re-observing
+    // must not rebuild the projection either.
+    expect(result.current).toBe(visibleCatalog);
+    expect(result.current.harnesses).toHaveLength(1);
+    expect(harnessCalls).toBe(1);
+    expect(modelCalls).toBe(1);
+  });
+
+  // Real timers here too - same two-hop cold-mount shape as the test above.
+  it("a cache change while hidden surfaces fresh labels and a new projection identity on reveal", async () => {
     const fixture = createCatalogFixture({
       "agent.gui.listHarnesses": () => ({ harnesses: harnesses(["opencode"]) }),
       "agent.gui.listModels": () => modelsResponse(2),
     });
-    const owner = renderHook(
-      () =>
-        useGuiHarnessCatalog(null, {
+
+    const { result, rerender } = renderHook(
+      (activity: CatalogQueryActivityOptions) =>
+        useGuiHarnessCatalog(null, activity),
+      {
+        wrapper: fixture.Wrapper,
+        initialProps: {
           enabled: true,
           subscribed: true,
           modelsFetch: "all-harnesses",
-        }),
-      { wrapper: fixture.Wrapper },
+        },
+      },
     );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models).toHaveLength(2);
+      expect(result.current.harnesses[0]?.modelsLoading).toBe(false);
     });
-    owner.unmount();
+    const beforeCatalog = result.current;
+    const beforeModels = result.current.harnesses[0]?.models;
+    expect(beforeModels[0].label).toBe("Model 0");
 
-    const hidden = renderHook(
-      () =>
-        useGuiHarnessCatalog(null, {
-          enabled: false,
-          subscribed: false,
-          modelsFetch: "cached-only",
-        }),
-      { wrapper: fixture.Wrapper },
+    rerender({ enabled: false, subscribed: false, modelsFetch: "cached-only" });
+    expect(result.current).toBe(beforeCatalog);
+    expect(result.current.harnesses[0]?.models).toBe(beforeModels);
+
+    // The cache changes while this reader is fully detached (another
+    // surface's fetch, or a manual refresh landing). Written directly for a
+    // deterministic edit, independent of a second hook's fetch timing.
+    fixture.queryClient.setQueryData(
+      modelsQuery(fixture.queryClient).queryKey,
+      {
+        harnessId: "opencode",
+        models: [
+          {
+            harnessId: "opencode",
+            slug: "model-refreshed",
+            label: "Refreshed Model",
+            description: null,
+            contextWindow: null,
+            maxOutputTokens: null,
+            defaultReasoningEffort: null,
+            supportedReasoningEfforts: [],
+            defaultServiceTier: null,
+            supportedServiceTiers: [],
+            deprecationNotice: null,
+            metadata: {},
+          },
+        ],
+      } satisfies ListGuiAgentModelsResponse,
     );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+
+    rerender({
+      enabled: true,
+      subscribed: true,
+      modelsFetch: "all-harnesses",
     });
-    expect(hidden.result.current.harnesses).toHaveLength(0);
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models[0]?.label).toBe(
+        "Refreshed Model",
+      );
+    });
+
+    expect(result.current).not.toBe(beforeCatalog);
+    const afterModels = result.current.harnesses[0]?.models;
+    expect(afterModels).not.toBe(beforeModels);
+    expect(afterModels).toHaveLength(1);
+    expect(afterModels[0].label).toBe("Refreshed Model");
   });
 });
 
@@ -1803,14 +1927,17 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
       },
     });
 
-    const { result } = renderHook(
-      () =>
-        useGuiHarnessCatalog(null, {
+    const { result, rerender } = renderHook(
+      (activity: CatalogQueryActivityOptions) =>
+        useGuiHarnessCatalog(null, activity),
+      {
+        wrapper: fixture.Wrapper,
+        initialProps: {
           enabled: true,
           subscribed: true,
           modelsFetch: "all-harnesses",
-        }),
-      { wrapper: fixture.Wrapper },
+        },
+      },
     );
     await waitFor(() => {
       expect(result.current.harnesses[0]?.models).toHaveLength(2);
@@ -1848,6 +1975,34 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
     });
     expect(result.current.harnesses[0]?.models).toHaveLength(2);
     expect(result.current.harnesses[0]?.modelsLoading).toBe(false);
+    expect(modelCalls).toBe(1);
+
+    // Hidden while pending: at this exact moment the shared model query's
+    // only observer comes from `pendingModelQueries` - a SEPARATE
+    // `useHostQueries` fan-out from the available-harness one above (the
+    // harness is not in `harnessIds` while pending). A `subscribed`
+    // regression specific to that batch's own options would only show up
+    // here - every other detach test in this file uses an always-available
+    // fixture and never populates this branch at all.
+    const pendingModelQuery = modelsQuery(fixture.queryClient);
+    rerender({
+      enabled: false,
+      subscribed: false,
+      modelsFetch: "cached-only",
+    });
+    expect(pendingModelQuery.getObserversCount()).toBe(0);
+    expect(result.current.harnesses[0]?.models).toHaveLength(2);
+    expect(modelCalls).toBe(1);
+
+    // Reveal again before continuing the settle sequence below.
+    rerender({
+      enabled: true,
+      subscribed: true,
+      modelsFetch: "all-harnesses",
+    });
+    await waitFor(() => {
+      expect(pendingModelQuery.getObserversCount()).toBeGreaterThan(0);
+    });
     expect(modelCalls).toBe(1);
 
     // Settles unavailable: the retained-models exemption must not apply -

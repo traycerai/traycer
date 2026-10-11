@@ -3,6 +3,10 @@ import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  __resetDocumentVisibilitySubscribersForTests,
+  setDesktopWindowOnScreen,
+} from "@/lib/dom/document-visibility";
+import {
   resetStatusAnimationClockForTests,
   STATUS_ANIMATION_PULSE_CADENCE_MS,
   STATUS_ANIMATION_SMOOTH_CADENCE_MS,
@@ -11,10 +15,6 @@ import {
   subscribeStatusAnimation,
   useStatusAnimation,
 } from "@/lib/animation/status-animation-clock";
-import {
-  __resetDocumentVisibilitySubscribersForTests,
-  setDesktopWindowOnScreen,
-} from "@/lib/dom/document-visibility";
 
 function setDocumentHidden(hidden: boolean): void {
   Object.defineProperty(document, "visibilityState", {
@@ -222,7 +222,7 @@ describe("subscribeStatusAnimation", () => {
     ]);
   });
 
-  it("stops ticking when the desktop window is off screen even though Page Visibility stays visible", () => {
+  it("stops ticking when the desktop shell reports the window off-screen even though document.visibilityState stays visible, and resumes once it reports back on-screen", () => {
     const calls: number[] = [];
     subscribeStatusAnimation(
       (elapsed) => calls.push(elapsed),
@@ -233,9 +233,10 @@ describe("subscribeStatusAnimation", () => {
       vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS);
     });
     expect(calls).toEqual([STATUS_ANIMATION_TICK_MS]);
-    expect(document.visibilityState).toBe("visible");
 
+    expect(document.visibilityState).toBe("visible");
     setDesktopWindowOnScreen(false);
+    expect(document.visibilityState).toBe("visible");
     expect(vi.getTimerCount()).toBe(0);
 
     act(() => {
@@ -246,6 +247,14 @@ describe("subscribeStatusAnimation", () => {
 
     setDesktopWindowOnScreen(true);
     expect(vi.getTimerCount()).toBe(1);
+
+    act(() => {
+      vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS);
+    });
+    expect(calls).toEqual([
+      STATUS_ANIMATION_TICK_MS,
+      STATUS_ANIMATION_TICK_MS * 2,
+    ]);
   });
 
   it("is a no-op under prefers-reduced-motion, with an inert unsubscribe", () => {

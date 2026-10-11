@@ -6,6 +6,7 @@ import {
 } from "@/lib/artifacts/artifact-export";
 import {
   ArtifactBodyUnavailableError,
+  type ArtifactBodyHold,
   holdArtifactBody,
 } from "@/lib/epic-replica-reads";
 import {
@@ -32,6 +33,25 @@ export interface EpicExportArtifactsInput {
   readonly format: ArtifactExportFormat;
   readonly archive: boolean;
   readonly archiveTitle: string | null;
+}
+
+function serializeHeldArtifact(
+  hold: ArtifactBodyHold,
+  artifact: ArtifactExportSelection,
+) {
+  try {
+    return {
+      ...artifact,
+      markdown: serializeArtifactMarkdown(hold.fragment),
+    };
+  } finally {
+    // Before the next materialize, so at most one body is resident -
+    // including on the throw path, where the loop is abandoned. The
+    // `"immediate"` retention above is the other half of that claim:
+    // ordering the release early bounds nothing on its own if the
+    // release only arms a cooldown.
+    hold.release();
+  }
 }
 
 export function useEpicExportArtifacts() {
@@ -80,19 +100,7 @@ export function useEpicExportArtifacts() {
           }
           throw cause;
         });
-        try {
-          serialized.push({
-            ...artifact,
-            markdown: serializeArtifactMarkdown(hold.fragment),
-          });
-        } finally {
-          // Before the next materialize, so at most one body is resident -
-          // including on the throw path, where the loop is abandoned. The
-          // `"immediate"` retention above is the other half of that claim:
-          // ordering the release early bounds nothing on its own if the
-          // release only arms a cooldown.
-          hold.release();
-        }
+        serialized.push(serializeHeldArtifact(hold, artifact));
       }
       const output = await createArtifactExport({
         artifacts: serialized,

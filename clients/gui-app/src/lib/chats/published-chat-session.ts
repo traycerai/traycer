@@ -1,3 +1,4 @@
+import { createChatRowStore } from "@/stores/chats/chat-row-store";
 import { createStore, useStore } from "zustand";
 import type { UseBoundStore, StoreApi } from "zustand";
 // The OPEN record schemas: a published copy can carry a row from a host newer
@@ -494,6 +495,7 @@ export function publishedChatSessionState(
     stateFailedSendRestoration: () => undefined,
     markNoticeDelivered: () => undefined,
     takeSetupFailedRestoration: () => null,
+    peekSetupFailedRestoration: () => null,
     takeMessageDeliveryRestoration: () => null,
     setCurrentComposerSettings: () => undefined,
     dispose: () => undefined,
@@ -563,6 +565,7 @@ export function createPublishedChatSessionHandle(
 ): PublishedChatSessionHandle {
   const state = publishedChatSessionState(input);
   const store = createStore<ChatSessionState>()(() => state);
+  const rows = createChatRowStore(store);
   const boundStore = Object.assign(
     <T>(selector: (value: ChatSessionState) => T): T =>
       useStore(store, selector),
@@ -573,15 +576,17 @@ export function createPublishedChatSessionHandle(
     chatId: input.chatId,
     userId: input.ownerUserId,
     store: boundStore,
+    rows: rows.store,
     deliveredNotices: {
       notices: new WeakSet(),
       retainedClientActionIds: new Set<string>(),
       clientActionIds: new Set(),
     },
     deliveredRestoreCompletionKeys: new Set(),
+    isSurfaceVisible: () => true,
     setSurfaceVisibility: () => undefined,
     clearSurfaceVisibility: () => undefined,
-    dispose: () => undefined,
+    dispose: rows.dispose,
     applyConversion: (update) => {
       const current = store.getState();
       const messages = reconcileRows(

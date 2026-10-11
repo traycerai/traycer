@@ -1377,9 +1377,8 @@ export class RunnerIpcBridge {
       this.epicVisibility.snapshot(),
     );
     // This window's OWN on-screen state (minimised / hidden, as main sees it).
-    // The Page Visibility API never reports hidden in this app because every
-    // window runs with `backgroundThrottling: false`, so the renderer has no
-    // other way to learn it.
+    // Throttling stays disabled for receiver stats (#1613) and transport
+    // keepalives, pinning DOM visibility to visible. Main reports hide/minimise.
     const ownRecord = this.windowRegistry.getRecordById(windowId);
     if (ownRecord !== null) {
       const onScreen = windowOnScreen(ownRecord.window);

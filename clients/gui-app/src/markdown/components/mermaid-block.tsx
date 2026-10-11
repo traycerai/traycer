@@ -7,7 +7,6 @@ import {
   deriveMermaidAriaLabel,
   deriveMermaidErrorMessage,
   ensureMermaidReady,
-  parseMermaid,
   renderMermaidSvg,
 } from "@/editor-core/nodes/mermaid/mermaid-service";
 import { useMermaidPngDownload } from "@/editor-core/nodes/mermaid/use-mermaid-png-download";
@@ -101,20 +100,16 @@ function MermaidRenderSession(props: {
   }, []);
 
   /*
-   * Async parse + render. `AbortController` invalidates in-flight work on
-   * dependency change or unmount so a stale resolve can't race past a
-   * newer one and overwrite state. Standard async-effect cancellation
-   * idiom; integrates with `fetch` and `addEventListener` if those land
-   * here later.
+   * Async cached render. `AbortController` invalidates in-flight work on
+   * dependency change or unmount and releases this consumer's queued layout.
+   * A shared diagram continues while another consumer still owns it.
    */
   useEffect(() => {
     const ctrl = new AbortController();
     const isAborted = (): boolean => ctrl.signal.aborted;
     void (async (): Promise<void> => {
       try {
-        await parseMermaid(renderCode);
-        if (isAborted()) return;
-        const { svg } = await renderMermaidSvg(renderCode);
+        const { svg } = await renderMermaidSvg(renderCode, ctrl.signal);
         if (isAborted()) return;
         setRender({ status: "ready", svg, error: "" });
       } catch (err: unknown) {

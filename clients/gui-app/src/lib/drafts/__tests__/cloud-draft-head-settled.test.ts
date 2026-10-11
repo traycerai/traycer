@@ -2122,3 +2122,125 @@ describe("noteCloudDraftHeadHost", () => {
     });
   });
 });
+
+describe("an absence sweep while a newer head's apply is parked on its images", () => {
+  const IMAGE_HASH = "ef".repeat(32);
+
+  /** Revision 2 of the row, naming an image, as the newer published head does. */
+  function newerDocument(): DraftDocument {
+    const document = landingDocumentWithImages(DRAFT_ID, OWNER_HOST_ID, [
+      IMAGE_HASH,
+    ]);
+    if (document.kind !== "landing") {
+      throw new Error("expected a landing document");
+    }
+    return {
+      ...document,
+      revision: 2,
+      portable: { ...document.portable, content: typed("bravo") },
+    };
+  }
+
+  function rowText(): string {
+    return JSON.stringify(useLandingDraftStore.getState().drafts);
+  }
+
+  /** Mounts the owner host's session, whose `drafts.readBlob` answers only once `openImages` runs. */
+  async function mountOwnerWithHeldImages(): Promise<{
+    readonly blobReads: () => number;
+    readonly openImages: () => void;
+  }> {
+    installFreshIndexedDb();
+    let reads = 0;
+    let openImages: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      openImages = resolve;
+    });
+    acquireDraftMirrorSession({
+      hostId: OWNER_HOST_ID,
+      client: {
+        request: (method: string) => {
+          if (method === "drafts.readBlob") {
+            reads += 1;
+            return held.then(() => ({ ok: false, reason: "missing" }));
+          }
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        },
+      } as never,
+      streamClient: fakeDraftStreamClient(),
+      timing: undefined,
+    });
+    await Promise.resolve();
+    return { blobReads: () => reads, openImages: () => openImages() };
+  }
+
+  it.each([
+    { relisted: false, outcome: "leaves the chat absent" },
+    {
+      relisted: true,
+      outcome: "wakes the relisting mount, whose read installs it",
+    },
+  ])(
+    "when a settled directory dispatched during the apply drops the older head's row and the chat is relisted=$relisted, the parked apply installs nothing and $outcome",
+    async ({ relisted }) => {
+      const older = summaryFor(DRAFT_ID, OWNER_HOST_ID, HEAD_ONE);
+      const newer = withPublishedAt(
+        summaryFor(DRAFT_ID, OWNER_HOST_ID, HEAD_TWO),
+        2,
+      );
+      const owner = await mountOwnerWithHeldImages();
+      await ingest(
+        HOST_ID,
+        older,
+        cloudDocument(DRAFT_ID, OWNER_HOST_ID, "landing"),
+      );
+      expect(landingIds()).toEqual([DRAFT_ID]);
+
+      beginCloudDraftHeadRead(newer);
+      const parked = ingest(HOST_ID, newer, newerDocument());
+      await vi.waitFor(() => {
+        expect(owner.blobReads()).toBe(1);
+      });
+
+      // A directory dispatched after the apply started no longer lists the
+      // chat: it drops the older head's row while the newer apply waits.
+      const dropped = sweepAbsentCloudDraftMirrors(
+        HOST_ID,
+        new Map(),
+        cloudDraftIngestSeq(),
+      );
+      expect(dropped).toEqual([DRAFT_ID]);
+      expect(landingIds()).toEqual([]);
+      // The claim is still the parked read's: a mount walking a directory
+      // that lists the chat again skips the head.
+      expect(cloudDraftHeadReading(newer)).toBe(true);
+      const woken = vi.fn<AbandonListener>();
+      const unsubscribe = subscribeCloudDraftHeadAbandoned(woken);
+
+      owner.openImages();
+      await parked;
+      unsubscribe();
+
+      expect(landingIds()).toEqual([]);
+      expect(cloudDraftHeadReading(newer)).toBe(false);
+      expect(cloudDraftHeadSettled(newer)).toBe(false);
+      // The skipping mount is told now, not at its next directory delivery.
+      expect(woken).toHaveBeenCalledTimes(1);
+      expect(woken.mock.calls[0]).toEqual([newer, "released"]);
+
+      if (relisted) {
+        beginCloudDraftHeadRead(newer);
+        await ingest(HOST_ID, newer, newerDocument());
+
+        expect(landingIds()).toEqual([DRAFT_ID]);
+        expect(rowText()).toContain("bravo");
+        expect(cloudDraftHeadSettled(newer)).toBe(true);
+      }
+    },
+  );
+});

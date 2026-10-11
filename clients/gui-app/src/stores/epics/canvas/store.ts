@@ -1,3 +1,8 @@
+import {
+  setPaneDemand,
+  topLevelDemand,
+  type ActiveSurfaceDemand,
+} from "@/stores/tabs/surface-demand";
 import { readTabStripLayout } from "@/stores/tabs/store";
 import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
 import {
@@ -18,7 +23,7 @@ import { create } from "zustand";
 import {
   createJSONStorage,
   persist,
-  type StateStorage,
+  type PersistStorage,
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
@@ -26,6 +31,11 @@ import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/pl
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { basePersistOptions, epicCanvasKey } from "@/lib/persist";
 import { appLogger } from "@/lib/logger";
+import {
+  deferJsonWrite,
+  flushDeferredJsonWrite,
+  cancelDeferredJsonWrite,
+} from "@/lib/persist/deferred-json-storage";
 import {
   DEFAULT_EPIC_NODE_NAMES,
   type EpicNodeKind,
@@ -47,7 +57,6 @@ import {
   type AnalyticsSource,
 } from "@/lib/analytics";
 import type {
-  DesktopJsonValue,
   DesktopPerWindowSnapshot,
   DesktopPerWindowStatePatch,
 } from "@/lib/windows/types";
@@ -93,6 +102,7 @@ import {
   resizeSplit,
   setActivePane,
   setActiveTab as setActiveTileTabCanvas,
+  activatePaneTab,
   splitPaneAtEdge,
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
@@ -139,13 +149,14 @@ import {
 import {
   EMPTY_TREES,
   sanitizePersistedCanvasState,
+  type PersistedCanvasStatePatch,
 } from "@/stores/epics/canvas/canvas-persistence";
 import {
   buildDesktopProjectionPatch,
   projectCanvasByTabIdForDesktop,
   projectTabsForDesktop,
 } from "@/stores/epics/canvas/canvas-desktop-projection";
-import { serializeEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
+import { serializeCanvasByTabId } from "@/stores/epics/canvas/migrate-canvas";
 import {
   isTabCloseLocked,
   isTabStructurallyLocked,
@@ -632,6 +643,12 @@ export interface EpicCanvasStore {
     paneId: string,
     tileTabId: string,
   ) => NestedFocusTarget | null;
+  setTileTabDemand: (
+    tabId: string,
+    paneId: string,
+    tileTabId: string,
+    demand: ActiveSurfaceDemand,
+  ) => void;
   setActiveTilePane: (tabId: string, paneId: string) => void;
   prepareSetActiveTilePaneFocusTarget: (
     tabId: string,
@@ -810,41 +827,38 @@ export { createEpicName } from "@/lib/epic-name";
 let localPersistenceEnabled = true;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
-const serializedCanvasByReference = new WeakMap<
-  EpicCanvasState,
-  DesktopJsonValue
->();
-
-function serializeCanvasForLocalPersist(
-  canvas: EpicCanvasState,
-): DesktopJsonValue {
-  const cached = serializedCanvasByReference.get(canvas);
-  if (cached !== undefined) return cached;
-  const serialized = serializeEpicCanvasState(canvas);
-  serializedCanvasByReference.set(canvas, serialized);
-  return serialized;
-}
-
-function serializeCanvasByTabIdForLocalPersist(
-  canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
-): Readonly<Record<string, DesktopJsonValue>> {
-  if (!localPersistenceEnabled) return {};
-  return Object.fromEntries(
-    Object.entries(canvasByTabId).flatMap(([tabId, canvas]) =>
-      canvas === undefined
-        ? []
-        : [[tabId, serializeCanvasForLocalPersist(canvas)]],
-    ),
-  );
-}
-
-const epicCanvasStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
+let lastDesktopProjection: {
+  readonly state: EpicCanvasStore;
+  readonly patch: DesktopPerWindowStatePatch;
+} | null = null;
+const localCanvasJsonStorage = createJSONStorage<PersistedCanvasStatePatch>(
+  () => window.localStorage,
+);
+const epicCanvasStorage: PersistStorage<PersistedCanvasStatePatch> = {
+  getItem: (name) => {
+    // Explicit hydration accepts disk as the incoming authority. A queued
+    // local snapshot must not overwrite a newer value before we read it.
+    cancelDeferredJsonWrite(name);
+    return localCanvasJsonStorage?.getItem(name) ?? null;
+  },
   setItem: (name, value) => {
     if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
+    deferJsonWrite(name, () => {
+      if (!localPersistenceEnabled) return;
+      window.localStorage.setItem(
+        name,
+        JSON.stringify({
+          ...value,
+          state: {
+            ...value.state,
+            canvasByTabId: serializeCanvasByTabId(value.state.canvasByTabId),
+          },
+        }),
+      );
+    });
   },
   removeItem: (name) => {
+    cancelDeferredJsonWrite(name);
     window.localStorage.removeItem(name);
   },
 };
@@ -857,6 +871,7 @@ export function setEpicCanvasDesktopProjectionBridge(
   bridge: DesktopPerWindowProjectionBridge | null,
 ): void {
   desktopProjectionBridge = bridge;
+  lastDesktopProjection = null;
   setEpicCanvasLocalPersistenceEnabled(bridge === null);
 }
 
@@ -1875,7 +1890,13 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             const tab = state.tabsById[tabId];
             if (tab === undefined) return state;
             const isOpen = state.openTabOrder.includes(tabId);
-            if (state.activeTabId === tabId && isOpen) return state;
+            if (
+              state.activeTabId === tabId &&
+              isOpen &&
+              (topLevelDemand(`epic:${tabId}`) === "preview" ||
+                state.mostRecentTabIdByEpicId[tab.epicId] === tabId)
+            )
+              return state;
             // Activation only moves order/active/recent pointers; the tab record
             // stays stable so header-strip / command-palette consumers (which read
             // tab metadata) don't re-render on every tab switch.
@@ -1884,10 +1905,10 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
                 ? state.openTabOrder
                 : [...state.openTabOrder, tabId],
               activeTabId: tabId,
-              mostRecentTabIdByEpicId: {
-                ...state.mostRecentTabIdByEpicId,
-                [tab.epicId]: tabId,
-              },
+              mostRecentTabIdByEpicId:
+                topLevelDemand(`epic:${tabId}`) === "preview"
+                  ? state.mostRecentTabIdByEpicId
+                  : { ...state.mostRecentTabIdByEpicId, [tab.epicId]: tabId },
             };
           });
         },
@@ -2299,11 +2320,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         setActiveTileTab: (tabId, paneId, tileTabId) => {
-          set((state) =>
-            updateTabCanvas(state, tabId, (canvas) =>
-              setActiveTileTabCanvas(canvas, paneId, tileTabId),
-            ),
-          );
+          get().setTileTabDemand(tabId, paneId, tileTabId, "settled");
         },
 
         prepareSetActiveTileTabFocusTarget: (tabId, paneId, tileTabId) => {
@@ -2313,6 +2330,20 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             tileInstanceId: tileTabId,
           });
           return target;
+        },
+
+        setTileTabDemand: (tabId, paneId, tileTabId, demand) => {
+          const canvas = get().canvasByTabId[tabId];
+          const pane =
+            canvas === undefined ? null : findPaneById(canvas.root, paneId);
+          if (pane === null || !pane.tabInstanceIds.includes(tileTabId)) return;
+          if (demand === "preview") setPaneDemand(paneId, tileTabId, demand);
+          set((state) =>
+            updateTabCanvas(state, tabId, (current) =>
+              activatePaneTab(current, paneId, tileTabId, demand),
+            ),
+          );
+          if (demand === "settled") setPaneDemand(paneId, tileTabId, demand);
         },
 
         setActiveTilePane: (tabId, paneId) => {
@@ -3316,12 +3347,10 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
     },
     {
       ...basePersistOptions(epicCanvasKey(null)),
-      storage: createJSONStorage(() => epicCanvasStorage),
+      storage: epicCanvasStorage,
       partialize: (state) => ({
         tabsById: state.tabsById,
-        canvasByTabId: serializeCanvasByTabIdForLocalPersist(
-          state.canvasByTabId,
-        ),
+        canvasByTabId: state.canvasByTabId,
         openTabOrder: state.openTabOrder,
         activeTabId: state.activeTabId,
         mostRecentTabIdByEpicId: state.mostRecentTabIdByEpicId,
@@ -3350,6 +3379,21 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
     },
   ),
 );
+
+// Commit the outgoing bucket before retargeting: the lifecycle bridge checks
+// localStorage directly when deciding whether a returning account has state.
+const setCanvasPersistOptions = useEpicCanvasStore.persist.setOptions;
+useEpicCanvasStore.persist.setOptions = (options) => {
+  const name = useEpicCanvasStore.persist.getOptions().name;
+  if (
+    options.name !== undefined &&
+    options.name !== name &&
+    name !== undefined
+  ) {
+    flushDeferredJsonWrite(name);
+  }
+  setCanvasPersistOptions(options);
+};
 
 const rawPublicSetState = useEpicCanvasStore.setState.bind(useEpicCanvasStore);
 /**
@@ -3488,13 +3532,43 @@ export function applyEpicCanvasDesktopProjection(
   }
 }
 
-useEpicCanvasStore.subscribe((state) => {
-  if (desktopProjectionBridge === null || applyingDesktopProjection) return;
-  void desktopProjectionBridge.update({
-    epicTabs: projectTabsForDesktop(state),
+function projectCanvasForDesktop(
+  state: EpicCanvasStore,
+): DesktopPerWindowStatePatch {
+  const previous = lastDesktopProjection;
+  const tabsChanged =
+    previous === null ||
+    state.openTabOrder !== previous.state.openTabOrder ||
+    state.tabsById !== previous.state.tabsById;
+  const patch: DesktopPerWindowStatePatch = {
     activeTabId: state.activeTabId,
-    canvasByTabId: projectCanvasByTabIdForDesktop(state),
-  });
+    epicTabs: tabsChanged
+      ? projectTabsForDesktop(state)
+      : previous.patch.epicTabs,
+    canvasByTabId:
+      tabsChanged || state.canvasByTabId !== previous.state.canvasByTabId
+        ? projectCanvasByTabIdForDesktop(state)
+        : previous.patch.canvasByTabId,
+  };
+  // Reuse unchanged projections, but keep the full patch so the next write
+  // still repairs persistence if an earlier IPC write failed.
+  lastDesktopProjection = { state, patch };
+  return patch;
+}
+
+useEpicCanvasStore.subscribe((state, previous) => {
+  if (desktopProjectionBridge === null || applyingDesktopProjection) return;
+  if (
+    state.openTabOrder === previous.openTabOrder &&
+    state.tabsById === previous.tabsById &&
+    state.canvasByTabId === previous.canvasByTabId &&
+    state.activeTabId === previous.activeTabId
+  ) {
+    return;
+  }
+  // Retain the latest local snapshot through an intervening desktop projection,
+  // which is deliberately excluded from this outbound subscriber.
+  desktopProjectionBridge.schedule(() => projectCanvasForDesktop(state));
 });
 
 /**

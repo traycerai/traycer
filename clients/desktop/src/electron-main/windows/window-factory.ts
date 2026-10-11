@@ -129,15 +129,12 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // window may create `<webview>` tags; attach is fail-closed in
       // `installWebviewAttachGuards` before the renderer loads.
       webviewTag: true,
-      // An occluded window's timers are throttled to ~1/min by default, which
-      // collapses the WebRTC receiver's own reporting and stops
-      // `requestVideoFrameCallback` entirely. The browser tile's sender reads
-      // that silence as a path that cannot carry frames and ratchets its
-      // capture rate down for the rest of the session; the GUI must keep
-      // compositing and reporting while it is not being looked at. The cost
-      // is accepted and whole-renderer: an occluded window keeps its timers,
-      // rAF and compositing running, so it goes on spending CPU (and battery)
-      // in the background rather than idling.
+      // Keep receiver frame callbacks/stats running while occluded (#1613),
+      // or the sender ratchets capture down for the rest of the session.
+      // Intensive background timer throttling can also delay transport
+      // keepalives past their pong cutoff and falsely close healthy sockets.
+      // Renderer work gates use the main-process minimise/hide signal instead;
+      // native occlusion remains unavailable with throttling disabled.
       backgroundThrottling: false,
       zoomFactor: options.zoomFactor,
     },

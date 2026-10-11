@@ -9,7 +9,10 @@ import {
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { type SizesByGroupId } from "@/stores/epics/canvas/types";
+import type {
+  SizesByGroupId,
+  TileLayoutNode,
+} from "@/stores/epics/canvas/types";
 import {
   SplitContainer,
   type SplitPaneComponentProps,
@@ -117,6 +120,14 @@ function TileCanvasBody(props: {
 
 const EMPTY_SIZES: SizesByGroupId = {};
 
+function geometryKey(node: TileLayoutNode | null): string {
+  if (node === null) return "null";
+  if (node.kind === "pane") {
+    return JSON.stringify([node.kind, node.id, node.tabInstanceIds.length > 0]);
+  }
+  return `${JSON.stringify([node.kind, node.id, node.direction])}[${node.children.map(geometryKey).join(",")}]`;
+}
+
 function TileCanvasLive(
   props: TileCanvasProps & { hasActiveHandoff: boolean },
 ) {
@@ -159,9 +170,11 @@ function TileCanvasLive(
   // and the re-read has to see it before paint. Parent layout effects run
   // after the children's, so a slot mounted by this commit has already
   // registered and measured itself.
+  // Selection and activation history replace root, but cannot move a pane.
+  const layoutKey = geometryKey(root);
   useLayoutEffect(() => {
     remeasureTileSurfaceGeometry();
-  }, [root, sizesByGroupId]);
+  }, [layoutKey, sizesByGroupId]);
 
   if (root === null) {
     // During a fresh create the eager-opened chat tab populates the canvas a

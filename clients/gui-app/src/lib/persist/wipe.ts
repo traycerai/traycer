@@ -27,6 +27,7 @@ import {
   APPEARANCE_DB_NAME,
   clearAppearanceCache,
 } from "@/lib/appearance/appearance-cache";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -40,6 +41,7 @@ import {
   transcriptImageMetaDbName,
 } from "@/lib/attachments/transcript-image-bytes-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { clearComposerDraftPersistence } from "@/stores/composer/composer-draft-store";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
 import { clearAllSkeletonsForResume } from "@/stores/chats/skeleton-resume-cache";
 
@@ -230,7 +232,10 @@ export async function clearAllPersistedStores(args: {
   // pagehide handler, since this remains ordered before the journal delete.
   await fileEditRuntimeRegistry.teardown();
 
-  // 2. Blanket-prefix sweep across BOTH storages.
+  // 2. Cancel pending local writes before the sweep so unload cannot restore them.
+  cancelDeferredJsonWrites();
+  clearComposerDraftPersistence();
+  // Blanket-prefix sweep across BOTH storages.
   const localStorageCount = sweepStorage(window.localStorage);
   const sessionStorageCount = sweepStorage(window.sessionStorage);
   appLogger.info("[persist] browser storage sweep complete", {

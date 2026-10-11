@@ -2406,6 +2406,10 @@ describe("WsStreamClient", () => {
 
   it("requestReconnect drops the live socket and redials through existing backoff without disposing the session", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    // scheduleReconnect now jitters its delay (`jitteredBackoffFor(...,
+    // Math.random)`); pin it to 1 so the exact-boundary steps below keep
+    // asserting the un-jittered schedule.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const client = new WsStreamClient({
@@ -2463,11 +2467,13 @@ describe("WsStreamClient", () => {
     // Same session object stays live; close only when the consumer tears down.
     session.close();
     expect(statuses.at(-1)).toBe("closed");
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
   it("requestReconnect preserves escalated reconnectAttempt instead of force-resetting like forceReconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const client = new WsStreamClient({
@@ -2516,10 +2522,12 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(3);
 
     session.close();
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
   it("escalates reconnect backoff across consecutive slow-client evictions", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const client = new WsStreamClient({
@@ -2567,10 +2575,12 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(3);
 
     session.close();
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
   it("resets event-only backoff after a sustained healthy subscription dwell", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const client = new WsStreamClient({
@@ -2619,6 +2629,7 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(3);
 
     session.close();
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -2630,6 +2641,7 @@ describe("WsStreamClient", () => {
   // leaves `reconnectAttempt` a lifetime drop counter again.
   it("settles the dwell on ELAPSED time when a throttled timer never fired", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const client = new WsStreamClient({
@@ -2679,11 +2691,13 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(3);
 
     session.close();
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
   it("clears the healthy dwell timer when a quiet subscription drops", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const client = new WsStreamClient({
@@ -2730,6 +2744,68 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(3);
 
     session.close();
+    randomSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("jitters two same-history clients to different bounded reconnect delays", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random");
+
+    const clientOptions = {
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    };
+    const { factory: factoryA, sockets: socketsA } = makeFactory();
+    const clientA = new WsStreamClient({
+      ...clientOptions,
+      webSocketFactory: factoryA,
+    });
+    const { factory: factoryB, sockets: socketsB } = makeFactory();
+    const clientB = new WsStreamClient({
+      ...clientOptions,
+      webSocketFactory: factoryB,
+    });
+    const sessionA = clientA.subscribe("epic.subscribe", { epicId: "epic-a" });
+    const sessionB = clientB.subscribe("epic.subscribe", { epicId: "epic-b" });
+    completeHandshake(socketsA[0].socket);
+    completeHandshake(socketsB[0].socket);
+
+    // Same backoff stage on two independent clients, but each drop draws its
+    // own `Math.random()` call - a low and a high roll land at opposite ends
+    // of the jittered [0.5, 1) range.
+    randomSpy.mockReturnValueOnce(0).mockReturnValueOnce(1);
+    socketsA[0].socket.fireClose(1006, "abnormal", false);
+    socketsB[0].socket.fireClose(1006, "abnormal", false);
+
+    const lowDelayMs = Math.round(10 * 0.5);
+    const highDelayMs = 10;
+    expect(lowDelayMs).toBeLessThan(highDelayMs);
+
+    vi.advanceTimersByTime(lowDelayMs);
+    expect(socketsA).toHaveLength(2);
+    expect(socketsB).toHaveLength(1);
+
+    vi.advanceTimersByTime(highDelayMs - lowDelayMs);
+    expect(socketsB).toHaveLength(2);
+
+    sessionA.close();
+    sessionB.close();
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -4242,6 +4318,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
   it("recovers a handshake-time UNAUTHORIZED after a real bearer rotation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
 
     const { factory, sockets } = makeFactory();
     const ctx = makeRequestContext("expired");
@@ -4308,6 +4385,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(sockets).toHaveLength(3);
 
     session.close();
+    randomSpy.mockRestore();
   });
 
   it("does NOT count transient network-errors toward the no-progress bound (a wake-network blip stays recoverable)", async () => {

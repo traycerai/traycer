@@ -5,6 +5,7 @@ import {
   commonIgnores,
   linterOptionsConfig,
 } from "../../eslint/flat-base.mjs";
+import reactRenderState from "../../eslint/react-render-state-plugin.mjs";
 import reactHooks from "eslint-plugin-react-hooks";
 import jsxA11y from "eslint-plugin-jsx-a11y";
 import react from "eslint-plugin-react";
@@ -2042,12 +2043,15 @@ export default tseslint.config(
       react: { version: "detect" },
     },
     plugins: {
+      "react-render-state": reactRenderState,
       "react-refresh": reactRefresh,
       "@tanstack/query": pluginQuery,
       "@tanstack/router": pluginRouter,
       react,
     },
     rules: {
+      "react-render-state/no-render-cache-read": "error",
+      "react-render-state/no-unexplained-use-no-memo": "error",
       // ── react-refresh ──────────────────────────────────────────────────────
       "react-refresh/only-export-components": [
         "warn",
@@ -2556,6 +2560,15 @@ export default tseslint.config(
           "useLandingDraftStore.setActiveDraft",
         ],
       }),
+    },
+  },
+  {
+    // Reveal/resume resamples an external wall clock before paint, as
+    // useGraceCountdown does. Deferring this write shows the hidden/paused
+    // sample for a frame; deriving it during render would read impure time.
+    files: ["src/hooks/use-elapsed-seconds.ts"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
     },
   },
   {

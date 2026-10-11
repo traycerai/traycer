@@ -370,7 +370,14 @@ export function spawnEpicRuntimeWorker<TProjection>(
 
   // The one reducer for this worker's projection stream, constructed here so
   // there can be no second one.
-  const projections = createRuntimeProjectionOrdering(options.projection);
+  const projections = createRuntimeProjectionOrdering(
+    options.projection,
+    () => {
+      queueMicrotask(() => {
+        if (!disposed) bridge.emit({ kind: "projection/resync" }, NO_TRANSFER);
+      });
+    },
+  );
 
   // Turns the worker's byte pushes back into calls on the real books, and
   // answers the accountant's synchronous reads from the snapshot each push
@@ -509,7 +516,16 @@ export function spawnEpicRuntimeWorker<TProjection>(
         options.relay.log(event.entry);
         return;
       case "projection":
-        projections.deliver(event.revision, event.value);
+        try {
+          projections.deliver(event.revision, event.value, event.baseRevision);
+        } catch (cause: unknown) {
+          surfaceFatal(
+            cause instanceof Error
+              ? cause.message
+              : "Projection recovery failed",
+            null,
+          );
+        }
         return;
 
       case "body/doc-in":

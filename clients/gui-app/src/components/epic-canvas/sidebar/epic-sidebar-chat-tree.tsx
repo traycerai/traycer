@@ -145,6 +145,7 @@ import {
   useAncestorIds,
   useEpicAgentRoleClaims,
   useEpicAgentSessionFacet,
+  useEpicAgentActivityTier,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
@@ -221,6 +222,7 @@ import {
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { shallow } from "zustand/shallow";
 import {
   BASE_PAD_LEFT,
   EMPTY_PENDING_LIST,
@@ -574,6 +576,7 @@ interface ExpansionController {
   expandedIds: ReadonlySet<string>;
   toggleExpanded: (id: string) => void;
   ensureExpanded: (id: string) => void;
+  onExitComplete: () => void;
 }
 
 function usePanelRootIds(
@@ -1096,9 +1099,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     visibleCloudChats,
   ]);
 
+  const [completedExits, setCompletedExits] = useState(0);
+  const onExitComplete = useCallback(() => {
+    setCompletedExits((count) => count + 1);
+  }, []);
   const expansion = useMemo<ExpansionController>(
-    () => ({ expandedIds, toggleExpanded, ensureExpanded }),
-    [expandedIds, toggleExpanded, ensureExpanded],
+    () => ({ expandedIds, toggleExpanded, ensureExpanded, onExitComplete }),
+    [expandedIds, toggleExpanded, ensureExpanded, onExitComplete],
   );
   // The content clock each LOCAL chat sorts by - the same value its idle-time
   // chip renders, so the order and the chip cannot disagree (see
@@ -1213,6 +1220,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         lastActiveAtByKey,
       }),
     [rootIds, tree.nodeById, visibleCloudChats, comparator, lastActiveAtByKey],
+  );
+  // A sibling can move without changing its index when a preceding subtree
+  // grows, reorders or finishes exiting. Share only these geometry inputs.
+  const rootKeys = useMemo(
+    () => listEntries.map((entry) => entry.key),
+    [listEntries],
+  );
+  const layoutDependency = useChatTreeLayoutRevision(
+    selectableIds,
+    rootKeys,
+    expandedIds,
+    completedExits,
   );
   // What the live region announces. Counted from the MATCHES, not `listEntries`:
   // that list holds only local roots (nested matches render recursively beneath
@@ -1362,7 +1381,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               that final-row exit before revealing the archived empty state.
               Rows come from the UNIFIED list (chat-sync-v2): local tree nodes
               and cloud-only rows interleave under one comparator. */}
-              <AnimatePresence initial={false}>
+              <AnimatePresence initial={false} onExitComplete={onExitComplete}>
                 {listEntries.map((entry) =>
                   entry.kind === "local" ? (
                     <ChatNode
@@ -1450,18 +1469,26 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                 {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
                 <HoverCardGroup>
-                  <SidebarContent>
+                  <MotionSidebarContent
+                    layoutRoot
+                    layoutScroll
+                    layoutDependency={layoutDependency}
+                  >
                     <SidebarGroup className="min-h-0 flex-1">
                       <SidebarGroupContent
                         ref={treeRegionRef}
                         className="flex min-h-0 flex-1 flex-col"
                         data-testid="epic-chat-tree-region"
                       >
-                        {panelContent}
+                        <ChatTreeLayoutContext.Provider
+                          value={layoutDependency}
+                        >
+                          {panelContent}
+                        </ChatTreeLayoutContext.Provider>
                         {messageHits.node}
                       </SidebarGroupContent>
                     </SidebarGroup>
-                  </SidebarContent>
+                  </MotionSidebarContent>
                 </HoverCardGroup>
               </SidebarFilterVisibilityContext.Provider>
             </SidebarSortClockContext.Provider>
@@ -1510,6 +1537,42 @@ function PendingCreateRow({ depth, name }: { depth: number; name: string }) {
     </li>
   );
 }
+
+// Geometry updates reach the Motion shell without rerunning row data hooks.
+function useChatTreeLayoutRevision(
+  selectableIds: ReadonlyArray<string>,
+  rootKeys: ReadonlyArray<string>,
+  expandedIds: ReadonlySet<string>,
+  completedExits: number,
+): number {
+  const [layout, setLayout] = useState({
+    selectableIds,
+    rootKeys,
+    expandedIds,
+    completedExits,
+    revision: 0,
+  });
+  let layoutDependency = layout.revision;
+  if (
+    !shallow(layout.selectableIds, selectableIds) ||
+    !shallow(layout.rootKeys, rootKeys) ||
+    !shallow(layout.expandedIds, expandedIds) ||
+    layout.completedExits !== completedExits
+  ) {
+    layoutDependency += 1;
+    setLayout({
+      selectableIds,
+      rootKeys,
+      expandedIds,
+      completedExits,
+      revision: layoutDependency,
+    });
+  }
+  return layoutDependency;
+}
+
+const MotionSidebarContent = m.create(SidebarContent);
+const ChatTreeLayoutContext = createContext(0);
 
 interface ChatNodeProps {
   epicId: string;
@@ -1615,30 +1678,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // The cascade-delete summary, subscribed to its ANSWER rather than to the
-  // record list it is computed from.
-  //
-  // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
-  // ANY record in the epic changes - a body write, a chat token, a timestamp
-  // stamp - so every one of these rows re-rendered on every one of those, for a
-  // count that almost never moves. Measured on the field's shape (40 rows, 12
-  // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
-  // defence, because this is the row's OWN subscription rather than a prop.
-  //
-  // The tree walk is the same counts by a different route: `childrenByParent`
-  // and `nodeById` are the normalised structure this sidebar already renders, so
-  // it agrees with what the user sees. `useShallow` is required rather than
-  // decorative - the selector returns a fresh object per call, and without it
-  // `useSyncExternalStore` sees a change on every notification and loops.
-  //
-  // The artifact row was moved to exactly this in `d1cb1b3a`; this row is the
-  // same defect in the second copy of it.
-  const cascadeCounts = useEpicStore(
-    useShallow((state: OpenEpicState) =>
-      computeDescendantCountsFromTree(state.tree, nodeId),
-    ),
-  );
-
   const expanded = expandedIds.has(nodeId);
   const hasChildren = childIds.length > 0;
   const showChildren = hasChildren && expanded;
@@ -1665,6 +1704,14 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Closed dialogs need no subtree walk on mount or store notifications.
+  const cascadeSummary = useEpicStore((state) =>
+    confirmDeleteOpen
+      ? formatCascadeSummary(
+          computeDescendantCountsFromTree(state.tree, nodeId),
+        )
+      : null,
+  );
   const deletePending = anyMutationPending([
     deleteChat.isPending,
     deleteTerminalAgent.isPending,
@@ -1987,7 +2034,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const cascadeSummary = formatCascadeSummary(cascadeCounts);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -2163,6 +2209,7 @@ function ChatNodeShellBody(
   props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
 ) {
   const shouldReduceMotion = useReducedMotion() === true;
+  const layoutDependency = useContext(ChatTreeLayoutContext);
   const {
     epicId,
     tabId,
@@ -2272,6 +2319,7 @@ function ChatNodeShellBody(
   return (
     <m.li
       layout={shouldReduceMotion ? false : "position"}
+      layoutDependency={layoutDependency}
       exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
       transition={{ duration: 0.16, ease: "easeOut" }}
       role="treeitem"
@@ -2399,7 +2447,10 @@ function ChatNodeChildren(props: ChatNodeChildrenProps) {
   return (
     <ul role="group" className="relative space-y-0.5">
       <TreeGroupGuide parentDepth={props.depth} />
-      <AnimatePresence initial={false}>
+      <AnimatePresence
+        initial={false}
+        onExitComplete={props.expansion.onExitComplete}
+      >
         {props.childIds.map((childId) => (
           <ChatNode
             key={childId}
@@ -2539,13 +2590,12 @@ const ChatRowLeadingIconWithNestedRollup = memo(
       epicId: props.epicId,
       nodeId: props.nodeId,
     });
-    const activityTiers = useEpicAgentActivityTiers();
+    const selfTier = useEpicAgentActivityTier(props.nodeId);
     const selfIndicator = useSurfaceNotificationIndicatorState(
       { epicId: props.epicId, chatId: props.nodeId },
       props.ownerHostId,
     );
     if (rollup !== null) {
-      const selfTier = activityTiers.get(props.nodeId);
       // Chat and terminal-agent parents rank alike: a TUI agent's
       // `agent.stopped` notifications are chat-scoped to its id, so its
       // indicator entry is as real as a chat's.
@@ -4064,7 +4114,7 @@ function useChatRowOwnStatusKind(args: {
     { epicId, chatId: nodeId },
     ownerHostId,
   );
-  const awarenessTier = useEpicAgentActivityTiers().get(nodeId);
+  const awarenessTier = useEpicAgentActivityTier(nodeId);
   const isViewer = useContext(SidebarViewerContext);
   // Terminal-agent rows have no chat session and never carried a read-only
   // lock (their PTY runs host-side), so the viewer arm is chat-only.

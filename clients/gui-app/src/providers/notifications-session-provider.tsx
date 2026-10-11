@@ -1,3 +1,4 @@
+import { HostEntityReadDriver } from "@/lib/notifications/host-entity-read-driver";
 import {
   useCallback,
   useEffect,
@@ -346,7 +347,25 @@ function NotificationsSessionBody(
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
   const markEntityReadMutation =
     useNotificationMarkEntityRead(servingHostClient);
-  const markEntityRead = markEntityReadMutation.mutate;
+  const mutateEntityRead = markEntityReadMutation.mutateAsync;
+  const markEntityRead = useCallback(
+    (entity: HostNotificationsEntityRef): Promise<unknown> => {
+      const auth = useAuthStore.getState();
+      if (
+        !authorizesCloudCapability(auth.status) ||
+        auth.contextMetadata?.userId !== userId
+      ) {
+        return Promise.resolve();
+      }
+      return mutateEntityRead(entity);
+    },
+    [mutateEntityRead, userId],
+  );
+  const [hostEntityReads] = useState(() => new HostEntityReadDriver());
+  useEffect(() => {
+    hostEntityReads.reset();
+    return () => hostEntityReads.reset();
+  }, [hostEntityReads, userId, status, servingHostId, servingHostClient]);
   const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
   // Notification-feed delivery is independent from the live chat stream. A
   // newly observed row may describe an older turn that replicated late, so it
@@ -472,13 +491,19 @@ function NotificationsSessionBody(
           acknowledgementScope.originHostId === servingHostId) &&
         authorizesCloudCapability(useAuthStore.getState().status)
       ) {
-        markEntityRead(acknowledgementScope.entity);
+        hostEntityReads.request(acknowledgementScope.entity, markEntityRead);
       }
       if (notificationFeedMode === "cloud") {
         markCloudEntityRead(acknowledgementScope);
       }
     },
-    [servingHostId, markEntityRead, markCloudEntityRead, notificationFeedMode],
+    [
+      servingHostId,
+      markEntityRead,
+      markCloudEntityRead,
+      notificationFeedMode,
+      hostEntityReads,
+    ],
   );
   const consumeFocusedEntity = useCallback(
     (scope: FocusedNotificationScope): void => {
@@ -508,6 +533,7 @@ function NotificationsSessionBody(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (servingHostId !== hostId) return;
+      hostEntityReads.observe(frame);
       // `partitionSnapshot` is a `snapshot` for every purpose here: `@1.3`
       // defines it by extending the frozen `@1.2` snapshot, so it carries the
       // same `attention` / `recent` pages and only narrows WHICH rows they
@@ -519,6 +545,8 @@ function NotificationsSessionBody(
           hostId,
           servingHostClient,
         );
+        const activeEntity = activeEntityRef.current;
+        if (activeEntity !== null) consumeFocusedEntity(activeEntity);
         recordCompletions(
           [...frame.attention.entries, ...frame.recent.entries].map(
             (entry) => ({
@@ -598,6 +626,8 @@ function NotificationsSessionBody(
     [
       servingHostId,
       consumeEntity,
+      consumeFocusedEntity,
+      hostEntityReads,
       recordCompletions,
       removeObservedCompletions,
       servingHostClient,
@@ -852,6 +882,7 @@ function NotificationsSessionBody(
   // rows are not scoped to a host and must survive the swap untouched.
   const resetHostReplica = useCallback(
     (departedHostId: string): void => {
+      hostEntityReads.reset();
       activeEntityRef.current = null;
       useHostNotificationsStore.getState().reset();
       // Scoped to the slice that actually departed. The map holds a slice per
@@ -864,7 +895,7 @@ function NotificationsSessionBody(
       resetCloudRelaySession();
       clearNotificationIndicatorCaches(queryClient);
     },
-    [queryClient, resetCloudRelaySession],
+    [queryClient, resetCloudRelaySession, hostEntityReads],
   );
 
   // The host replica alone, for a change of PROJECTION rather than of host.
@@ -873,10 +904,11 @@ function NotificationsSessionBody(
   // wiping it here would blank running agents for a feed-mode flip. The
   // indicator caches DO go, because their `home` selector moves with the mode.
   const resetHostProjection = useCallback((): void => {
+    hostEntityReads.reset();
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
     clearNotificationIndicatorCaches(queryClient);
-  }, [queryClient]);
+  }, [queryClient, hostEntityReads]);
 
   // Cloud rows are a relay-session snapshot, not a durable replica. A lost
   // binding or replacement stream client starts a new ownership epoch and

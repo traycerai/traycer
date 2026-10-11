@@ -849,16 +849,9 @@ export interface DesktopWindowsBridge {
     };
   };
   /**
-   * Whether THIS window is on screen (shown and not minimised) as main sees
-   * it. Renderer parking's window-level input: the Page Visibility API is
-   * inert in the desktop app because every window runs with
-   * `backgroundThrottling: false`, so minimising changes nothing the renderer
-   * can observe on its own.
-   *
-   * Optional + capability-probed like `epicVisibility`, for the same skew
-   * reason. Absent, the renderer keeps answering "visible" and parking waits
-   * for a tab hide, which is the pre-channel behaviour. Probed at the install
-   * site (`lib/epics/desktop-window-visibility.ts`).
+   * Main's shown/not-minimised signal supplies desktop visibility. Throttling
+   * stays disabled for receiver stats (#1613) and transport keepalives, so DOM
+   * visibility stays visible. Optional for older preloads.
    */
   windowVisibility?: {
     snapshot(): Promise<boolean>;

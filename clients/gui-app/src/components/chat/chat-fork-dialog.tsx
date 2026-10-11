@@ -818,6 +818,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     failedForkSource.sourceChatId === target?.sourceChatId &&
     failedForkSource.assistantMessageId === target.assistantMessageId;
 
+  // Keep the owner mounted: successful forks close this dialog before their
+  // projected chat arrives, and unmounting would cancel that navigation.
+  const [everOpened, setEverOpened] = useState(open);
+  if (open && !everOpened) setEverOpened(true);
+  if (!open && !everOpened) return null;
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent

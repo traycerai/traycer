@@ -127,6 +127,7 @@ const EMPTY_FIND_PAINT: FindPaint = {
 const AVAILABILITY_NOTICE_TEST_ID = "managed-command-output-availability";
 
 let nextManagedOutputSessionIdentity = 1;
+// render-cache: stable per-key instance identity; output state read via subscription (useStore).
 const managedOutputSessionIdentityByStore = new WeakMap<object, string>();
 
 function managedOutputSessionViewKey(

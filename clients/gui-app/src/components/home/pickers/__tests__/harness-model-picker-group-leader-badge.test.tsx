@@ -25,7 +25,6 @@ const MOD_HELD_BY_PICKER: LeaderState = {
   modOwnerScopeId: LEADER_SCOPE_MODEL_PICKER,
   altOwnerScopeId: null,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 
 const MOD_NOT_HELD: LeaderState = {
@@ -35,7 +34,6 @@ const MOD_NOT_HELD: LeaderState = {
   modOwnerScopeId: null,
   altOwnerScopeId: null,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 
 function harness(id: "codex" | "claude"): HarnessOption {

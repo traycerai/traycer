@@ -4,6 +4,7 @@ import {
   __setHostAgentActivityStateForTests,
   getEpicAgentActivity,
   markAgentActivityReconnecting,
+  noteAgentActivityConnectionStatus,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 
@@ -20,6 +21,7 @@ import {
 
 const LOCAL_HOST = "host-local";
 const REMOTE_HOST = "host-remote";
+const THIRD_HOST = "host-third";
 const CLOUD_EPIC = "cloud-homed-epic";
 
 afterEach(() => {
@@ -154,6 +156,65 @@ describe("agent activity across hosts", () => {
       "local-agent",
       "remote-agent-2",
     ]);
+  });
+
+  it("retains merged identity across unrelated byHost replacements, drops it on a real change", () => {
+    __setHostAgentActivityStateForTests(
+      LOCAL_HOST,
+      { [CLOUD_EPIC]: { working: ["local-agent"], turn: [] } },
+      "local",
+      null,
+    );
+    __setHostAgentActivityStateForTests(
+      REMOTE_HOST,
+      { [CLOUD_EPIC]: { working: ["remote-agent"], turn: [] } },
+      "cloud",
+      null,
+    );
+    const previous = getEpicAgentActivity(CLOUD_EPIC);
+
+    // Each step below replaces the whole `byHost` map (every write does)
+    // without changing either contributing host's CLOUD_EPIC bucket. The merge
+    // cache keys on the `byHost` map object itself, so it misses on all three
+    // even though nothing CLOUD_EPIC-relevant changed.
+
+    // 1. LOCAL_HOST's next frame repeats its CLOUD_EPIC bucket unchanged
+    // alongside a new unrelated epic - `reconcileAgentActivityByEpic` already
+    // keeps that bucket identity-stable per host.
+    __setHostAgentActivityStateForTests(
+      LOCAL_HOST,
+      {
+        [CLOUD_EPIC]: { working: ["local-agent"], turn: [] },
+        "other-epic": { working: ["other-agent"], turn: [] },
+      },
+      "local",
+      null,
+    );
+    expect(getEpicAgentActivity(CLOUD_EPIC)).toBe(previous);
+
+    // 2. A THIRD host is added, contributing only an unrelated epic.
+    __setHostAgentActivityStateForTests(
+      THIRD_HOST,
+      { "other-epic": { working: ["other-agent"], turn: [] } },
+      "local",
+      null,
+    );
+    expect(getEpicAgentActivity(CLOUD_EPIC)).toBe(previous);
+
+    // 3. That third host's connection status moves, still not touching either
+    // contributor.
+    noteAgentActivityConnectionStatus(THIRD_HOST, "reconnecting", null);
+    expect(getEpicAgentActivity(CLOUD_EPIC)).toBe(previous);
+
+    // A REAL contributor removal must still update: dropping REMOTE_HOST takes
+    // contributors from 2 to 1, so the merge should give way to LOCAL_HOST's
+    // own bucket rather than serving a stale two-host union.
+    useAgentActivityStore.getState().resetHost(REMOTE_HOST);
+    const afterRemoval = getEpicAgentActivity(CLOUD_EPIC);
+    expect(afterRemoval).not.toBe(previous);
+    expect([...afterRemoval.working]).toEqual(["local-agent"]);
+    const localSlice = useAgentActivityStore.getState().byHost.get(LOCAL_HOST);
+    expect(afterRemoval).toBe(localSlice?.byEpic.get(CLOUD_EPIC));
   });
 
   it("marks EVERY host's view reconnecting on a local-replica disconnect", () => {

@@ -14,6 +14,22 @@ const HOST_ID = mockLocalHostEntry.hostId;
 const REPO = "/repo";
 const EPIC_ID = "epic-1";
 const OWNER_ID = "chat-1";
+// A distinct managed worktree the deletion/push event never names, used to
+// prove narrowing is legitimate for a genuinely host-created checkout.
+const MANAGED_UNRELATED_PATH = "/repo/wt/managed-unrelated";
+const DELETED_MANAGED_PATH = "/repo/wt/deleted";
+
+function managedWorktreeEntry(
+  worktreePath: string,
+  workspacePath: string,
+): {
+  readonly mode: "worktree";
+  readonly isImported: boolean;
+  readonly worktreePath: string;
+  readonly workspacePath: string;
+} {
+  return { mode: "worktree", isImported: false, worktreePath, workspacePath };
+}
 
 describe("invalidateWorktreeChangedCaches + branch lists", () => {
   it("refetches a MOUNTED branch list, so the deleted branch actually leaves the source picker", async () => {
@@ -131,7 +147,7 @@ describe("invalidateWorktreeChangedCaches + branch lists", () => {
 });
 
 describe("invalidateWorktreeChangedCaches + worktree.getBinding", () => {
-  it("refreshes a MOUNTED, ENABLED binding query's `missingWorktreePaths` on both a root-scoped and a path-scoped event", async () => {
+  it("refreshes a MOUNTED, ENABLED binding query's `missingWorktreePaths` on both a root-scoped event and a path-scoped event naming the missing path", async () => {
     // A real observer, not `setQueryData`: the chat tile's folder-missing
     // banner reads this query's DATA, so the contract is that a disappeared
     // (then restored) folder actually reaches it, not just that the cache
@@ -149,9 +165,8 @@ describe("invalidateWorktreeChangedCaches + worktree.getBinding", () => {
     expect(observer.getCurrentResult().data?.missingWorktreePaths).toEqual([]);
 
     // The folder disappears. A ROOT-scoped burst (some other row added or
-    // removed) still has to refresh this query - a `worktreePath` event
-    // carries a run directory, not the owner id this query is keyed on, so
-    // the binding scope is invalidated unconditionally.
+    // removed) still has to refresh this query - a root event has no
+    // membership evidence to narrow by, so it invalidates unconditionally.
     served = [REPO];
     invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
       root: true,
@@ -164,17 +179,176 @@ describe("invalidateWorktreeChangedCaches + worktree.getBinding", () => {
       REPO,
     ]);
 
-    // The folder is restored. A PATH-scoped event for an unrelated worktree
-    // still refreshes it too, since the getBinding invalidation doesn't gate
-    // on `scopes.worktreePaths` the way the per-path enrichment overlay does.
+    // The folder is restored. A PATH-scoped event naming that SAME missing
+    // path refreshes it too - membership for `worktree.getBinding` is read
+    // from the query's own cached `missingWorktreePaths`, so the event has to
+    // name a path that's actually in there.
     served = [];
     invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
       root: false,
-      worktreePaths: new Set(["/some/other/worktree"]),
+      worktreePaths: new Set([REPO]),
     });
     await waitUntil(
       () => observer.getCurrentResult().data?.missingWorktreePaths.length === 0,
     );
+    stop();
+  });
+
+  it("conservatively refreshes a MOUNTED binding query with a null binding and unresolved missing paths, even for an unrelated event", async () => {
+    // H5: `binding: null` with nonempty `missingWorktreePaths` carries no
+    // identity evidence at all - there is no entry to inspect for
+    // provenance, so a lexical miss on the CURRENT missing paths must not be
+    // read as proof of no relation.
+    const queryClient = createAppQueryClient();
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({
+        binding: null,
+        missingWorktreePaths: [REPO],
+      });
+    };
+    const observer = new QueryObserver(queryClient, {
+      queryKey: bindingKey(),
+      queryFn,
+    });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set(["/some/other/worktree"]),
+    });
+
+    await waitUntil(() => fetches === 2);
+    stop();
+  });
+
+  it("leaves a MOUNTED binding query's cached missingWorktreePaths untouched by a path-scoped event naming an unrelated worktree", async () => {
+    // H5: a genuinely host-created managed checkout (mode 'worktree',
+    // isImported false, a concrete worktreePath) is the ONE case narrowing
+    // may exclude - its path identity is certain, so a lexical miss really is
+    // unrelated. `binding: null` would trip the conservative null-binding
+    // guard below regardless of the event's path, so this fixture has to be a
+    // real entry for the narrowing to be under test at all.
+    const queryClient = createAppQueryClient();
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({
+        binding: {
+          entries: [managedWorktreeEntry(MANAGED_UNRELATED_PATH, REPO)],
+        },
+        missingWorktreePaths: [],
+      });
+    };
+    const observer = new QueryObserver(queryClient, {
+      queryKey: bindingKey(),
+      queryFn,
+    });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set([DELETED_MANAGED_PATH]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fetches).toBe(1);
+    expect(queryClient.getQueryState(bindingKey())?.isInvalidated).toBe(false);
+    stop();
+  });
+
+  it.each([
+    ["a symlink alias of the deleted path", "/alias/link-to-deleted"],
+    [
+      "an uppercase-case-variant spelling of the deleted path",
+      DELETED_MANAGED_PATH.toUpperCase(),
+    ],
+  ])(
+    "conservatively refreshes a MOUNTED binding query for an imported entry naming %s",
+    async (_label, importedPath) => {
+      // H5: an imported binding persists whatever path the caller supplied -
+      // it can alias the deleted managed checkout through a symlink or a
+      // case-variant spelling that `worktreePathMatcher` deliberately does not
+      // resolve (it is lexical only, never case-folding or symlink-aware).
+      // Provenance is uncertain, so a lexical miss must not exclude it.
+      const queryClient = createAppQueryClient();
+      let fetches = 0;
+      const queryFn = () => {
+        fetches += 1;
+        return Promise.resolve({
+          binding: {
+            entries: [
+              {
+                mode: "worktree" as const,
+                isImported: true,
+                worktreePath: importedPath,
+                workspacePath: importedPath,
+              },
+            ],
+          },
+          missingWorktreePaths: [],
+        });
+      };
+      const observer = new QueryObserver(queryClient, {
+        queryKey: bindingKey(),
+        queryFn,
+      });
+      const stop = observer.subscribe(() => undefined);
+      await waitUntil(() => observer.getCurrentResult().data !== undefined);
+      expect(fetches).toBe(1);
+
+      invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+        root: false,
+        worktreePaths: new Set([DELETED_MANAGED_PATH]),
+      });
+
+      await waitUntil(() => fetches === 2);
+      stop();
+    },
+  );
+
+  it("conservatively refreshes a MOUNTED binding query for a local entry inside the deleted directory with no worktreePath to compare", async () => {
+    // H5: a local-mode entry can be a subfolder INSIDE the deleted checkout
+    // (a genuine descendant, not just a lexically-unrelated path), and its
+    // `worktreePath` is null - there is no path to compare at all, so it
+    // must stay included rather than being excluded for "no evidence".
+    const queryClient = createAppQueryClient();
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({
+        binding: {
+          entries: [
+            {
+              mode: "local" as const,
+              isImported: false,
+              worktreePath: null,
+              workspacePath: `${DELETED_MANAGED_PATH}/src`,
+            },
+          ],
+        },
+        missingWorktreePaths: [],
+      });
+    };
+    const observer = new QueryObserver(queryClient, {
+      queryKey: bindingKey(),
+      queryFn,
+    });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set([DELETED_MANAGED_PATH]),
+    });
+
+    await waitUntil(() => fetches === 2);
     stop();
   });
 

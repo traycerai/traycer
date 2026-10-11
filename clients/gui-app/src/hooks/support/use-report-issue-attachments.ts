@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
@@ -250,6 +256,27 @@ async function ingestOneFile(
   return false;
 }
 
+async function ingestFiles(
+  candidates: ReadonlyArray<File>,
+  ctx: IngestFileContext,
+  pendingIngestCountRef: RefObject<number>,
+  setIsIngesting: (value: boolean) => void,
+): Promise<void> {
+  pendingIngestCountRef.current += 1;
+  setIsIngesting(true);
+  try {
+    for (const file of candidates) {
+      const shouldStopBatch = await ingestOneFile(file, ctx);
+      if (shouldStopBatch) return;
+    }
+  } finally {
+    pendingIngestCountRef.current -= 1;
+    if (ctx.isActive() && pendingIngestCountRef.current === 0) {
+      setIsIngesting(false);
+    }
+  }
+}
+
 export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
   const [images, setImages] = useState<
     ReadonlyArray<ReportIssueAttachmentImage>
@@ -315,23 +342,7 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
         setRejection,
       };
 
-      async function ingest(): Promise<void> {
-        pendingIngestCountRef.current += 1;
-        setIsIngesting(true);
-        try {
-          for (const file of candidates) {
-            const shouldStopBatch = await ingestOneFile(file, ctx);
-            if (shouldStopBatch) return;
-          }
-        } finally {
-          pendingIngestCountRef.current -= 1;
-          if (isActive() && pendingIngestCountRef.current === 0) {
-            setIsIngesting(false);
-          }
-        }
-      }
-
-      void ingest();
+      void ingestFiles(candidates, ctx, pendingIngestCountRef, setIsIngesting);
     },
     [commitImage],
   );

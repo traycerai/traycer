@@ -13,10 +13,15 @@
  * `useSurfaceHostPin`; cases that only care about `resolvedHostId` use
  * whichever of the two the production call site actually uses.
  *
- * The selection STORE is the real one (`resetForTests()` between cases); only
- * the three boundary reads a panel cannot control in a unit test - the task's
- * node hosts, the effective host, and the fleet's leases/attach state - are
- * mocked, exactly the seam `use-surface-host-pin.ts` itself draws them at.
+ * The selection STORE and the selection-authority store are both real
+ * (`resetForTests()` / `reset()` between cases): `use-surface-host-pin.ts`
+ * reads leases and attach state directly off `useSelectionAuthorityStore`
+ * (a `useShallow` selector over it), not through a `useHostLeases()` /
+ * `useSelectionAuthorityAttached()` wrapper hook, so seeding those wrapper
+ * hooks would no longer reach the resolver at all. Only the two boundary
+ * reads a panel cannot control in a unit test - the task's node hosts and
+ * the effective host - are mocked, exactly the seam `use-surface-host-pin.ts`
+ * itself draws them at.
  */
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,8 +30,6 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 const boundary = vi.hoisted(() => ({
   nodeHostIds: new Set<string>(),
   effectiveHostId: "effective-host" as string | null,
-  leases: [] as HostLeaseSnapshot[],
-  authorityAttached: false,
 }));
 
 vi.mock("@/hooks/epic/use-epic-node-host-ids", () => ({
@@ -34,12 +37,6 @@ vi.mock("@/hooks/epic/use-epic-node-host-ids", () => ({
 }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => boundary.effectiveHostId,
-}));
-vi.mock("@/hooks/host/use-host-lease", () => ({
-  useHostLeases: () => boundary.leases,
-}));
-vi.mock("@/hooks/host/use-selection-authority-attached", () => ({
-  useSelectionAuthorityAttached: () => boundary.authorityAttached,
 }));
 // Not exercised by the resolver itself (only by `useSurfaceHostClient`,
 // which none of these cases call), stubbed so the module import needs no
@@ -59,6 +56,7 @@ import {
   useSurfaceHostSelectionStore,
   type SurfaceKind,
 } from "@/stores/host/surface-host-selection-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const TASK_PANEL_KINDS = [
   "git-diff",
@@ -82,15 +80,23 @@ function dead(hostId: string): HostLeaseSnapshot {
   return { hostId, status: "dead", dead: { reason: "offline" } };
 }
 
+/** Publishes leases onto the REAL authority store, exactly as the fleet
+ * bridge would - this is the seam `use-surface-host-pin.ts` now reads. */
+function seedLeases(leases: HostLeaseSnapshot[]): void {
+  useSelectionAuthorityStore.setState({ leases });
+}
+function seedAuthorityAttached(attached: boolean): void {
+  useSelectionAuthorityStore.setState({ attached });
+}
+
 function resetStore(): void {
   useSurfaceHostSelectionStore.getState().resetForTests();
+  useSelectionAuthorityStore.getState().reset();
 }
 
 beforeEach(() => {
   boundary.nodeHostIds = new Set();
   boundary.effectiveHostId = "effective-host";
-  boundary.leases = [];
-  boundary.authorityAttached = false;
   resetStore();
 });
 
@@ -188,8 +194,8 @@ describe("task-default resolution", () => {
 describe("the pull-requests four-tier chain (pin, task default, canvas default, effective)", () => {
   it("falls from a dead sole task host through to a live canvas default", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [dead("task-host"), ready("canvas-host")];
-    boundary.authorityAttached = true;
+    seedLeases([dead("task-host"), ready("canvas-host")]);
+    seedAuthorityAttached(true);
     const { result } = renderHook(() =>
       useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
     );
@@ -203,8 +209,8 @@ describe("the pull-requests four-tier chain (pin, task default, canvas default, 
     // The fleet HAS spoken (attached, non-empty leases), but none of them
     // names "task-host" - `isSurfacePinDeposed` treats a host missing from a
     // known fleet the same as a dead one, not as "unknown yet".
-    boundary.leases = [ready("canvas-host")];
-    boundary.authorityAttached = true;
+    seedLeases([ready("canvas-host")]);
+    seedAuthorityAttached(true);
     const { result } = renderHook(() =>
       useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
     );
@@ -215,8 +221,8 @@ describe("the pull-requests four-tier chain (pin, task default, canvas default, 
 
   it("falls from a dead task host AND a dead canvas default all the way to effective", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [dead("task-host"), dead("canvas-host")];
-    boundary.authorityAttached = true;
+    seedLeases([dead("task-host"), dead("canvas-host")]);
+    seedAuthorityAttached(true);
     const { result } = renderHook(() =>
       useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
     );
@@ -229,8 +235,8 @@ describe("the pull-requests four-tier chain (pin, task default, canvas default, 
 describe("pin precedence over the task default and effective", () => {
   it("honors an explicit pin over a sole task host, and reports the task host as `followingHostId`", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [ready("task-host"), ready("pinned-host")];
-    boundary.authorityAttached = true;
+    seedLeases([ready("task-host"), ready("pinned-host")]);
+    seedAuthorityAttached(true);
     const surfaceKey = panelKey("file-tree");
     act(() => {
       useSurfaceHostSelectionStore
@@ -249,8 +255,8 @@ describe("pin precedence over the task default and effective", () => {
 
   it("falls through a dead task host to effective, honoring the same lease rule as a pin", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [dead("task-host")];
-    boundary.authorityAttached = true;
+    seedLeases([dead("task-host")]);
+    seedAuthorityAttached(true);
     const { result } = renderHook(() =>
       useSurfaceHostPinWithDefault(panelKey("git-diff"), null),
     );
@@ -260,8 +266,8 @@ describe("pin precedence over the task default and effective", () => {
 
   it("holds a task default through an expected restart, exactly as a pin does", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [restartingExpected("task-host")];
-    boundary.authorityAttached = true;
+    seedLeases([restartingExpected("task-host")]);
+    seedAuthorityAttached(true);
     const { result } = renderHook(() =>
       useSurfaceHostPinWithDefault(panelKey("browsers"), null),
     );
@@ -270,8 +276,8 @@ describe("pin precedence over the task default and effective", () => {
   });
 
   it("holds an explicit pin through an expected restart", () => {
-    boundary.leases = [restartingExpected("pinned-host")];
-    boundary.authorityAttached = true;
+    seedLeases([restartingExpected("pinned-host")]);
+    seedAuthorityAttached(true);
     const surfaceKey = panelKey("git-diff");
     act(() => {
       useSurfaceHostSelectionStore
@@ -291,8 +297,8 @@ describe("recovery and deregistration", () => {
         .getState()
         .setSelection(surfaceKey, "pinned-host");
     });
-    boundary.leases = [dead("pinned-host")];
-    boundary.authorityAttached = true;
+    seedLeases([dead("pinned-host")]);
+    seedAuthorityAttached(true);
 
     const { result, rerender } = renderHook(() =>
       useSurfaceHostPin(surfaceKey),
@@ -302,7 +308,9 @@ describe("recovery and deregistration", () => {
       "pinned-host",
     );
 
-    boundary.leases = [ready("pinned-host")];
+    act(() => {
+      seedLeases([ready("pinned-host")]);
+    });
     rerender();
     expect(result.current.resolvedHostId).toBe("pinned-host");
   });
@@ -315,8 +323,8 @@ describe("recovery and deregistration", () => {
         .getState()
         .setSelection(surfaceKey, "pinned-host");
     });
-    boundary.leases = [dead("pinned-host"), ready("task-host")];
-    boundary.authorityAttached = true;
+    seedLeases([dead("pinned-host"), ready("task-host")]);
+    seedAuthorityAttached(true);
 
     const { result, rerender } = renderHook(() =>
       useSurfaceHostPinWithDefault(surfaceKey, null),
@@ -330,7 +338,9 @@ describe("recovery and deregistration", () => {
       "pinned-host",
     );
 
-    boundary.leases = [ready("pinned-host"), ready("task-host")];
+    act(() => {
+      seedLeases([ready("pinned-host"), ready("task-host")]);
+    });
     rerender();
     expect(result.current.resolvedHostId).toBe("pinned-host");
     expect(result.current.resolvedFrom).toBe("pin");
@@ -343,8 +353,8 @@ describe("recovery and deregistration", () => {
         .getState()
         .setSelection(surfaceKey, "gone-host");
     });
-    boundary.leases = [ready("effective-host")];
-    boundary.authorityAttached = true;
+    seedLeases([ready("effective-host")]);
+    seedAuthorityAttached(true);
 
     const { result, rerender } = renderHook(() =>
       useSurfaceHostPin(surfaceKey),
@@ -365,8 +375,8 @@ describe("recovery and deregistration", () => {
         .getState()
         .setSelection(surfaceKey, "pinned-host");
     });
-    boundary.authorityAttached = false;
-    boundary.leases = [];
+    seedAuthorityAttached(false);
+    seedLeases([]);
 
     renderHook(() => useSurfaceHostPin(surfaceKey));
     expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(

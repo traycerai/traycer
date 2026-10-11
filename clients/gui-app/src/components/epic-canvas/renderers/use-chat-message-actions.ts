@@ -1,3 +1,6 @@
+import { useStore } from "zustand";
+import type { StoreApi } from "zustand/vanilla";
+import { useShallow } from "zustand/react/shallow";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -34,7 +37,7 @@ import {
   revertPromptArtifactCount,
   type RevertScope,
 } from "@/lib/chat/file-edits-below-message";
-import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+
 import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
@@ -188,15 +191,13 @@ export interface ChatMessageActionsInput {
   readonly node: ChatSurfaceNode;
   readonly chatTitle: string | null;
   readonly chatParentId: string | null;
-  readonly messages: ChatSessionState["messages"];
-  readonly events: ChatSessionState["events"];
+  readonly sessionStore: StoreApi<ChatSessionState>;
   /**
    * The hydration state behind `messages`/`events`, or `null` on the legacy
    * line where those two ARE the whole transcript. Read only by the
    * revert-scope resolution, which is the one thing here that scans DOWNWARD
    * from a message and so cannot treat the two arrays as complete.
    */
-  readonly transcriptWindow: TranscriptWindow | null;
   readonly profile: AuthProfile | null;
   readonly chatActions: ChatActions;
   readonly pendingActions: ChatSessionState["pendingActions"];
@@ -381,9 +382,7 @@ export function useChatMessageActions(
     node,
     chatTitle,
     chatParentId,
-    messages,
-    events,
-    transcriptWindow,
+    sessionStore,
     profile,
     chatActions,
     pendingActions,
@@ -406,17 +405,28 @@ export function useChatMessageActions(
   // while the scope depends only on which message is being edited. Widening it
   // back would re-run three transcript passes for each character typed.
   const inlineEditTargetMessageId = activeInlineEdit?.targetMessageId ?? null;
-  const revertScope = useMemo<RevertScope | null>(
-    () =>
+  const revertInputs = useStore(
+    sessionStore,
+    useShallow((state) =>
       inlineEditTargetMessageId === null
         ? null
+        : {
+            messages: state.messages,
+            events: state.events,
+            transcriptWindow:
+              state.transcriptDerived === null ? null : state.transcriptWindow,
+          },
+    ),
+  );
+  const revertScope = useMemo<RevertScope | null>(
+    () =>
+      inlineEditTargetMessageId === null || revertInputs === null
+        ? null
         : resolveRevertScope({
-            messages,
-            events,
-            transcriptWindow,
+            ...revertInputs,
             fromMessageId: inlineEditTargetMessageId,
           }),
-    [inlineEditTargetMessageId, events, messages, transcriptWindow],
+    [inlineEditTargetMessageId, revertInputs],
   );
 
   /** See `LiveInlineEdit`: the authority for what a send would carry. */

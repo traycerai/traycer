@@ -751,6 +751,12 @@ function fatalClose(code: string): StreamCloseReason {
   };
 }
 
+/**
+ * When `settle` is an array, `host.notifications.markRead` stays pending and
+ * pushes a function that answers it. Null (the default) answers at once.
+ */
+const markReadHold: { settle: Array<() => void> | null } = { settle: null };
+
 function createHostClient(
   markReadCalls: Array<HostNotificationsMarkReadRequest>,
 ): HostClient<HostRpcRegistry> {
@@ -764,7 +770,13 @@ function createHostClient(
       handlers: {
         "host.notifications.markRead": (request) => {
           markReadCalls.push(request);
-          return {};
+          const held = markReadHold.settle;
+          if (held === null) return {};
+          return new Promise<Record<string, never>>((resolve) => {
+            held.push(() => {
+              resolve({});
+            });
+          });
         },
         // Held open forever. The only thing that may settle it is the
         // coordinator releasing the read, which is exactly the effect the
@@ -841,6 +853,13 @@ function setFocusedTerminal(epicId: string, terminalId: string): void {
     titleSource: "default",
     hostId: mockLocalHostEntry.hostId,
     cwd: "/repo",
+  });
+}
+
+/** Indicator invalidations coalesce on a microtask; let one that is coming land. */
+async function flushInvalidations(): Promise<void> {
+  await act(async () => {
+    for (let hop = 0; hop < 20; hop += 1) await Promise.resolve();
   });
 }
 
@@ -3085,6 +3104,62 @@ describe("<NotificationsSessionProvider />", () => {
     });
   });
 
+  it("sends one read while a visit's read is pending, then exactly one more for a completion that landed meanwhile", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const held: Array<() => void> = [];
+    markReadHold.settle = held;
+    try {
+      const { markReadCalls, streamClient } =
+        await renderHostNotificationsProvider();
+
+      act(() => {
+        setFocusedChat("epic-a", "chat-a");
+        hasFocus.mockReturnValue(true);
+        sendPresence();
+      });
+      await waitFor(() => expect(markReadCalls).toHaveLength(1));
+
+      // Focus leaves and returns while the read is still pending.
+      act(() => {
+        hasFocus.mockReturnValue(false);
+        sendPresence();
+        hasFocus.mockReturnValue(true);
+        sendPresence();
+      });
+      // A completion for the chat arrives during the same read.
+      act(() => {
+        streamClient.session.emitServerFrame({
+          kind: "upserted",
+          hasBinaryPayload: false,
+          entry: hostEntry({
+            id: "done-during-read",
+            epicId: "epic-a",
+            chatId: "chat-a",
+            severity: "done",
+          }),
+          removedIds: [],
+          summary: { unreadCount: 1, attentionCount: 0 },
+        });
+      });
+      await Promise.resolve();
+      expect(markReadCalls).toHaveLength(1);
+
+      act(() => {
+        held[0]();
+      });
+      await waitFor(() => expect(markReadCalls).toHaveLength(2));
+      expect(markReadCalls[1]).toEqual(markReadCalls[0]);
+
+      act(() => {
+        held[1]();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(markReadCalls).toHaveLength(2);
+    } finally {
+      markReadHold.settle = null;
+    }
+  });
+
   it("does not consume done rows belonging to a different tile in the same epic", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls, streamClient } =
@@ -3464,7 +3539,9 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    });
   });
 
   it("releases the in-flight indicator read on the NOTIFICATION host, not the app-wide one", async () => {
@@ -3556,7 +3633,9 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+    });
     expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false);
 
     queryClient.getQueryCache().find({ queryKey: target })?.setState({
@@ -3574,6 +3653,8 @@ describe("<NotificationsSessionProvider />", () => {
         summary: { unreadCount: 0, attentionCount: 0 },
       });
     });
+    // Invalidations coalesce on a microtask: let a would-be one land first.
+    await flushInvalidations();
     expect(queryClient.getQueryState(target)?.isInvalidated).toBe(false);
   });
 
@@ -3600,8 +3681,10 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
+    });
   });
 
   it("fully invalidates indicators for a read-state frame carrying removals", async () => {
@@ -3625,8 +3708,10 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
+    });
   });
 
   it("invalidates all indicator queries on a removed frame", async () => {
@@ -3644,7 +3729,9 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    });
   });
 
   it("wires host-channel toast clicks through success-only mark-read with stream origin host", async () => {

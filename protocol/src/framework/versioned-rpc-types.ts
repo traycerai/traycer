@@ -486,6 +486,8 @@ export type UncheckedMethodVersionRegistry = Readonly<
   Record<number, AnyMajorVersionLine>
 > & {
   readonly degrade?: MethodDegradeDeclaration;
+  /** Explicit permission to discard a dispatched read. Never grant to mutations. */
+  readonly cancelAfterDispatch?: boolean;
 };
 
 /**

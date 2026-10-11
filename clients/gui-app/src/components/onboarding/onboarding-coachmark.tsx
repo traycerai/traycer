@@ -3,6 +3,8 @@ import {
   useEffectEvent,
   useId,
   useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
   useRef,
   useState,
   type RefObject,
@@ -119,8 +121,11 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
   const maskId = `first-task-coachmark-dim-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const headingId = `${maskId}-title`;
   const descriptionId = `${maskId}-body`;
-  const portal =
-    held?.closest<HTMLElement>(MODAL_OVERLAY_SELECTOR) ?? document.body;
+  const surface = useMemo(() => createGuideSurfaceStore(held), [held]);
+  const { portal, overOverlay } = useSyncExternalStore(
+    surface.subscribe,
+    surface.getSnapshot,
+  );
 
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (target === null || event.defaultPrevented || event.isComposing) return;
@@ -216,7 +221,8 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
     // the halo on a detached node. Only the latest request may paint.
     let positionRequest = 0;
     const reposition = (): void => {
-      const request = ++positionRequest;
+      positionRequest += 1;
+      const request = positionRequest;
       // The card can never be wider than the surface it floats in: on the body
       // that is the viewport, inside a portalled overlay it is that overlay.
       // Written as a custom property because the floater is `width: max-content`
@@ -265,7 +271,6 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
   // above the card's resting home - and must not dim, because dimming the app
   // behind a surface that already owns attention would darken the very thing
   // the step is about.
-  const overOverlay = held.closest(OVERLAY_SELECTOR) !== null;
   const dimmed = !overOverlay;
   const state = exiting ? "exiting" : "entered";
   return createPortal(
@@ -426,6 +431,33 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
   );
 }
 
+// Snapshot the DOM ancestry: a retained target can move without changing identity.
+function createGuideSurfaceStore(target: HTMLElement | null) {
+  let snapshot = { portal: document.body, overOverlay: false };
+  return {
+    getSnapshot: () => {
+      const portal =
+        target?.closest<HTMLElement>(MODAL_OVERLAY_SELECTOR) ?? document.body;
+      const overOverlay =
+        target !== null && target.closest(OVERLAY_SELECTOR) !== null;
+      if (snapshot.portal !== portal || snapshot.overOverlay !== overOverlay) {
+        snapshot = { portal, overOverlay };
+      }
+      return snapshot;
+    },
+    subscribe: (notify: () => void) => {
+      const observer = new MutationObserver(notify);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["data-slot", "data-overlay-surface"],
+      });
+      return () => observer.disconnect();
+    },
+  };
+}
+
 /**
  * The card's step-progress row. Completed steps are filled; the current step
  * and those after it stay as track, so the row reads as "how far you have
@@ -569,10 +601,12 @@ function useGuideTarget(
         // underneath it has not landed yet - measuring now pins the card to a
         // rect it is about to leave.
         if (overlayWasOpen.current && !overlayOpen) {
-          settle ??= window.setTimeout(() => {
-            settle = null;
-            update(true);
-          }, PICKER_SETTLE_MS);
+          if (settle === null) {
+            settle = window.setTimeout(() => {
+              settle = null;
+              update(true);
+            }, PICKER_SETTLE_MS);
+          }
           return;
         }
         if (settle !== null) return;

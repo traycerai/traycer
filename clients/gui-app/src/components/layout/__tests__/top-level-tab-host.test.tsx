@@ -17,6 +17,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   LandingTerminalHost,
@@ -41,6 +42,10 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  setTopLevelDemand,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
 
@@ -490,6 +495,12 @@ function setSingle(ref: TabRef, refs: ReadonlyArray<TabRef>) {
   }));
 }
 
+// Demand is process-global and the shared coordinator writes it on every
+// activation; each test starts from the initial store.
+beforeEach(() => {
+  useSurfaceDemandStore.setState(useSurfaceDemandStore.getInitialState(), true);
+});
+
 describe("<TopLevelTabHost />", () => {
   // The draft tab kind renders through TWO chained `React.lazy()` boundaries
   // (`draft-surface-provider` wrapping `landing-draft-surface`), each a real
@@ -520,6 +531,10 @@ describe("<TopLevelTabHost />", () => {
 
   afterEach(() => {
     cleanup();
+    useSurfaceDemandStore.setState(
+      useSurfaceDemandStore.getInitialState(),
+      true,
+    );
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
@@ -634,6 +649,52 @@ describe("<TopLevelTabHost />", () => {
     );
 
     expect(screen.getByTestId("epic-surface-content-epic-a")).toBeTruthy();
+  });
+
+  it("a cold surface under preview demand mounts only the static shell, and settling mounts its body", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    setSingle(EPIC_A, [EPIC_A, EPIC_B]);
+    render(<TopLevelTabHost />);
+    expect(screen.getByTestId("epic-surface-content-epic-a")).toBeTruthy();
+    expect(screen.queryByTestId("epic-surface-content-epic-b")).toBeNull();
+
+    // The cursor lands on a never-mounted tab: it shows, but owns no resources.
+    act(() => {
+      setTopLevelDemand([tabRefKey(EPIC_B)], "preview");
+      setSingle(EPIC_B, [EPIC_A, EPIC_B]);
+    });
+    expect(surfaceRef(EPIC_B).dataset.visible).toBe("true");
+    expect(
+      within(surfaceRef(EPIC_B)).getByTestId("surface-preview-shell"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("epic-surface-content-epic-b")).toBeNull();
+
+    act(() => setTopLevelDemand([tabRefKey(EPIC_B)], "settled"));
+    expect(screen.getByTestId("epic-surface-content-epic-b")).toBeTruthy();
+    expect(
+      within(surfaceRef(EPIC_B)).queryByTestId("surface-preview-shell"),
+    ).toBeNull();
+  });
+
+  it("previewing an already-mounted surface keeps its body instance and local state", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    setSingle(EPIC_A, [EPIC_A, EPIC_B]);
+    render(<TopLevelTabHost />);
+    act(() => setSingle(EPIC_B, [EPIC_A, EPIC_B]));
+    const bodyBefore = screen.getByTestId("epic-surface-body-epic-a");
+    bodyBefore.setAttribute("data-local-value", "retained");
+
+    act(() => {
+      setTopLevelDemand([tabRefKey(EPIC_A)], "preview");
+      setSingle(EPIC_A, [EPIC_A, EPIC_B]);
+    });
+
+    const bodyAfter = screen.getByTestId("epic-surface-body-epic-a");
+    expect(bodyAfter).toBe(bodyBefore);
+    expect(bodyAfter.dataset.localValue).toBe("retained");
+    expect(
+      within(surfaceRef(EPIC_A)).queryByTestId("surface-preview-shell"),
+    ).toBeNull();
   });
 
   it("keeps split partner keys mounted while swapping their slots", () => {

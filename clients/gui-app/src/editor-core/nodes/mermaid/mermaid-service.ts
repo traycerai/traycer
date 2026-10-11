@@ -29,6 +29,7 @@ let themeVersion = 0;
 
 function notifyThemeChange(): void {
   themeVersion += 1;
+  renderCache.clear();
   themeChangeListeners.forEach((cb) => {
     try {
       cb();
@@ -121,36 +122,260 @@ export function subscribeMermaidTheme(cb: () => void): () => void {
   };
 }
 
-/**
- * Syntax-validate mermaid source. Mermaid's `parse` throws on invalid
- * syntax with a `message` on the error - we surface it as-is.
- */
-export async function parseMermaid(code: string): Promise<void> {
-  const { mermaid } = await ensureMermaidReady();
-  await mermaid.parse(code);
-}
-
 export interface MermaidRenderResult {
   readonly svg: string;
 }
 
-/**
- * Render the diagram to an SVG string. The `id` must be unique per call
- * (mermaid uses it as the root element id inside the SVG) - we append a
- * monotonic counter so concurrent renders in split-pane views don't clash.
- */
+// Bound both entry count and source/output size; large diagrams still render.
+interface MermaidRenderJob {
+  promise: Promise<string>;
+  consumers: number;
+  started: boolean;
+  cancel: () => void;
+}
+
+const renderCache = new Map<string, string>();
+const renderJobs = new Map<string, MermaidRenderJob>();
+const MAX_CACHED_DIAGRAM_CHARS = 128_000;
 let renderCounter = 0;
+let renderTail: Promise<void> = Promise.resolve();
+
+function nextRenderId(): string {
+  return `tc-mermaid-${Date.now().toString(36)}-${(renderCounter += 1).toString(36)}`;
+}
+
+function uniqueSvgCopy(svg: string): string {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = svg;
+  const prefix = nextRenderId();
+  const ids = new Map<string, string>();
+  for (const element of wrapper.querySelectorAll("[id]")) {
+    ids.set(element.id, `${prefix}-${ids.size}`);
+  }
+  if (ids.size === 0) return svg;
+  const escapedIds = Array.from(ids.keys())
+    .sort((a, b) => b.length - a.length)
+    .map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const ignoredCssToken =
+    /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\//;
+  const rewriteUrls = (value: string): string =>
+    value.replace(
+      /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\/|(?<![\w-])url\(\s*(?:"(#[^"\\]*)"|'(#[^'\\]*)'|(#[^\s)"'\\]*))\s*\)/gi,
+      (
+        match,
+        double: string | undefined,
+        single: string | undefined,
+        bare: string | undefined,
+      ) => {
+        const fragment = double ?? single ?? bare;
+        if (fragment === undefined) return match;
+        const replacement = ids.get(fragment.slice(1));
+        return replacement === undefined
+          ? match
+          : match.replace(fragment, `#${replacement}`);
+      },
+    );
+  const urlAttributes = new Set([
+    "style",
+    "fill",
+    "stroke",
+    "filter",
+    "clip-path",
+    "mask",
+    "marker",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "cursor",
+  ]);
+  const rewriteAttribute = (name: string, value: string): string => {
+    if (name === "id") return ids.get(value) ?? value;
+    if (name === "aria-labelledby" || name === "aria-describedby") {
+      return value
+        .split(/\s+/)
+        .map((id) => ids.get(id) ?? id)
+        .join(" ");
+    }
+    if (name === "href" || name === "xlink:href") {
+      const replacement = value.startsWith("#")
+        ? ids.get(value.slice(1))
+        : undefined;
+      return replacement === undefined ? value : `#${replacement}`;
+    }
+    return urlAttributes.has(name) ? rewriteUrls(value) : value;
+  };
+  // Consume attribute predicates before quoted tokens: references inside these
+  // values must move with their attributes, while ordinary strings stay intact.
+  const selectorPattern = new RegExp(
+    `(\\[(?:${ignoredCssToken.source}|[^\\]"'])*\\])|${ignoredCssToken.source}|#(${escapedIds.join("|")})(?![\\w-])`,
+    "g",
+  );
+  const rewriteSelector = (value: string): string =>
+    value.replace(
+      selectorPattern,
+      (match, attribute: string | undefined, id: string | undefined) => {
+        if (attribute !== undefined) {
+          const predicate =
+            /^(\[\s*)((?:\\.|[\w:|-])+?)(\s*[~|^$*]?=\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s\]]+)(\s+[is])?(\s*\])$/i.exec(
+              attribute,
+            );
+          if (predicate === null) return match;
+          const [, start, name, operator, token, , end] = predicate;
+          const flag = predicate.at(5);
+          const quote =
+            token.startsWith('"') || token.startsWith("'") ? token[0] : "";
+          const original = quote === "" ? token : token.slice(1, -1);
+          const rewritten = rewriteAttribute(
+            name.replace(/\\:/g, ":").replaceAll("|", ":"),
+            original,
+          );
+          if (rewritten === original) return match;
+          return `${start}${name}${operator}${quote}${rewritten}${quote}${flag ?? ""}${end}`;
+        }
+        const replacement = id === undefined ? undefined : ids.get(id);
+        return replacement === undefined ? match : `#${replacement}`;
+      },
+    );
+  const rewriteRule = (rule: CSSRule): void => {
+    if ("selectorText" in rule && typeof rule.selectorText === "string") {
+      rule.selectorText = rewriteSelector(rule.selectorText);
+    }
+    if ("style" in rule) {
+      const declaration = (rule as CSSStyleRule).style;
+      declaration.cssText = rewriteUrls(declaration.cssText);
+    }
+    if ("cssRules" in rule) {
+      for (const child of Array.from((rule as CSSGroupingRule).cssRules)) {
+        rewriteRule(child);
+      }
+    }
+  };
+  for (const element of wrapper.querySelectorAll("*")) {
+    for (const attribute of Array.from(element.attributes)) {
+      const value = rewriteAttribute(attribute.name, attribute.value);
+      if (value !== attribute.value)
+        element.setAttribute(attribute.name, value);
+    }
+    if (element.tagName.toLowerCase() === "style") {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(element.textContent);
+      for (const rule of Array.from(sheet.cssRules)) rewriteRule(rule);
+      element.textContent = Array.from(
+        sheet.cssRules,
+        (rule) => rule.cssText,
+      ).join("\n");
+    }
+  }
+  return wrapper.innerHTML;
+}
+
+function createRenderJob(
+  mermaid: MermaidModule,
+  code: string,
+  key: string,
+  version: number,
+): MermaidRenderJob {
+  const job: MermaidRenderJob = {
+    promise: Promise.resolve(""),
+    consumers: 0,
+    started: false,
+    cancel: () => {},
+  };
+  const drop = (): void => {
+    if (renderJobs.get(key) === job) renderJobs.delete(key);
+  };
+  job.promise = (async () => {
+    await new Promise<void>((resolve, reject) => {
+      let cancelIdle: () => void;
+      if (typeof window.requestIdleCallback === "function") {
+        const id = window.requestIdleCallback(() => resolve(), {
+          timeout: 500,
+        });
+        cancelIdle = () => window.cancelIdleCallback(id);
+      } else {
+        const id = window.setTimeout(resolve, 0);
+        cancelIdle = () => window.clearTimeout(id);
+      }
+      job.cancel = () => {
+        cancelIdle();
+        drop();
+        reject(new DOMException("Diagram render abandoned", "AbortError"));
+      };
+    });
+    // Keep the wait in our queue, where ownership can still be withdrawn,
+    // rather than marking a job started inside Mermaid's own serial queue.
+    const admitted = renderTail.then(async () => {
+      if (job.consumers === 0) {
+        throw new DOMException("Diagram render abandoned", "AbortError");
+      }
+      job.started = true;
+      const id = nextRenderId();
+      try {
+        const { svg } = await mermaid.render(id, code);
+        if (
+          code.length <= MAX_CACHED_DIAGRAM_CHARS &&
+          svg.length <= MAX_CACHED_DIAGRAM_CHARS &&
+          version === themeVersion
+        ) {
+          renderCache.set(key, svg);
+          if (renderCache.size > 32) {
+            const oldest = renderCache.keys().next().value;
+            if (oldest !== undefined) renderCache.delete(oldest);
+          }
+        }
+        return svg;
+      } catch (error) {
+        sweepStrandedMermaidContainers(id);
+        throw error;
+      }
+    });
+    renderTail = admitted.then(
+      () => undefined,
+      () => undefined,
+    );
+    return admitted;
+  })().finally(drop);
+  return job;
+}
+
+/** A consumer owns queued layout until its signal aborts or its copy is ready. */
 export async function renderMermaidSvg(
   code: string,
+  signal: AbortSignal,
 ): Promise<MermaidRenderResult> {
+  signal.throwIfAborted();
   const { mermaid } = await ensureMermaidReady();
-  const id = `tc-mermaid-${Date.now().toString(36)}-${(renderCounter += 1).toString(36)}`;
+  signal.throwIfAborted();
+  const key = `${themeVersion}\0${code}`;
+  const cached = renderCache.get(key);
+  if (cached !== undefined) {
+    renderCache.delete(key);
+    renderCache.set(key, cached);
+    signal.throwIfAborted();
+    return { svg: uniqueSvgCopy(cached) };
+  }
+  let job = renderJobs.get(key);
+  if (job === undefined) {
+    job = createRenderJob(mermaid, code, key, themeVersion);
+    renderJobs.set(key, job);
+  }
+  const ownedJob = job;
+  ownedJob.consumers += 1;
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    ownedJob.consumers -= 1;
+    if (ownedJob.consumers === 0 && !ownedJob.started) ownedJob.cancel();
+  };
+  signal.addEventListener("abort", release, { once: true });
   try {
-    const { svg } = await mermaid.render(id, code);
-    return { svg };
-  } catch (err) {
-    sweepStrandedMermaidContainers(id);
-    throw err;
+    const svg = await ownedJob.promise;
+    signal.throwIfAborted();
+    return { svg: uniqueSvgCopy(svg) };
+  } finally {
+    signal.removeEventListener("abort", release);
+    release();
   }
 }
 

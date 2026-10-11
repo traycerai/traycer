@@ -71,7 +71,11 @@
  * (A `useLayoutEffect`-committed ref would be the paseo shape, but reading
  * a ref during render violates the React Compiler's `react-hooks/refs`.)
  */
-import { useMemo, useState } from "react";
+import { use, useMemo, useState } from "react";
+import {
+  SurfaceDemandContext,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
 import { epicFileViewer } from "@/lib/files/viewer-registry";
 import { TILE_KIND_EPIC_FILE } from "@/stores/epics/canvas/tile-kinds";
@@ -186,6 +190,11 @@ export function useMountedPaneTabs(
   input: UseMountedPaneTabsInput,
 ): ReadonlySet<string> {
   const { activeTabId, pane, tabs, paneVisible } = input;
+  const parentDemand = use(SurfaceDemandContext);
+  const preview = useSurfaceDemandStore(
+    (state) => state.panePreviewTargets[pane.id] !== undefined,
+  );
+  const demand = parentDemand === "preview" || preview ? "preview" : "settled";
 
   // Terminals are pinned; chats and pages are retained by their own policies
   // below; everything else competes for LRU slots.
@@ -224,26 +233,31 @@ export function useMountedPaneTabs(
         retainedPaneChatInstanceIds({
           pane,
           cap: RETAINED_PANE_CHAT_CAP,
+          demand,
           tileFor: (instanceId) => tileByInstanceId.get(instanceId),
         }),
       ),
-    [pane, tileByInstanceId],
+    [pane, tileByInstanceId, demand],
   );
 
+  // A previewed active tab is not retained: mounting a page loads it (its
+  // file read, its sandbox frame), which a held tab cycle's preview must not
+  // do, and a preview would also push a page the reader really viewed out of
+  // the cap. The pages already in the history keep their slots.
   const retainedPageIds = useMemo(
     () =>
       retainedPanePageInstanceIds(
-        activeTabId,
+        demand === "settled" ? activeTabId : null,
         pane.activationHistory,
         tileByInstanceId,
       ),
-    [activeTabId, pane.activationHistory, tileByInstanceId],
+    [activeTabId, demand, pane.activationHistory, tileByInstanceId],
   );
 
   const [committedLru, setCommittedLru] =
     useState<ReadonlyArray<string>>(EMPTY_LRU);
   const mountedTabLru = deriveMountedTabLru({
-    activeTabId,
+    activeTabId: demand === "settled" ? activeTabId : null,
     availableTabIds: availableLruIds,
     cap: paneVisible ? MOUNTED_PANE_TAB_LRU_CAP : 1,
     // A hidden pane collapses to the active tab only; dropping the

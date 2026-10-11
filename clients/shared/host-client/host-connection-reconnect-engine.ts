@@ -1,5 +1,6 @@
 import type { StreamCloseReason } from "../host-transport/i-stream-session";
 import type { TimerHandle } from "../host-transport/timer-handle";
+import { jitteredBackoffFor } from "../host-transport/backoff";
 
 /**
  * THE per-lease reconnect engine (connection-registry §6, redesign P4.1).
@@ -254,7 +255,12 @@ export function createHostReconnectEngine(): HostReconnectEngine {
         ) {
           return;
         }
-        const delayMs = backoffMs;
+        const delayMs = jitteredBackoffFor(
+          0,
+          backoffMs,
+          HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
+          Math.random,
+        );
         backoffMs = Math.min(backoffMs * 2, HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
         timer = globalThis.setTimeout(() => {
           timer = null;

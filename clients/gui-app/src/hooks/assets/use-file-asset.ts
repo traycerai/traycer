@@ -473,6 +473,10 @@ const sharedAssetSubscriptions = new Map<string, SharedAssetSubscription>();
  */
 let nextFocusRefreshGeneration = 1;
 
+function claimFocusRefreshGeneration(): number {
+  return nextFocusRefreshGeneration++;
+}
+
 // eslint-disable-next-line max-params -- All six are semantically distinct and required for the shared-subscription identity + transport-pin contract (mirrors git-query-keys.ts's fileDiff).
 function acquireSharedAssetSubscription(
   sharedKey: string,
@@ -652,7 +656,7 @@ export function useHostFileAsset(args: {
     const wasFocused = wasFocusedRef.current;
     wasFocusedRef.current = paneFocused;
     if (paneFocused && !wasFocused && isWorktreeBacked) {
-      setFocusRefreshGeneration(nextFocusRefreshGeneration++);
+      setFocusRefreshGeneration(claimFocusRefreshGeneration());
     }
   }, [paneFocused, isWorktreeBacked]);
 

@@ -1,10 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
-import {
-  useEpicActiveAgentIds,
-  useEpicAgentActivityTiers,
-} from "@/lib/epic-selectors";
+import { useEpicAgentActivityTier } from "@/lib/epic-selectors";
 import { useAgentActivityCoverage } from "@/stores/agent-activity-store";
 
 /**
@@ -42,8 +39,7 @@ export function TerminalAgentProgressIcon(props: {
   /** Identity glyph for the idle slot (harness brand, static bot, …). */
   readonly idleIcon: ReactNode;
 }) {
-  const isActive = useEpicActiveAgentIds().has(props.nodeId);
-  const tier = useEpicAgentActivityTiers().get(props.nodeId);
+  const tier = useEpicAgentActivityTier(props.nodeId);
   const indicatorState = useSurfaceNotificationIndicatorState(
     { epicId: props.epicId, chatId: props.nodeId },
     props.originHostId,
@@ -56,7 +52,7 @@ export function TerminalAgentProgressIcon(props: {
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
-      running={isActive ? (tier ?? "turn") : false}
+      running={tier ?? false}
       activityCoverage={activityCoverage}
       subjectId={props.nodeId}
       testIdPrefix={props.testIdPrefix}

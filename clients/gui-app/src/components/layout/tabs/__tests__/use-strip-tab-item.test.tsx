@@ -115,7 +115,6 @@ const IDLE_LEADER: LeaderState = {
   modOwnerScopeId: null,
   altOwnerScopeId: null,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 
 const ALT_LEADER: LeaderState = {

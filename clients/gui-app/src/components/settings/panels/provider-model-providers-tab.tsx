@@ -588,7 +588,14 @@ export function ProviderModelProvidersTab(props: {
         },
       },
     );
-  }, [auth, configWrite, disconnectTarget, providerId]);
+  }, [
+    auth,
+    configWrite,
+    disconnectTarget,
+    providerId,
+    setRowError,
+    setDisconnectTarget,
+  ]);
 
   const canDisconnect = capabilities.actions.includes("disconnect");
   const connectable = isConnectable(capabilities);

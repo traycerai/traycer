@@ -9,7 +9,8 @@
  * zustand discard the old blob and reboot from initial state.
  */
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { shallow } from "zustand/vanilla/shallow";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 const RECENTS_LIMIT = 8;
@@ -27,6 +28,13 @@ export interface CommandPaletteState {
   readonly togglePin: (id: string) => boolean;
   readonly clearRecents: () => void;
 }
+
+type PalettePreferences = Pick<CommandPaletteState, "recentIds" | "pinnedIds">;
+
+const paletteStorage = createJSONStorage<PalettePreferences>(
+  () => window.localStorage,
+);
+let persistedPreferences: PalettePreferences = { recentIds: [], pinnedIds: [] };
 
 export const useCommandPaletteStore = create<CommandPaletteState>()(
   persist(
@@ -78,6 +86,29 @@ export const useCommandPaletteStore = create<CommandPaletteState>()(
     }),
     {
       ...basePersistOptions(COMMAND_PALETTE_PERSIST_KEY),
+      storage:
+        paletteStorage === undefined
+          ? undefined
+          : {
+              ...paletteStorage,
+              setItem: (name, value) => {
+                if (
+                  shallow(
+                    value.state.recentIds,
+                    persistedPreferences.recentIds,
+                  ) &&
+                  shallow(value.state.pinnedIds, persistedPreferences.pinnedIds)
+                ) {
+                  return;
+                }
+                const result = paletteStorage.setItem(name, value);
+                persistedPreferences = value.state;
+                return result;
+              },
+            },
+      onRehydrateStorage: () => (state) => {
+        if (state !== undefined) persistedPreferences = state;
+      },
       partialize: (state) => ({
         recentIds: state.recentIds,
         pinnedIds: state.pinnedIds,

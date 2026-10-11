@@ -38,11 +38,13 @@ export interface UseSlashCommandsParams {
 
 export const NO_LOCAL_SLASH_COMMANDS: ReadonlyArray<SlashCommand> = [];
 
+const commandNameCollator = new Intl.Collator(undefined, {
+  sensitivity: "base",
+  numeric: true,
+});
+
 function compareCommandNames(left: SlashCommand, right: SlashCommand): number {
-  return left.name.localeCompare(right.name, undefined, {
-    sensitivity: "base",
-    numeric: true,
-  });
+  return commandNameCollator.compare(left.name, right.name);
 }
 
 export function useSlashCommands(
@@ -58,6 +60,7 @@ export function useSlashCommands(
   const trimmed = query.trim();
   const localCommands = params.localCommands;
   const allCommands = useMemo<ReadonlyArray<SlashCommand>>(() => {
+    if (!params.enabled) return NO_LOCAL_SLASH_COMMANDS;
     const providerCommands: ReadonlyArray<ProviderSlashCommand> = (
       commandsQuery.data?.commands ?? []
     ).map((command): ProviderSlashCommand => ({
@@ -69,7 +72,7 @@ export function useSlashCommands(
       ...localCommands,
       ...providerCommands,
     ]).toSorted(compareCommandNames);
-  }, [commandsQuery.data?.commands, localCommands]);
+  }, [commandsQuery.data?.commands, localCommands, params.enabled]);
   const data = useMemo<ReadonlyArray<SlashCommand>>(
     () => rankSlashCommands(allCommands, trimmed),
     [allCommands, trimmed],

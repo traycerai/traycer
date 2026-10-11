@@ -580,6 +580,28 @@ export function subscribeToBrowserSessionsCoordinator(
   };
 }
 
+/** Read-only store interface for subscriptions that select inventory or display fields. */
+export function browserSessionsCoordinatorStore(key: string | null) {
+  return {
+    getState: () => browserSessionsCoordinatorState(key),
+    getInitialState: () => null,
+    subscribe: (
+      listener: (
+        state: BrowserSessionsState | null,
+        previous: BrowserSessionsState | null,
+      ) => void,
+    ) => {
+      let previous = browserSessionsCoordinatorState(key);
+      return subscribeToBrowserSessionsCoordinator(key, () => {
+        const state = browserSessionsCoordinatorState(key);
+        const before = previous;
+        previous = state;
+        listener(state, before);
+      });
+    },
+  };
+}
+
 function notifyBrowserSessionsCoordinator(key: string): void {
   browserSessionsCoordinatorListeners
     .get(key)

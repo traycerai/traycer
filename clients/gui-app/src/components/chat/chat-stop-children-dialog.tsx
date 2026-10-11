@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,6 +23,9 @@ export function StopChildrenDialog(props: {
   readonly onStopAll: () => void;
   readonly onStopOnlyThis: () => void;
 }) {
+  const [everOpened, setEverOpened] = useState(props.open);
+  if (props.open && !everOpened) setEverOpened(true);
+  if (!props.open && !everOpened) return null;
   const count = props.agents.length;
   const plural = count === 1 ? "" : "s";
   return (

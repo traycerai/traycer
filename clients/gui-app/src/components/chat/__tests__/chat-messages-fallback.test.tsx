@@ -66,10 +66,10 @@ import type {
   ProviderNoticeSegment,
 } from "@/stores/composer/chat-store";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 import { usePublishConfirmedManualFallbackAction } from "@/components/chat/fallback/use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "@/components/chat/fallback/use-unattended-fallback-outcome";

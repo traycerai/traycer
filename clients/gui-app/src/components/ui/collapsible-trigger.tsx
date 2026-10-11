@@ -2,6 +2,8 @@ import type { ComponentProps } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Collapsible as CollapsiblePrimitive } from "radix-ui";
 
+import { useCollapsibleState } from "@/components/ui/collapsible-context";
+
 import { cn } from "@/lib/utils";
 
 // Radix ships this trigger unstyled, so until `shadcn/no-restyle` counted them
@@ -40,10 +42,12 @@ function CollapsibleTrigger({
   ...props
 }: ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger> &
   VariantProps<typeof collapsibleTriggerVariants>) {
+  const { open, contentId } = useCollapsibleState();
   return (
     <CollapsiblePrimitive.CollapsibleTrigger
       data-slot="collapsible-trigger"
       className={cn(collapsibleTriggerVariants({ variant }), className)}
+      aria-controls={open ? contentId : undefined}
       {...props}
     />
   );

@@ -19,7 +19,10 @@ import {
 } from "@/lib/drafts/stash-migration";
 import { setActiveDesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  LANDING_DRAFT_PERSIST_KEY,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
@@ -331,6 +334,7 @@ describe("local stash migration", () => {
     // reached the store and not the disk, so the receipt must not be written.
     setActiveDesktopPerWindowProjectionBridge({
       update: () => Promise.resolve(),
+      schedule: () => undefined,
       flush: () => Promise.reject(new Error("no ipc")),
       dispose: () => undefined,
     });
@@ -341,6 +345,49 @@ describe("local stash migration", () => {
       null,
     );
     expect(await databaseNames()).toContain(STASH_DB_NAME);
+  });
+
+  it("records nothing and keeps the source when the browser-mode local-storage write fails (no desktop bridge)", async () => {
+    await seedTwoEntries();
+    // No desktop bridge here (browser mode): `installLandingDraft`'s own
+    // synchronous barrier is the only thing standing between the row landing
+    // in memory and the receipt/retirement below - the desktop path's
+    // separate flush-failure test above covers the OTHER writer.
+    const realSetItem = window.localStorage.setItem.bind(window.localStorage);
+    // Some environments run the jsdom setup's `installMockLocalStorage()`
+    // fallback (own-property methods on `window.localStorage` itself, not
+    // inherited from `Storage.prototype` - see
+    // `__tests__/test-browser-apis.ts`), so the spy must target whichever one
+    // is actually live rather than assuming the prototype.
+    const storageSpyTarget: Storage = Object.hasOwn(
+      window.localStorage,
+      "setItem",
+    )
+      ? window.localStorage
+      : Storage.prototype;
+    const setItemSpy = vi
+      .spyOn(storageSpyTarget, "setItem")
+      .mockImplementation(function (key: string, value: string) {
+        if (key === LANDING_DRAFT_PERSIST_KEY) {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        }
+        realSetItem(key, value);
+      });
+
+    try {
+      await migrateLocalStash();
+    } finally {
+      setItemSpy.mockRestore();
+    }
+
+    expect(window.localStorage.getItem("traycer-gui-app:stash-migration")).toBe(
+      null,
+    );
+    expect(await databaseNames()).toContain(STASH_DB_NAME);
+    // The row reached memory before the barrier threw, but was never durably
+    // written - the newest entry is processed first, so it is the one that
+    // reached (and stopped) the pass.
+    expect(draftTexts()).toEqual(["newer"]);
   });
 
   it("converts a stash id once when two callers race on it", async () => {

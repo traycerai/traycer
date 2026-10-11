@@ -34,8 +34,27 @@ function tileFor(instanceId: string): EpicCanvasTileRef | undefined {
   };
 }
 
+/** Settled (non-preview) retention - the normal, non-cycling path. */
 function retained(pane: TilePane, cap: number): ReadonlyArray<string> {
-  return retainedPaneChatInstanceIds({ pane, tileFor, cap });
+  return retainedPaneChatInstanceIds({
+    pane,
+    tileFor,
+    cap,
+    demand: "settled",
+  });
+}
+
+/** Retention while `pane.activeTabId` is only a preview target. */
+function retainedDuringHold(
+  pane: TilePane,
+  cap: number,
+): ReadonlyArray<string> {
+  return retainedPaneChatInstanceIds({
+    pane,
+    tileFor,
+    cap,
+    demand: "preview",
+  });
 }
 
 describe("retainedPaneChatInstanceIds", () => {
@@ -142,5 +161,50 @@ describe("retainedPaneChatInstanceIds", () => {
       activationHistory: [],
     });
     expect(retained(pane, RETAINED_PANE_CHAT_CAP)).toEqual([]);
+  });
+});
+
+// A held Cmd+] repeat previews `pane.activeTabId` on every frame without
+// touching `activationHistory` (`activatePaneTab` with `preview` vs
+// `settled` demand in actions.ts). Under preview demand retention must keep
+// exactly the settled window history already picked: the in-flight target
+// never takes a slot of its own (a cold one would otherwise force a stream
+// acquisition per frame), and never displaces a settled entry. A target that
+// is already in the settled window stays retained, once.
+describe("retainedPaneChatInstanceIds under preview demand", () => {
+  it("gives a never-settled preview target no slot and keeps the settled window intact", () => {
+    const pane = paneWith({
+      tabInstanceIds: ["chat-a", "chat-b", "chat-c"],
+      activeTabId: "chat-c",
+      activationHistory: ["chat-a", "chat-b"],
+    });
+    expect(retainedDuringHold(pane, RETAINED_PANE_CHAT_CAP)).toEqual([
+      "chat-a",
+      "chat-b",
+    ]);
+  });
+
+  it("keeps an already-settled preview target retained without duplicating it", () => {
+    const pane = paneWith({
+      tabInstanceIds: ["chat-a", "chat-b"],
+      activeTabId: "chat-b",
+      activationHistory: ["chat-a", "chat-b"],
+    });
+    expect(retainedDuringHold(pane, RETAINED_PANE_CHAT_CAP)).toEqual([
+      "chat-a",
+      "chat-b",
+    ]);
+  });
+
+  it("settling the same target promotes it into the retained window", () => {
+    const pane = paneWith({
+      tabInstanceIds: ["chat-a", "chat-b", "chat-c"],
+      activeTabId: "chat-c",
+      activationHistory: ["chat-a", "chat-b"],
+    });
+    expect(retained(pane, RETAINED_PANE_CHAT_CAP)).toEqual([
+      "chat-c",
+      "chat-a",
+    ]);
   });
 });

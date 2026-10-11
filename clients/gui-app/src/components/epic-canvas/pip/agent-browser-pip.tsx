@@ -16,7 +16,7 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { PipPreviewSurface } from "@/components/epic-canvas/pip/pip-preview-surface";
-import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsInventory } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import {
@@ -89,7 +89,7 @@ function ActiveAgentBrowserPip(props: {
 }): ReactElement {
   const snapshot = props.snapshot;
   const canvasHostId = useCanvasHostId();
-  const primaryItems = useBrowserSessionsContext().items;
+  const primaryItems = useBrowserSessionsInventory().items;
   const remoteHostIds = useMemo(() => {
     const targetHostIds = [
       snapshot.target?.hostId,

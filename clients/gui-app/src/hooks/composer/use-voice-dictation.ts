@@ -2,11 +2,20 @@
    deliberately to capture PCM without a separate AudioWorklet asset (which would
    need CSP `script-src` widening for `file://`); migrating to AudioWorklet is a
    follow-up. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  MicrophoneAccessStatus,
+  IRunnerHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
@@ -136,6 +145,140 @@ function dictationDurationBucket(
  * the host resamples to the model rate), and forwards final transcripts to the
  * caller (which writes them into the composer).
  */
+async function acquireMicrophoneStream({
+  generation,
+  startGenerationRef,
+  runnerHost,
+  setPermissionDenied,
+  fail,
+}: {
+  generation: number;
+  startGenerationRef: RefObject<number>;
+  runnerHost: IRunnerHost;
+  setPermissionDenied: (denied: boolean) => void;
+  fail: (
+    failureClass: DictationFailureClass,
+    fields: AppLogFields,
+    message: string,
+    error: unknown,
+  ) => void;
+}): Promise<MediaStream | null> {
+  if (generation !== startGenerationRef.current) return null;
+  if (typeof navigator === "undefined") {
+    Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+      permission: "unavailable",
+    });
+    fail(
+      "capture_unavailable",
+      {},
+      "Microphone capture is not available in this environment.",
+      "Microphone capture is not available in this environment.",
+    );
+    return null;
+  }
+  // Trigger the native OS permission prompt (macOS) before opening the
+  // stream. Returns the existing decision when already set; a denied app is
+  // never re-prompted, so route those to the "Open Settings" affordance.
+  let access: MicrophoneAccessStatus;
+  try {
+    access = await runnerHost.requestMicrophoneAccess();
+  } catch (error) {
+    if (generation !== startGenerationRef.current) return null;
+    fail(
+      "permission_request_failed",
+      {},
+      `Could not request microphone access: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      error,
+    );
+    return null;
+  }
+  if (generation !== startGenerationRef.current) return null;
+  if (access === "denied") {
+    Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+      permission: "denied",
+    });
+    setPermissionDenied(true);
+    fail(
+      "permission_denied_os",
+      {},
+      "Microphone access is blocked for Traycer.",
+      "Microphone access is blocked for Traycer.",
+    );
+    return null;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      // Mono, echo cancellation, noise suppression, and auto gain. Echo
+      // cancellation stays on under Windows too: it does not select the
+      // communications category (see `dictationCaptureConstraints`).
+      audio: dictationCaptureConstraints(),
+    });
+    // The session may have been stopped/cancelled while the prompt was open.
+    if (generation !== startGenerationRef.current) {
+      for (const track of stream.getTracks()) track.stop();
+      return null;
+    }
+    Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+      permission: "granted",
+    });
+    return stream;
+  } catch (error) {
+    // The session may have been stopped/cancelled while getUserMedia was
+    // pending - a late rejection must not resurrect it into "error" or
+    // emit analytics for an attempt the user already abandoned.
+    if (generation !== startGenerationRef.current) return null;
+    // No log here: `fail()` writes the single line for this path, and the
+    // `denied` split it used to record is now carried by the failure class.
+    const failure = classifyMicOpenFailure(error);
+    if (failure.denied) {
+      // The OS said yes but the browser-level prompt was refused - still a
+      // user-visible permission denial for the funnel.
+      Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+        permission: "denied",
+      });
+      setPermissionDenied(true);
+    }
+    fail(failure.failureClass, {}, failure.message, error);
+    return null;
+  }
+}
+
+function createCaptureContext(
+  fail: (
+    failureClass: DictationFailureClass,
+    fields: AppLogFields,
+    message: string,
+    error: unknown,
+  ) => void,
+): AudioContext | null {
+  let ctx: AudioContext;
+  try {
+    ctx = new AudioContext({ sampleRate: SPEECH_INPUT_SAMPLE_RATE });
+  } catch (error) {
+    appLogger.warn("[voice-dictation] requested sample rate unsupported", {
+      sampleRate: SPEECH_INPUT_SAMPLE_RATE,
+      error: describeLogError(error),
+    });
+    try {
+      ctx = new AudioContext();
+    } catch (error) {
+      // No log here either: `fail()` writes the single line for this path.
+      fail(
+        "audio_context_create_failed",
+        {},
+        `Could not start audio capture: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        error,
+      );
+      return null;
+    }
+  }
+  return ctx;
+}
+
 export function useVoiceDictation(
   args: UseVoiceDictationArgs,
 ): UseVoiceDictation {
@@ -330,89 +473,14 @@ export function useVoiceDictation(
   // error, or silently aborts) when the mic can't be opened or the session was
   // stopped/cancelled while the prompt was up (detected via `generation`).
   const acquireMicStream = useCallback(
-    async (generation: number): Promise<MediaStream | null> => {
-      if (generation !== startGenerationRef.current) return null;
-      if (typeof navigator === "undefined") {
-        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
-          permission: "unavailable",
-        });
-        fail(
-          "capture_unavailable",
-          {},
-          "Microphone capture is not available in this environment.",
-          "Microphone capture is not available in this environment.",
-        );
-        return null;
-      }
-      // Trigger the native OS permission prompt (macOS) before opening the
-      // stream. Returns the existing decision when already set; a denied app is
-      // never re-prompted, so route those to the "Open Settings" affordance.
-      let access: MicrophoneAccessStatus;
-      try {
-        access = await runnerHost.requestMicrophoneAccess();
-      } catch (error) {
-        if (generation !== startGenerationRef.current) return null;
-        fail(
-          "permission_request_failed",
-          {},
-          `Could not request microphone access: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          error,
-        );
-        return null;
-      }
-      if (generation !== startGenerationRef.current) return null;
-      if (access === "denied") {
-        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
-          permission: "denied",
-        });
-        setPermissionDenied(true);
-        fail(
-          "permission_denied_os",
-          {},
-          "Microphone access is blocked for Traycer.",
-          "Microphone access is blocked for Traycer.",
-        );
-        return null;
-      }
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          // Mono, echo cancellation, noise suppression, and auto gain. Echo
-          // cancellation stays on under Windows too: it does not select the
-          // communications category (see `dictationCaptureConstraints`).
-          audio: dictationCaptureConstraints(),
-        });
-        // The session may have been stopped/cancelled while the prompt was open.
-        if (generation !== startGenerationRef.current) {
-          for (const track of stream.getTracks()) track.stop();
-          return null;
-        }
-        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
-          permission: "granted",
-        });
-        return stream;
-      } catch (error) {
-        // The session may have been stopped/cancelled while getUserMedia was
-        // pending - a late rejection must not resurrect it into "error" or
-        // emit analytics for an attempt the user already abandoned.
-        if (generation !== startGenerationRef.current) return null;
-        // No log here: `fail()` writes the single line for this path, and the
-        // `denied` split it used to record is now carried by the failure class.
-        const failure = classifyMicOpenFailure(error);
-        if (failure.denied) {
-          // The OS said yes but the browser-level prompt was refused - still a
-          // user-visible permission denial for the funnel.
-          Analytics.getInstance().track(
-            AnalyticsEvent.VoicePermissionResolved,
-            { permission: "denied" },
-          );
-          setPermissionDenied(true);
-        }
-        fail(failure.failureClass, {}, failure.message, error);
-        return null;
-      }
-    },
+    (generation: number) =>
+      acquireMicrophoneStream({
+        generation,
+        startGenerationRef,
+        runnerHost,
+        setPermissionDenied,
+        fail,
+      }),
     [fail, runnerHost],
   );
 
@@ -545,29 +613,8 @@ export function useVoiceDictation(
     // to the host (the browser may pin it to the hardware rate, ignoring the
     // 16 kHz hint). Fall back to the hardware rate if 16 kHz is unsupported; the
     // host resamples either way.
-    let ctx: AudioContext;
-    try {
-      ctx = new AudioContext({ sampleRate: SPEECH_INPUT_SAMPLE_RATE });
-    } catch (error) {
-      appLogger.warn("[voice-dictation] requested sample rate unsupported", {
-        sampleRate: SPEECH_INPUT_SAMPLE_RATE,
-        error: describeLogError(error),
-      });
-      try {
-        ctx = new AudioContext();
-      } catch (error) {
-        // No log here either: `fail()` writes the single line for this path.
-        fail(
-          "audio_context_create_failed",
-          {},
-          `Could not start audio capture: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          error,
-        );
-        return;
-      }
-    }
+    const ctx = createCaptureContext(fail);
+    if (ctx === null) return;
     audioContextRef.current = ctx;
 
     const client = new SpeechStreamClient({

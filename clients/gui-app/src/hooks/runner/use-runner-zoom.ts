@@ -122,6 +122,7 @@ export function useRunnerZoomResetMutation(
 }
 
 let nextZoomCacheScopeId = 0;
+// render-cache: stable per-key instance identity; zoom state read via subscription (Query + onChange).
 const zoomCacheScopes = new WeakMap<DesktopZoomBridge, string>();
 const zoomCacheBridges = new Map<string, DesktopZoomBridge>();
 

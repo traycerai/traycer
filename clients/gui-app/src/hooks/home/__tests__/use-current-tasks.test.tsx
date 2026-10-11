@@ -1216,6 +1216,91 @@ describe("useCurrentTasks restarting a multi-page pin tail", () => {
   });
 });
 
+describe("useCurrentTasks pin-tail cache retention", () => {
+  it("garbage-collects an abandoned cursor's pin-tail cache 5 minutes after it falls idle, while the current cursor stays correct", async () => {
+    vi.useFakeTimers();
+    try {
+      testState.firstPage = page(
+        [pinnedTask("first-pin")],
+        "cursor-1",
+        SETTLED,
+      );
+      fetchCursorPage.mockImplementation(
+        (_hostId: string, _userId: string, args: CursorPageArgs) =>
+          Promise.resolve(
+            args.cursor === "cursor-1"
+              ? page([pinnedTask("tail-one")], null, null)
+              : page([pinnedTask("tail-two")], null, null),
+          ),
+      );
+      const queryClient = newQueryClient();
+      const { result } = renderHook(() => useCurrentTasks(), {
+        wrapper: wrapperFor(queryClient),
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      await flushDeliveries();
+      expect(pinnedIds(result)).toContain("tail-one");
+
+      const cursorOneKey = cloudQueryKeys.currentTasksPinTail(
+        HOST_ID,
+        USER_ID,
+        "cursor-1",
+      );
+      expect(queryClient.getQueryState(cursorOneKey)).toBeDefined();
+
+      // The first page's boundary moves on - a pin landed past cursor-1 - so
+      // the tail re-scans under a NEW cursor key. cursor-1's key falls idle
+      // (no observer), which is the only way its cache can ever expire.
+      act(() => {
+        queryClient.setQueryData(
+          cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+          page([pinnedTask("first-pin")], "cursor-2", SETTLED),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      await flushDeliveries();
+      expect(pinnedIds(result)).toContain("tail-two");
+      expect(pinnedIds(result)).not.toContain("tail-one");
+
+      const cursorTwoKey = cloudQueryKeys.currentTasksPinTail(
+        HOST_ID,
+        USER_ID,
+        "cursor-2",
+      );
+      // Still cached just after falling idle - the point is the TIMEOUT, not
+      // an eager eviction on abandonment.
+      expect(queryClient.getQueryState(cursorOneKey)).toBeDefined();
+
+      // Comfortably under 5 minutes (allowing for the earlier real-time
+      // advances already spent since it fell idle): the abandoned cursor's
+      // cache must still survive.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+      });
+      expect(queryClient.getQueryState(cursorOneKey)).toBeDefined();
+
+      // Past 5 minutes total: gone. The current cursor's cache and the
+      // hook's live output are untouched by the neighboring cursor's
+      // collection.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60 * 1000 + 1);
+      });
+      expect(queryClient.getQueryState(cursorOneKey)).toBeUndefined();
+      expect(queryClient.getQueryState(cursorTwoKey)).toBeDefined();
+      expect(pinnedIds(result)).toEqual(
+        expect.arrayContaining(["first-pin", "tail-two"]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("useCurrentTasks open task owned by another host", () => {
   const HOST_B = "host-b";
 

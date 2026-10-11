@@ -7,9 +7,8 @@ import type { DesktopWindowsBridge } from "@/lib/windows/types";
  * `lib/dom/document-visibility.ts`, which renderer parking and the cross-window
  * report both read.
  *
- * Needed because the Page Visibility API is inert on the desktop: every window
- * runs with `backgroundThrottling: false`, which keeps `visibilityState` at
- * `"visible"` through minimise and hide. Main watches the BrowserWindow's own
+ * Desktop keeps throttling disabled for receiver stats (#1613) and transport
+ * keepalives, pinning DOM visibility to "visible". Main watches the window's
  * `minimize` / `restore` / `show` / `hide` transitions and pushes the boolean
  * here; this module only carries it across.
  *

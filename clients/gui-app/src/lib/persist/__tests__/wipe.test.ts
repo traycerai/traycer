@@ -43,9 +43,23 @@ vi.mock("@/lib/appearance/appearance-cache", () => ({
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
-import { persistKey } from "@/lib/persist/keys";
 import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import {
+  deferJsonWrite,
+  cancelDeferredJsonWrites,
+  flushDeferredJsonWrite,
+} from "@/lib/persist/deferred-json-storage";
+import { composerDraftRowPrefix, persistKey } from "@/lib/persist/keys";
+import {
+  EMPTY_COMPOSER_DRAFT,
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import {
+  ANON_NAME,
+  textDoc,
+} from "@/stores/composer/__tests__/composer-draft-rows";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
 
 const SKELETON_RESUME_PRESENT_KEY = persistKey(
@@ -239,9 +253,11 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(order[order.length - 1]).toBe("reload");
     // hostClear precedes every sweep removal.
     expect(order[0]).toBe("hostClear");
-    // Seven seeded prefix keys are swept; the resume clear also removes its
-    // presence hint after the prefix sweep.
-    expect(order.filter((e) => e.includes("removeItem")).length).toBe(8);
+    // Seven seeded prefix keys are swept (5 local incl. the resume presence
+    // hint + 2 session); the resume clear removes its presence hint again
+    // after the sweep, and the composer draft clear issues its own (no-op)
+    // `removeItem` of its legacy blob key.
+    expect(order.filter((e) => e.includes("removeItem")).length).toBe(9);
   });
 
   it("awaits `hostClear` BEFORE sweeping (a rejecting clear aborts the sweep + reload)", async () => {
@@ -633,5 +649,109 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
       "blocked",
     );
     expect(reloadSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("clearAllPersistedStores - queued debounced writes", () => {
+  it("cancels a queued history/canvas write before the sweep, so a later pagehide cannot resurrect it", async () => {
+    // Reset to jsdom's real default (no IndexedDB) - a prior "renderer
+    // IndexedDB drop" test may have left a blocked-deletion factory installed,
+    // which is irrelevant to this test's own concern.
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    const key = "traycer-gui-app:last-route:window-a";
+    expect(localStorageMock.getItem(key)).toBeNull();
+
+    // A history navigation (or a canvas local-persist write) queued its disk
+    // write but the 100ms debounce hasn't fired yet.
+    deferJsonWrite(key, () => {
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({ entries: ["/epics/e1/t1"], index: 0 }),
+      );
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(localStorageMock.getItem(key)).toBeNull();
+
+    // The unload-time flush must not be able to resurrect a key the wipe
+    // just cleared.
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(localStorageMock.getItem(key)).toBeNull();
+  });
+});
+
+describe("clearAllPersistedStores - composer drafts", () => {
+  it("empties the live drafts and the storage baseline at the sweep, so old text is gone while the reload is pending and the next custody write lands", async () => {
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    const composerRows = (): string[] =>
+      snapshotKeys(localStorageMock).filter((key) =>
+        key.startsWith(composerDraftRowPrefix(ANON_NAME)),
+      );
+    const allStoredText = (): string =>
+      snapshotKeys(localStorageMock)
+        .map((key) => localStorageMock.getItem(key) ?? "")
+        .join("\n");
+
+    // A persisted row (the adapter has now seen its revision), unsaved text on
+    // top of it, and a pending submitted-draft receipt.
+    const store = useComposerDraftStore.getState();
+    store.setSnapshot("chat-wipe", textDoc("OLD persisted"), null);
+    flushDeferredJsonWrite(ANON_NAME);
+    expect(composerRows()).toHaveLength(1);
+    store.setSnapshot("chat-wipe", textDoc("OLD unsaved"), null);
+    store.recordPendingSubmittedDraftRetract("draft-old", "host-a");
+    const epochBefore = readComposerDraftSnapshot("chat-wipe").resetEpoch;
+
+    // Hold the wipe after the storage sweep, before the reload: the renderer
+    // stays live in that window.
+    let releaseCleanup: () => void = () => undefined;
+    clearAppearanceCache.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      }),
+    );
+    const wiping = clearAllPersistedStores({ hostClear: null });
+    await vi.waitFor(() => {
+      expect(clearAppearanceCache).toHaveBeenCalled();
+    });
+    expect(reloadSpy).not.toHaveBeenCalled();
+
+    // Nothing of the old drafts is left on disk or in the editor's source.
+    expect(composerRows()).toEqual([]);
+    const afterWipe = readComposerDraftSnapshot("chat-wipe");
+    expect(afterWipe.content).toEqual(EMPTY_COMPOSER_DRAFT.content);
+    expect(afterWipe.resetEpoch).toBeGreaterThan(epochBefore);
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes,
+    ).toEqual({});
+    window.dispatchEvent(new Event("pagehide"));
+    expect(allStoredText()).not.toContain("OLD");
+
+    // A custody write in that window is not blocked by the wiped row's old
+    // revision, and it is durable.
+    expect(() =>
+      useComposerDraftStore
+        .getState()
+        .replaceDraft("chat-wipe", textDoc("NEW restored"), null),
+    ).not.toThrow();
+    expect(composerRows()).toHaveLength(1);
+    expect(allStoredText()).toContain("NEW restored");
+    expect(allStoredText()).not.toContain("OLD");
+
+    releaseCleanup();
+    await wiping;
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    cancelDeferredJsonWrites();
   });
 });

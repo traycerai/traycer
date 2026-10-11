@@ -55,7 +55,10 @@ const mockSessionState = vi.hoisted<{
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useRegisteredEpicAgentActivityTiers: () => mockSessionState.activityTiers,
+  useRegisteredEpicAgentActivityTier: (
+    _epicId: string | null,
+    agentId: string,
+  ) => mockSessionState.activityTiers.get(agentId),
   useRegisteredEpicPermissionRole: () => mockSessionState.epicPermissionRole,
 }));
 

@@ -1,4 +1,9 @@
 import {
+  setTopLevelDemand,
+  useSurfaceDemandStore,
+  type ActiveSurfaceDemand,
+} from "./surface-demand";
+import {
   captureHeaderLocation,
   restoreHeaderLayout,
 } from "@/lib/tab-recovery/header-layout";
@@ -447,7 +452,7 @@ function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
   return side.kind === "tab" ? side.ref : null;
 }
 
-function coordinatedSelection(
+export function coordinatedSelection(
   layout: PersistedTabStripLayout,
 ): CoordinatedTabSelection {
   const active = layout.items.find((item) => item.id === layout.activeItemId);
@@ -624,6 +629,10 @@ export class TabCommandCoordinator {
     this.ledger = EMPTY_LEDGER;
     this.diagnostics = EMPTY_DIAGNOSTICS;
     this.notify();
+    useSurfaceDemandStore.setState(
+      useSurfaceDemandStore.getInitialState(),
+      true,
+    );
   }
 
   installSourceReconciliation(): void {
@@ -1031,19 +1040,41 @@ export class TabCommandCoordinator {
   activateTab(
     target: CoordinatedTabActivationTarget,
   ): CoordinatedTabActivation | null {
+    return this.activateTabWithDemand(target, "settled");
+  }
+
+  activateTabWithDemand(
+    target: CoordinatedTabActivationTarget,
+    demand: ActiveSurfaceDemand,
+  ): CoordinatedTabActivation | null {
     const priorLayout = currentLayout();
     const priorSelection = coordinatedSelection(priorLayout);
     const resolved = this.resolveCoordinatedActivation(target, priorLayout);
     if (resolved === null) return null;
+    const active = resolved.layout.items.find(
+      (item) => item.id === resolved.layout.activeItemId,
+    );
     // Marked before the layout lands, so the strip finds the mark when the
     // new tab mounts. Selecting a tab that is already open adds nothing.
     markOpenedTabs(resolved.reservedAdditions);
     this.execute({
-      layout: resolved.layout,
+      layout:
+        demand === "preview"
+          ? {
+              ...resolved.layout,
+              activationHistory: priorLayout.activationHistory,
+            }
+          : resolved.layout,
       reservedAdditions: resolved.reservedAdditions,
       pendingRemovals: [],
       projectSourceCompatibility: true,
       applySources: () => {
+        setTopLevelDemand(
+          active === undefined
+            ? [tabRefKey(resolved.ref)]
+            : flattenStripItemRefs(active).map(tabRefKey),
+          demand,
+        );
         this.applyExpectedSourceMutation(resolved.applySources);
       },
       applyRemovals: () => undefined,
@@ -2235,6 +2266,23 @@ export class TabCommandCoordinator {
   }
 
   private notify(): void {
+    if (this.ledger.suppressionDepth === 0) {
+      const layout = currentLayout();
+      const active = layout.items.find(
+        (item) => item.id === layout.activeItemId,
+      );
+      const keys =
+        active === undefined ? [] : flattenStripItemRefs(active).map(tabRefKey);
+      if (layoutHomeIsActive(layout)) keys.push(tabRefKey(HOME_TAB_REF));
+      const previous = useSurfaceDemandStore.getState().topLevelActiveKeys;
+      if (
+        previous === null ||
+        keys.length !== previous.length ||
+        keys.some((key, index) => key !== previous[index])
+      ) {
+        setTopLevelDemand(keys, "settled");
+      }
+    }
     this.listeners.forEach((listener) => listener());
   }
 }

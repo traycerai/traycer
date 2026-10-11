@@ -4,7 +4,7 @@ import { MessageSquareLock } from "lucide-react";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import {
-  useRegisteredEpicAgentActivityTiers,
+  useRegisteredEpicAgentActivityTier,
   useRegisteredEpicPermissionRole,
 } from "@/lib/epic-selectors";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
@@ -57,7 +57,7 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   // for it. A host that has not classified its agents still reports `"turn"`.
   //
   // Both reads go through the REGISTERED (keyed, non-throwing) selectors, not
-  // the ambient `useEpicAgentActivityTiers()` / `useEpicPermissionRole()`: this
+  // the ambient `useEpicAgentActivityTier()` / `useEpicPermissionRole()`: this
   // icon already carries its `epicId`, and it is a presentational leaf that
   // must stay renderable wherever a chat node is drawn - the same rule the
   // sibling `TuiAgentLiveTabIcon` follows. With the ambient hooks it was the
@@ -67,8 +67,7 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   // - no activity, `null` role - which is the same neutral idle the icon
   // already shows for an unknown permission.
   const awarenessRunning: IndicatorRunningKind =
-    useRegisteredEpicAgentActivityTiers(props.epicId).get(props.chatId) ??
-    false;
+    useRegisteredEpicAgentActivityTier(props.epicId, props.chatId) ?? false;
   // Read for the HANDLE-LESS arm below, but hooks cannot be called
   // conditionally so it is resolved here for both. `null` answers
   // `indeterminate` by construction, which is the right reading for a row

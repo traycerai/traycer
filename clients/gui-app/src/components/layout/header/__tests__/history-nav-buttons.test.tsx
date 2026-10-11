@@ -18,6 +18,7 @@ import type { AppRouter } from "@/router";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -65,6 +66,8 @@ function renderButtons(router: AppRouter) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  // Clearing storage does not drop a queued write a prior test left pending.
+  cancelDeferredJsonWrites();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
@@ -72,6 +75,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  cancelDeferredJsonWrites();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 

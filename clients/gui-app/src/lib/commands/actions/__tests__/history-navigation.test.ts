@@ -3,7 +3,11 @@ import {
   createMemoryHistory,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import {
+  createPersistentMemoryHistory,
+  getHistoryController,
+} from "@/lib/persistent-history";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -280,6 +284,8 @@ function tileByContentId(
 
 beforeEach(() => {
   window.localStorage.clear();
+  // Clearing storage does not drop a queued write a prior test left pending.
+  cancelDeferredJsonWrites();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   boundHostClient.value = null;
   queryClient.clear();
@@ -290,6 +296,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  cancelDeferredJsonWrites();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   for (const handle of liveEpicHandles.splice(0)) {
     getOpenEpicRegistry().release(handle.epicId, "discard", null);
@@ -822,9 +829,11 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
       [hrefA, hrefB, `/epics/e1/${tabId}`],
       2,
     );
-    vi.spyOn(history, "go").mockImplementation(() => {});
+    const controller = getHistoryController(history);
+    if (controller === null) throw new Error("expected a controller");
 
     goBack({ history });
+    expect(controller.getIndex()).toBe(1);
     const firstPreview = requirePreviewTabId(tabId);
     // Reuses SPEC_B's original instanceId, so hrefB resolves directly.
     expect(firstPreview).toBe(SPEC_B.instanceId);
@@ -838,19 +847,8 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
         }) !== null,
     ).toBe(true);
 
-    // Simulate the stack cursor landing on B so the next back targets A.
-    // (go is mocked, so reseed at the landing entry.)
-    window.localStorage.setItem(
-      storageKey(WINDOW_ID),
-      JSON.stringify({
-        entries: [hrefA, hrefB, `/epics/e1/${tabId}`],
-        index: 1,
-      }),
-    );
-    const historyAtB = createPersistentMemoryHistory(null, WINDOW_ID);
-    vi.spyOn(historyAtB, "go").mockImplementation(() => {});
-
-    goBack({ history: historyAtB });
+    goBack({ history });
+    expect(controller.getIndex()).toBe(0);
     const secondPreview = requirePreviewTabId(tabId);
     // Reuses SPEC_A's original instanceId - swapping the preview slot did
     // not force a fresh id either.

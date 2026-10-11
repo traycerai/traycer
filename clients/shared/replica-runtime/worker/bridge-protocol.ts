@@ -147,7 +147,8 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 14;
+// 15 adds projection base revisions and full-snapshot recovery.
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 15;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -378,6 +379,7 @@ export type MainToWorkerEvent =
       readonly kind: "accounting/demote";
       readonly overBytes: number;
     }
+  | { readonly kind: "projection/resync" }
   | { readonly kind: "shutdown" };
 
 export type WorkerToMainEvent =
@@ -394,14 +396,12 @@ export type WorkerToMainEvent =
        * it does for a call response, and the spawner owns the one reducer
        * that applies them in order (`createRuntimeProjectionOrdering`).
        *
-       * `revision` is the sink's own (`ProjectionSink.revision()`), so the two
-       * sides share one ordering. It is strictly increasing per worker, and
-       * the main side DROPS a revision it has already applied: a re-delivered
-       * publication that rolled the UI back to an older slice would be
-       * indistinguishable from a legitimate update, because the sink publishes
-       * WHOLE values rather than patches.
+       * The worker host stamps strictly increasing revisions. Deltas name the
+       * preceding revision; recovery snapshots have no dependency on a base.
        */
       readonly kind: "projection";
+      /** null is an independent full snapshot; otherwise this delta needs that base. */
+      readonly baseRevision: number | null;
       readonly revision: number;
       readonly value: unknown;
     }
@@ -803,6 +803,7 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   "stream/manifest": true,
   "accounting/demote": true,
   "runtime/command": true,
+  "projection/resync": true,
   "body/awareness-out": true,
   shutdown: true,
 };

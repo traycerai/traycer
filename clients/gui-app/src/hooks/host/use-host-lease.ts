@@ -5,6 +5,12 @@ import {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
+const selectionAuthorityStoreApi = {
+  getState: useSelectionAuthorityStore.getState,
+  getInitialState: useSelectionAuthorityStore.getInitialState,
+  subscribe: useSelectionAuthorityStore.subscribe,
+};
+
 /**
  * {@link leaseEquals} lifted over the hook's nullable answer, which the
  * comparator itself does not model: `null` is "the authority has published no
@@ -75,7 +81,7 @@ function selectedLeaseEquals(
  */
 export function useHostLease(hostId: string | null): HostLeaseSnapshot | null {
   return useStoreWithEqualityFn(
-    useSelectionAuthorityStore,
+    selectionAuthorityStoreApi,
     (state) =>
       hostId === null
         ? null

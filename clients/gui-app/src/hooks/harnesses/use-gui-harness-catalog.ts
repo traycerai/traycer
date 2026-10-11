@@ -517,6 +517,22 @@ export function useGuiHarnessCatalog(
   );
 }
 
+type GuiHarnessModelQuerySnapshot = Pick<
+  UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>,
+  "data" | "isLoading" | "error"
+>;
+
+// Native combine sharing keeps display-context inputs stable across detachment.
+function combineModelCatalogQueries(
+  results: Array<UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>>,
+): ReadonlyArray<GuiHarnessModelQuerySnapshot> {
+  return results.map(({ data, isLoading, error }) => ({
+    data,
+    isLoading,
+    error,
+  }));
+}
+
 /**
  * Client-scoped harness + model catalog; see `useGuiHarnessesQueryForClient`.
  * The model picker reads its rail/rows through this with the composer's
@@ -528,22 +544,13 @@ export function useGuiHarnessCatalogForClient(
   activity: CatalogQueryActivityOptions,
 ): GuiHarnessCatalog {
   const harnessesQuery = useGuiHarnessesQueryForClient(client, activity);
-  // Fetching is gated by `enabled` (inside the sub-query hooks); the projection
-  // is gated by `subscribed` alone, so a cache-only reader
-  // (`{ enabled: false, subscribed: true }`) still surfaces the cached catalog
-  // for label lookup on any visible transcript, without owning a fetch. For
-  // every existing caller `enabled === subscribed`, so this is unchanged for
-  // them.
-  const attached = activity.subscribed;
-
   const harnessIds = useMemo(() => {
-    if (!attached) return EMPTY_GUI_HARNESS_IDS;
     return (
       harnessesQuery.data?.harnesses.flatMap((harness) =>
         harness.available ? [harness.id] : [],
       ) ?? EMPTY_GUI_HARNESS_IDS
     );
-  }, [attached, harnessesQuery.data?.harnesses]);
+  }, [harnessesQuery.data?.harnesses]);
 
   const requests = useMemo(() => {
     if (harnessIds.length === 0) return EMPTY_GUI_MODEL_REQUESTS;
@@ -553,19 +560,24 @@ export function useGuiHarnessCatalogForClient(
     }));
   }, [harnessIds, workingDirectory]);
 
-  const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
+  const modelQueries = useHostQueries<
+    HostRpcRegistry,
+    "agent.gui.listModels",
+    ReadonlyArray<GuiHarnessModelQuerySnapshot>
+  >({
     client,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
+    combine: combineModelCatalogQueries,
     options: {
       // `"all-harnesses"` is the explicit fan-out (see
       // `CatalogQueryActivityOptions`). Boot no longer mounts it. A `"cached-only"`
       // observer never fetches; it still surfaces and tracks the shared slots,
       // which the surface's own targeted per-harness queries fill.
       enabled: activity.enabled && activity.modelsFetch === "all-harnesses",
-      // Cache-only (see the module header). These observers are created and
-      // destroyed as each surface activates, so a finite staleTime turned every
+      subscribed: activity.subscribed,
+      // Cache-only (see the module header). A finite staleTime turned every
       // picker open / chat-tile reveal / palette subpage mount past the window
       // into a fan-out across EVERY harness. A harness with no cached entry yet
       // (newly available, or a targeted first-use still in flight) still fetches
@@ -582,32 +594,37 @@ export function useGuiHarnessCatalogForClient(
   // model list, without starting discovery for a cold pending provider.
   const pendingRequests = useMemo(
     () =>
-      attached
-        ? (harnessesQuery.data?.harnesses.flatMap((harness) =>
-            harness.enabled &&
-            harness.availabilityPending &&
-            harness.lastSettledAvailable !== false &&
-            !harness.available
-              ? [
-                  {
-                    method: "agent.gui.listModels" as const,
-                    params: { harnessId: harness.id, workingDirectory },
-                  },
-                ]
-              : [],
-          ) ?? EMPTY_GUI_MODEL_REQUESTS)
-        : EMPTY_GUI_MODEL_REQUESTS,
-    [attached, harnessesQuery.data?.harnesses, workingDirectory],
+      harnessesQuery.data?.harnesses.flatMap((harness) =>
+        harness.enabled &&
+        harness.availabilityPending &&
+        harness.lastSettledAvailable !== false &&
+        !harness.available
+          ? [
+              {
+                method: "agent.gui.listModels" as const,
+                params: { harnessId: harness.id, workingDirectory },
+              },
+            ]
+          : [],
+      ) ?? EMPTY_GUI_MODEL_REQUESTS,
+    [harnessesQuery.data?.harnesses, workingDirectory],
   );
   const pendingModelQueries = useHostQueries<
     HostRpcRegistry,
-    "agent.gui.listModels"
+    "agent.gui.listModels",
+    ReadonlyArray<GuiHarnessModelQuerySnapshot>
   >({
     client,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests: pendingRequests,
-    options: { enabled: false, staleTime: Infinity, gcTime: Infinity },
+    combine: combineModelCatalogQueries,
+    options: {
+      enabled: false,
+      subscribed: activity.subscribed,
+      staleTime: Infinity,
+      gcTime: Infinity,
+    },
   });
 
   const queryByHarnessId = useMemo(() => {
@@ -623,7 +640,7 @@ export function useGuiHarnessCatalogForClient(
 
   const harnesses = useMemo<ReadonlyArray<GuiHarnessCatalogEntry>>(
     () =>
-      attached && harnessesQuery.data !== undefined
+      harnessesQuery.data !== undefined
         ? harnessesQuery.data.harnesses.map((harness) => {
             const modelQuery = queryByHarnessId.get(harness.id);
             // TanStack structural-shares `query.data`; reuse that array so a
@@ -657,7 +674,7 @@ export function useGuiHarnessCatalogForClient(
             };
           })
         : EMPTY_GUI_HARNESS_CATALOG_ENTRIES,
-    [attached, harnessesQuery.data, queryByHarnessId],
+    [harnessesQuery.data, queryByHarnessId],
   );
   // Same predicate as the per-entry flag above: a slot nothing will fetch is
   // not "loading", however empty it is.

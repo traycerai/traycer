@@ -1,3 +1,7 @@
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { useEffect, useRef } from "react";
 import {
   useMergedNotificationRows,
@@ -52,8 +56,7 @@ export function useConsumeBrowserAttention(
       return;
     }
     const consume = () => {
-      if (document.visibilityState !== "visible" || !document.hasFocus())
-        return;
+      if (!isDocumentVisible() || !document.hasFocus()) return;
       for (const row of rows) {
         if (
           browserAttentionMatches(row, { epicId, hostId, sessionId, tabId })
@@ -66,8 +69,7 @@ export function useConsumeBrowserAttention(
       }
     };
     const consumeOnForeground = () => {
-      const nextForeground =
-        document.visibilityState === "visible" && document.hasFocus();
+      const nextForeground = isDocumentVisible() && document.hasFocus();
       // Retry unread rows on a new foreground transition after a failed read.
       // Focus and visibility events can describe the same transition, so only
       // the first one clears attempted reads; ordinary rerenders also dedupe.
@@ -81,11 +83,12 @@ export function useConsumeBrowserAttention(
     consumeOnForeground();
     window.addEventListener("focus", consumeOnForeground);
     window.addEventListener("blur", leaveForeground);
-    document.addEventListener("visibilitychange", consumeOnForeground);
+    const unsubscribeVisibility =
+      subscribeDocumentVisibility(consumeOnForeground);
     return () => {
       window.removeEventListener("focus", consumeOnForeground);
       window.removeEventListener("blur", leaveForeground);
-      document.removeEventListener("visibilitychange", consumeOnForeground);
+      unsubscribeVisibility();
     };
   }, [active, rows, markAsRead, epicId, hostId, sessionId, tabId]);
 }

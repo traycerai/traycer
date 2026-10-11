@@ -328,7 +328,8 @@ function currentTaskPinTailQueryOptions(scope: PinTailScope, enabled: boolean) {
       fetchPinTail(scope.hostId, scope.userId, scope.firstPageCursor, signal),
     enabled,
     staleTime: Infinity,
-    gcTime: Infinity,
+    // Cursor changes create a new tail; obsolete generations must expire.
+    gcTime: 5 * 60 * 1000,
     structuralSharing: (previous, incoming) =>
       replaceEqualDeep(previous, admitPinTailResult(incoming, scope)),
   });

@@ -64,6 +64,7 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import {
   registerTileSurfaceGeometryHost,
+  refreshTileSurfaceGeometrySlot,
   registerTileSurfaceGeometrySlot,
   type TileSurfaceRect,
 } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
@@ -133,9 +134,14 @@ export function StableTileSurfaceHost(
 }
 
 function applyRectToElement(element: HTMLElement, rect: TileSurfaceRect): void {
-  element.style.transform = `translate(${rect.left}px, ${rect.top}px)`;
-  element.style.width = `${rect.width}px`;
-  element.style.height = `${rect.height}px`;
+  const transform = `translate(${rect.left}px, ${rect.top}px)`;
+  const width = `${rect.width}px`;
+  const height = `${rect.height}px`;
+  if (element.style.transform !== transform) {
+    element.style.transform = transform;
+  }
+  if (element.style.width !== width) element.style.width = width;
+  if (element.style.height !== height) element.style.height = height;
 }
 
 function isUsableTileSurfaceRect(rect: TileSurfaceRect): boolean {
@@ -184,10 +190,15 @@ function TileSurfaceRecord(props: {
       applyRectToElement(element, rect);
       if (currentlyVisible || hasUsableRect) setCanMountBody(true);
     });
-    // Re-register on a visibility transition. Registration synchronously
-    // delivers the current rect, which opens the sticky mount latch for a
-    // visible 0x0 birth without a separate set-state effect. Only records born
-    // hidden wait for usable geometry; once mounted, the body stays mounted.
+  }, [instanceId, slotElement]);
+
+  useLayoutEffect(() => {
+    // Keep the observer attached across selection. Re-observing the same
+    // slot would enqueue an initial RO delivery and an all-slot geometry pass.
+    // Reapply the cached box; resize and topology changes own fresh reads.
+    if (visible && slotElement !== null) {
+      refreshTileSurfaceGeometrySlot(instanceId);
+    }
   }, [instanceId, slotElement, visible]);
 
   // A hosted record going hidden is a physically distant sibling of

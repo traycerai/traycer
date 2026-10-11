@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { Check, ChevronsUpDown, RotateCcw, X } from "lucide-react";
 import type {
   ConfigDetectedShell,
@@ -104,6 +109,38 @@ function buildEntryList(
  * the hover ✕ on an added row removes it via `onRemove` without closing the
  * popover.
  */
+async function browseShellProgram({
+  pickProgramFile,
+  probeSource,
+  queryClient,
+  setInput,
+  setDebounced,
+  commitAdd,
+}: {
+  pickProgramFile: ShellProbeSource["pickProgramFile"];
+  probeSource: ShellProbeSource;
+  queryClient: QueryClient;
+  setInput: (value: string) => void;
+  setDebounced: (value: string) => void;
+  commitAdd: (path: string) => void;
+}): Promise<void> {
+  if (pickProgramFile === null) return;
+  try {
+    const picked = await pickProgramFile();
+    if (picked === null) return;
+    setInput(picked);
+    setDebounced(picked);
+    // Same gate as a typed path: only an executable file is added outright; a
+    // non-executable pick is left in the input so its amber status explains why.
+    const result = await queryClient.fetchQuery(
+      shellProbeQueryOptions(probeSource, picked, true),
+    );
+    if (result.exists && result.executable) commitAdd(picked);
+  } catch (error) {
+    toastFromRunnerError(error, "Failed to browse for a shell");
+  }
+}
+
 export function ShellProgramCombobox(props: {
   readonly value: string;
   readonly synthesised: boolean;
@@ -198,23 +235,15 @@ export function ShellProgramCombobox(props: {
     closeAndReset();
   };
 
-  const onBrowse = async () => {
-    if (pickProgramFile === null) return;
-    try {
-      const picked = await pickProgramFile();
-      if (picked === null) return;
-      setInput(picked);
-      setDebounced(picked);
-      // Same gate as a typed path: only an executable file is added outright; a
-      // non-executable pick is left in the input so its amber status explains why.
-      const result = await queryClient.fetchQuery(
-        shellProbeQueryOptions(probeSource, picked, true),
-      );
-      if (result.exists && result.executable) commitAdd(picked);
-    } catch (error) {
-      toastFromRunnerError(error, "Failed to browse for a shell");
-    }
-  };
+  const onBrowse = () =>
+    browseShellProgram({
+      pickProgramFile,
+      probeSource,
+      queryClient,
+      setInput,
+      setDebounced,
+      commitAdd,
+    });
 
   return (
     <Popover

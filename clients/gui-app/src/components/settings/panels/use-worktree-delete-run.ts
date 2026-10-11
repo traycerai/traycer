@@ -427,7 +427,7 @@ const pendingSettledCallbacks = new Set<() => void>();
 export function useWorktreeDeleteRun(
   hostId: string,
   openStreamTransport: (hostId: string) => DurableStreamTransport,
-  onSettled: () => void,
+  onSettled: (worktreePaths: readonly string[]) => void,
 ): {
   readonly target: WorktreeHostEntry | null;
   readonly run: WorktreeDeleteRunState | null;
@@ -505,6 +505,7 @@ export function useWorktreeDeleteRun(
       // Freeze the settle callback at start so a host swap mid-delete can't
       // redirect the cache invalidation to the wrong host scope (the live
       // `onSettledRef` would otherwise rebind to the newly-selected host).
+      const settle = onSettledRef.current;
       startWorktreeDeleteCommand({
         hostId,
         batchKey,
@@ -512,7 +513,8 @@ export function useWorktreeDeleteRun(
         targets,
         begin,
         openStreamTransport,
-        onSettled: onSettledRef.current,
+        onSettled: () =>
+          settle(targets.map((item) => item.target.worktreePath)),
       });
     },
     [begin, hostId, openStreamTransport],

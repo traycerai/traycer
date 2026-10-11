@@ -24,6 +24,8 @@
 import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import { createTestChatSession } from "@/stores/chats/test-support/create-test-chat-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
@@ -256,9 +258,9 @@ function baseInput(
     node: { id: "chat-1", instanceId: "tile-1", name: "Chat" },
     chatTitle: null,
     chatParentId: null,
-    messages: [],
-    events: [],
-    transcriptWindow: null,
+    // A fresh session store already holds the original fixture values: empty
+    // `messages` and `events`, no `transcriptDerived` (so no window).
+    sessionStore: testSessionStore(),
     profile: { userId: "user-1", userName: "U", email: "u@example.com" },
     chatActions: fakeChatActions(() => null),
     pendingActions: {},
@@ -319,8 +321,19 @@ beforeEach(() => {
   });
 });
 
+// One store per test: the input is rebuilt on every render, and a new store
+// each time would resubscribe the hook to a different source.
+let session: ChatSessionStoreHandle | null = null;
+
+function testSessionStore(): ChatSessionStoreHandle["store"] {
+  session ??= createTestChatSession();
+  return session.store;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
+  session?.dispose();
+  session = null;
   useAuthStore.setState({ profile: null, contextMetadata: null });
   resetDraftBlobTransportForTests();
 });

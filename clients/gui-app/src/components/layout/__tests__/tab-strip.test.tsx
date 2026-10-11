@@ -739,6 +739,25 @@ async function flushNav(): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, 0));
 }
 
+/**
+ * Lets a queued strip reveal run to completion: microtasks first (a
+ * MutationObserver batch schedules its frame from one), then two animation
+ * frames, so a NEGATIVE assertion that follows cannot pass merely because the
+ * frame has not run yet.
+ */
+async function flushStripFrames(): Promise<void> {
+  await flushNav();
+  for (let i = 0; i < 2; i++) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+    });
+  }
+}
+
 interface RevealBox {
   readonly left: number;
   readonly right: number;
@@ -746,6 +765,8 @@ interface RevealBox {
 
 interface RevealGeometryShim {
   readonly scrolled: () => number;
+  /** How many times the strip read the scroller's own box. */
+  readonly scrollerReads: () => number;
   readonly restore: () => void;
 }
 
@@ -768,10 +789,15 @@ interface RevealGeometryShim {
  * cases, and the split group L-146 was written against would have scrolled by
  * the half's overflow and left the other half cut.
  *
- * `memberBox` is read per measurement so one test can move the selection from
- * a member that fits to one that does not.
+ * `boxes` gives each member its box by the test id of the tab it holds, whether
+ * or not that tab is selected - as a real layout does. The strip caches those
+ * boxes when it measures and reveals a later selection from the cache, so a
+ * box that only existed while its tab was selected would leave nothing to
+ * reveal from.
  */
-function installRevealGeometry(memberBox: () => RevealBox): RevealGeometryShim {
+function installRevealGeometry(
+  boxes: Readonly<Record<string, RevealBox>>,
+): RevealGeometryShim {
   const realRect = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "getBoundingClientRect",
@@ -780,20 +806,40 @@ function installRevealGeometry(memberBox: () => RevealBox): RevealGeometryShim {
     ({ left, right, width: right - left }) as DOMRect;
   const isScroller = (node: Element | null): boolean =>
     node !== null && node.hasAttribute("data-layout-passive-members");
+  const memberOf = (node: HTMLElement): HTMLElement | null => {
+    let current: HTMLElement | null = node;
+    while (current !== null && !isScroller(current.parentElement)) {
+      current = current.parentElement;
+    }
+    return current;
+  };
+  const boxOfMember = (member: HTMLElement): RevealBox | undefined => {
+    for (const [testId, memberBox] of Object.entries(boxes)) {
+      if (
+        member.dataset.testid === testId ||
+        member.querySelector(`[data-testid="${testId}"]`) !== null
+      ) {
+        return memberBox;
+      }
+    }
+    return undefined;
+  };
+  let scrollerReads = 0;
   HTMLElement.prototype.getBoundingClientRect = function boxFor(
     this: HTMLElement,
   ): DOMRect {
     // The scroller shows 0..200.
-    if (isScroller(this)) return box(0, 200);
-    const holdsSelection =
-      this.getAttribute("aria-selected") === "true" ||
-      this.querySelector('[aria-selected="true"]') !== null;
-    if (!holdsSelection) return box(0, 0);
-    const member = memberBox();
+    if (isScroller(this)) {
+      scrollerReads += 1;
+      return box(0, 200);
+    }
+    const member = memberOf(this);
+    const memberBox = member === null ? undefined : boxOfMember(member);
+    if (memberBox === undefined) return box(0, 0);
     // The scroller's own child IS the member; anything below it is a half of
     // one, and a half is strictly narrower and flush with the member's start.
-    if (isScroller(this.parentElement)) return box(member.left, member.right);
-    return box(member.left, (member.left + member.right) / 2);
+    if (member === this) return box(memberBox.left, memberBox.right);
+    return box(memberBox.left, (memberBox.left + memberBox.right) / 2);
   };
   let scrolled = 0;
   const realScrollLeft = Object.getOwnPropertyDescriptor(
@@ -809,6 +855,7 @@ function installRevealGeometry(memberBox: () => RevealBox): RevealGeometryShim {
   });
   return {
     scrolled: () => scrolled,
+    scrollerReads: () => scrollerReads,
     restore: () => {
       if (realRect === undefined) {
         Reflect.deleteProperty(HTMLElement.prototype, "getBoundingClientRect");
@@ -1195,13 +1242,19 @@ describe("<TabStrip />", () => {
     });
     // The scroller shows 0..200; the tab's member box runs 120..320, so 120px
     // of it - the trailing cap and the end of the label - is past the edge.
-    const geometry = installRevealGeometry(() => ({ left: 120, right: 320 }));
+    const geometry = installRevealGeometry({
+      "tab-sample-workspace-sample-workspace": { left: 120, right: 320 },
+    });
     try {
       const router = buildRouter("/sample-workspace");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("header-tab-strip-scroll");
 
-      expect(geometry.scrolled()).toBe(120);
+      // Selected from the first commit, with no resize or selection signal
+      // after it: only the strip's own first measurement can reveal it.
+      await waitFor(() => {
+        expect(geometry.scrolled()).toBe(120);
+      });
     } finally {
       geometry.restore();
     }
@@ -1262,20 +1315,27 @@ describe("<TabStrip />", () => {
     const { beta } = seedTwoEpicTabs();
     // Alpha's member sits wholly inside the scroller's 0..200, so mounting on
     // it must move nothing; Beta's runs 260..460, entirely past the edge.
-    let selected: RevealBox = { left: 0, right: 180 };
-    const geometry = installRevealGeometry(() => selected);
+    const geometry = installRevealGeometry({
+      "tab-epic-e-a": { left: 0, right: 180 },
+      "tab-epic-e-b": { left: 260, right: 460 },
+    });
     try {
       const router = buildRouter("/epics/e-a/e-a");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("tab-epic-e-b");
+      // The strip has measured, Beta included, before it is activated.
+      await waitFor(() => {
+        expect(geometry.scrollerReads()).toBeGreaterThan(0);
+      });
       expect(geometry.scrolled()).toBe(0);
 
-      selected = { left: 260, right: 460 };
       act(() => {
         useTabsStore.setState({ activeItemId: tabItemId(beta) });
       });
 
-      expect(geometry.scrolled()).toBe(260);
+      await waitFor(() => {
+        expect(geometry.scrolled()).toBe(260);
+      });
     } finally {
       geometry.restore();
     }
@@ -1290,12 +1350,17 @@ describe("<TabStrip />", () => {
    */
   it("does not reveal while a header tab is being dragged", async () => {
     const { alpha, beta } = seedTwoEpicTabs();
-    let selected: RevealBox = { left: 0, right: 180 };
-    const geometry = installRevealGeometry(() => selected);
+    const geometry = installRevealGeometry({
+      "tab-epic-e-a": { left: 0, right: 180 },
+      "tab-epic-e-b": { left: 260, right: 460 },
+    });
     try {
       const router = buildRouter("/epics/e-a/e-a");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("tab-epic-e-b");
+      await waitFor(() => {
+        expect(geometry.scrollerReads()).toBeGreaterThan(0);
+      });
 
       act(() => {
         useEpicDndStore.getState().headerTabDragStarted(
@@ -1311,10 +1376,12 @@ describe("<TabStrip />", () => {
           null,
         );
       });
-      selected = { left: 260, right: 460 };
       act(() => {
         useTabsStore.setState({ activeItemId: tabItemId(beta) });
       });
+      // The reveal Beta's activation queues has run by here, and left the
+      // strip where the drag has it.
+      await flushStripFrames();
 
       expect(geometry.scrolled()).toBe(0);
     } finally {
@@ -2165,15 +2232,20 @@ describe("<TabStrip />", () => {
     useTabsStore.setState({ activeItemId: "tab:epic:e-a" });
     // Alpha's member fits inside the scroller's 0..200; Gamma's runs 300..500,
     // entirely past the right edge.
-    let selected: RevealBox = { left: 0, right: 180 };
-    const geometry = installRevealGeometry(() => selected);
+    const geometry = installRevealGeometry({
+      "tab-epic-e-a": { left: 0, right: 180 },
+      "tab-epic-e-b": { left: 60, right: 200 },
+      "tab-epic-e-c": { left: 300, right: 500 },
+    });
     try {
       const router = buildRouter("/epics/e-a/e-a");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("tab-epic-e-a");
+      await waitFor(() => {
+        expect(geometry.scrollerReads()).toBeGreaterThan(0);
+      });
       expect(geometry.scrolled()).toBe(0);
 
-      selected = { left: 300, right: 500 };
       await router.navigate({
         to: "/epics/$epicId/$tabId",
         params: { epicId: "e-c", tabId: "e-c" },
@@ -2192,7 +2264,9 @@ describe("<TabStrip />", () => {
       await flushNav();
 
       expect(screen.getByTestId("tab-epic-e-c")).toBeDefined();
-      expect(geometry.scrolled()).toBe(300);
+      await waitFor(() => {
+        expect(geometry.scrolled()).toBe(300);
+      });
     } finally {
       geometry.restore();
     }

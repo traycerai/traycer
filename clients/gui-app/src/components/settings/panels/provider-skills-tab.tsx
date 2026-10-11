@@ -25,7 +25,10 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
-import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
+import {
+  useProvidersSkillsMutate,
+  type SkillsMutateVariables,
+} from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
@@ -88,6 +91,83 @@ export function ProviderSkillsTab({
       caps={caps}
     />
   );
+}
+
+async function mutateComposedSkill(
+  variables: SkillsMutateVariables,
+  mutate: (variables: SkillsMutateVariables) => Promise<SkillsMutateData>,
+  setPendingKey: (key: string | null) => void,
+): Promise<SkillsMutateData> {
+  try {
+    return await mutate(variables);
+  } finally {
+    setPendingKey(null);
+  }
+}
+
+async function updateProviderSkill({
+  skill,
+  confirm,
+  scopeTuple,
+  mutate,
+  setUpdateConfirm,
+  setOpenSkill,
+  setDetailFileEpoch,
+  setDetailError,
+  setPendingKey,
+}: {
+  skill: ProviderSkill;
+  confirm: boolean;
+  scopeTuple: Pick<
+    SkillsMutateVariables,
+    "providerId" | "scope" | "workspaceRoot"
+  >;
+  mutate: (variables: SkillsMutateVariables) => Promise<SkillsMutateData>;
+  setUpdateConfirm: (skill: ProviderSkill | null) => void;
+  setOpenSkill: (skill: ProviderSkill | null) => void;
+  setDetailFileEpoch: (update: (epoch: number) => number) => void;
+  setDetailError: (error: string | null) => void;
+  setPendingKey: (key: string | null) => void;
+}): Promise<void> {
+  try {
+    const data = await mutate({
+      ...scopeTuple,
+      mutation: confirm
+        ? {
+            action: "update",
+            name: skill.name,
+            path: skill.path,
+            confirm: true,
+          }
+        : { action: "update", name: skill.name, path: skill.path },
+      suppressToast: true,
+    });
+    setUpdateConfirm(null);
+    toast.success("Updated from source");
+    const next = skillAfterUpdate(data, skill);
+    if (next === null) {
+      setOpenSkill(null);
+    } else {
+      setOpenSkill(next);
+      setDetailFileEpoch((epoch) => epoch + 1);
+    }
+  } catch (err) {
+    if (!confirm && isExternalDriftError(err)) {
+      setUpdateConfirm(skill);
+      return;
+    }
+    if (isSkillUpdateNoOp(err)) {
+      setUpdateConfirm(null);
+      toast.success("Already up to date");
+      return;
+    }
+    setUpdateConfirm(null);
+    setDetailError(
+      err instanceof Error ? err.message : "Couldn't update this skill.",
+    );
+  } finally {
+    setPendingKey(null);
+  }
 }
 
 function ProviderSkillsTabBody({
@@ -277,8 +357,8 @@ function ProviderSkillsTabBody({
     mutation: ProvidersSkillsMutateAction,
   ): Promise<SkillsMutateData> {
     setPendingKey(`composer:${mutation.action}`);
-    try {
-      return await mutate.mutateAsync({
+    return mutateComposedSkill(
+      {
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
@@ -286,10 +366,10 @@ function ProviderSkillsTabBody({
         // The composer renders failures inline, so the hook's global toast
         // would double-report the same error.
         suppressToast: true,
-      });
-    } finally {
-      setPendingKey(null);
-    }
+      },
+      mutate.mutateAsync,
+      setPendingKey,
+    );
   }
 
   /**
@@ -304,47 +384,21 @@ function ProviderSkillsTabBody({
   ): Promise<void> {
     setDetailError(null);
     setPendingKey(`update:${skill.path}`);
-    try {
-      const data = await mutate.mutateAsync({
+    await updateProviderSkill({
+      skill,
+      confirm,
+      scopeTuple: {
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
-        mutation: confirm
-          ? {
-              action: "update",
-              name: skill.name,
-              path: skill.path,
-              confirm: true,
-            }
-          : { action: "update", name: skill.name, path: skill.path },
-        suppressToast: true,
-      });
-      setUpdateConfirm(null);
-      toast.success("Updated from source");
-      const next = skillAfterUpdate(data, skill);
-      if (next === null) {
-        setOpenSkill(null);
-      } else {
-        setOpenSkill(next);
-        setDetailFileEpoch((epoch) => epoch + 1);
-      }
-    } catch (err) {
-      if (!confirm && isExternalDriftError(err)) {
-        setUpdateConfirm(skill);
-        return;
-      }
-      if (isSkillUpdateNoOp(err)) {
-        setUpdateConfirm(null);
-        toast.success("Already up to date");
-        return;
-      }
-      setUpdateConfirm(null);
-      setDetailError(
-        err instanceof Error ? err.message : "Couldn't update this skill.",
-      );
-    } finally {
-      setPendingKey(null);
-    }
+      },
+      mutate: mutate.mutateAsync,
+      setUpdateConfirm,
+      setOpenSkill,
+      setDetailFileEpoch,
+      setDetailError,
+      setPendingKey,
+    });
   }
 
   function onRemove(skill: ProviderSkill): void {

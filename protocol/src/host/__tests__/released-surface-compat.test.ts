@@ -55,4 +55,14 @@ describe("released method-name set (host-v1.0.0) is frozen", () => {
       expect(Object.hasOwn(registry, "degrade")).toBe(true);
     }
   });
+
+  it("requires each method to state its own post-dispatch cancellation permission", () => {
+    for (const [method, registry] of Object.entries(hostRpcRegistry)) {
+      expect(
+        Object.hasOwn(registry, "cancelAfterDispatch"),
+        `${method} is missing cancelAfterDispatch`,
+      ).toBe(true);
+      expect(typeof registry.cancelAfterDispatch).toBe("boolean");
+    }
+  });
 });

@@ -30,6 +30,7 @@ export interface DesktopAppUpdatesState {
 
 type AppUpdateStoreListener = () => void;
 
+// render-cache: stable per-key instance; state read via subscription (useSyncExternalStore).
 const stores = new WeakMap<DesktopAppUpdatesBridge, DesktopAppUpdateStore>();
 
 export function useDesktopAppUpdates(): DesktopAppUpdatesState {

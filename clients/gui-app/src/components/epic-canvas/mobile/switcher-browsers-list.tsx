@@ -40,7 +40,7 @@ import {
   useBrowserTabRowLabels,
   type BrowserSidebarTabRow,
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
-import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsInventory } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
@@ -90,7 +90,7 @@ export function SwitcherBrowsersList(props: SwitcherListProps) {
 
 function SwitcherBrowsersListLive(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
-  const sessions = useBrowserSessionsContext();
+  const sessions = useBrowserSessionsInventory();
   const surfaceKey = useTabSurfaceKey("browsers", tabId);
   const hostPin = useSurfaceHostPin(surfaceKey);
   // Query state is the sheet's, not the panel-header search store's - see the
@@ -179,7 +179,7 @@ function SwitcherBrowsersBody(props: {
   readonly onAddBrowser: () => void;
   readonly isAddingBrowser: boolean;
 }) {
-  const sessions = useBrowserSessionsContext();
+  const sessions = useBrowserSessionsInventory();
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
   const elsewhere = useEpicBrowsersElsewhere({
     epicId: props.epicId,

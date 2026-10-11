@@ -4,6 +4,7 @@ export const DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS = 100;
 
 export interface DesktopPerWindowProjectionBridge {
   update(patch: DesktopPerWindowStatePatch): Promise<void>;
+  schedule(projection: () => DesktopPerWindowStatePatch): void;
   flush(): Promise<void>;
   dispose(): void;
 }
@@ -19,6 +20,7 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
   debounceMs: number,
 ): DesktopPerWindowProjectionBridge {
   let pendingPatch: DesktopPerWindowStatePatch | null = null;
+  let pendingProjection: (() => DesktopPerWindowStatePatch) | null = null;
   let timer: Parameters<typeof clearTimeout>[0] | null = null;
   let disposed = false;
   let writeChain: Promise<void> = Promise.resolve();
@@ -31,7 +33,16 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
 
   const flush = (): Promise<void> => {
     clearTimer();
-    const patch = pendingPatch;
+    // Materialize before entering the write chain: move/close barriers must
+    // capture this snapshot, even while an earlier IPC write is still pending.
+    const projection = pendingProjection;
+    pendingProjection = null;
+    const projected = projection?.() ?? null;
+    let patch = pendingPatch;
+    if (projected !== null) {
+      patch =
+        patch === null ? projected : mergePerWindowPatches(patch, projected);
+    }
     pendingPatch = null;
     if (patch === null) return writeChain;
     const attempt = writeChain
@@ -63,6 +74,11 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
           : mergePerWindowPatches(pendingPatch, patch);
       schedule();
       return Promise.resolve();
+    },
+    schedule: (projection) => {
+      if (disposed) return;
+      pendingProjection = projection;
+      schedule();
     },
     flush,
     dispose: () => {

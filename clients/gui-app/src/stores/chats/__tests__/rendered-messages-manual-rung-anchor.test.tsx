@@ -12,10 +12,10 @@ import type { LastFailedAttempt } from "@traycer/protocol/host/agent/gui/subscri
 import type { ProviderNoticeReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find-projection";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";

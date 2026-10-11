@@ -1,4 +1,8 @@
 import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -1051,7 +1055,7 @@ export function useScreencastSession(
     // re-stamp on every commit would keep pushing the staleness clock forward
     // and a frozen tile would never be judged at all.
     const stamp = (): boolean => {
-      if (document.visibilityState !== "visible") {
+      if (!isDocumentVisible()) {
         visibleSinceRef.current = null;
         return false;
       }
@@ -1067,9 +1071,10 @@ export function useScreencastSession(
       notePresented(presented.sequence);
     };
     stamp();
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    const unsubscribeVisibility =
+      subscribeDocumentVisibility(onVisibilityChange);
     return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      unsubscribeVisibility();
     };
   }, [notePresented]);
 

@@ -1,4 +1,6 @@
 import type { Editor } from "@tiptap/core";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { resolveMinimapVisibleItemCapacity } from "@/components/minimap/minimap-track-geometry";
 import {
@@ -48,7 +50,7 @@ function resolveScrollBehavior(): ScrollBehavior {
  *   ProseMirror position after the caret, so an outline keyed on positions
  *   would hand the rail a new array on each keystroke and re-render it into
  *   the editor's hottest path.
- * - `positionsRef` holds those positions, refreshed on every doc change,
+ * - `positionsRef` holds those positions, refreshed after a burst of doc changes,
  *   because resolving a heading's DOM node needs the current position.
  *
  * The two are always written together from the same walk, so their indices
@@ -61,13 +63,17 @@ export function useArtifactHeadingMetrics(input: {
   readonly refreshRef: RefObject<() => void>;
   /** Which gutter to measure. */
   readonly side: EdgeSide;
+  /** Hidden rails keep only the picker outline current. */
+  readonly shown: boolean;
 }): ArtifactHeadingMetrics {
-  const { editor, refreshRef, scroller, side } = input;
+  const { editor, refreshRef, scroller, side, shown } = input;
+  const visible = useTileBodyVisible();
+  const coarsePointer = useCoarsePointer();
+  const measureRail = visible && shown && !coarsePointer;
+  const dirtyRef = useRef(false);
   const [outline, setOutline] = useState<
     ReadonlyArray<ArtifactHeadingOutlineEntry>
-  >(() =>
-    toArtifactHeadingOutline(deriveArtifactHeadingItems(editor.state.doc)),
-  );
+  >([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [hitStripWidth, setHitStripWidth] = useState(0);
   const [maxVisibleItems, setMaxVisibleItems] = useState(2);
@@ -80,7 +86,7 @@ export function useArtifactHeadingMetrics(input: {
   // section actually changes, which is once per section boundary rather than
   // once per scroll tick.
   const refreshActive = useCallback((): void => {
-    if (scroller === null) return;
+    if (!measureRail || scroller === null) return;
     const next = resolveArtifactHeadingActiveIndex({
       tops: topsRef.current,
       scrollTop: scroller.scrollTop,
@@ -88,10 +94,16 @@ export function useArtifactHeadingMetrics(input: {
       scrollHeight: scroller.scrollHeight,
     });
     setActiveIndex((current) => (current === next ? current : next));
-  }, [scroller]);
+  }, [measureRail, scroller]);
 
   const measure = useCallback((): void => {
-    if (scroller === null || editor.isDestroyed) return;
+    if (
+      !measureRail ||
+      dirtyRef.current ||
+      scroller === null ||
+      editor.isDestroyed
+    )
+      return;
     topsRef.current = measureArtifactHeadingTops({
       view: editor.view,
       scroller,
@@ -108,7 +120,7 @@ export function useArtifactHeadingMetrics(input: {
       resolveMinimapVisibleItemCapacity(scroller.clientHeight),
     );
     refreshActive();
-  }, [editor, refreshActive, scroller, side]);
+  }, [editor, measureRail, refreshActive, scroller, side]);
 
   /**
    * The queued frame must run the LATEST measure, not the one that happened to
@@ -138,32 +150,41 @@ export function useArtifactHeadingMetrics(input: {
     });
   }, []);
 
-  // Doc changes: refresh positions every time (they shift under any edit),
-  // but replace the rendered outline only when the skeleton differs.
+  // Hidden tiles catch up once on reveal; visible edits share one trailing walk.
   useEffect(() => {
+    if (!visible) return;
+    let timer: number | null = null;
     const syncFromDoc = (): void => {
+      timer = null;
+      if (editor.isDestroyed) return;
       const items = deriveArtifactHeadingItems(editor.state.doc);
       positionsRef.current = items.map((item) => item.id);
+      dirtyRef.current = false;
       const next = toArtifactHeadingOutline(items);
       setOutline((current) =>
         sameArtifactHeadingOutline(current, next) ? current : next,
       );
-      scheduleMeasure();
+      if (measureRail) scheduleMeasure();
     };
-
+    const onUpdate = (): void => {
+      dirtyRef.current = true;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(syncFromDoc, 150);
+    };
     syncFromDoc();
-    editor.on("update", syncFromDoc);
+    editor.on("update", onUpdate);
     return () => {
-      editor.off("update", syncFromDoc);
+      editor.off("update", onUpdate);
+      if (timer !== null) window.clearTimeout(timer);
     };
-  }, [editor, scheduleMeasure]);
+  }, [editor, measureRail, scheduleMeasure, visible]);
 
   // Re-measure on layout change. Observing the scroller alone is not enough:
   // content-only reflow (an image loading, a mermaid block rendering, a
   // collaborator's edit above the fold) leaves the scroller's border box
   // untouched while every heading below moves.
   useEffect(() => {
-    if (scroller === null) return;
+    if (!measureRail || scroller === null) return;
     // Measure as soon as the scroller exists. `ResizeObserver` does fire an
     // initial callback on observe, but relying on it would make the rail's
     // first measurement depend on that callback winning a race with an
@@ -175,7 +196,7 @@ export function useArtifactHeadingMetrics(input: {
     return () => {
       observer.disconnect();
     };
-  }, [editor, scheduleMeasure, scroller]);
+  }, [editor, measureRail, scheduleMeasure, scroller]);
 
   useEffect(() => {
     refreshRef.current = refreshActive;
@@ -205,17 +226,27 @@ export function useArtifactHeadingMetrics(input: {
 
   const scrollToIndex = useCallback(
     (index: number): void => {
-      if (scroller === null) return;
-      if (index < 0 || index >= topsRef.current.length) return;
+      if (!visible || scroller === null || editor.isDestroyed) return;
+      // The phone picker has no live rail geometry, and an edit may still be
+      // inside the debounce. Resolve against the current document on selection.
+      const selected = outline.at(index);
+      if (selected === undefined) return;
+      const heading = deriveArtifactHeadingItems(editor.state.doc).find(
+        (item) => item.key === selected.key,
+      );
+      if (heading === undefined) return;
+      const tops = measureArtifactHeadingTops({
+        view: editor.view,
+        scroller,
+        positions: [heading.id],
+      });
+      setActiveIndex(index);
       scroller.scrollTo({
-        top: Math.max(
-          0,
-          topsRef.current[index] - ARTIFACT_HEADING_SCROLL_PADDING,
-        ),
+        top: Math.max(0, tops[0] - ARTIFACT_HEADING_SCROLL_PADDING),
         behavior: resolveScrollBehavior(),
       });
     },
-    [scroller],
+    [editor, outline, scroller, visible],
   );
 
   return {

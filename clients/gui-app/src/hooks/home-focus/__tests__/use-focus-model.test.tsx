@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { Suspense, startTransition, use, useEffect, useState } from "react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -11,6 +12,11 @@ import {
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import type { UseNotificationIndicatorsArgs } from "@/hooks/notifications/use-notification-indicators-query";
 import { useFocusModel } from "@/hooks/home-focus/use-focus-model";
+import type { FocusModel } from "@/lib/home-focus/focus-model";
+import {
+  makeApprovalPayload,
+  makeMergedNotificationRow,
+} from "@/lib/home-focus/__tests__/fixtures";
 
 /** The separator `focusAgentKey` joins on - the one byte no id can
  * carry. */
@@ -31,8 +37,15 @@ const { notificationIndicatorsMock } = vi.hoisted(() => ({
   })),
 }));
 
+/** The feed the hook reads, mutable so a case can change what one render sees. */
+const { notificationRowsMock } = vi.hoisted(() => ({
+  notificationRowsMock: {
+    value: [] as ReadonlyArray<MergedNotificationRow>,
+  },
+}));
+
 vi.mock("@/stores/notifications/merged-notifications", () => ({
-  useMergedNotificationRows: () => EMPTY_NOTIFICATION_ROWS,
+  useMergedNotificationRows: () => notificationRowsMock.value,
 }));
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
@@ -189,6 +202,7 @@ vi.mock("@/stores/auth/auth-store", () => ({
 }));
 
 beforeEach(() => {
+  notificationRowsMock.value = EMPTY_NOTIFICATION_ROWS;
   notificationIndicatorsMock.mockClear();
   connectableHostsMock.hostIds = [];
   connectableHostsMock.resolved = true;
@@ -273,6 +287,75 @@ describe("useFocusModel", () => {
     rerender();
 
     expect(result.current).toBe(first);
+  });
+
+  it("does not let an abandoned concurrent render pin a prompt's activation", async () => {
+    // A prompt keeps the activation it was FIRST shown with while its feed id
+    // is unchanged, so the baseline it is compared against must be one that
+    // reached a commit. Two rows, one feed id, different objects: whichever
+    // activation the committed prompt carries says which render it came from.
+    const promptRow = () =>
+      makeMergedNotificationRow({
+        feedId: "host:approval-1",
+        hostKind: "approval.requested",
+        severity: "needs_action",
+        payload: makeApprovalPayload("epic-1", "chat-1"),
+      });
+    const abandoned = promptRow();
+    const committed = promptRow();
+
+    const gate = {
+      suspended: false,
+      pending: new Promise<void>(() => undefined),
+    };
+    const seen: { model: FocusModel | null; bump: (tick: number) => void } = {
+      model: null,
+      bump: () => undefined,
+    };
+    function Suspender(): null {
+      // Suspends for as long as the gate is shut; the promise never settles.
+      if (gate.suspended) use(gate.pending);
+      return null;
+    }
+    function Harness() {
+      const [, setTick] = useState(0);
+      const model = useFocusModel();
+      // Reads what COMMITTED, never what a render computed.
+      useEffect(() => {
+        seen.model = model;
+        seen.bump = setTick;
+      }, [model, setTick]);
+      return (
+        <Suspense fallback={null}>
+          <Suspender />
+        </Suspense>
+      );
+    }
+
+    render(<Harness />);
+    expect(seen.model?.prompts).toHaveLength(0);
+
+    // A transition renders the hook with the new prompt, then suspends below
+    // it, so React throws the whole render away.
+    notificationRowsMock.value = [abandoned];
+    gate.suspended = true;
+    await act(async () => {
+      startTransition(() => seen.bump(1));
+      await Promise.resolve();
+    });
+    expect(seen.model?.prompts).toHaveLength(0);
+
+    // The next commit sees an equal prompt under a fresh row object.
+    notificationRowsMock.value = [committed];
+    gate.suspended = false;
+    await act(async () => {
+      seen.bump(2);
+      await Promise.resolve();
+    });
+
+    expect(seen.model?.prompts).toHaveLength(1);
+    expect(seen.model?.prompts[0]?.activation).toBe(committed);
+    expect(seen.model?.prompts[0]?.activation).not.toBe(abandoned);
   });
 
   it("caps indicatorEpicIds at HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP sorted ids, from a >500-epic activity fixture", () => {

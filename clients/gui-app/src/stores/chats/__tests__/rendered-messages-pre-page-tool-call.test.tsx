@@ -7,10 +7,10 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "./rendered-messages-test-utils";
 
 /**
  * A host older than agent pages stores tool calls without `page` / `mcpApp`.

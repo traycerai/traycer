@@ -223,6 +223,60 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("skips a redundant localStorage write from the storage adapter itself, not just the setter's own early-return", () => {
+    const { factory } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: "user-alice",
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    // A real jsdom `Storage` instance doesn't expose `setItem` as an own,
+    // spy-friendly property - it lives on the prototype, so spy there. A
+    // suite elsewhere in the run may have replaced `window.localStorage`
+    // with a plain stub object that DOES carry `setItem` as its own
+    // property instead - spy on whichever one actually owns it.
+    const storageSpyTarget: Storage = Object.hasOwn(
+      window.localStorage,
+      "setItem",
+    )
+      ? window.localStorage
+      : (Object.getPrototypeOf(window.localStorage) as Storage);
+    const setItemSpy = vi.spyOn(storageSpyTarget, "setItem");
+    const FOCUS_KEY = "traycer-gui-app:open-epic:user-alice:epic-a";
+    const writesToFocusKey = (): number =>
+      setItemSpy.mock.calls.filter(([key]) => key === FOCUS_KEY).length;
+
+    opened.store.getState().setLastFocusedArtifactId("art-1");
+    expect(writesToFocusKey()).toBe(1);
+
+    // A real, unrelated `setState` still reaches the persist middleware's
+    // subscriber (zustand's `persist` calls `storage.setItem` unconditionally
+    // on every state change - it has no dedup of its own). Focus itself is
+    // untouched, so this must exercise the storage adapter's OWN comparison,
+    // not `setLastFocusedArtifactId`'s `if (get().lastFocusedArtifactId ===
+    // artifactId) return` early-return, which a same-value re-call would
+    // otherwise never get past.
+    const priorResidencyVersion = opened.store.getState().bodyResidencyVersion;
+    opened.store.setState({ bodyResidencyVersion: priorResidencyVersion + 1 });
+    expect(opened.store.getState().bodyResidencyVersion).toBe(
+      priorResidencyVersion + 1,
+    );
+    expect(writesToFocusKey()).toBe(1);
+
+    // A genuine focus change still writes - both fields the adapter compares.
+    opened.store.getState().setLastFocusedArtifactId("art-2");
+    expect(writesToFocusKey()).toBe(2);
+    opened.store.getState().setLastFocusedThreadId("thread-1");
+    expect(writesToFocusKey()).toBe(3);
+
+    setItemSpy.mockRestore();
+    opened.dispose();
+  });
+
   it("records epicDeleted with attribution on the onEpicDeleted frame", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({

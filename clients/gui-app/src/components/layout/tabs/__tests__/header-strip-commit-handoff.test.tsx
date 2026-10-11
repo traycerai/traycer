@@ -27,7 +27,15 @@
  *   partial fix, B     0.33px      (re-base landed on the visible neighbour)
  */
 import { useLayoutEffect, useRef } from "react";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import {
   armHeaderStripCommitHandoff,
@@ -65,6 +73,8 @@ function slotsForOrder(order: readonly string[]): Record<string, number> {
 }
 
 let originalOffsetLeft: PropertyDescriptor | undefined;
+/** Counts every `offsetLeft` read, so a test can assert the hot path is cold. */
+let offsetLeftReads = 0;
 
 beforeAll(() => {
   originalOffsetLeft = Object.getOwnPropertyDescriptor(
@@ -76,6 +86,7 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetLeft", {
     configurable: true,
     get(this: HTMLElement) {
+      offsetLeftReads += 1;
       const id = this.getAttribute("data-strip-item-id");
       return id === null ? 0 : (slots[id] ?? 0);
     },
@@ -194,6 +205,7 @@ afterEach(() => {
   disarmHeaderStripCommitHandoff();
   values.clear();
   report = { rebased: [], moved: [], uncorrected: [] };
+  offsetLeftReads = 0;
 });
 
 /**
@@ -232,7 +244,7 @@ function driveCommit(input: {
   // The commit: DOM order changes and the drag model's offsets drop to zero on
   // the same pass, which is the whole difficulty.
   act(() => {
-    armHeaderStripCommitHandoff();
+    armHeaderStripCommitHandoff(HORIZONTAL_STRIP_AXIS);
     slots = endSlots;
     view.rerender(
       <Strip
@@ -332,9 +344,12 @@ describe("header strip commit handoff", () => {
     expect(report.rebased).toEqual([]);
   });
 
-  it("does not re-base when the handoff is not armed", () => {
+  it("does not re-base when the handoff is not armed, and touches no DOM at all", () => {
     // A baseline can move for reasons that are not a drop - a tab closes, the
-    // window resizes. Those keep their existing behaviour.
+    // window resizes. Those keep their existing behaviour. This is also the
+    // hot path the optimization removes: an unarmed pass must not query the
+    // DOM or read `offsetLeft` on every layout, since most layouts are not a
+    // commit.
     slots = slotsForOrder(["a", "b", "c"]);
     const view = render(
       <Strip
@@ -346,6 +361,9 @@ describe("header strip commit handoff", () => {
         ]}
       />,
     );
+    const querySelectorAllSpy = vi.spyOn(document, "querySelectorAll");
+    querySelectorAllSpy.mockClear();
+    offsetLeftReads = 0;
     act(() => {
       slots = slotsForOrder(["c", "b", "a"]);
       view.rerender(
@@ -359,7 +377,68 @@ describe("header strip commit handoff", () => {
         />,
       );
     });
-    expect(report.rebased).toEqual([]);
+    // Checked first: a regression that puts the hot-path DOM walk back on an
+    // unarmed pass should fail here, directly, rather than surface as a less
+    // legible mismatch in the report shape below.
+    expect(offsetLeftReads).toBe(0);
+    expect(querySelectorAllSpy).not.toHaveBeenCalled();
+    expect(report).toEqual({ rebased: [], moved: [], uncorrected: [] });
+    querySelectorAllSpy.mockRestore();
+  });
+
+  it("arms from the CURRENT DOM position, not a value left over from an earlier quiet render", () => {
+    // Between drops, an unarmed layout pass (e.g. a plain resize) no longer
+    // tracks baselines at all - the previous test proves that. So the arm
+    // itself has to read the live position, or the very next commit would
+    // correct against a stale mount-time snapshot instead of what is actually
+    // on screen right before the drop.
+    const mountSlots = slotsForOrder(["a", "b", "c"]);
+    const resizedSlots: Record<string, number> = {
+      ...mountSlots,
+      b: mountSlots.b + 50,
+      c: mountSlots.c + 50,
+    };
+    const endSlots = slotsForOrder(["b", "c", "a"]);
+    slots = mountSlots;
+
+    const itemsAt = (order: readonly string[]) =>
+      order.map((id) => ({
+        id,
+        offsetX: 0,
+        opacity: id === "a" ? 0 : 1,
+        registered: true,
+        tag: "div" as const,
+      }));
+
+    const view = render(
+      <Strip nodeEpoch={0} items={itemsAt(["a", "b", "c"])} />,
+    );
+
+    // A quiet resize: same order, shifted slots, nothing armed. Under the
+    // optimization this reads no DOM at all - it must not leave any baseline
+    // behind for the next commit to (correctly or incorrectly) reuse.
+    act(() => {
+      slots = resizedSlots;
+      view.rerender(<Strip nodeEpoch={0} items={itemsAt(["a", "b", "c"])} />);
+    });
+    const before: Record<string, number> = {};
+    for (const id of ["a", "b", "c"]) before[id] = renderedLeft(id);
+
+    // The actual commit: displaced against the post-resize slots, matching
+    // how the drag model re-syncs targetX on the render right before a drop.
+    act(() => {
+      armHeaderStripCommitHandoff(HORIZONTAL_STRIP_AXIS);
+      slots = endSlots;
+      view.rerender(<Strip nodeEpoch={0} items={itemsAt(["b", "c", "a"])} />);
+    });
+
+    for (const id of ["a", "b", "c"]) {
+      expect(
+        renderedLeft(id),
+        `${id} jumped against a stale baseline`,
+      ).toBeCloseTo(before[id] ?? Number.NaN, 2);
+    }
+    expect([...report.rebased].sort()).toEqual(["a", "b", "c"]);
   });
 
   it("reports a strip item that is on screen but never registers", () => {
@@ -397,7 +476,7 @@ describe("header strip commit handoff", () => {
         <Strip nodeEpoch={0} items={[at("a", 0), at("b", 0)]} />,
       );
       act(() => {
-        armHeaderStripCommitHandoff();
+        armHeaderStripCommitHandoff(HORIZONTAL_STRIP_AXIS);
         slots = slotsForOrder(["a", "b", "c"]);
         view.rerender(
           <Strip
@@ -466,7 +545,7 @@ describe("header strip commit handoff", () => {
     for (const id of ["a", "b", "c"]) before[id] = renderedLeft(id);
 
     act(() => {
-      armHeaderStripCommitHandoff();
+      armHeaderStripCommitHandoff(HORIZONTAL_STRIP_AXIS);
       slots = endSlots;
       view.rerender(
         <Strip items={mk(["b", "c", "a"], {}, "span")} nodeEpoch={0} />,

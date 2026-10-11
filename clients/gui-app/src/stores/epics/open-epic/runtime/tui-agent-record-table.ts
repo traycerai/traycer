@@ -1,3 +1,5 @@
+import { replaceSliceRows } from "./projection-table-changes";
+import { terminalAgentProjectionsEq } from "../projection-helpers";
 /**
  * The host's registry-backed terminal-agent rows - the terminal twin of
  * `chat-record-table.ts`, and now literally the same reconciliation: both
@@ -279,6 +281,16 @@ export function createTuiAgentRecordTable(
         buildSlice: (visibleRows) => {
           const next = tuiAgentRecordsSlice(visibleRows);
           return next.allIds.length === 0 ? EMPTY_TERMINAL_AGENTS_SLICE : next;
+        },
+        updateSlice: (previous, changedRows, currentUserId) => {
+          if (currentUserId === null) return null;
+          const changed = tuiAgentRecordsSlice(changedRows);
+          if (changed.allIds.length !== changedRows.length) return null;
+          return replaceSliceRows(
+            previous,
+            changed,
+            terminalAgentProjectionsEq,
+          );
         },
         slicesEq: terminalAgentSlicesEq,
         emptySlice: EMPTY_TERMINAL_AGENTS_SLICE,

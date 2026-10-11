@@ -12,6 +12,10 @@ import {
   type TabStripPlacement,
 } from "@/lib/layout/layout-arrangement";
 import { useLayoutStore } from "@/stores/layout/layout-store";
+import {
+  SurfaceDemandContext,
+  type ActiveSurfaceDemand,
+} from "@/stores/tabs/surface-demand";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { setMobileApp } from "@/lib/mobile-app";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
@@ -235,6 +239,23 @@ function renderShell(queryClient: QueryClient) {
   );
 }
 
+function shellUnderDemand(
+  queryClient: QueryClient,
+  demand: ActiveSurfaceDemand,
+) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
+          <SurfaceDemandContext.Provider value={demand}>
+            <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+          </SurfaceDemandContext.Provider>
+        </TestEpicSessionTab>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+}
+
 /**
  * `EpicSessionProvider` provides its OWN `EpicSessionPresentationContext`
  * value internally, wrapped around its children (between the real
@@ -359,6 +380,48 @@ describe("<EpicShell />", () => {
     expect(canvas.className).not.toMatch(/\bborder\b/);
     expect(screen.queryByTestId("epic-session-loading")).toBeNull();
     expect(screen.queryByTestId("chat-stream-prewarm")).toBeNull();
+  });
+
+  it("a previewed epic with no session yet shows the static shell, never the animated loading body, and settling swaps it in", () => {
+    const { rerender } = render(
+      <SurfaceDemandContext.Provider value="preview">
+        <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+      </SurfaceDemandContext.Provider>,
+    );
+
+    expect(screen.getByTestId("epic-shell").dataset.sessionReady).toBe("false");
+    expect(screen.getByTestId("surface-preview-shell")).toBeTruthy();
+    expect(screen.queryByTestId("tile-canvas-loading")).toBeNull();
+
+    rerender(
+      <SurfaceDemandContext.Provider value="settled">
+        <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+      </SurfaceDemandContext.Provider>,
+    );
+    expect(screen.queryByTestId("surface-preview-shell")).toBeNull();
+    expect(screen.getByTestId("tile-canvas-loading")).toBeTruthy();
+  });
+
+  it("a previewed epic whose session is up but has no snapshot yet stays on the static shell until it settles", async () => {
+    installControlledFactory();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0, staleTime: 60_000 },
+      },
+    });
+    const { rerender } = render(shellUnderDemand(queryClient, "preview"));
+    await waitForSessionReady();
+
+    expect(screen.getByTestId("surface-preview-shell")).toBeTruthy();
+    expect(screen.queryByTestId("epic-connection-pill")).toBeNull();
+
+    rerender(shellUnderDemand(queryClient, "settled"));
+    await waitFor(() => {
+      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("surface-preview-shell")).toBeNull();
+
+    queryClient.clear();
   });
 
   it("draws no divider of its own: the canvas frame below it owns the border now (flush surface)", () => {

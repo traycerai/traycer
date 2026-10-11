@@ -38,9 +38,8 @@ import {
  * (`CHUNKED`, `CHUNK_FIRST` on the first, `CHUNK_LAST` on the last). Frames
  * carry NO json section of their own — `MuxFrame.json` is always null on this
  * path, and the logical json/binary split lives in `bodyFlags` bit 0
- * (HAS_BINARY) + `jsonLen`. The single-frame case exercises exactly the same
- * encode/decode path as a 1,600-frame transfer, so small-message coverage
- * covers the large-transfer logic.
+ * (HAS_BINARY) + `jsonLen`. Chunked bodies assemble their JSON and binary
+ * sections separately, so the binary owns its buffer for worker transfer.
  *
  * Sending is pull-based: a message enters its session's scheduler as ONE
  * {@link OutboundChunkSource} occupying one queue slot, and frames
@@ -207,35 +206,42 @@ export interface DecodedMessageBody {
  * handling a malformed frame does.
  */
 export function decodeMuxMessageBody(body: Uint8Array): DecodedMessageBody {
-  if (body.length < BODY_HEADER_LEN) {
+  const { jsonEnd, hasBinary } = decodeBodyHeader(body, body.length);
+  const json =
+    jsonEnd === BODY_HEADER_LEN
+      ? null
+      : parseBodyJson(body.subarray(BODY_HEADER_LEN, jsonEnd));
+  const binary = hasBinary ? body.subarray(jsonEnd) : null;
+  return { json, binary };
+}
+
+function decodeBodyHeader(
+  header: Uint8Array,
+  bodyLength: number,
+): { jsonEnd: number; hasBinary: boolean } {
+  if (bodyLength < BODY_HEADER_LEN) {
     throw new MuxFrameDecodeError(
-      `mux message body too short: ${body.length} < ${BODY_HEADER_LEN}`,
+      `mux message body too short: ${bodyLength} < ${BODY_HEADER_LEN}`,
     );
   }
-  const bodyFlags = body[0];
+  const bodyFlags = header[0];
   if ((bodyFlags & ~BODY_FLAG_HAS_BINARY) !== 0) {
     throw new MuxFrameDecodeError(
       `mux message body has unknown flags: ${bodyFlags}`,
     );
   }
   const jsonLen = new DataView(
-    body.buffer,
-    body.byteOffset,
-    body.byteLength,
+    header.buffer,
+    header.byteOffset,
+    header.byteLength,
   ).getUint32(1);
   const jsonEnd = BODY_HEADER_LEN + jsonLen;
-  if (jsonEnd > body.length) {
+  if (jsonEnd > bodyLength) {
     throw new MuxFrameDecodeError(
-      `mux message body json length ${jsonLen} exceeds body (${body.length - BODY_HEADER_LEN} available)`,
+      `mux message body json length ${jsonLen} exceeds body (${bodyLength - BODY_HEADER_LEN} available)`,
     );
   }
-  const hasBinary = (bodyFlags & BODY_FLAG_HAS_BINARY) !== 0;
-  const json =
-    jsonLen === 0
-      ? null
-      : parseBodyJson(body.subarray(BODY_HEADER_LEN, jsonEnd));
-  const binary = hasBinary ? body.subarray(jsonEnd) : null;
-  return { json, binary };
+  return { jsonEnd, hasBinary: (bodyFlags & BODY_FLAG_HAS_BINARY) !== 0 };
 }
 
 function parseBodyJson(bytes: Uint8Array): Record<string, unknown> {
@@ -726,10 +732,10 @@ export class ChunkReassembler {
         throw new MuxMessageSizeError(accumulator.totalLength);
       }
       if (frame.chunkLast) {
-        return this.complete(
+        return this.completeChunks(
           accumulator.type,
           frame.streamId,
-          concat(accumulator.slices, accumulator.totalLength),
+          accumulator,
         );
       }
       this.accumulators.set(frame.streamId, accumulator);
@@ -764,11 +770,7 @@ export class ChunkReassembler {
       return null;
     }
     this.accumulators.delete(frame.streamId);
-    return this.complete(
-      existing.type,
-      frame.streamId,
-      concat(existing.slices, existing.totalLength),
-    );
+    return this.completeChunks(existing.type, frame.streamId, existing);
   }
 
   /** Drops any in-flight reassembly for one stream (its logical stream ended). */
@@ -813,17 +815,47 @@ export class ChunkReassembler {
     const decoded = decodeMuxMessageBody(body);
     return { type, streamId, json: decoded.json, binary: decoded.binary };
   }
+
+  private completeChunks(
+    type: MuxFrameTypeValue,
+    streamId: number,
+    accumulator: StreamAccumulator,
+  ): ReassembledMessage {
+    const { slices, totalLength } = accumulator;
+    const header = copyChunkRange(
+      slices,
+      0,
+      Math.min(BODY_HEADER_LEN, totalLength),
+    );
+    const { jsonEnd, hasBinary } = decodeBodyHeader(header, totalLength);
+    const json =
+      jsonEnd === BODY_HEADER_LEN
+        ? null
+        : parseBodyJson(copyChunkRange(slices, BODY_HEADER_LEN, jsonEnd));
+    // Assemble binary straight into its final owned buffer. Concatenating the
+    // whole body first would force a second copy at the worker transfer guard.
+    const binary = hasBinary
+      ? copyChunkRange(slices, jsonEnd, totalLength)
+      : null;
+    return { type, streamId, json, binary };
+  }
 }
 
-function concat(slices: Uint8Array[], totalLength: number): Uint8Array {
-  if (slices.length === 1) {
-    return slices[0];
-  }
-  const out = new Uint8Array(totalLength);
+function copyChunkRange(
+  slices: readonly Uint8Array[],
+  start: number,
+  end: number,
+): Uint8Array {
+  const out = new Uint8Array(end - start);
   let offset = 0;
   for (const slice of slices) {
-    out.set(slice, offset);
+    const from = Math.max(start - offset, 0);
+    const to = Math.min(end - offset, slice.length);
+    if (from < to) {
+      out.set(slice.subarray(from, to), offset + from - start);
+    }
     offset += slice.length;
+    if (offset >= end) break;
   }
   return out;
 }

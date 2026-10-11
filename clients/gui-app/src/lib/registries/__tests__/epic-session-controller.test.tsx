@@ -58,6 +58,12 @@ import {
   setTestEffectiveHost,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
+import {
+  setTopLevelDemand,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
 import {
   __resetEpicParkingForTests,
@@ -347,6 +353,12 @@ function PresentationProbe(props: {
   }, [onPresentation, presentation]);
   return null;
 }
+
+// Demand is process-global and the shared coordinator writes it on every
+// activation; each test starts from the initial store.
+beforeEach(() => {
+  useSurfaceDemandStore.setState(useSurfaceDemandStore.getInitialState(), true);
+});
 
 describe("EpicSessionController: session lifecycle with no surface mounted", () => {
   let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
@@ -2060,5 +2072,121 @@ describe("session-owned write-throughs", () => {
       writeThroughOldHandle(session);
       await expectDetachedWriteThroughs(session);
     });
+  });
+});
+
+/**
+ * Explicit surface demand on the controller's own imperative acquisition path
+ * (`startRun` in `epic-session-controller.ts`), distinct from the chat plane's
+ * React-effect gate: a COLD top-level body never starts its session under
+ * `preview` demand (`topLevelDemand("epic:<tabId>")`), and starts the moment it
+ * settles. Warm entries are retained through a preview.
+ */
+describe("EpicSessionController: cold acquisition under surface demand", () => {
+  const EPIC_ID = "epic-cold-deferred";
+  const TAB_ID = "tab-cold-deferred";
+  function activateHeaderTab(tabId: string): void {
+    const ref: TabRef = { kind: "epic", id: tabId };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: `tab:epic:${tabId}`, ref }],
+      activeItemId: `tab:epic:${tabId}`,
+      stripOrder: [ref],
+      systemTabs: { history: null, settings: null },
+    });
+  }
+
+  function hasSession(): boolean | undefined {
+    return getEpicSessionController().readEntryStatusForTests(EPIC_ID)
+      ?.hasSession;
+  }
+
+  beforeEach(() => {
+    __getOpenEpicRegistryForTests().disposeAll();
+    __resetEpicParkingForTests();
+    __setAgentActivityPlaneAnsweringForTests();
+    resetFakeDurableStreamTransports();
+    installTestEpicSessionEnvironment(defaultTestEpicSessionEnvironment());
+    setTestEffectiveHost("host-a", true);
+  });
+
+  afterEach(() => {
+    useSurfaceDemandStore.setState(
+      useSurfaceDemandStore.getInitialState(),
+      true,
+    );
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetCanvasStore();
+    __resetEpicParkingForTests();
+    __resetAgentActivityStoreForTests();
+    useSelectionAuthorityStore.getState().reset();
+    vi.useRealTimers();
+  });
+
+  it("a cold body under preview demand never starts its session, and settling starts it without a timer", () => {
+    vi.useFakeTimers();
+    setTopLevelDemand([`epic:${TAB_ID}`], "preview");
+    openTestEpicTab(TAB_ID, EPIC_ID, "");
+    activateHeaderTab(TAB_ID);
+    setEpicSurfaceVisibility(EPIC_ID, TAB_ID, true);
+
+    // Visible and header-active, yet still only a preview: nothing, however
+    // long it lingers.
+    vi.advanceTimersByTime(10_000);
+    expect(hasSession()).toBeFalsy();
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBeNull();
+
+    setTopLevelDemand([`epic:${TAB_ID}`], "settled");
+    expect(hasSession()).toBe(true);
+  });
+
+  it("a settled body starts its session, and that warm session survives its own later preview", () => {
+    setTopLevelDemand([`epic:${TAB_ID}`], "settled");
+    openTestEpicTab(TAB_ID, EPIC_ID, "");
+    activateHeaderTab(TAB_ID);
+    setEpicSurfaceVisibility(EPIC_ID, TAB_ID, true);
+    expect(hasSession()).toBe(true);
+
+    setTopLevelDemand([`epic:${TAB_ID}`], "preview");
+    expect(hasSession()).toBe(true);
+  });
+
+  it("a sessionless epic the cursor passed through is never acquired at any notification while the cursor moves on and settles elsewhere", () => {
+    const OTHER_EPIC_ID = "epic-cold-target";
+    const OTHER_TAB_ID = "tab-cold-target";
+    const registry = __getOpenEpicRegistryForTests();
+    const acquiredWhileGone: string[] = [];
+    // Every registry notification and every demand write is a chance for a
+    // departed preview to look settled; sample both.
+    const sample = (label: string): void => {
+      if (registry.peek(EPIC_ID) !== null) acquiredWhileGone.push(label);
+    };
+    const unsubscribeRegistry = registry.subscribe(() => sample("registry"));
+    const unsubscribeDemand = useSurfaceDemandStore.subscribe(() =>
+      sample("demand"),
+    );
+
+    try {
+      setTopLevelDemand([`epic:${TAB_ID}`], "preview");
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      openTestEpicTab(OTHER_TAB_ID, OTHER_EPIC_ID, "");
+
+      // Cursor: A (preview) -> B (preview) -> B (settled).
+      setTopLevelDemand([`epic:${OTHER_TAB_ID}`], "preview");
+      sample("after-move");
+      setTopLevelDemand([`epic:${OTHER_TAB_ID}`], "settled");
+      sample("after-settle");
+    } finally {
+      unsubscribeRegistry();
+      unsubscribeDemand();
+    }
+
+    expect(acquiredWhileGone).toEqual([]);
+    expect(
+      getEpicSessionController().readEntryStatusForTests(OTHER_EPIC_ID)
+        ?.hasSession,
+    ).toBe(true);
+    expect(hasSession()).toBeFalsy();
   });
 });

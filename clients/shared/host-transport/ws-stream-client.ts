@@ -80,7 +80,7 @@ import type { WebSocketCloseEvent, WebSocketErrorEvent } from "./ws-factory";
 import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
 import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
-import { backoffFor } from "./backoff";
+import { jitteredBackoffFor } from "./backoff";
 
 /**
  * Options for constructing the shared `/stream` transport.
@@ -3360,12 +3360,12 @@ class StreamSession<
     // Fold the slow-client eviction streak into the attempt count so repeated
     // host evictions of a too-slow renderer escalate toward `maxBackoffMs`
     // rather than retrying at the initial delay (which resets on every
-    // successful subscribe). For all other drops the streak is 0 and this is
-    // exactly `backoffFor(reconnectAttempt, ...)`.
-    const delay = backoffFor(
+    // successful subscribe). Jitter spreads sibling streams' recovery work.
+    const delay = jitteredBackoffFor(
       Math.max(this.reconnectAttempt, this.slowClientReconnectStreak),
       this.config.initialBackoffMs,
       this.config.maxBackoffMs,
+      Math.random,
     );
     this.reconnectAttempt += 1;
     this.backoffTimer = setTimeout(() => {

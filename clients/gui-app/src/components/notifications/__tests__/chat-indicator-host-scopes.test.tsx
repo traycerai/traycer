@@ -373,14 +373,19 @@ describe("ChatIndicatorHostScopes", () => {
     // below could not supply it either, since it folds only the `home: local`
     // partition, which by construction excludes a cloud-homed row.
     feedMode.value = "cloud";
-    useCloudNotificationsStore.setState({
-      rows: {
-        "entry-b": cloudApprovalRow({
+    // `indicators` is projected once on the store's own write actions
+    // (`applySnapshot` et al.), never recomputed on read - seeding `rows`
+    // directly would leave the hook's indicator projection empty.
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudApprovalRow({
           entryId: "entry-b",
           originHostId: HOST_B,
           chatId: "chat-b",
         }),
-      },
+      ],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
     });
     const harness = createHarness([]);
 

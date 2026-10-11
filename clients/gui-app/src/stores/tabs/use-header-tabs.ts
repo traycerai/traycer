@@ -413,12 +413,16 @@ function epicHeaderTabCacheKey(
   return `${lockState}\u001f${hostId ?? ""}`;
 }
 
+// render-cache: The immutable source plus host/lock key determines a pure projection.
 const epicHeaderTabCache = new WeakMap<
   EpicViewTab,
   Map<EpicHeaderTabCacheKey, HeaderTab>
 >();
+// render-cache: The immutable source key determines a pure projection.
 const draftHeaderTabCache = new WeakMap<LandingDraftTab, HeaderTab>();
+// render-cache: The immutable source key determines a pure projection.
 const historyHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
+// render-cache: The immutable source key determines a pure projection.
 const settingsHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
 
 function memoizedHeaderTab<S extends object>(

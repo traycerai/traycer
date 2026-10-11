@@ -6,6 +6,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import {
   fillComposerWithSuggestion,
+  isSuggestionPlaceholderDocument,
   promptSuggestionAllowed,
 } from "@/components/chat/composer/prompt-suggestion";
 import "@/lib/theme-applier";
@@ -54,7 +55,7 @@ export function PromptSuggestionSwipeFixture(): ReactElement {
     workspaceBlocked: false,
     draftHasText: false,
     draftHasImages: false,
-    draftContent,
+    draftIsSuggestionPlaceholder: isSuggestionPlaceholderDocument(draftContent),
   })
     ? SUGGESTION
     : null;

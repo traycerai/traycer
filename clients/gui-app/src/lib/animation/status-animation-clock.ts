@@ -59,7 +59,7 @@ const reducedMotionSubscribers = new Set<() => void>();
 let intervalHandle: number | null = null;
 let elapsedMs = 0;
 let listenersAttached = false;
-let stopVisibility: (() => void) | null = null;
+let unsubscribeVisibility: (() => void) | null = null;
 let reducedMotionList: MediaQueryList | null = null;
 
 function queryReducedMotion(): MediaQueryList | null {
@@ -71,10 +71,6 @@ function queryReducedMotion(): MediaQueryList | null {
 export function prefersReducedMotion(): boolean {
   const list = reducedMotionList ?? queryReducedMotion();
   return list?.matches ?? false;
-}
-
-function documentHidden(): boolean {
-  return !isDocumentVisible();
 }
 
 function tick(): void {
@@ -95,7 +91,7 @@ function start(): void {
   if (
     intervalHandle !== null ||
     writers.size === 0 ||
-    documentHidden() ||
+    !isDocumentVisible() ||
     prefersReducedMotion()
   )
     return;
@@ -109,7 +105,7 @@ function stop(): void {
 }
 
 function handleVisibilityChange(): void {
-  if (documentHidden()) stop();
+  if (!isDocumentVisible()) stop();
   else start();
 }
 
@@ -122,7 +118,7 @@ function handleReducedMotionChange(): void {
 function attachListenersOnce(): void {
   if (listenersAttached || typeof document === "undefined") return;
   listenersAttached = true;
-  stopVisibility = subscribeDocumentVisibility(handleVisibilityChange);
+  unsubscribeVisibility = subscribeDocumentVisibility(handleVisibilityChange);
   reducedMotionList = queryReducedMotion();
   reducedMotionList?.addEventListener("change", handleReducedMotionChange);
 }
@@ -130,8 +126,8 @@ function attachListenersOnce(): void {
 function detachListeners(): void {
   if (!listenersAttached) return;
   listenersAttached = false;
-  stopVisibility?.();
-  stopVisibility = null;
+  unsubscribeVisibility?.();
+  unsubscribeVisibility = null;
   reducedMotionList?.removeEventListener("change", handleReducedMotionChange);
   reducedMotionList = null;
 }

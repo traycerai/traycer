@@ -258,6 +258,7 @@ export interface EpicRuntimeWorkerHost {
    * sequences interleave into an order that drops deliveries as stale.
    */
   publishProjection(value: unknown): void;
+  setProjectionSnapshotReader(read: () => unknown): void;
   /** Push a resident body's update to main's live doc (`body/doc-in`). */
   publishBodyDocUpdate(docKey: string, update: Uint8Array): void;
   /** Push a remote presence frame for one body (`body/awareness-in`). */
@@ -307,6 +308,7 @@ export function startEpicRuntimeWorkerHost(
   let stopped = false;
   const bootstrapListeners = new Set<(facts: RuntimeWorkerBootstrap) => void>();
   let projectionRevision = 0;
+  let readProjectionSnapshot: (() => unknown) | null = null;
 
   /**
    * Answer a release. Split out so the handler can stay a one-liner that is
@@ -545,44 +547,62 @@ export function startEpicRuntimeWorkerHost(
     bridge.emit(event, NO_TRANSFER);
   });
 
+  function acceptBootstrap(facts: RuntimeWorkerBootstrap): void {
+    if (facts.protocolVersion !== RUNTIME_BRIDGE_PROTOCOL_VERSION) {
+      // Loud, and NOT followed by `ready`. A version-skewed worker that
+      // answered `ready` would be adopted by the main thread and then
+      // ignore half the traffic it was sent, which reads as a runtime that
+      // is merely slow.
+      bridge.emit(
+        {
+          kind: "fatal",
+          message: `Runtime worker bridge protocol mismatch: main thread speaks ${String(
+            facts.protocolVersion,
+          )}, worker speaks ${String(RUNTIME_BRIDGE_PROTOCOL_VERSION)}`,
+          stack: null,
+        },
+        NO_TRANSFER,
+      );
+      return;
+    }
+    // Recorded only on a MATCHING handshake. A skewed bootstrap's payload
+    // is exactly the thing that must not be trusted: storing it and then
+    // answering `fatal` would leave the core builder able to construct
+    // against facts the two sides do not agree on.
+    bootstrap = facts;
+    // Composition BEFORE `ready`. A throw here propagates to the listener
+    // wrapper's catch and becomes a `fatal` with no `ready` - main then
+    // rejects its handshake instead of adopting a worker whose runtime
+    // does not exist.
+    for (const listener of [...bootstrapListeners]) listener(facts);
+    bridge.emit(
+      { kind: "ready", protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION },
+      NO_TRANSFER,
+    );
+  }
+
+  function publishProjectionSnapshot(): void {
+    if (readProjectionSnapshot === null) {
+      throw new Error("Projection snapshot unavailable");
+    }
+    const value = readProjectionSnapshot();
+    projectionRevision += 1;
+    bridge.emit(
+      {
+        kind: "projection",
+        revision: projectionRevision,
+        baseRevision: null,
+        value,
+      },
+      NO_TRANSFER,
+    );
+  }
+
   const onEvent = (event: MainToWorkerEvent): void => {
     if (stopped) return;
     switch (event.kind) {
       case "bootstrap": {
-        if (
-          event.bootstrap.protocolVersion !== RUNTIME_BRIDGE_PROTOCOL_VERSION
-        ) {
-          // Loud, and NOT followed by `ready`. A version-skewed worker that
-          // answered `ready` would be adopted by the main thread and then
-          // ignore half the traffic it was sent, which reads as a runtime that
-          // is merely slow.
-          bridge.emit(
-            {
-              kind: "fatal",
-              message: `Runtime worker bridge protocol mismatch: main thread speaks ${String(
-                event.bootstrap.protocolVersion,
-              )}, worker speaks ${String(RUNTIME_BRIDGE_PROTOCOL_VERSION)}`,
-              stack: null,
-            },
-            NO_TRANSFER,
-          );
-          return;
-        }
-        // Recorded only on a MATCHING handshake. A skewed bootstrap's payload
-        // is exactly the thing that must not be trusted: storing it and then
-        // answering `fatal` would leave the core builder able to construct
-        // against facts the two sides do not agree on.
-        bootstrap = event.bootstrap;
-        // Composition BEFORE `ready`. A throw here propagates to the listener
-        // wrapper's catch and becomes a `fatal` with no `ready` - main then
-        // rejects its handshake instead of adopting a worker whose runtime
-        // does not exist.
-        for (const listener of [...bootstrapListeners])
-          listener(event.bootstrap);
-        bridge.emit(
-          { kind: "ready", protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION },
-          NO_TRANSFER,
-        );
+        acceptBootstrap(event.bootstrap);
         return;
       }
       case "stream/frame": {
@@ -624,6 +644,10 @@ export function startEpicRuntimeWorkerHost(
           event.frame,
           event.localClientId,
         );
+        return;
+      }
+      case "projection/resync": {
+        publishProjectionSnapshot();
         return;
       }
       case "runtime/command": {
@@ -708,11 +732,20 @@ export function startEpicRuntimeWorkerHost(
         encoded.transfer,
       );
     },
+    setProjectionSnapshotReader(read): void {
+      readProjectionSnapshot = read;
+    },
     publishProjection(value): void {
       if (stopped) return;
+      const baseRevision = projectionRevision;
       projectionRevision += 1;
       bridge.emit(
-        { kind: "projection", revision: projectionRevision, value },
+        {
+          kind: "projection",
+          revision: projectionRevision,
+          baseRevision,
+          value,
+        },
         NO_TRANSFER,
       );
     },

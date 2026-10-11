@@ -71,8 +71,6 @@ export interface LeaderState {
   readonly altOwnerScopeId: string | null;
   /** Scope id that owns the visible `modShift` hint, or null. */
   readonly modShiftOwnerScopeId: string | null;
-  /** The active route’s pathname - exposed for diagnostics/consumers. */
-  readonly pathname: string;
 }
 
 const DEFAULT_LEADER_STATE: LeaderState = {
@@ -82,7 +80,6 @@ const DEFAULT_LEADER_STATE: LeaderState = {
   modOwnerScopeId: null,
   altOwnerScopeId: null,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 
 export const LeaderHeldContext =

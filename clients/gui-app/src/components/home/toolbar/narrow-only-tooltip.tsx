@@ -9,15 +9,17 @@ interface NarrowOnlyTooltipProps {
 }
 
 export function NarrowOnlyTooltip(props: NarrowOnlyTooltipProps) {
+  const { label, children, ...rest } = props;
   const isNarrow = useIsComposerNarrow();
   return (
     <TooltipWrapper
-      label={isNarrow ? props.label : null}
+      label={isNarrow ? label : null}
       side="top"
       sideOffset={undefined}
       align={undefined}
+      {...rest}
     >
-      {props.children}
+      {children}
     </TooltipWrapper>
   );
 }

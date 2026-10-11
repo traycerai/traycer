@@ -19,6 +19,7 @@ import {
   mergeEpicAgentActivity,
   reconcileAgentActivityByEpic,
   type AgentActivityCoverage,
+  type AgentActivityTier,
   type EpicAgentActivity,
 } from "@/lib/agent-activity";
 import {
@@ -357,6 +358,18 @@ export function useEpicAgentActivity(epicId: string | null): EpicAgentActivity {
   return useAgentActivityStore(selector);
 }
 
+/** Select before subscribing so another agent's transition cannot wake this row. */
+export function useAgentActivityTier(
+  epicId: string | null,
+  agentId: string,
+): AgentActivityTier | undefined {
+  return useAgentActivityStore((state) => {
+    const activity = selectEpicAgentActivity(state.byHost, epicId);
+    if (!activity.working.has(agentId)) return undefined;
+    return activity.turn.has(agentId) ? "turn" : "background";
+  });
+}
+
 function makeSelectEpicAgentActivity(
   epicId: string | null,
 ): (state: AgentActivityState) => EpicAgentActivity {
@@ -365,18 +378,9 @@ function makeSelectEpicAgentActivity(
 }
 
 /**
- * Merged multi-host results, keyed by the `byHost` map that produced them.
- *
- * `selectEpicAgentActivity` runs as a Zustand selector and Zustand compares
- * selector output with `Object.is`. The single-host path returns the bucket
- * itself, so it is already identity-stable; the union path allocates. Without
- * this cache EVERY unrelated write to `byHost` - a `connectionStatus` change
- * on any host, a frame from any other host - produced a fresh merged object
- * for every two-host epic, re-rendering every consumer and rebuilding
- * `agentActivityTiers` (which keys its cache by activity identity).
- *
- * `byHost` is replaced on every write, so keying on it is exactly the right
- * invalidation, and a WeakMap lets superseded maps and their merges go away.
+ * Avoid repeating the host walk for a snapshot. The operand cache in
+ * `mergeEpicAgentActivity` preserves each union across unrelated writes that
+ * replace `byHost` but leave this epic's contributing buckets unchanged.
  */
 const mergedActivityByHostMap = new WeakMap<
   ReadonlyMap<string, HostAgentActivity>,
@@ -458,12 +462,8 @@ export function useActivityFleetCoverage(): ActivityFleetCoverage {
 export function markAgentActivityReconnecting(): void {
   useAgentActivityStore.setState((state) => {
     if (state.byHost.size === 0) return state;
-    // Identity is load-bearing here, so a no-op write is not free: `patchHost`
-    // already skips them, and the merge cache is keyed on the `byHost`
-    // snapshot. Replacing every slice when they all already read
-    // `reconnecting` discards that cache and re-renders every activity
-    // consumer with unchanged data - once per callback, and a flapping link
-    // delivers a stream of them.
+    // Skip no-op writes so a flapping link does not reevaluate every activity
+    // selector when all hosts already report the same reconnecting state.
     let changed = false;
     for (const host of state.byHost.values()) {
       if (

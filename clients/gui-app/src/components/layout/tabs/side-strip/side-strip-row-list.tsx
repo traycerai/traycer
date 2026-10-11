@@ -256,7 +256,7 @@ function prepareSplitMotion(tab: HeaderTab): void {
         ),
     );
   if (pair === undefined) return;
-  armHeaderStripCommitHandoff();
+  armHeaderStripCommitHandoff(VERTICAL_STRIP_AXIS);
   for (const ref of flattenStripItemRefs(pair)) {
     seedHeaderStripItemFrom(tabItemId(ref), pair.id, VERTICAL_STRIP_AXIS);
   }

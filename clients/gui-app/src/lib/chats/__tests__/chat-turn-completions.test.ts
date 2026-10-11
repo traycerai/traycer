@@ -1,10 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatActiveTurnSchema } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+
+/**
+ * Only the registry boundary is mocked - `chat-turn-completions.ts` itself,
+ * the real `ChatSessionStoreHandle`, and its real store transitions all run
+ * for real below, so this proves the actual wiring (`getChatSessionHandleHostId`
+ * for `hostId`, `activeTurn.profileId` for `profileId`) rather than a copy of
+ * it.
+ */
+const registryMocks = vi.hoisted(() => ({
+  handles: [] as ChatSessionStoreHandle[],
+  hostIdByHandle: new Map<ChatSessionStoreHandle, string | null>(),
+}));
+
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  getChatSessionRegistry: () => ({
+    listHandles: () => registryMocks.handles,
+    subscribe: () => () => undefined,
+  }),
+  getChatSessionHandleHostId: (handle: ChatSessionStoreHandle) =>
+    registryMocks.hostIdByHandle.get(handle) ?? null,
+}));
+
 import {
   advanceTurnNotify,
   seedTurnNotifyState,
+  subscribeChatTurnCompletions,
   toChatTurnPhase,
   INITIAL_TURN_NOTIFY_STATE,
+  type ChatTurnCompletion,
   type ChatTurnPhase,
   type TurnNotifyState,
 } from "@/lib/chats/chat-turn-completions";
@@ -178,5 +209,100 @@ describe("toChatTurnPhase", () => {
       turnEnded: true,
       connectionClosed: false,
     });
+  });
+});
+
+describe("subscribeChatTurnCompletions producer identity", () => {
+  afterEach(() => {
+    registryMocks.handles = [];
+    registryMocks.hostIdByHandle = new Map();
+  });
+
+  it("carries the registry's hostId and the completed turn's real profileId, not the store's own construction-time hostId", () => {
+    const callbacksHolder: { current: ChatStreamCallbacks | null } = {
+      current: null,
+    };
+    function callbacks(): ChatStreamCallbacks {
+      if (callbacksHolder.current === null) {
+        throw new Error("expected callbacks");
+      }
+      return callbacksHolder.current;
+    }
+    const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      // Deliberately different from the registry mock's hostId below: a
+      // wiring bug that read this field instead of the registry lookup would
+      // still pass any test that used the same value for both.
+      hostId: "store-construction-host",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      userId: "user-1",
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+        callbacksHolder.current = nextCallbacks;
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => false,
+          draftBlobBridgeSupported: () => false,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
+          close: () => undefined,
+        };
+      },
+    });
+    registryMocks.handles = [handle];
+    registryMocks.hostIdByHandle.set(handle, "registry-host-b");
+
+    const completions: ChatTurnCompletion[] = [];
+    const unsubscribe = subscribeChatTurnCompletions((completion) => {
+      completions.push(completion);
+    });
+
+    callbacks().onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-1",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        profileId: "work-profile",
+        userMessageId: "message-1",
+        startedAt: 1,
+        updatedAt: 1,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    });
+    callbacks().onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(completions).toEqual([
+      {
+        hostId: "registry-host-b",
+        profileId: "work-profile",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: null,
+        harnessId: "codex",
+      },
+    ]);
+
+    unsubscribe();
+    handle.dispose();
   });
 });

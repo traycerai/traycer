@@ -645,6 +645,7 @@ describe("QuitInterceptBridge", () => {
     let resolveFlush: (() => void) | null = null;
     const flushBridge: DesktopPerWindowProjectionBridge = {
       update: () => Promise.resolve(),
+      schedule: () => undefined,
       flush: () =>
         new Promise<void>((resolve) => {
           resolveFlush = resolve;
@@ -716,6 +717,7 @@ describe("QuitInterceptBridge", () => {
 
     const flushBridge: DesktopPerWindowProjectionBridge = {
       update: () => Promise.resolve(),
+      schedule: () => undefined,
       flush: () => Promise.reject(new Error("projection flush failed")),
       dispose: () => undefined,
     };

@@ -356,6 +356,86 @@ describe("subscribeChatSessionWakeRetry", () => {
     dispose();
   });
 
+  it("queues a hidden surface's wake retry and drains it on the jittered background tick, while a visible session in the same wake retries immediately", () => {
+    const runnerHost = makeRunnerHost();
+    const { fireResume } = wireResumeSpy(runnerHost);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+
+    const visible = createHarness("chat-visible");
+    const hidden = createHarness("chat-hidden");
+    __getChatSessionRegistryForTests().acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: "chat-visible",
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
+      () => visible.handle,
+    );
+    __getChatSessionRegistryForTests().acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: "chat-hidden",
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
+      () => hidden.handle,
+    );
+    driveTerminallyClosed(visible);
+    driveTerminallyClosed(hidden);
+    hidden.handle.setSurfaceVisibility("test-surface", false);
+
+    vi.useFakeTimers();
+    try {
+      const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+      fireResume();
+      // The visible session dials immediately; the hidden one is queued.
+      expect(visible.factoryRuns()).toBe(2);
+      expect(hidden.factoryRuns()).toBe(1);
+
+      vi.advanceTimersByTime(200);
+      expect(hidden.factoryRuns()).toBe(2);
+
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a queued hidden-surface retry on unsubscribe instead of firing it later", () => {
+    const runnerHost = makeRunnerHost();
+    const { fireResume } = wireResumeSpy(runnerHost);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+
+    const hidden = createHarness("chat-hidden-cleanup");
+    __getChatSessionRegistryForTests().acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: "chat-hidden-cleanup",
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
+      () => hidden.handle,
+    );
+    driveTerminallyClosed(hidden);
+    hidden.handle.setSurfaceVisibility("test-surface", false);
+
+    vi.useFakeTimers();
+    try {
+      const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+      fireResume();
+      expect(hidden.factoryRuns()).toBe(1);
+
+      dispose();
+      vi.advanceTimersByTime(1_000);
+      expect(hidden.factoryRuns()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("folds a burst of wake pulses into one dial per episode for a fast-re-closing session", () => {
     const runnerHost = makeRunnerHost();
     const { fireResume } = wireResumeSpy(runnerHost);

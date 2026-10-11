@@ -925,6 +925,75 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-a", HOST)).toBe(leased.handle);
   });
 
+  it("never evicts a leased session under byte-budget pressure", () => {
+    // The shared registry's eligibility filter excludes `entry.demand !== 0`.
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const leased = createHandle("epic-1", "chat-leased");
+    const warm = createHandle("epic-1", "chat-warm");
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-leased",
+        hostId: HOST,
+        scopeKey: SCOPE,
+      },
+      () => leased.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-warm", hostId: HOST, scopeKey: SCOPE },
+      () => warm.handle,
+    );
+    registry.release("epic-1", "chat-warm", HOST);
+
+    expect(registry.evictOldestEligibleForByteBudget()).toBe(true);
+    expect(leased.closeCount()).toBe(0);
+    expect(warm.closeCount()).toBe(1);
+    expect(registry.peek("epic-1", "chat-leased", HOST)).toBe(leased.handle);
+
+    expect(registry.evictOldestEligibleForByteBudget()).toBe(false);
+    expect(leased.closeCount()).toBe(0);
+  });
+
+  it("does not evict a lease-free active session under byte-budget pressure, evicting an idle sibling instead", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const active = createHandle("epic-1", "chat-active-budget");
+    const idle = createHandle("epic-1", "chat-idle-budget");
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-active-budget",
+        hostId: HOST,
+        scopeKey: SCOPE,
+      },
+      () => active.handle,
+    );
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-idle-budget",
+        hostId: HOST,
+        scopeKey: SCOPE,
+      },
+      () => idle.handle,
+    );
+    markRunning(active.handle);
+    registry.release("epic-1", "chat-active-budget", HOST);
+    registry.release("epic-1", "chat-idle-budget", HOST);
+
+    expect(registry.evictOldestEligibleForByteBudget()).toBe(true);
+    expect(active.closeCount()).toBe(0);
+    expect(idle.closeCount()).toBe(1);
+    expect(registry.peek("epic-1", "chat-active-budget", HOST)).toBe(
+      active.handle,
+    );
+  });
+
   it("notifies subscribers when sessions appear and expire", () => {
     const registry = new ChatSessionRegistry({
       idleTtlMs: TTL_MS,

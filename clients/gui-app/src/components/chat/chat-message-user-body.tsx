@@ -1,3 +1,4 @@
+import { LazyDropdownMenu } from "@/components/ui/lazy-menu";
 import {
   Check,
   ChevronDown,
@@ -34,11 +35,9 @@ import { useComposerPickerItems } from "@/components/chat/composer/picker/use-co
 import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -793,11 +792,15 @@ function InlineUserMessageEditor({
   }, []);
 
   const onDocumentChange = useCallback(
-    (content: JsonContent, selection: { from: number; to: number }) => {
+    (
+      content: JsonContent,
+      selection: { from: number; to: number },
+      changedImages: JsonContent | null,
+    ) => {
       editing.onSnapshot(content, selection);
       // See `chat-composer.tsx` for why an on-change caller is needed at all:
       // a b64 node can enter long after mount without going through a paste.
-      noteContentImages(content);
+      if (changedImages !== null) noteContentImages(changedImages);
       scheduleVisibilityCheck();
     },
     [editing, noteContentImages, scheduleVisibilityCheck],
@@ -1278,8 +1281,8 @@ function UserMessageTouchMenu({
     // edge rather than floating beneath it. The confirming-delete chip takes
     // this same corner region while this trigger is unmounted.
     <div className="absolute right-1 top-full z-10 hidden -translate-y-1/2 pointer-coarse:flex">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      <LazyDropdownMenu
+        trigger={
           <Button
             type="button"
             variant="muted"
@@ -1295,7 +1298,8 @@ function UserMessageTouchMenu({
           >
             <MoreHorizontal className="size-3.5" aria-hidden />
           </Button>
-        </DropdownMenuTrigger>
+        }
+      >
         <DropdownMenuContent align="end">
           {canModify ? (
             <DropdownMenuItem onSelect={actions.onEdit}>
@@ -1322,7 +1326,7 @@ function UserMessageTouchMenu({
             </>
           ) : null}
         </DropdownMenuContent>
-      </DropdownMenu>
+      </LazyDropdownMenu>
     </div>
   );
 }

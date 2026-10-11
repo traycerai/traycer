@@ -9,10 +9,10 @@ import type {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 
 /**
  * Which ACCOUNT an assistant turn is labelled with, across a provider fallback

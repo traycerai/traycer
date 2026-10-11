@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  QueryClient,
+  QueryObserver,
+  type QueryKey,
+} from "@tanstack/react-query";
 import type {
   ProviderRateLimits,
   RateLimitUnavailableReason,
@@ -13,6 +17,10 @@ import {
   type ProviderRateLimitEnvelope,
   type RateLimitUsageResponse,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import { queryKeys } from "@/lib/query-keys";
+import { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 
 const GOOD: ProviderRateLimits = {
   provider: "claude-code",
@@ -561,134 +569,156 @@ const OPENROUTER_GOOD: ProviderRateLimits = {
 };
 
 describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", () => {
-  function invalidateSpyFor(client: QueryClient) {
-    return vi.spyOn(client, "invalidateQueries").mockResolvedValue(undefined);
+  const RATE_LIMIT_KEY = ["host", "host-a", "host.getRateLimitUsage", {}];
+  const CLASSIC_KEY = providersListQueryKey("host-a");
+  const observers: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const unsubscribe of observers.splice(0)) unsubscribe();
+  });
+
+  /** An observed query whose reads stay pending until settled; the first is settled here. */
+  async function watchSettled(
+    queryClient: QueryClient,
+    key: QueryKey,
+  ): Promise<Array<() => void>> {
+    const reads: Array<() => void> = [];
+    const observer = new QueryObserver(queryClient, {
+      queryKey: key,
+      queryFn: () =>
+        new Promise<object>((resolve) => {
+          reads.push(() => {
+            resolve({});
+          });
+        }),
+      staleTime: Infinity,
+      retry: false,
+    });
+    observers.push(observer.subscribe(() => undefined));
+    reads[0]();
+    await flush();
+    return reads;
   }
 
-  it("invalidates providers.list when a claude-code fetch resolves", () => {
-    const queryClient = new QueryClient();
-    const invalidateSpy = invalidateSpyFor(queryClient);
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(GOOD),
-      queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
-    });
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
-    expect(typeof invalidateSpy.mock.calls[0]?.[0]?.predicate).toBe("function");
-  });
+  async function flush(): Promise<void> {
+    for (let hop = 0; hop < 20; hop += 1) await Promise.resolve();
+  }
 
-  it("invalidates providers.list when a codex fetch resolves", () => {
-    const queryClient = new QueryClient();
-    const invalidateSpy = invalidateSpyFor(queryClient);
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(CODEX_GOOD),
-      queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
+  /**
+   * A `host.getRateLimitUsage` read on the serving host, folded through the
+   * mapper inside its queryFn the way `fetchProviderRateLimits` does. The
+   * convergence read is owed when the host's last such read settles, so it is
+   * driven by real fetches rather than a bare mapper call.
+   */
+  async function fetchResolved(
+    queryClient: QueryClient,
+    provider: ProviderRateLimits | null,
+  ): Promise<void> {
+    const queryKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "host.getRateLimitUsage"
+    >("host-a", "host.getRateLimitUsage", {
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "codex",
+      profileId: provider?.provider ?? "aperture-only",
     });
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
-  });
+    await queryClient.fetchQuery({
+      queryKey,
+      queryFn: () =>
+        Promise.resolve(
+          mapResponseToProviderRateLimitEnvelope({
+            response: response(provider),
+            queryClient,
+            queryKey,
+          }),
+        ),
+      staleTime: 0,
+      retry: false,
+    });
+  }
 
-  it("invalidates providers.list when a grok fetch resolves", () => {
-    const queryClient = new QueryClient();
-    const invalidateSpy = invalidateSpyFor(queryClient);
-    const providersListKey = ["host", "host-a", "providers.list", {}];
-    const unrelatedKey = ["host", "host-a", "host.getRateLimitUsage", {}];
-    queryClient.setQueryData(providersListKey, { providers: [] });
-    queryClient.setQueryData(unrelatedKey, {
-      latest: null,
-      lastGood: null,
-      lastGoodAt: null,
-      lastFailureAt: null,
-    });
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(GROK_GOOD),
-      queryClient,
-      queryKey: unrelatedKey,
-    });
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
-    const predicate = invalidateSpy.mock.calls[0]?.[0]?.predicate;
-    const providersListQuery = queryClient
-      .getQueryCache()
-      .find({ queryKey: providersListKey, exact: true });
-    const unrelatedQuery = queryClient
-      .getQueryCache()
-      .find({ queryKey: unrelatedKey, exact: true });
-    if (
-      predicate === undefined ||
-      providersListQuery === undefined ||
-      unrelatedQuery === undefined
-    ) {
-      throw new Error("expected cached queries and invalidation predicate");
-    }
-    expect(predicate(providersListQuery)).toBe(true);
-    expect(predicate(unrelatedQuery)).toBe(false);
-  });
-
-  it("does not invalidate providers.list for openrouter/kilocode (never carry managed profiles)", () => {
-    const queryClient = new QueryClient();
-    const invalidateSpy = invalidateSpyFor(queryClient);
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(OPENROUTER_GOOD),
-      queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
-    });
-    expect(invalidateSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not invalidate providers.list for a failed claude-code/codex probe (available: false carries nothing to converge on)", () => {
-    const queryClient = new QueryClient();
-    const invalidateSpy = invalidateSpyFor(queryClient);
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(unavailable("timeout")),
-      queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
-    });
-    mapResponseToProviderRateLimitEnvelope({
-      response: response({
+  it.each([
+    { provider: "claude-code", snapshot: GOOD, converges: true },
+    { provider: "codex", snapshot: CODEX_GOOD, converges: true },
+    { provider: "grok", snapshot: GROK_GOOD, converges: true },
+    // Never carry managed profiles, or nothing new to converge on.
+    { provider: "openrouter", snapshot: OPENROUTER_GOOD, converges: false },
+    {
+      provider: "a failed probe",
+      snapshot: unavailable("timeout"),
+      converges: false,
+    },
+    {
+      provider: "a missing CLI",
+      snapshot: {
         provider: "codex",
         available: false,
         reason: "cli_not_found",
-      }),
-      queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
-    });
-    expect(invalidateSpy).not.toHaveBeenCalled();
+      } satisfies ProviderRateLimits,
+      converges: false,
+    },
+    { provider: "an aperture-only response", snapshot: null, converges: false },
+  ])(
+    "refreshes the serving host's provider list for $provider only when it can converge",
+    async ({ snapshot, converges }) => {
+      const queryClient = new QueryClient();
+      const classic = await watchSettled(queryClient, CLASSIC_KEY);
+
+      await fetchResolved(queryClient, snapshot);
+      await flush();
+
+      expect(classic).toHaveLength(converges ? 2 : 1);
+    },
+  );
+
+  it("touches only the serving host's classic list, leaving other hosts, native inventories and unrelated queries alone", async () => {
+    const queryClient = new QueryClient();
+    const classic = await watchSettled(queryClient, CLASSIC_KEY);
+    const untouched = [
+      ["host", "host-b", "providers.list", { native: null }],
+      [
+        "host",
+        "host-a",
+        "providers.list",
+        {
+          native: {
+            kind: "skills",
+            providerId: "codex",
+            scope: "global",
+            workspaceRoot: null,
+          },
+        },
+        "providers",
+        "native",
+        "skills",
+      ],
+      RATE_LIMIT_KEY,
+    ];
+    const others = await Promise.all(
+      untouched.map((key) => watchSettled(queryClient, key)),
+    );
+
+    await fetchResolved(queryClient, GOOD);
+    await flush();
+
+    expect(classic).toHaveLength(2);
+    for (const reads of others) expect(reads).toHaveLength(1);
+    for (const key of untouched) {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    }
   });
 
-  it("does not invalidate providers.list for a null provider snapshot (aperture-only response)", () => {
+  it("answers responses landing in the same tick with one read", async () => {
     const queryClient = new QueryClient();
-    const invalidateSpy = invalidateSpyFor(queryClient);
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(null),
-      queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
-    });
-    expect(invalidateSpy).not.toHaveBeenCalled();
-  });
+    const classic = await watchSettled(queryClient, CLASSIC_KEY);
 
-  it("invalidates providers.list under every cached host scope, leaving unrelated queries alone", () => {
-    // Unmocked queryClient (real invalidateQueries) - exercises the predicate
-    // itself rather than asserting on how it was called.
-    const queryClient = new QueryClient();
-    const providersListKeyA = ["host", "host-a", "providers.list", {}];
-    const providersListKeyB = ["host", "host-b", "providers.list", {}];
-    const unrelatedKey = ["host", "host-a", "host.getRateLimitUsage", {}];
-    queryClient.setQueryData(providersListKeyA, { providers: [] });
-    queryClient.setQueryData(providersListKeyB, { providers: [] });
-    queryClient.setQueryData(unrelatedKey, {});
+    await Promise.all([
+      fetchResolved(queryClient, GOOD),
+      fetchResolved(queryClient, CODEX_GOOD),
+      fetchResolved(queryClient, GROK_GOOD),
+    ]);
+    await flush();
 
-    mapResponseToProviderRateLimitEnvelope({
-      response: response(GOOD),
-      queryClient,
-      queryKey: unrelatedKey,
-    });
-
-    expect(queryClient.getQueryState(providersListKeyA)?.isInvalidated).toBe(
-      true,
-    );
-    expect(queryClient.getQueryState(providersListKeyB)?.isInvalidated).toBe(
-      true,
-    );
-    expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
+    expect(classic).toHaveLength(2);
   });
 });

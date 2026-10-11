@@ -2,7 +2,8 @@ import {
   codexRetryVisibility,
   codexRetryTitle,
 } from "@traycer/protocol/host/agent/gui/retry-feedback";
-import { useMemo } from "react";
+import { createSelector, createStructuredSelector, lruMemoize } from "reselect";
+import { shallow } from "zustand/shallow";
 import type {
   AssistantTurnProfile,
   ChatSessionAnchor,
@@ -20,6 +21,10 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 // transcript's skeleton, and this is where those ordinals get drawn - so a
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
+// The ONE comparator. The host numbers rows with it to build the windowed
+// transcript's skeleton, and this is where those ordinals get drawn - so a
+// second, locally-written `a.createdAt - b.createdAt` here would be a silent
+// way for the two sides to disagree about which row an ordinal names.
 import {
   autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
@@ -32,7 +37,16 @@ import {
 // accumulate into ONE rendered turn). Shared rather than local because the
 // host's fork-boundary derivation groups by the same key, and a chat must not
 // change where it forks depending on which side computed it.
+// Identity of the assistant turn a record contributes to (records sharing a key
+// accumulate into ONE rendered turn). Shared rather than local because the
+// host's fork-boundary derivation groups by the same key, and a chat must not
+// change where it forks depending on which side computed it.
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+// The row ENUMERATION - which rows a chat has, and in what order. The host
+// numbers ordinals from these exact functions, so every decision that changes a
+// row's existence, id, or position is consumed from here rather than restated:
+// the steer split, the trailing-boundary rule, steered-user suppression, the
+// stopped-turn fold, and every row id.
 // The row ENUMERATION - which rows a chat has, and in what order. The host
 // numbers ordinals from these exact functions, so every decision that changes a
 // row's existence, id, or position is consumed from here rather than restated:
@@ -241,61 +255,16 @@ export interface RenderedMessagesInput {
   readonly viewTabId: string;
 }
 
-/*
- * Per-Message cache for user rows. `Message` references are stable across
- * snapshot deltas (the protocol re-issues the same object identity), so a
- * WeakMap keyed on the message gives O(1) reuse without invalidation logic.
- */
-const renderCache = new WeakMap<
-  RenderedMessagesDisplayContext,
-  WeakMap<OpenMessage, ChatMessageModel>
->();
-
-/*
- * Per-assistant-turn cache. Unlike user messages, assistant turns are
- * synthesized by coalescing one-or-more `Message`s sharing a `turnId` (plus
- * optional live-blocks injection), so there's no single `Message` reference
- * to key on. Instead we hash the turn's blocks into a `signature` and reuse
- * the cached `ChatMessageModel` whenever the signature matches the last
- * call. During streaming the live turn's signature changes on block status,
- * timestamp, or renderable text updates, so it recomputes; every other
- * persisted turn returns a reference-stable model that lets `React.memo` on
- * `ChatMessage` skip rendering. Without this cache, all visible rows
- * re-render per delta because the assistant model is rebuilt fresh each
- * call.
- */
 interface AssistantTurnCacheEntry {
   cacheKey: string;
   models: ReadonlyArray<ChatMessageModel>;
 }
-
+interface RenderedMessageCache {
+  users: WeakMap<OpenMessage, ChatMessageModel>;
+  readonly turns: Map<string, AssistantTurnCacheEntry>;
+}
 const TURN_SIGNATURE_HASH_OFFSET = 2166136261;
 const TURN_SIGNATURE_HASH_PRIME = 16777619;
-
-const assistantTurnCache = new WeakMap<
-  RenderedMessagesDisplayContext,
-  Map<string, AssistantTurnCacheEntry>
->();
-
-function userCacheForContext(
-  ctx: RenderedMessagesDisplayContext,
-): WeakMap<OpenMessage, ChatMessageModel> {
-  const existing = renderCache.get(ctx);
-  if (existing !== undefined) return existing;
-  const created = new WeakMap<OpenMessage, ChatMessageModel>();
-  renderCache.set(ctx, created);
-  return created;
-}
-
-function assistantTurnCacheForContext(
-  ctx: RenderedMessagesDisplayContext,
-): Map<string, AssistantTurnCacheEntry> {
-  const existing = assistantTurnCache.get(ctx);
-  if (existing !== undefined) return existing;
-  const created = new Map<string, AssistantTurnCacheEntry>();
-  assistantTurnCache.set(ctx, created);
-  return created;
-}
 
 function turnSignature(blocks: ReadonlyArray<OpenContentBlock>): string {
   if (blocks.length === 0) return "0";
@@ -1122,129 +1091,223 @@ function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
   };
 }
 
-export function useRenderedMessages(
+export type RenderedMessagesProjector = (
   input: RenderedMessagesInput,
   displayContext: RenderedMessagesDisplayContext,
-): ReadonlyArray<ChatMessageModel> {
-  // The store assigns a fresh `activeTurn` object on every snapshot, so depend
-  // on its stable primitive fields (not the object identity) to avoid busting
-  // this memo each frame. These are all set at turn-start and never rewritten
-  // per delta, so they make safe, churn-free deps.
-  const {
-    turnId: activeTurnId,
-    userMessageId: activeTurnUserMessageId,
-    harnessId: activeTurnHarnessId,
-    profileId: activeTurnProfileId,
-    startedAt: activeTurnStartedAt,
-  } = activeTurnPrimitives(input.activeTurn);
-  // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
-  // carries the same context object, so the map is at most one entry per
-  // hydrated turn, and the derivations below all hold a turn key rather than a
-  // row id. Non-assistant rows drop out here and are read by row id where they
-  // are needed.
-  const contextByTurnKey = useMemo(() => {
-    const byTurnKey = new Map<string, TranscriptRowContext>();
-    for (const rowId of Object.keys(input.rowContext)) {
-      const turnKey = assistantRowTurnKey(rowId);
-      if (turnKey === null || turnKey === "") continue;
-      byTurnKey.set(turnKey, input.rowContext[rowId]);
-    }
-    return byTurnKey;
-  }, [input.rowContext]);
-  const profileLabelsByTurnKey = useMemo(
-    () =>
+) => ReadonlyArray<ChatMessageModel>;
+
+export function createRenderedMessagesProjector(): RenderedMessagesProjector {
+  const cache: RenderedMessageCache = {
+    users: new WeakMap(),
+    turns: new Map(),
+  };
+  const selectTurnPrimitives = createSelector(
+    [(input: RenderedMessagesInput) => input.activeTurn],
+    (inputActiveTurn) => activeTurnPrimitives(inputActiveTurn),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectActiveTurnId = createSelector(
+    [selectTurnPrimitives],
+    (value) => value.turnId,
+  );
+
+  const selectActiveTurnUserMessageId = createSelector(
+    [selectTurnPrimitives],
+    (value) => value.userMessageId,
+  );
+
+  const selectActiveTurnHarnessId = createSelector(
+    [selectTurnPrimitives],
+    (value) => value.harnessId,
+  );
+
+  const selectActiveTurnProfileId = createSelector(
+    [selectTurnPrimitives],
+    (value) => value.profileId,
+  );
+
+  const selectActiveTurnStartedAt = createSelector(
+    [selectTurnPrimitives],
+    (value) => value.startedAt,
+  );
+
+  const selectContextByTurnKey = createSelector(
+    [(input: RenderedMessagesInput) => input.rowContext],
+    (inputRowContext) => {
+      const byTurnKey = new Map<string, TranscriptRowContext>();
+      for (const rowId of Object.keys(inputRowContext)) {
+        const turnKey = assistantRowTurnKey(rowId);
+        if (turnKey === null || turnKey === "") continue;
+        byTurnKey.set(turnKey, inputRowContext[rowId]);
+      }
+      return byTurnKey;
+    },
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectProfileLabelsByTurnKey = createSelector(
+    [
+      createStructuredSelector({
+        inputMessages: (input: RenderedMessagesInput) => input.messages,
+        contextByTurnKey: selectContextByTurnKey,
+        activeTurnId: selectActiveTurnId,
+        activeTurnUserMessageId: selectActiveTurnUserMessageId,
+        activeTurnHarnessId: selectActiveTurnHarnessId,
+        activeTurnProfileId: selectActiveTurnProfileId,
+      }),
+    ],
+    ({
+      inputMessages,
+      contextByTurnKey,
+      activeTurnId,
+      activeTurnUserMessageId,
+      activeTurnHarnessId,
+      activeTurnProfileId,
+    }) =>
       profileLabelsByTurnKeyFromMessages({
-        messages: input.messages,
+        messages: inputMessages,
         contextByTurnKey,
         activeTurnId,
         activeTurnUserMessageId,
         activeTurnHarnessId,
         activeTurnProfileId,
       }),
+    {
+      memoize: lruMemoize,
+      argsMemoize: lruMemoize,
+      memoizeOptions: { resultEqualityCheck: shallow },
+    },
+  );
+
+  const selectActiveTurnProjection = createSelector(
     [
-      input.messages,
-      contextByTurnKey,
-      activeTurnId,
-      activeTurnUserMessageId,
-      activeTurnHarnessId,
-      activeTurnProfileId,
+      (input: RenderedMessagesInput) => input.activeTurn,
+      selectProfileLabelsByTurnKey,
     ],
+    (inputActiveTurn, profileLabelsByTurnKey) =>
+      projectActiveTurn(inputActiveTurn, profileLabelsByTurnKey),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  const activeTurnProjection = projectActiveTurn(
-    input.activeTurn,
-    profileLabelsByTurnKey,
+
+  const selectActiveTurnMetaInput = createSelector(
+    [selectActiveTurnProjection],
+    (activeTurnProjection) => activeTurnProjection.metaInput,
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  const activeTurnMetaInput = activeTurnProjection.metaInput;
-  const runStatus = input.runStatus;
-  // The run-state indicator belongs to the single active turn; `idle`
-  // surfaces no indicator on any row.
-  const activeRunState: ChatMessageRunState | null =
-    runStatus === "idle" ? null : runStatus;
-  const pendingApprovals = input.pendingApprovals ?? NO_PENDING_APPROVALS;
-  const pendingFileEditApprovals =
+
+  const selectRunStatus = (input: RenderedMessagesInput) => input.runStatus;
+
+  const selectActiveRunState = createSelector(
+    [selectRunStatus],
+    (runStatus) => (runStatus === "idle" ? null : runStatus),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectPendingApprovals = (input: RenderedMessagesInput) =>
+    input.pendingApprovals ?? NO_PENDING_APPROVALS;
+
+  const selectPendingFileEditApprovals = (input: RenderedMessagesInput) =>
     input.pendingFileEditApprovals ?? NO_PENDING_FILE_EDIT_APPROVALS;
-  const pendingInterviews = input.pendingInterviews ?? NO_PENDING_INTERVIEWS;
-  const queuedPromptMessageIds =
+
+  const selectPendingInterviews = (input: RenderedMessagesInput) =>
+    input.pendingInterviews ?? NO_PENDING_INTERVIEWS;
+
+  const selectQueuedPromptMessageIds = (input: RenderedMessagesInput) =>
     input.queuedPromptMessageIds ?? NO_QUEUED_PROMPT_IDS;
-  const withdrawnMessageId = input.withdrawnMessageId;
-  const turnPauseAccounting = useMemo(
-    () =>
+
+  const selectWithdrawnMessageId = (input: RenderedMessagesInput) =>
+    input.withdrawnMessageId;
+
+  const selectTurnPauseAccounting = createSelector(
+    [
+      createStructuredSelector({
+        inputEvents: (input: RenderedMessagesInput) => input.events,
+        activeTurnId: selectActiveTurnId,
+        pendingApprovals: selectPendingApprovals,
+        pendingFileEditApprovals: selectPendingFileEditApprovals,
+        pendingInterviews: selectPendingInterviews,
+      }),
+    ],
+    ({
+      inputEvents,
+      activeTurnId,
+      pendingApprovals,
+      pendingFileEditApprovals,
+      pendingInterviews,
+    }) =>
       buildTurnPauseAccounting({
-        events: input.events,
+        events: inputEvents,
         activeTurnId,
         pendingApprovals,
         pendingFileEditApprovals,
         pendingInterviews,
       }),
-    [
-      input.events,
-      activeTurnId,
-      pendingApprovals,
-      pendingFileEditApprovals,
-      pendingInterviews,
-    ],
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  // Event-derived views change only when the event log changes, never per
-  // streamed delta - memoize them so a delta doesn't re-scan the events.
-  const checkpointViews = useMemo(
-    () => checkpointManifestViewsFromEvents(input.events, contextByTurnKey),
-    [input.events, contextByTurnKey],
+  const selectCheckpointViews = createSelector(
+    [(input: RenderedMessagesInput) => input.events, selectContextByTurnKey],
+    (inputEvents, contextByTurnKey) =>
+      checkpointManifestViewsFromEvents(inputEvents, contextByTurnKey),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  const steeredMessageIds = useMemo(
-    () => completedSteerMessageIds(input.events, input.rowContext),
-    [input.events, input.rowContext],
+
+  const selectSteeredMessageIds = createSelector(
+    [
+      (input: RenderedMessagesInput) => input.events,
+      (input: RenderedMessagesInput) => input.rowContext,
+    ],
+    (inputEvents, inputRowContext) =>
+      completedSteerMessageIds(inputEvents, inputRowContext),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  const turnStoppedByTurnKey = useMemo(
-    () => turnStoppedInfoByTurnKey(input.events),
-    [input.events],
+
+  const selectTurnStoppedByTurnKey = createSelector(
+    [(input: RenderedMessagesInput) => input.events],
+    (inputEvents) => turnStoppedInfoByTurnKey(inputEvents),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  const turnLifecycleTimingByTurnKey = useMemo(
-    () => turnLifecycleTimingFromEvents(input.events),
-    [input.events],
+
+  const selectTurnLifecycleTimingByTurnKey = createSelector(
+    [(input: RenderedMessagesInput) => input.events],
+    (inputEvents) => turnLifecycleTimingFromEvents(inputEvents),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  // The setup card row(s) are derived from the same event log, keyed on events
-  // plus the (stable) binding identity, so a streamed delta doesn't re-scan or
-  // re-partition the setup lifecycle windows.
-  const epicId = input.epicId;
-  const ownerId = input.ownerId;
-  const ownerKind = input.ownerKind;
-  const viewTabId = input.viewTabId;
-  const setupCardWindows = input.setupCardWindows;
-  const setupCardRows = useMemo(
-    () =>
+
+  const selectEpicId = (input: RenderedMessagesInput) => input.epicId;
+
+  const selectOwnerId = (input: RenderedMessagesInput) => input.ownerId;
+
+  const selectOwnerKind = (input: RenderedMessagesInput) => input.ownerKind;
+
+  const selectViewTabId = (input: RenderedMessagesInput) => input.viewTabId;
+
+  const selectSetupCardWindows = (input: RenderedMessagesInput) =>
+    input.setupCardWindows;
+
+  const selectSetupCardRows = createSelector(
+    [
+      createStructuredSelector({
+        inputEvents: (input: RenderedMessagesInput) => input.events,
+        epicId: selectEpicId,
+        ownerId: selectOwnerId,
+        ownerKind: selectOwnerKind,
+        setupCardWindows: selectSetupCardWindows,
+      }),
+    ],
+    ({ inputEvents, epicId, ownerId, ownerKind, setupCardWindows }) =>
       buildSetupCardRows(
-        input.events,
+        inputEvents,
         { epicId, ownerId, ownerKind },
         setupCardWindows,
       ),
-    [input.events, epicId, ownerId, ownerKind, setupCardWindows],
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  // Project each row into its transcript card PLUS the placement signals the
-  // final merge needs (anchor target + genesis-pin discriminator), so that merge
-  // never has to index `setupCardRows` positionally in parallel with the cards.
-  const setupCardEntries = useMemo(
-    () =>
+
+  const selectSetupCardEntries = createSelector(
+    [selectSetupCardRows, selectOwnerId, selectViewTabId],
+    (setupCardRows, ownerId, viewTabId) =>
       setupCardRows.map((row) => ({
         // The HOST's window index, not this array's position - see
         // `adoptWholeLogIdentity`. Indexing positionally here is what made the
@@ -1253,138 +1316,232 @@ export function useRenderedMessages(
         anchorId: row.triggeringMessageId,
         isGenesisPin: row.isGenesisPin,
       })),
-    [setupCardRows, ownerId, viewTabId],
-  );
-  const forkedChatLinkMessages = useMemo(
-    () => buildForkedChatLinkMessages(input.events, viewTabId),
-    [input.events, viewTabId],
-  );
-  const notificationAnchorMessages = useMemo(
-    () => buildNotificationAnchorMessages(input.events),
-    [input.events],
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  const autoJudgeUnattendedDenialMessages = useMemo(
-    () => buildAutoJudgeUnattendedDenialMessages(input.events),
-    [input.events],
+  const selectForkedChatLinkMessages = createSelector(
+    [(input: RenderedMessagesInput) => input.events, selectViewTabId],
+    (inputEvents, viewTabId) =>
+      buildForkedChatLinkMessages(inputEvents, viewTabId),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  const autoJudgeNoticeMessages = useMemo(
-    () => buildAutoJudgeNoticeMessages(input.events),
-    [input.events],
+  const selectNotificationAnchorMessages = createSelector(
+    [(input: RenderedMessagesInput) => input.events],
+    (inputEvents) => buildNotificationAnchorMessages(inputEvents),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  const importedChatMarkerMessages = useMemo(
-    () => buildImportedChatMarkerMessages(input.events),
-    [input.events],
+  const selectAutoJudgeUnattendedDenialMessages = createSelector(
+    [(input: RenderedMessagesInput) => input.events],
+    (inputEvents) => buildAutoJudgeUnattendedDenialMessages(inputEvents),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  // The live row's blocks merge INTO a persisted turn only when a persisted
-  // assistant message already shares its `turnId` (multi-record / post-snapshot
-  // turns). The store routes streamed deltas to EITHER `messages` or
-  // `liveAssistantMessage`, never both, so in the common streaming case the
-  // live row stands alone and the persisted render is independent of it.
-  const liveAssistant = input.liveAssistantMessage;
-  const liveTurnKey = liveAssistant === null ? null : liveAssistant.turnId;
-
-  // Head/tail partition for the merge case: carve the live turn's records out
-  // of the settled walk so a streaming delta re-derives ONLY the active turn
-  // (the tail), leaving the settled head untouched per tick. The final memo
-  // re-interleaves the partitions through the shared `createdAt` sort, so the
-  // split never changes row ids or order. Per-tick stability: every dep here
-  // changes on snapshots or turn boundaries, never on streamed deltas. An
-  // empty `activeTurn` means the live row (if any) stands alone.
-  const partition = useMemo((): {
-    readonly settled: ReadonlyArray<OpenMessage>;
-    readonly activeTurn: ReadonlyArray<OpenMessage>;
-  } => {
-    const isActiveTurnRecord = (message: OpenMessage): boolean =>
-      message.role === "assistant" && message.turnId === liveTurnKey;
-    const activeTurn =
-      liveTurnKey === null
-        ? NO_MESSAGES
-        : input.messages.filter(isActiveTurnRecord);
-    if (activeTurn.length === 0) {
-      return { settled: input.messages, activeTurn: NO_MESSAGES };
-    }
-    return {
-      settled: input.messages.filter((message) => !isActiveTurnRecord(message)),
-      activeTurn,
-    };
-  }, [input.messages, liveTurnKey]);
-  const liveMergesIntoPersisted = partition.activeTurn.length > 0;
-
-  // User records can be referenced from either partition (steer rows render
-  // inside their nesting turn); build the lookup once per snapshot and thread
-  // it everywhere instead of letting each walk rebuild it.
-  const userMessagesById = useMemo(
-    () => userMessagesByIdFromMessages(input.messages),
-    [input.messages],
+  const selectAutoJudgeNoticeMessages = createSelector(
+    [(input: RenderedMessagesInput) => input.events],
+    (inputEvents) => buildAutoJudgeNoticeMessages(inputEvents),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
-  // A withdrawn opening anchors nothing: its row is hidden below, and a
-  // record-less `turn.stopped` naming it (a legacy chat's stop during the old
-  // setup window, migrated on upgrade) would otherwise draw an orphan stopped
-  // boundary until the host's own removal of the row lands.
-  const retainedUserMessageIds = useMemo((): ReadonlySet<string> => {
-    const ids = new Set([
-      ...userMessagesById.keys(),
-      ...input.pendingUserMessages.map((message) => message.messageId),
-    ]);
-    if (withdrawnMessageId !== null) ids.delete(withdrawnMessageId);
-    return ids;
-  }, [userMessagesById, input.pendingUserMessages, withdrawnMessageId]);
 
-  const activeTurnSteeredIdsKey = liveMergesIntoPersisted
-    ? activeTurnSteeredIdsContentKey(partition.activeTurn, liveAssistant)
-    : "";
-  const activeTurnSteeredMessageIds = useMemo(
-    (): ReadonlySet<string> =>
+  const selectImportedChatMarkerMessages = createSelector(
+    [(input: RenderedMessagesInput) => input.events],
+    (inputEvents) => buildImportedChatMarkerMessages(inputEvents),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectLiveAssistant = (input: RenderedMessagesInput) =>
+    input.liveAssistantMessage;
+
+  const selectLiveTurnKey = createSelector(
+    [selectLiveAssistant],
+    (liveAssistant) => (liveAssistant === null ? null : liveAssistant.turnId),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectStreamingTurnKey = createSelector(
+    [selectLiveTurnKey, selectActiveRunState, selectActiveTurnId],
+    (liveTurnKey, activeRunState, activeTurnId) =>
+      liveTurnKey ?? (activeRunState === null ? null : activeTurnId),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectActiveRecords = createSelector(
+    [
+      selectStreamingTurnKey,
+      (input: RenderedMessagesInput) => input.messages,
+      selectLiveTurnKey,
+    ],
+    (streamingTurnKey, inputMessages, liveTurnKey) => {
+      if (streamingTurnKey === null) return NO_MESSAGES;
+      const records = inputMessages.filter(
+        (message) =>
+          message.role === "assistant" && message.turnId === streamingTurnKey,
+      );
+      if (liveTurnKey === null) {
+        const tailStart = inputMessages.length - records.length;
+        if (
+          records.some(
+            (message, index) =>
+              message !== inputMessages[tailStart + index] ||
+              (message.role === "assistant" && message.startedAt === null),
+          )
+        ) {
+          return NO_MESSAGES;
+        }
+      }
+      return records;
+    },
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectSettled = createSelector(
+    [
+      selectActiveRecords,
+      (input: RenderedMessagesInput) => input.messages,
+      selectStreamingTurnKey,
+    ],
+    (activeRecords, inputMessages, streamingTurnKey) => {
+      if (activeRecords.length === 0) return inputMessages;
+      return inputMessages.filter(
+        (message) =>
+          message.role !== "assistant" || message.turnId !== streamingTurnKey,
+      );
+    },
+    {
+      memoize: lruMemoize,
+      argsMemoize: lruMemoize,
+      memoizeOptions: { resultEqualityCheck: shallow },
+    },
+  );
+
+  const selectLiveMergesIntoPersisted = createSelector(
+    [selectLiveTurnKey, selectActiveRecords],
+    (liveTurnKey, activeRecords) =>
+      liveTurnKey !== null && activeRecords.length > 0,
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectUserMessagesById = createSelector(
+    [(input: RenderedMessagesInput) => input.messages],
+    (inputMessages) => userMessagesByIdFromMessages(inputMessages),
+    {
+      memoize: lruMemoize,
+      argsMemoize: lruMemoize,
+      memoizeOptions: { resultEqualityCheck: shallow },
+    },
+  );
+
+  const selectRetainedUserMessageIds = createSelector(
+    [
+      selectUserMessagesById,
+      (input: RenderedMessagesInput) => input.pendingUserMessages,
+      selectWithdrawnMessageId,
+    ],
+    (userMessagesById, inputPendingUserMessages, withdrawnMessageId) => {
+      const ids = new Set([
+        ...userMessagesById.keys(),
+        ...inputPendingUserMessages.map((message) => message.messageId),
+      ]);
+      if (withdrawnMessageId !== null) ids.delete(withdrawnMessageId);
+      return ids;
+    },
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectActiveTurnSteeredIdsKey = createSelector(
+    [selectActiveRecords, selectLiveAssistant],
+    (activeRecords, liveAssistant) =>
+      activeRecords.length > 0
+        ? activeTurnSteeredIdsContentKey(activeRecords, liveAssistant)
+        : "",
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectActiveTurnSteeredMessageIds = createSelector(
+    [selectActiveTurnSteeredIdsKey],
+    (activeTurnSteeredIdsKey) =>
       new Set(
         activeTurnSteeredIdsKey === ""
           ? []
           : activeTurnSteeredIdsKey.split("\n"),
       ),
-    [activeTurnSteeredIdsKey],
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  // Turns present in the snapshot (plus the live turn) survive the cache
-  // sweep; anything else fell out of the transcript (branch edits, deletes).
-  const retainedTurnKeys = useMemo((): ReadonlySet<string> => {
-    const keys = new Set(
-      input.messages
-        .filter(
-          (message): message is OpenAssistantMessage =>
-            message.role === "assistant",
-        )
-        .map(assistantTurnKey),
-    );
-    if (liveTurnKey !== null) keys.add(liveTurnKey);
-    return keys;
-  }, [input.messages, liveTurnKey]);
-  const stoppedWithoutAssistantRecords = useMemo(
-    () =>
+  const selectRetainedTurnKeys = createSelector(
+    [(input: RenderedMessagesInput) => input.messages, selectLiveTurnKey],
+    (inputMessages, liveTurnKey) => {
+      const keys = new Set(
+        inputMessages
+          .filter(
+            (message): message is OpenAssistantMessage =>
+              message.role === "assistant",
+          )
+          .map(assistantTurnKey),
+      );
+      if (liveTurnKey !== null) keys.add(liveTurnKey);
+      return keys;
+    },
+    {
+      memoize: lruMemoize,
+      argsMemoize: lruMemoize,
+      memoizeOptions: { resultEqualityCheck: shallow },
+    },
+  );
+
+  const selectStoppedWithoutAssistantRecords = createSelector(
+    [
+      selectTurnStoppedByTurnKey,
+      selectRetainedTurnKeys,
+      selectActiveTurnId,
+      selectRetainedUserMessageIds,
+    ],
+    (
+      turnStoppedByTurnKey,
+      retainedTurnKeys,
+      activeTurnId,
+      retainedUserMessageIds,
+    ) =>
       renderStoppedTurnsWithoutAssistantRecords(
         turnStoppedByTurnKey,
         retainedTurnKeys,
         activeTurnId,
         retainedUserMessageIds,
       ),
-    [
-      turnStoppedByTurnKey,
-      retainedTurnKeys,
-      activeTurnId,
-      retainedUserMessageIds,
-    ],
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  const persisted = useMemo(() => {
-    return renderPersistedMessages({
-      messages: partition.settled,
+  const selectPersisted = createSelector(
+    [
+      createStructuredSelector({
+        settled: selectSettled,
+        userMessagesById: selectUserMessagesById,
+        profileLabelsByTurnKey: selectProfileLabelsByTurnKey,
+        contextByTurnKey: selectContextByTurnKey,
+        activeTurnSteeredMessageIds: selectActiveTurnSteeredMessageIds,
+        checkpointViews: selectCheckpointViews,
+        activeTurnId: selectActiveTurnId,
+        activeRunState: selectActiveRunState,
+        turnPauseAccounting: selectTurnPauseAccounting,
+        steeredMessageIds: selectSteeredMessageIds,
+        turnStoppedByTurnKey: selectTurnStoppedByTurnKey,
+        turnLifecycleTimingByTurnKey: selectTurnLifecycleTimingByTurnKey,
+        retainedTurnKeys: selectRetainedTurnKeys,
+        displayContext: (
+          _input: RenderedMessagesInput,
+          context: RenderedMessagesDisplayContext,
+        ) => context,
+        epicId: selectEpicId,
+        ownerId: selectOwnerId,
+      }),
+    ],
+    ({
+      settled,
       userMessagesById,
       profileLabelsByTurnKey,
       contextByTurnKey,
-      liveAssistant: null,
-      externallyNestedSteeredMessageIds: activeTurnSteeredMessageIds,
+      activeTurnSteeredMessageIds,
       checkpointViews,
       activeTurnId,
       activeRunState,
@@ -1392,40 +1549,80 @@ export function useRenderedMessages(
       steeredMessageIds,
       turnStoppedByTurnKey,
       turnLifecycleTimingByTurnKey,
-      sweepRetainedTurnKeys: retainedTurnKeys,
-      ctx: displayContext,
+      retainedTurnKeys,
+      displayContext,
       epicId,
-      chatId: ownerId,
-    });
-  }, [
-    partition,
-    userMessagesById,
-    profileLabelsByTurnKey,
-    contextByTurnKey,
-    activeTurnSteeredMessageIds,
-    retainedTurnKeys,
-    checkpointViews,
-    activeTurnId,
-    activeRunState,
-    turnPauseAccounting,
-    steeredMessageIds,
-    turnStoppedByTurnKey,
-    turnLifecycleTimingByTurnKey,
-    displayContext,
-    epicId,
-    ownerId,
-  ]);
+      ownerId,
+    }) => {
+      return renderPersistedMessages({
+        cache,
+        messages: settled,
+        userMessagesById,
+        profileLabelsByTurnKey,
+        contextByTurnKey,
+        liveAssistant: null,
+        externallyNestedSteeredMessageIds: activeTurnSteeredMessageIds,
+        checkpointViews,
+        activeTurnId,
+        activeRunState,
+        turnPauseAccounting,
+        steeredMessageIds,
+        turnStoppedByTurnKey,
+        turnLifecycleTimingByTurnKey,
+        sweepRetainedTurnKeys: retainedTurnKeys,
+        ctx: displayContext,
+        epicId,
+        chatId: ownerId,
+      });
+    },
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
 
-  // The tail: re-derives per streamed delta, but walks only the active turn's
-  // records. The live turn always carries `startedAt` (set at turn start), so
-  // the settled walk's `lastUserTimestamp` legacy anchor fallback is not
-  // needed here.
-  const activeTurn = useMemo(
-    () =>
-      partition.activeTurn.length === 0
+  const selectActiveTurn = createSelector(
+    [
+      createStructuredSelector({
+        activeRecords: selectActiveRecords,
+        userMessagesById: selectUserMessagesById,
+        profileLabelsByTurnKey: selectProfileLabelsByTurnKey,
+        contextByTurnKey: selectContextByTurnKey,
+        liveAssistant: selectLiveAssistant,
+        checkpointViews: selectCheckpointViews,
+        activeTurnId: selectActiveTurnId,
+        activeRunState: selectActiveRunState,
+        turnPauseAccounting: selectTurnPauseAccounting,
+        steeredMessageIds: selectSteeredMessageIds,
+        turnStoppedByTurnKey: selectTurnStoppedByTurnKey,
+        turnLifecycleTimingByTurnKey: selectTurnLifecycleTimingByTurnKey,
+        displayContext: (
+          _input: RenderedMessagesInput,
+          context: RenderedMessagesDisplayContext,
+        ) => context,
+        epicId: selectEpicId,
+        ownerId: selectOwnerId,
+      }),
+    ],
+    ({
+      activeRecords,
+      userMessagesById,
+      profileLabelsByTurnKey,
+      contextByTurnKey,
+      liveAssistant,
+      checkpointViews,
+      activeTurnId,
+      activeRunState,
+      turnPauseAccounting,
+      steeredMessageIds,
+      turnStoppedByTurnKey,
+      turnLifecycleTimingByTurnKey,
+      displayContext,
+      epicId,
+      ownerId,
+    }) =>
+      activeRecords.length === 0
         ? NO_RENDERED_MESSAGES
         : renderPersistedMessages({
-            messages: partition.activeTurn,
+            cache,
+            messages: activeRecords,
             userMessagesById,
             profileLabelsByTurnKey,
             contextByTurnKey,
@@ -1445,35 +1642,54 @@ export function useRenderedMessages(
             epicId,
             chatId: ownerId,
           }),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectPending = createSelector(
     [
-      partition,
+      (input: RenderedMessagesInput) => input.pendingUserMessages,
+      (
+        _input: RenderedMessagesInput,
+        context: RenderedMessagesDisplayContext,
+      ) => context,
+    ],
+    (inputPendingUserMessages, displayContext) =>
+      inputPendingUserMessages.map((message) =>
+        renderPendingUserMessage(message, displayContext),
+      ),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectLive = createSelector(
+    [
+      createStructuredSelector({
+        liveAssistant: selectLiveAssistant,
+        userMessagesById: selectUserMessagesById,
+        profileLabelsByTurnKey: selectProfileLabelsByTurnKey,
+        liveMergesIntoPersisted: selectLiveMergesIntoPersisted,
+        checkpointViews: selectCheckpointViews,
+        activeRunState: selectActiveRunState,
+        turnPauseAccounting: selectTurnPauseAccounting,
+        displayContext: (
+          _input: RenderedMessagesInput,
+          context: RenderedMessagesDisplayContext,
+        ) => context,
+        epicId: selectEpicId,
+        ownerId: selectOwnerId,
+      }),
+    ],
+    ({
+      liveAssistant,
       userMessagesById,
       profileLabelsByTurnKey,
-      contextByTurnKey,
-      liveAssistant,
+      liveMergesIntoPersisted,
       checkpointViews,
-      activeTurnId,
       activeRunState,
       turnPauseAccounting,
-      steeredMessageIds,
-      turnStoppedByTurnKey,
-      turnLifecycleTimingByTurnKey,
       displayContext,
       epicId,
       ownerId,
-    ],
-  );
-
-  const pending = useMemo(
-    () =>
-      input.pendingUserMessages.map((message) =>
-        renderPendingUserMessage(message, displayContext),
-      ),
-    [input.pendingUserMessages, displayContext],
-  );
-
-  const live = useMemo(
-    () =>
+    }) =>
       renderLiveAssistant({
         liveAssistant,
         userMessagesById,
@@ -1486,212 +1702,285 @@ export function useRenderedMessages(
         epicId,
         chatId: ownerId,
       }),
-    [
-      liveAssistant,
-      userMessagesById,
-      profileLabelsByTurnKey,
-      liveMergesIntoPersisted,
-      checkpointViews,
-      activeRunState,
-      turnPauseAccounting,
-      displayContext,
-      epicId,
-      ownerId,
-    ],
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
   );
 
-  const rows = useMemo(() => {
-    // A withdrawn opening has left the conversation - its prompt is back in the
-    // composer - so neither its row nor an optimistic copy of it is drawn, from
-    // the moment the host's delivery view says so. The host's own removal
-    // follows (on the windowed line, a reindex and a resnapshot later); this is
-    // the one place that gap is closed, and every row below reads these.
-    const shownPersisted = withoutWithdrawnUserRow(
-      persisted,
-      withdrawnMessageId,
-    );
-    const shownActiveTurn = withoutWithdrawnUserRow(
-      activeTurn,
-      withdrawnMessageId,
-    );
-    const shownPending = withoutWithdrawnUserRow(pending, withdrawnMessageId);
-    // Pre-turn window: the host reports `running`/`stopping` (a send was
-    // accepted) but no assistant row exists yet - provider-session/worktree
-    // setup runs before the turn materializes. Synthesize a pending-assistant
-    // row so the response area shows "Working…" immediately. It shares the live
-    // row's key, so when the real turn arrives it swaps in place (no flicker).
-    // `pending` (the optimistic user messages, timestamped `Date.now()`) is
-    // included so the indicator's `createdAt` floor sits above them and the row
-    // sorts BELOW the just-sent message instead of jumping above it.
-    // Suppress the pre-turn "Working…" indicator only while the LIVE setup
-    // lifecycle is in flight: the open (current) window has a workspace still
-    // `setting-up`, so the card itself stands in for the awaited turn. Two
-    // guards matter:
-    //  - `row.isActive` (NOT the row state): a window closed by a boundary
-    //    (`worktree.missing` / re-bind) can be stranded at `setting-up` when the
-    //    worktree vanished mid-setup, and that historical card must never gate a
-    //    later normal turn.
-    //  - per-workspace `setting-up` (NOT the rolled-up `aggregate.state`): the
-    //    rollup ranks `failed` above `setting-up`, so a multi-repo window with
-    //    one failed + one still-running repo rolls up to `failed`; keying off the
-    //    aggregate would wrongly un-suppress the indicator while a repo is still
-    //    in flight (a stray "Working…" beside the live card).
-    const setupGating = setupCardRows.some(
-      (row) =>
-        row.isActive &&
-        row.model.workspaces.some(
-          (workspace) =>
-            workspace.state === "creating" || workspace.state === "setting-up",
-        ),
-    );
-    const trailing = setupGating
-      ? []
-      : renderPendingRunIndicator({
-          activeRunState,
-          activeTurnId,
-          activeTurnStartedAt,
-          activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
-          turnPauseAccounting,
-          rendered: [
-            ...shownPersisted,
-            ...shownActiveTurn,
-            ...shownPending,
-            ...live,
-          ],
-        });
+  const selectShownPersisted = createSelector(
+    [selectPersisted, selectWithdrawnMessageId],
+    (persisted, withdrawnMessageId) =>
+      withoutWithdrawnUserRow(persisted, withdrawnMessageId),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
 
-    // A prompt is drawn in one place.
-    //
-    // The optimistic row covers the instant after send, before the host has
-    // queued or persisted it. Once the host has that prompt in the queue, the
-    // queue row is the copy that survives a reload and a paused setup, so the
-    // optimistic row stays in the store (a queued send is not a lost send) and
-    // is not drawn. Once the host has persisted the message, that transcript
-    // row is the copy; the optimistic row shares its id and drops.
-    const persistedIds = new Set(
-      [...shownPersisted, ...shownActiveTurn].map((message) => message.id),
-    );
-    const dedupedPending = shownPending.filter(
-      (message) =>
-        !persistedIds.has(message.id) &&
-        !queuedPromptMessageIds.has(message.id),
-    );
+  const selectShownActiveTurn = createSelector(
+    [selectActiveTurn, selectWithdrawnMessageId],
+    (activeTurn, withdrawnMessageId) =>
+      withoutWithdrawnUserRow(activeTurn, withdrawnMessageId),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
 
-    // `baseRows` = everything that sorts by `createdAt`. Assembled before the
-    // cards so the common case can early-out without the anchor machinery. The
-    // imported-chat markers are deliberately NOT here - they are pinned (see
-    // `pinImportedChatMarkers`), so sorting them would only file them wrongly.
-    const baseRows = [
-      ...shownPersisted,
-      ...shownActiveTurn,
-      ...dedupedPending,
-      ...live,
-      ...stoppedWithoutAssistantRecords,
-      ...forkedChatLinkMessages,
-      ...notificationAnchorMessages,
-      // After the anchors, because `projectTranscriptRows` appends its passes
-      // in this same order and a tie between two events sharing a timestamp is
-      // resolved by that order alone. Moving any of these lists moves ordinals.
-      ...autoJudgeUnattendedDenialMessages,
-      ...autoJudgeNoticeMessages,
-      ...trailing,
-    ];
+  const selectShownPending = createSelector(
+    [selectPending, selectWithdrawnMessageId],
+    (pending, withdrawnMessageId) =>
+      withoutWithdrawnUserRow(pending, withdrawnMessageId),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
 
-    // Overwhelmingly common case - this chat has no worktree setup card: a plain
-    // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
-    // memo re-runs on every streamed delta, so the no-card path must stay cheap.
-    if (setupCardEntries.length === 0) {
+  const selectActiveIds = createSelector(
+    [selectShownActiveTurn],
+    (shownActiveTurn) => new Set(shownActiveTurn.map((message) => message.id)),
+    {
+      memoize: lruMemoize,
+      argsMemoize: lruMemoize,
+      memoizeOptions: { resultEqualityCheck: shallow },
+    },
+  );
+
+  const selectDedupedPending = createSelector(
+    [
+      selectShownPersisted,
+      selectShownPending,
+      selectActiveIds,
+      selectQueuedPromptMessageIds,
+    ],
+    (shownPersisted, shownPending, activeIds, queuedPromptMessageIds) => {
+      const persistedIds = new Set(shownPersisted.map((message) => message.id));
+      return shownPending.filter(
+        (message) =>
+          !persistedIds.has(message.id) &&
+          !activeIds.has(message.id) &&
+          !queuedPromptMessageIds.has(message.id),
+      );
+    },
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectSettledOrder = createSelector(
+    [
+      createStructuredSelector({
+        shownPersisted: selectShownPersisted,
+        dedupedPending: selectDedupedPending,
+        stoppedWithoutAssistantRecords: selectStoppedWithoutAssistantRecords,
+        forkedChatLinkMessages: selectForkedChatLinkMessages,
+        notificationAnchorMessages: selectNotificationAnchorMessages,
+        autoJudgeUnattendedDenialMessages:
+          selectAutoJudgeUnattendedDenialMessages,
+        autoJudgeNoticeMessages: selectAutoJudgeNoticeMessages,
+      }),
+    ],
+    ({
+      shownPersisted,
+      dedupedPending,
+      stoppedWithoutAssistantRecords,
+      forkedChatLinkMessages,
+      notificationAnchorMessages,
+      autoJudgeUnattendedDenialMessages,
+      autoJudgeNoticeMessages,
+    }) =>
+      [
+        ...rankMessages(shownPersisted, 0),
+        ...rankMessages(dedupedPending, 2),
+        ...rankMessages(stoppedWithoutAssistantRecords, 4),
+        ...rankMessages(forkedChatLinkMessages, 5),
+        ...rankMessages(notificationAnchorMessages, 6),
+        ...rankMessages(autoJudgeUnattendedDenialMessages, 7),
+        ...rankMessages(autoJudgeNoticeMessages, 8),
+      ].sort(compareRankedMessages),
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+
+  const selectRows = createSelector(
+    [
+      createStructuredSelector({
+        setupCardRows: selectSetupCardRows,
+        shownActiveTurn: selectShownActiveTurn,
+        live: selectLive,
+        activeRunState: selectActiveRunState,
+        activeTurnId: selectActiveTurnId,
+        activeTurnStartedAt: selectActiveTurnStartedAt,
+        activeTurnMetaInput: selectActiveTurnMetaInput,
+        displayContext: (
+          _input: RenderedMessagesInput,
+          context: RenderedMessagesDisplayContext,
+        ) => context,
+        turnPauseAccounting: selectTurnPauseAccounting,
+        shownPersisted: selectShownPersisted,
+        shownPending: selectShownPending,
+        settledOrder: selectSettledOrder,
+        setupCardEntries: selectSetupCardEntries,
+        importedChatMarkerMessages: selectImportedChatMarkerMessages,
+      }),
+    ],
+    ({
+      setupCardRows,
+      shownActiveTurn,
+      live,
+      activeRunState,
+      activeTurnId,
+      activeTurnStartedAt,
+      activeTurnMetaInput,
+      displayContext,
+      turnPauseAccounting,
+      shownPersisted,
+      shownPending,
+      settledOrder,
+      setupCardEntries,
+      importedChatMarkerMessages,
+    }) => {
+      // Pre-turn window: the host reports `running`/`stopping` (a send was
+      // accepted) but no assistant row exists yet - provider-session/worktree
+      // setup runs before the turn materializes. Synthesize a pending-assistant
+      // row so the response area shows "Working…" immediately. It shares the live
+      // row's key, so when the real turn arrives it swaps in place (no flicker).
+      // `pending` (the optimistic user messages, timestamped `Date.now()`) is
+      // included so the indicator's `createdAt` floor sits above them and the row
+      // sorts BELOW the just-sent message instead of jumping above it.
+      // Suppress the pre-turn "Working…" indicator only while the LIVE setup
+      // lifecycle is in flight: the open (current) window has a workspace still
+      // `setting-up`, so the card itself stands in for the awaited turn. Two
+      // guards matter:
+      //  - `row.isActive` (NOT the row state): a window closed by a boundary
+      //    (`worktree.missing` / re-bind) can be stranded at `setting-up` when the
+      //    worktree vanished mid-setup, and that historical card must never gate a
+      //    later normal turn.
+      //  - per-workspace `setting-up` (NOT the rolled-up `aggregate.state`): the
+      //    rollup ranks `failed` above `setting-up`, so a multi-repo window with
+      //    one failed + one still-running repo rolls up to `failed`; keying off the
+      //    aggregate would wrongly un-suppress the indicator while a repo is still
+      //    in flight (a stray "Working…" beside the live card).
+      const setupGating = setupCardRows.some(
+        (row) =>
+          row.isActive &&
+          row.model.workspaces.some(
+            (workspace) =>
+              workspace.state === "creating" ||
+              workspace.state === "setting-up",
+          ),
+      );
+      const hasLiveIndicator = [...shownActiveTurn, ...live].some(
+        (message) => message.role === "assistant" && message.runState !== null,
+      );
+      const trailing =
+        setupGating || activeRunState === null || hasLiveIndicator
+          ? NO_RENDERED_MESSAGES
+          : renderPendingRunIndicator({
+              activeRunState,
+              activeTurnId,
+              activeTurnStartedAt,
+              activeTurnMeta: pendingTurnMeta(
+                activeTurnMetaInput,
+                displayContext,
+              ),
+              turnPauseAccounting,
+              rendered: [
+                ...shownPersisted,
+                ...shownActiveTurn,
+                ...shownPending,
+                ...live,
+              ],
+            });
+
+      // Ranks preserve the former stable sort's assembly order on ties:
+      // persisted, active, pending, live, event rows, trailing indicator.
+      const changingOrder = [
+        ...rankMessages(shownActiveTurn, 1),
+        ...rankMessages(live, 3),
+        ...rankMessages(trailing, 9),
+      ].sort(compareRankedMessages);
+      const baseRows = mergeRankedMessages(settledOrder, changingOrder);
+      if (setupCardEntries.length === 0) {
+        return pinImportedChatMarkers(importedChatMarkerMessages, baseRows);
+      }
+
+      // Only the initial worktree of an unforked chat pins above its history.
+      // A fork's own setup belongs after the inherited conversation; the shared
+      // whole-log partition supplies that decision even for a cold range.
+      const pinGenesisCard = setupCardEntries[0].isGenesisPin;
+
+      // Every OTHER (mid-chat) setup card anchors DIRECTLY above the user message
+      // whose send created it - by message id (`anchorId`), NOT `createdAt`. The
+      // card is broadcast before the slow `git worktree add` while its message
+      // persists only AFTER the add, so a timestamp sort would drop the card below
+      // the message and then jump it above once the persisted message lands.
+      // Anchoring by id keeps the card pinned immediately above its message across
+      // the optimistic-echo -> persisted-message swap (both share the id).
+      const baseIds = new Set(baseRows.map((message) => message.id));
+      const cardsByAnchor = new Map<string, ChatMessageModel[]>();
+      const floatingCards: ChatMessageModel[] = [];
+      setupCardEntries.forEach((entry, index) => {
+        if (pinGenesisCard && index === 0) return;
+        // Anchor only when the triggering message is an actual transcript row. It
+        // is NOT for: a send still QUEUED behind an active turn (rendered as a
+        // queue item, not a row), a STEERED send (nested inside its turn), or a
+        // message later BRANCHED/DELETED away. Those fall back to a `createdAt`
+        // float so the card still renders - near the tail for a fresh creation,
+        // chronologically for a historical one - rather than vanishing, and it
+        // re-anchors on its own once/if the message becomes a transcript row.
+        if (entry.anchorId !== null && baseIds.has(entry.anchorId)) {
+          const list = cardsByAnchor.get(entry.anchorId);
+          if (list === undefined) {
+            cardsByAnchor.set(entry.anchorId, [entry.message]);
+          } else {
+            list.push(entry.message);
+          }
+        } else {
+          floatingCards.push(entry.message);
+        }
+      });
+
+      // Floating cards followed every base row in the original stable sort.
+      const sorted = mergeRankedMessages(
+        rankMessages(baseRows, 0),
+        rankMessages(floatingCards, 1).sort(compareRankedMessages),
+      );
+
+      // Weave each anchored card in immediately above its message. A push loop
+      // (not flatMap) avoids allocating a wrapper array per transcript row.
+      let woven: ReadonlyArray<ChatMessageModel> = sorted;
+      if (cardsByAnchor.size > 0) {
+        const interleaved: ChatMessageModel[] = [];
+        for (const message of sorted) {
+          const anchored = cardsByAnchor.get(message.id);
+          if (anchored !== undefined) interleaved.push(...anchored);
+          interleaved.push(message);
+        }
+        woven = interleaved;
+      }
       return pinImportedChatMarkers(
         importedChatMarkerMessages,
-        baseRows.sort(compareCanonicalRowOrder),
+        pinGenesisCard ? [setupCardEntries[0].message, ...woven] : woven,
       );
-    }
-
-    // Only the initial worktree of an unforked chat pins above its history.
-    // A fork's own setup belongs after the inherited conversation; the shared
-    // whole-log partition supplies that decision even for a cold range.
-    const pinGenesisCard = setupCardEntries[0].isGenesisPin;
-
-    // Every OTHER (mid-chat) setup card anchors DIRECTLY above the user message
-    // whose send created it - by message id (`anchorId`), NOT `createdAt`. The
-    // card is broadcast before the slow `git worktree add` while its message
-    // persists only AFTER the add, so a timestamp sort would drop the card below
-    // the message and then jump it above once the persisted message lands.
-    // Anchoring by id keeps the card pinned immediately above its message across
-    // the optimistic-echo -> persisted-message swap (both share the id).
-    const baseIds = new Set(baseRows.map((message) => message.id));
-    const cardsByAnchor = new Map<string, ChatMessageModel[]>();
-    const floatingCards: ChatMessageModel[] = [];
-    setupCardEntries.forEach((entry, index) => {
-      if (pinGenesisCard && index === 0) return;
-      // Anchor only when the triggering message is an actual transcript row. It
-      // is NOT for: a send still QUEUED behind an active turn (rendered as a
-      // queue item, not a row), a STEERED send (nested inside its turn), or a
-      // message later BRANCHED/DELETED away. Those fall back to a `createdAt`
-      // float so the card still renders - near the tail for a fresh creation,
-      // chronologically for a historical one - rather than vanishing, and it
-      // re-anchors on its own once/if the message becomes a transcript row.
-      if (entry.anchorId !== null && baseIds.has(entry.anchorId)) {
-        const list = cardsByAnchor.get(entry.anchorId);
-        if (list === undefined) {
-          cardsByAnchor.set(entry.anchorId, [entry.message]);
-        } else {
-          list.push(entry.message);
-        }
-      } else {
-        floatingCards.push(entry.message);
-      }
-    });
-
-    const sorted = [...baseRows, ...floatingCards].sort(
-      compareCanonicalRowOrder,
-    );
-
-    // Weave each anchored card in immediately above its message. A push loop
-    // (not flatMap) avoids allocating a wrapper array per transcript row.
-    let woven: ReadonlyArray<ChatMessageModel> = sorted;
-    if (cardsByAnchor.size > 0) {
-      const interleaved: ChatMessageModel[] = [];
-      for (const message of sorted) {
-        const anchored = cardsByAnchor.get(message.id);
-        if (anchored !== undefined) interleaved.push(...anchored);
-        interleaved.push(message);
-      }
-      woven = interleaved;
-    }
-    return pinImportedChatMarkers(
-      importedChatMarkerMessages,
-      pinGenesisCard ? [setupCardEntries[0].message, ...woven] : woven,
-    );
-  }, [
-    persisted,
-    activeTurn,
-    pending,
-    live,
-    stoppedWithoutAssistantRecords,
-    forkedChatLinkMessages,
-    importedChatMarkerMessages,
-    notificationAnchorMessages,
-    autoJudgeUnattendedDenialMessages,
-    autoJudgeNoticeMessages,
-    setupCardRows,
-    setupCardEntries,
-    queuedPromptMessageIds,
-    withdrawnMessageId,
-    activeRunState,
-    activeTurnId,
-    activeTurnStartedAt,
-    activeTurnMetaInput,
-    turnPauseAccounting,
-    displayContext,
-  ]);
+    },
+    { memoize: lruMemoize, argsMemoize: lruMemoize },
+  );
+  let previousContext: RenderedMessagesDisplayContext | null = null;
   // A memo of its own, off the one above: `chatWorking` flips with every
   // background edge and must not rebuild the row list to restamp one row.
-  const chatWorking = input.chatWorking ?? false;
-  return useMemo(
-    () => withOwedAutonomousResume(rows, chatWorking),
-    [rows, chatWorking],
-  );
+  let owedFrom: ReadonlyArray<ChatMessageModel> | null = null;
+  let owedResult: ReadonlyArray<ChatMessageModel> | null = null;
+  return (input, context) => {
+    if (previousContext !== context) {
+      cache.users = new WeakMap();
+      cache.turns.clear();
+      previousContext = context;
+    }
+    const rows = selectRows(input, context);
+    // The restamp is a pure function of `rows` while the chat is working, so
+    // the same rows hand back the same restamped array.
+    if (
+      owedResult !== null &&
+      owedFrom === rows &&
+      input.chatWorking === true
+    ) {
+      return owedResult;
+    }
+    const stamped = withOwedAutonomousResume(rows, input.chatWorking ?? false);
+    if (stamped !== rows) {
+      owedFrom = rows;
+      owedResult = stamped;
+    }
+    return stamped;
+  };
 }
 
 /**
@@ -1725,6 +2014,42 @@ function withOwedAutonomousResume(
     return rows;
   }
   return [...rows.slice(0, -1), { ...last, autonomousResumeOwed: true }];
+}
+
+interface RankedMessage {
+  readonly message: ChatMessageModel;
+  readonly rank: number;
+}
+
+function rankMessages(
+  messages: readonly ChatMessageModel[],
+  rank: number,
+): RankedMessage[] {
+  return messages.map((message) => ({ message, rank }));
+}
+
+function compareRankedMessages(a: RankedMessage, b: RankedMessage): number {
+  return compareCanonicalRowOrder(a.message, b.message) || a.rank - b.rank;
+}
+
+// ponytail: flat output still copies O(history); separate live-row subscriptions can remove this merge.
+function mergeRankedMessages(
+  settled: readonly RankedMessage[],
+  changing: readonly RankedMessage[],
+): readonly ChatMessageModel[] {
+  const merged: ChatMessageModel[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < settled.length && j < changing.length) {
+    if (compareRankedMessages(settled[i], changing[j]) <= 0) {
+      merged.push(settled[i++].message);
+    } else {
+      merged.push(changing[j++].message);
+    }
+  }
+  while (i < settled.length) merged.push(settled[i++].message);
+  while (j < changing.length) merged.push(changing[j++].message);
+  return merged;
 }
 
 /**
@@ -2130,6 +2455,7 @@ function pendingTurnMeta(
   };
   const display = ctx.resolveAgentSenderDisplay(sender);
   return {
+    sender,
     provider: turn.harnessId,
     providerLabel: display.providerLabel,
     profileLabel: turn.profileLabel,
@@ -2193,14 +2519,14 @@ interface AssistantTurnAccumulator {
    * not just the first record's last delta.
    */
   timestamp: number;
-  blocks: OpenContentBlock[];
+  blocks: ReadonlyArray<OpenContentBlock>;
   /**
-   * False while `blocks` still ALIASES a contributing record's own array.
+   * Null while `blocks` still ALIASES a contributing record's own array.
    * Every mutation goes through `ownedTurnBlocks` first, so the common
    * single-record turn never pays an array copy on a render pass - which it
    * used to, once per turn, making each pass O(blocks in the transcript).
    */
-  blocksOwned: boolean;
+  ownedBlocks: OpenContentBlock[] | null;
   /**
    * One signature fragment per contributing record (plus one for appended
    * live blocks). Each fragment is derived per record and memoized on that
@@ -2234,6 +2560,7 @@ interface AssistantTurnAccumulator {
 }
 
 interface PersistedMessagesRenderInput {
+  readonly cache: RenderedMessageCache;
   /** Records whose rows this call emits (one head/tail partition). */
   readonly messages: ReadonlyArray<OpenMessage>;
   /**
@@ -2299,8 +2626,8 @@ interface RenderLiveAssistantInput {
 function renderPersistedMessages(
   input: PersistedMessagesRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
-  const userCache = userCacheForContext(input.ctx);
-  const turnCache = assistantTurnCacheForContext(input.ctx);
+  const userCache = input.cache.users;
+  const turnCache = input.cache.turns;
   const turnAccumulator = new Map<string, AssistantTurnAccumulator>();
   for (const message of input.messages) {
     if (message.role !== "assistant") continue;
@@ -2352,7 +2679,7 @@ function renderPersistedMessages(
     );
   }
   if (input.sweepRetainedTurnKeys !== null) {
-    sweepAssistantTurnCache(input.ctx, input.sweepRetainedTurnKeys);
+    sweepAssistantTurnCache(input.cache.turns, input.sweepRetainedTurnKeys);
   }
   return out;
 }
@@ -2365,10 +2692,9 @@ function renderPersistedMessages(
  * seen, for the tile's whole lifetime.
  */
 function sweepAssistantTurnCache(
-  ctx: RenderedMessagesDisplayContext,
+  turnCache: Map<string, AssistantTurnCacheEntry>,
   retainTurnKeys: ReadonlySet<string>,
 ): void {
-  const turnCache = assistantTurnCacheForContext(ctx);
   for (const key of turnCache.keys()) {
     if (!retainTurnKeys.has(key)) turnCache.delete(key);
   }
@@ -2386,18 +2712,17 @@ function activeTurnSteeredIdsContentKey(
   activeTurnRecords: ReadonlyArray<OpenMessage>,
   liveAssistant: LiveAssistantMessage | null,
 ): string {
-  const ids = [
-    ...activeTurnRecords.flatMap((message) =>
-      message.role === "assistant" ? message.blocks : [],
-    ),
-    ...(liveAssistant === null ? [] : liveAssistant.blocks),
-  ]
-    .filter(
-      (block): block is Extract<OpenContentBlock, { type: "steer" }> =>
-        block.type === "steer",
-    )
-    .map((block) => block.messageId);
-  return [...new Set(ids)].sort().join("\n");
+  const ids = new Set<string>();
+  const collect = (blocks: ReadonlyArray<OpenContentBlock>): void => {
+    for (const block of blocks) {
+      if (block.type === "steer") ids.add(block.messageId);
+    }
+  };
+  for (const message of activeTurnRecords) {
+    if (message.role === "assistant") collect(message.blocks);
+  }
+  if (liveAssistant !== null) collect(liveAssistant.blocks);
+  return [...ids].sort().join("\n");
 }
 
 function userMessagesByIdFromMessages(
@@ -2837,7 +3162,7 @@ function addAssistantMessageToAccumulator(
     timestamp: message.timestamp,
     // Alias, not a copy - `ownedTurnBlocks` clones on the first mutation.
     blocks: message.blocks,
-    blocksOwned: false,
+    ownedBlocks: null,
     signatureParts: [assistantRecordSignature(message)],
     profileLabel,
     reasoningEffort: message.reasoningEffort,
@@ -2942,10 +3267,11 @@ function addLiveAssistantImageProjection(
  * only because every mutation site routes through here.
  */
 function ownedTurnBlocks(acc: AssistantTurnAccumulator): OpenContentBlock[] {
-  if (acc.blocksOwned) return acc.blocks;
-  acc.blocks = [...acc.blocks];
-  acc.blocksOwned = true;
-  return acc.blocks;
+  if (acc.ownedBlocks !== null) return acc.ownedBlocks;
+  const blocks = [...acc.blocks];
+  acc.blocks = blocks;
+  acc.ownedBlocks = blocks;
+  return blocks;
 }
 
 /**
@@ -3121,23 +3447,23 @@ function resolveResumeDeliveryPlacements(
   blocks: ReadonlyArray<OpenContentBlock>,
 ): ReadonlyArray<OpenContentBlock> {
   let hasAssistantWork = false;
-  return blocks.map((block) => {
+  let resolved: OpenContentBlock[] | null = null;
+  for (const [index, block] of blocks.entries()) {
     if (block.type === "autonomous_resume") {
-      const placement = block.deliveryPlacement ?? null;
-      if (placement !== null) return block;
-      return {
+      if ((block.deliveryPlacement ?? null) !== null) continue;
+      resolved ??= [...blocks];
+      resolved[index] = {
         ...block,
         deliveryPlacement: hasAssistantWork ? "in_turn" : "turn_start",
       };
+      continue;
     }
-    // Use the renderer's existing block vocabulary and visibility rules.
-    // Steer markers map to null; notifications were handled above and do not
-    // constitute assistant work by themselves.
+    // Steers and notifications do not count as assistant work.
     if (!hasAssistantWork && blockToSegment(block) !== null) {
       hasAssistantWork = true;
     }
-    return block;
-  });
+  }
+  return resolved ?? blocks;
 }
 
 /**
@@ -3563,6 +3889,7 @@ function renderAssistantTurnSlice(
 ): ChatMessageModel {
   const agentSender = input.ctx.resolveAgentSenderDisplay(input.acc.sender);
   const assistantMeta: AssistantTurnMeta = {
+    sender: input.acc.sender,
     provider: input.acc.sender.harnessId,
     providerLabel: agentSender.providerLabel,
     profileLabel: input.acc.profileLabel,
@@ -3808,6 +4135,7 @@ function renderSteeredUserMessage(input: {
     completedAt: null,
     stopped: null,
     persistentMessageId: input.persistentMessageId,
+    sender: input.sender,
     senderLabel: input.senderLabel,
     assistantMeta: null,
     statusLabel: null,
@@ -3869,6 +4197,7 @@ function renderUserMessage(
     completedAt: null,
     stopped: null,
     persistentMessageId: message.messageId,
+    sender: message.sender,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     assistantMeta: null,
     statusLabel: null,
@@ -3913,6 +4242,7 @@ function renderPendingUserMessage(
     completedAt: null,
     stopped: null,
     persistentMessageId: null,
+    sender: message.sender,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     assistantMeta: null,
     statusLabel: "Pending",
@@ -3943,10 +4273,9 @@ function renderLiveAssistant(
     sender: liveAssistant.sender,
     startedAt: liveAssistant.startedAt,
     timestamp: liveAssistant.timestamp,
-    // A standalone live row owns its list from the start: it is built fresh
-    // here each pass and never aliases a persisted record.
-    blocks: [...liveAssistant.blocks],
-    blocksOwned: true,
+    // Read-only until an accumulator mutation requests an owned copy.
+    blocks: liveAssistant.blocks,
+    ownedBlocks: null,
     signatureParts: [
       `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
     ],

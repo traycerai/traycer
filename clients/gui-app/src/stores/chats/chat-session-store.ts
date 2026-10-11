@@ -1,3 +1,8 @@
+import { createChatRowStore, type ChatRowSnapshot } from "./chat-row-store";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { SendTimings } from "@traycer/protocol/host/agent/gui/send-timing";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
@@ -105,6 +110,7 @@ import {
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
   hydratedRecords,
+  hydratedMessages,
   holdsActiveTurnAssistantMessage,
   hydratedRowContext,
   isActiveTurnStreamingEcho,
@@ -184,6 +190,9 @@ import {
   worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
+// Runtime import, and cycle-free: `setup-card-rows` reaches
+// `setup-card-segment` only through `import type`, which is erased, and nothing
+// in its graph imports this store back.
 // Runtime import, and cycle-free: `setup-card-rows` reaches
 // `setup-card-segment` only through `import type`, which is erased, and nothing
 // in its graph imports this store back.
@@ -565,7 +574,15 @@ type SendActionInput = {
   readonly frame: ChatOwnerActionFrame;
   readonly pending: PendingChatActionSeed;
   readonly pendingUserMessage: PendingUserMessage | null;
+  readonly beforeSend?: () => void;
 };
+
+export type QueueCancelInput =
+  | string
+  | {
+      readonly queueItemId: string;
+      readonly beforeSend: () => void;
+    };
 
 /**
  * What a send hands back to the composer if it never lands - the pre-submit
@@ -2068,7 +2085,7 @@ export interface ChatSessionState {
    * naming the message, or its ack, confirms it.
    */
   checkSendDelivery: () => void;
-  queueCancel: (queueItemId: string) => string | null;
+  queueCancel: (input: QueueCancelInput) => string | null;
   queueReorder: (
     queueItemId: string,
     beforeQueueItemId: string | null,
@@ -2176,6 +2193,8 @@ export interface ChatSessionState {
    * ({@link ChatSessionState.messageDelivery}): the view restores that one.
    */
   takeSetupFailedRestoration: (messageId: string) => JsonContent | null;
+  /** Same guarded lookup, leaving every retention slot intact. */
+  peekSetupFailedRestoration: (messageId: string) => JsonContent | null;
   /**
    * The withdrawn opening's prompt, for the composer - once, and only when this
    * client is the one to restore it: the view says `withdrawn` with a
@@ -2303,6 +2322,7 @@ export interface ChatSessionStoreHandle {
   readonly chatId: string;
   readonly userId: string | null;
   readonly store: UseBoundStore<StoreApi<ChatSessionState>>;
+  readonly rows: StoreApi<ChatRowSnapshot>;
   readonly deliveredNotices: DeliveredNoticeTracker;
   /**
    * Completed restores already surfaced as toasts. Completion state remains in
@@ -2314,9 +2334,10 @@ export interface ChatSessionStoreHandle {
    * Per-surface visibility report feeding the stream-flush coordinator's
    * tiered flush rate. The same chat can render in several surfaces (split
    * panes, keep-alive tabs); the chat counts as visible when ANY reporting
-   * surface is visible, and defaults to visible while nothing reports so an
-   * unreported store never starves.
+   * surface is visible. A never-reported handle defaults to visible; after
+   * its last surface detaches it stays in the hidden tier until resurfaced.
    */
+  readonly isSurfaceVisible: () => boolean;
   readonly setSurfaceVisibility: (surfaceId: string, visible: boolean) => void;
   readonly clearSurfaceVisibility: (surfaceId: string) => void;
   readonly dispose: () => void;
@@ -3458,6 +3479,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     }
   };
   let unsubscribeSendTimings: (() => void) | null = null;
+  let disposeRows: (() => void) | null = null;
   const notificationUserId = options.userId;
   const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
@@ -3589,13 +3611,15 @@ export function createChatSessionStoreWithNotificationDependencies(
     store.setState({ connectionEpoch });
   };
   const surfaceVisibility = new Map<string, boolean>();
+  let hasSurfaceVisibilityReport = false;
+  let resumeViewportHydration = (): void => {};
+  const isSurfaceVisible = (): boolean =>
+    !hasSurfaceVisibilityReport ||
+    Array.from(surfaceVisibility.values()).some((value) => value);
 
-  const pushSurfaceVisibility = (): void => {
+  const updateFlushVisibility = (): void => {
     if (flushLease === null) return;
-    const visible =
-      surfaceVisibility.size === 0 ||
-      Array.from(surfaceVisibility.values()).some((value) => value);
-    flushLease.setVisible(visible);
+    flushLease.setVisible(isSurfaceVisible() && isDocumentVisible());
   };
 
   // This chat's staging slot, and the question both reconcile passes have to
@@ -3716,6 +3740,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     if (!canSendAction(input.get)) return null;
     const client = streamClient;
     if (client === null) return null;
+    // A failed durable handoff must leave the action unrecorded and unsent.
+    input.beforeSend?.();
     if (input.frame.kind === "send") {
       sendTimings.begin(
         input.frame.messageId,
@@ -4206,13 +4232,86 @@ export function createChatSessionStoreWithNotificationDependencies(
         // object on a no-op; skip both to keep the result reference stable
         // when nothing changed (zustand then fires no listeners).
         let merged: ChatSessionState = state;
+        let draftMessages: OpenMessage[] | null = null;
+        let messageIndexes: Map<string, number> | null = null;
+        const pending = new Map<
+          string,
+          (message: OpenMessage) => OpenMessage
+        >();
+        const flushMessages = (current: ChatSessionState): ChatSessionState => {
+          let flushed = current;
+          for (const [messageId, update] of pending) {
+            if (!isWindowedTranscript(flushed)) break;
+            const patch = rewriteMessageInPlace(flushed, messageId, update, {
+              charge: "deferred",
+              witnesses: imageWitnesses,
+            });
+            if (patch !== null) flushed = { ...flushed, ...patch };
+          }
+          pending.clear();
+          draftMessages = null;
+          messageIndexes = null;
+          return flushed;
+        };
+        const rewrite: typeof rewriteMessageInPlace = (
+          current,
+          messageId,
+          update,
+          apply,
+        ) => {
+          // Charged writes can evict stale rows and images carry witnesses.
+          // Commit preceding streaming writes before either observes the window.
+          if (apply.charge === "now") {
+            const flushed = flushMessages(current);
+            const patch = rewriteMessageInPlace(
+              flushed,
+              messageId,
+              update,
+              apply,
+            );
+            if (patch === null) return flushed === current ? null : flushed;
+            return { ...flushed, ...patch };
+          }
+          if (messageIndexes === null) {
+            messageIndexes = new Map();
+            for (let index = 0; index < current.messages.length; index += 1) {
+              const messageIdAtIndex = current.messages[index].messageId;
+              if (!messageIndexes.has(messageIdAtIndex)) {
+                messageIndexes.set(messageIdAtIndex, index);
+              }
+            }
+          }
+          const index = messageIndexes.get(messageId);
+          if (index === undefined) return null;
+          if (
+            isWindowedTranscript(current) &&
+            !current.transcriptWindow.records.messages.has(messageId) &&
+            !current.transcriptWindow.liveMessages.some(
+              (message) => message.messageId === messageId,
+            )
+          ) {
+            return rewriteMessageInPlace(current, messageId, update, apply);
+          }
+          draftMessages ??= current.messages.slice();
+          draftMessages[index] = update(current.messages[index]);
+          // The active-row reducer replaces blocks with its complete accumulated
+          // content. Retain only that final rewrite, not every growing prefix.
+          pending.set(messageId, update);
+          return { messages: draftMessages };
+        };
         for (const event of batch) {
-          const partial = applyBlockDelta(merged, event, imageWitnesses);
+          const partial = applyBlockDelta(
+            merged,
+            event,
+            imageWitnesses,
+            rewrite,
+          );
           if (partial === merged || Object.keys(partial).length === 0) {
             continue;
           }
           merged = { ...merged, ...partial };
         }
+        merged = flushMessages(merged);
         const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
           merged.pendingActions,
           merged.messages,
@@ -4293,6 +4392,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       hasPending: () => bufferedDeltas.length > 0,
     });
     flushLease = lease;
+    updateFlushVisibility();
+    const unsubscribeDocumentVisibility = subscribeDocumentVisibility(
+      updateFlushVisibility,
+    );
 
     const clearBufferedDeltas = (): void => {
       bufferedDeltas = [];
@@ -5619,6 +5722,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     const requestPlannedHydration = (): void => {
+      if (disposed || !windowedLine) return;
       const client = streamClient;
       if (client === null) return;
       const state = get();
@@ -5633,18 +5737,20 @@ export function createChatSessionStoreWithNotificationDependencies(
       }
       const next = planTranscriptHydration(
         transcriptWindow,
-        visibleTranscriptRange,
+        // Keep the reading range for reveal; tail and required rows still plan.
+        isSurfaceVisible() ? visibleTranscriptRange : null,
         requiredHydrationOrdinalsOf(state),
       );
       if (next === null) return;
       const inFlight = inFlightHydrationRequest;
-      if (
-        inFlight !== null &&
-        inFlight.epoch === transcriptWindow.epoch &&
-        inFlight.range.fromOrdinal === next.fromOrdinal &&
-        inFlight.range.toOrdinal === next.toOrdinal
-      ) {
-        return;
+      if (isSameHydrationRequest(next)) return;
+      function isSameHydrationRequest(range: OrdinalRange): boolean {
+        return (
+          inFlight !== null &&
+          inFlight.epoch === transcriptWindow.epoch &&
+          inFlight.range.fromOrdinal === range.fromOrdinal &&
+          inFlight.range.toOrdinal === range.toOrdinal
+        );
       }
       const requestId = uuidv4();
       // Clears the previous request's timeout as well as its slot: replanning
@@ -5769,6 +5875,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
       }
     };
+
+    resumeViewportHydration = requestPlannedHydration;
 
     /**
      * Record that a delta invalidated bodies a range request is still waiting
@@ -10029,6 +10137,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // construct), `dispose()` is never reachable, so release the lease here -
       // otherwise the coordinator keeps invoking this store's flush/hasPending
       // callbacks for the lifetime of the process.
+      unsubscribeDocumentVisibility();
       lease.unregister();
       // The budget holder is attached before the factory runs, and the same
       // reasoning applies to it: no handle is returned, so `dispose()` - which
@@ -11200,7 +11309,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
       },
-      queueCancel: (queueItemId) => {
+      queueCancel: (input) => {
+        const queueItemId =
+          typeof input === "string" ? input : input.queueItemId;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "queueCancel",
@@ -11241,6 +11352,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             queueItemId,
           },
           pendingUserMessage: null,
+          beforeSend: typeof input === "string" ? undefined : input.beforeSend,
         });
         // Only for a cancel that actually reached the wire: a frame that never
         // left has no ack coming, so an entry recorded here would never be
@@ -11723,47 +11835,18 @@ export function createChatSessionStoreWithNotificationDependencies(
           };
         });
       },
+      peekSetupFailedRestoration: (messageId) =>
+        findSetupFailedRestoration(get(), messageId)?.restored ?? null,
       takeSetupFailedRestoration: (messageId) => {
         const state = get();
-        // The host's delivery view is this message's one restorer (see
-        // `ChatSessionState.messageDelivery`). The `setup.cancelled` a
-        // withdrawal emits names the same message, and it lands while the
-        // view still says pending.
-        if (messageDeliveryNames(state.messageDelivery, messageId)) {
-          return null;
-        }
-        // STILL QUEUED means there is nothing to restore. Restoring pulls the
-        // prompt into the composer and drops its optimistic echo, which is
-        // right when the send was REJECTED - the message then exists nowhere
-        // else - and wrong for a row the host is holding for Retry + resume:
-        // the user would be looking at the prompt in the composer AND in the
-        // queue, and could run it twice.
-        //
-        // The guard is on the predicate "the message is still queued" rather
-        // than on the async-create path, so it also covers today's queued
-        // per-message intent that fails at dequeue and stays paused. A rejected
-        // send never entered the queue, so its `setup.failed` still restores.
-        const stillQueued = state.queue.items.some(
-          (item) => item.kind === "prompt" && item.messageId === messageId,
-        );
-        if (stillQueued) return null;
-        const pendingUserMatch = state.pendingUserMessages.find(
-          (message) => message.messageId === messageId,
-        );
-        const pendingActionMatch = findRestorableSendByMessageId(
-          Object.values(state.pendingActions),
-          messageId,
-        );
-        const acceptedActionMatch = findRestorableSendByMessageId(
-          Object.values(state.acceptedActions),
-          messageId,
-        );
-        const restored =
-          pendingUserMatch?.content ??
-          pendingActionMatch?.content ??
-          acceptedActionMatch?.content ??
-          null;
-        if (restored === null) return null;
+        const restoration = findSetupFailedRestoration(state, messageId);
+        if (restoration === null) return null;
+        const {
+          restored,
+          pendingUserMatch,
+          pendingActionMatch,
+          acceptedActionMatch,
+        } = restoration;
         // Clear every restorable slot in lockstep so a duplicate
         // `setup.failed` event cannot double-restore. The action records
         // themselves stay in place - only their `restore` slot is
@@ -11863,6 +11946,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       dispose: () => {
         if (disposed) return;
         unsubscribeSendTimings?.();
+        disposeRows?.();
         sendTimings.clear();
         // BEFORE `disposed = true` and before the store leaves
         // `liveChatSessionStores`, because abandonment has to actually land:
@@ -11904,6 +11988,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         disposed = true;
         liveChatSessionStores.delete(store);
         unsubscribeLiveCompletionAcknowledgements();
+        unsubscribeDocumentVisibility();
         lease.unregister();
         clearBufferedDeltas();
         clearInFlightHydration();
@@ -12048,6 +12133,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     }
   });
 
+  const rows = createChatRowStore(store);
+  disposeRows = rows.dispose;
   liveChatSessionStores.add(store);
 
   return {
@@ -12055,6 +12142,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     chatId: options.chatId,
     userId: options.userId,
     store,
+    rows: rows.store,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),
       retainedClientActionIds: ownedStateAccount.createPrivateStringSet(
@@ -12070,14 +12158,18 @@ export function createChatSessionStoreWithNotificationDependencies(
       "deliveredRestoreCompletionKeys",
       settlePrivateStringSetCharge,
     ),
+    isSurfaceVisible,
     setSurfaceVisibility: (surfaceId, visible) => {
       if (surfaceVisibility.get(surfaceId) === visible) return;
+      const wasVisible = isSurfaceVisible();
       surfaceVisibility.set(surfaceId, visible);
-      pushSurfaceVisibility();
+      hasSurfaceVisibilityReport = true;
+      updateFlushVisibility();
+      if (!wasVisible && isSurfaceVisible()) resumeViewportHydration();
     },
     clearSurfaceVisibility: (surfaceId) => {
       if (!surfaceVisibility.delete(surfaceId)) return;
-      pushSurfaceVisibility();
+      updateFlushVisibility();
     },
     dispose: () => store.getState().dispose(),
   };
@@ -13768,6 +13860,57 @@ function forgetRefusedContentBlobAcks(
   invalidateDraftBlobConfirmations(hostId, blobHashesFromContent(content));
 }
 
+function findSetupFailedRestoration(
+  state: ChatSessionState,
+  messageId: string,
+) {
+  // The host's delivery view is this message's one restorer (see
+  // `ChatSessionState.messageDelivery`). The `setup.cancelled` a
+  // withdrawal emits names the same message, and it lands while the
+  // view still says pending.
+  if (messageDeliveryNames(state.messageDelivery, messageId)) {
+    return null;
+  }
+  // STILL QUEUED means there is nothing to restore. Restoring pulls the
+  // prompt into the composer and drops its optimistic echo, which is
+  // right when the send was REJECTED - the message then exists nowhere
+  // else - and wrong for a row the host is holding for Retry + resume:
+  // the user would be looking at the prompt in the composer AND in the
+  // queue, and could run it twice.
+  //
+  // The guard is on the predicate "the message is still queued" rather
+  // than on the async-create path, so it also covers today's queued
+  // per-message intent that fails at dequeue and stays paused. A rejected
+  // send never entered the queue, so its `setup.failed` still restores.
+  const stillQueued = state.queue.items.some(
+    (item) => item.kind === "prompt" && item.messageId === messageId,
+  );
+  if (stillQueued) return null;
+  const pendingUserMatch = state.pendingUserMessages.find(
+    (message) => message.messageId === messageId,
+  );
+  const pendingActionMatch = findRestorableSendByMessageId(
+    Object.values(state.pendingActions),
+    messageId,
+  );
+  const acceptedActionMatch = findRestorableSendByMessageId(
+    Object.values(state.acceptedActions),
+    messageId,
+  );
+  const restored =
+    pendingUserMatch?.content ??
+    pendingActionMatch?.content ??
+    acceptedActionMatch?.content ??
+    null;
+  if (restored === null) return null;
+  return {
+    restored,
+    pendingUserMatch,
+    pendingActionMatch,
+    acceptedActionMatch,
+  };
+}
+
 /**
  * Resolves the restorable `send` record for a `messageId` across either
  * the `pendingActions` or `acceptedActions` map. Returns the matched
@@ -13984,16 +14127,18 @@ function applyBlockDelta(
   state: ChatSessionState,
   event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
+  rewrite: typeof rewriteMessageInPlace,
 ): Partial<ChatSessionState> {
   return event.type === "image_resolution.updated"
-    ? applyImageResolutionDelta(state, event, witnesses)
-    : applyContentDelta(state, event, witnesses);
+    ? applyImageResolutionDelta(state, event, witnesses, rewrite)
+    : applyContentDelta(state, event, witnesses, rewrite);
 }
 
 function applyImageResolutionDelta(
   state: ChatSessionState,
   event: Extract<OpenRuntimeEvent, { type: "image_resolution.updated" }>,
   witnesses: ImageWitnessStore | null,
+  rewrite: typeof rewriteMessageInPlace,
 ): Partial<ChatSessionState> {
   // Recorded FIRST, and unconditionally: the witness is evidence about the
   // source's write stream, not about the client's holdings, so an unheld or
@@ -14061,7 +14206,7 @@ function applyImageResolutionDelta(
   // decided this event belongs to a persisted row rather than the live one, so
   // falling back would re-run that decision with a worse answer.
   const patch =
-    rewriteMessageInPlace(
+    rewrite(
       state,
       message.messageId,
       (target) =>
@@ -14091,6 +14236,7 @@ function applyContentDelta(
   state: ChatSessionState,
   event: Exclude<OpenRuntimeEvent, { type: "image_resolution.updated" }>,
   witnesses: ImageWitnessStore | null,
+  rewrite: typeof rewriteMessageInPlace,
 ): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
   // "% context left" composer chip can update during the turn. It must
@@ -14111,9 +14257,9 @@ function applyContentDelta(
   // new turn until its first usage.updated arrives). Always full reset.
   if (event.type === "turn.started") {
     if (state.liveTurnUsage === null) {
-      return applyContentBlockDelta(state, event, witnesses);
+      return applyContentBlockDelta(state, event, witnesses, rewrite);
     }
-    const partial = applyContentBlockDelta(state, event, witnesses);
+    const partial = applyContentBlockDelta(state, event, witnesses, rewrite);
     return { ...partial, liveTurnUsage: null };
   }
   // `turn.completed` / `turn.stopped` / `turn.interrupted` / `error`:
@@ -14132,7 +14278,7 @@ function applyContentDelta(
     event.type === "turn.interrupted" ||
     event.type === "error"
   ) {
-    const partial = applyContentBlockDelta(state, event, witnesses);
+    const partial = applyContentBlockDelta(state, event, witnesses, rewrite);
     const finalUsage =
       event.type === "turn.completed" && event.usage !== undefined
         ? event.usage
@@ -14141,7 +14287,7 @@ function applyContentDelta(
       ? partial
       : { ...partial, liveTurnUsage: finalUsage };
   }
-  return applyContentBlockDelta(state, event, witnesses);
+  return applyContentBlockDelta(state, event, witnesses, rewrite);
 }
 
 // The block id whose OWNING message a detached backgrounded-subagent event
@@ -14503,7 +14649,7 @@ function rewriteMessageInPlace(
     // `messages` only: republishing `events` from the same fold would hand
     // every event consumer a new array identity for a change that touched no
     // event.
-    messages: hydratedRecords(applied.window).messages,
+    messages: hydratedMessages(applied.window),
   };
 }
 
@@ -14910,12 +15056,19 @@ function assistantMessageOwnsBlock(
 // split-time position semantics (mirrors the host's carryover writer and the
 // detached writer). Returns null when the event is not a carryover (caller
 // falls through to active-row routing).
-function applySteerSplitCarryoverEvent(
-  state: ChatSessionState,
-  assistantIndex: number,
-  event: OpenRuntimeEvent,
-  witnesses: ImageWitnessStore | null,
-): Partial<ChatSessionState> | null {
+function applySteerSplitCarryoverEvent({
+  state,
+  assistantIndex,
+  event,
+  witnesses,
+  rewrite,
+}: {
+  state: ChatSessionState;
+  assistantIndex: number;
+  event: OpenRuntimeEvent;
+  witnesses: ImageWitnessStore | null;
+  rewrite: typeof rewriteMessageInPlace;
+}): Partial<ChatSessionState> | null {
   if (assistantIndex < 0) return null;
   const active = state.messages[assistantIndex];
   if (active.role !== "assistant" || !("blockId" in event)) return null;
@@ -14939,7 +15092,7 @@ function applySteerSplitCarryoverEvent(
   // row - which is the duplicate-card outcome this function exists to prevent.
   // A sibling we found but cannot write to is still a carryover.
   return (
-    rewriteMessageInPlace(
+    rewrite(
       state,
       sibling.messageId,
       (target) =>
@@ -14992,12 +15145,19 @@ function earlierSameTurnRowOwningEventBlock(
 // its card (its spawning turn already ended), so the card keeps updating instead
 // of being dropped (no active turn) or mis-applied to a later turn's row. Returns
 // null when no message owns the block (caller falls back to active-turn routing).
-function applyEventToOwningMessage(
-  state: ChatSessionState,
-  event: OpenRuntimeEvent,
-  ownerBlockId: string,
-  witnesses: ImageWitnessStore | null,
-): Partial<ChatSessionState> | null {
+function applyEventToOwningMessage({
+  state,
+  event,
+  ownerBlockId,
+  witnesses,
+  rewrite,
+}: {
+  state: ChatSessionState;
+  event: OpenRuntimeEvent;
+  ownerBlockId: string;
+  witnesses: ImageWitnessStore | null;
+  rewrite: typeof rewriteMessageInPlace;
+}): Partial<ChatSessionState> | null {
   const index = state.messages.findIndex((message) =>
     assistantMessageOwnsBlock(message, ownerBlockId),
   );
@@ -15010,7 +15170,7 @@ function applyEventToOwningMessage(
   );
   if (content.blocks === target.blocks) return {};
   return (
-    rewriteMessageInPlace(
+    rewrite(
       state,
       target.messageId,
       (message) =>
@@ -15048,8 +15208,9 @@ function applyContentBlockDelta(
   state: ChatSessionState,
   event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
+  rewrite: typeof rewriteMessageInPlace,
 ): Partial<ChatSessionState> {
-  const applied = reduceContentBlockDelta(state, event, witnesses);
+  const applied = reduceContentBlockDelta(state, event, witnesses, rewrite);
   if (applied === state) return applied;
   if (
     event.type === "text.delta" &&
@@ -15083,6 +15244,7 @@ function reduceContentBlockDelta(
   state: ChatSessionState,
   event: OpenRuntimeEvent,
   witnesses: ImageWitnessStore | null,
+  rewrite: typeof rewriteMessageInPlace,
 ): Partial<ChatSessionState> {
   const assistantIndex = findAssistantMessageIndex(
     state.messages,
@@ -15097,12 +15259,13 @@ function reduceContentBlockDelta(
     detachedTarget !== null &&
     !activeTurnOwnsBlock(state, assistantIndex, detachedTarget.ownerBlockId)
   ) {
-    const routed = applyEventToOwningMessage(
+    const routed = applyEventToOwningMessage({
       state,
       event,
-      detachedTarget.ownerBlockId,
+      ownerBlockId: detachedTarget.ownerBlockId,
       witnesses,
-    );
+      rewrite,
+    });
     if (routed !== null) return routed;
     // A detached event whose owning message is gone must NOT fall through to
     // the active turn: the accumulator would append its terminal as a duplicate
@@ -15150,12 +15313,13 @@ function reduceContentBlockDelta(
   // block's later events - deltas, completion - to the row that owns it, so
   // the block completes in place above the steer bubble instead of
   // re-materializing as a duplicate in the continuation row.
-  const carryoverRouted = applySteerSplitCarryoverEvent(
+  const carryoverRouted = applySteerSplitCarryoverEvent({
     state,
     assistantIndex,
     event,
     witnesses,
-  );
+    rewrite,
+  });
   if (carryoverRouted !== null) return carryoverRouted;
   if (assistantIndex >= 0) {
     const target = state.messages[assistantIndex];
@@ -15181,7 +15345,7 @@ function reduceContentBlockDelta(
       event,
     );
     if (content.blocks === target.blocks) return state;
-    const streamed = rewriteMessageInPlace(
+    const streamed = rewrite(
       state,
       target.messageId,
       (message) =>

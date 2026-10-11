@@ -64,7 +64,7 @@ interface SplitNodeViewProps {
   ) => void;
 }
 
-const SplitNodeView = memo(function SplitNodeView(props: SplitNodeViewProps) {
+const SplitNodeView = memo(function SplitNode(props: SplitNodeViewProps) {
   const { node, sizesByGroupId, PaneComponent, onResizeGroup } = props;
   if (node.kind === "pane") {
     return <PaneComponent pane={node} />;

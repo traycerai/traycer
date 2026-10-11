@@ -73,6 +73,39 @@ function callbackBody(source: string, declaration: string): string {
   return source.slice(start, start + end);
 }
 
+/**
+ * From a `{` at or after `fromIndex`, the balanced brace-delimited body
+ * (including the braces themselves).
+ *
+ * Used for plain function declarations, which have no dependency array to
+ * anchor on the way a `useCallback` does.
+ */
+function braceBody(source: string, fromIndex: number): string {
+  const braceStart = source.indexOf("{", fromIndex);
+  expect(braceStart, "no opening brace found").toBeGreaterThan(-1);
+  let depth = 0;
+  let end = -1;
+  for (let i = braceStart; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  expect(end, "unbalanced braces").toBeGreaterThan(-1);
+  return source.slice(braceStart, end + 1);
+}
+
+/** The body of a top-level `function` declaration, brace-matched. */
+function functionBody(source: string, declaration: string): string {
+  const start = source.indexOf(declaration);
+  expect(start, `"${declaration}" not found`).toBeGreaterThan(-1);
+  return braceBody(source, start);
+}
+
 /** The body of `endGesture`, from its declaration to its dependency array. */
 function endGestureBody(source: string): string {
   return callbackBody(source, "const endGesture = useCallback(");
@@ -121,9 +154,59 @@ describe("gesture teardown is centralised", () => {
       dragEndStart,
       cancelStart + cancelBody.length,
     );
-    // detach, reparent, composer attachment, main fall-through, cancel.
-    const calls = lifecycle.split("endGesture();").length - 1;
-    expect(calls).toBe(5);
+    // detach, composer attachment, main fall-through, cancel: four direct
+    // calls. The reparent exit is the fifth, but it no longer calls
+    // `endGesture()` inline - the try/catch/finally around the sidebar commit
+    // moved into the module-local `commitReparentAndEndGesture` so React
+    // Compiler can memoize this callback, and that finally now lives outside
+    // this slice. It is verified structurally below instead of by count here.
+    const directCalls = lifecycle.split("endGesture();").length - 1;
+    expect(directCalls).toBe(4);
+
+    // The reparent branch hands its OWN `endGesture` to the helper BY
+    // REFERENCE rather than calling it: the bare name closing an argument
+    // list (an optional trailing comma and any whitespace/reformatting
+    // between the name and the closing paren) only ever appears at that
+    // hand-off. It does not match "endGesture()" (a call - "(" immediately
+    // follows the name, not whitespace/comma/")") or a dependency array's
+    // "endGesture, hostBinding, ..." (more than one identifier before the
+    // close) or "[endGesture]" (closes on "]", not ")").
+    expect(lifecycle).toContain("commitReparentAndEndGesture(");
+    const handoffs = (lifecycle.match(/endGesture\s*,?\s*\)/g) ?? []).length;
+    expect(
+      handoffs,
+      "reparent exit should pass endGesture by reference to commitReparentAndEndGesture, not call it inline",
+    ).toBe(1);
+
+    // The helper must call that reference exactly once, unconditionally, from
+    // a `finally` - the same guarantee the inline `finally` gave before the
+    // extraction. A `finally` whose only statement is the call proves it runs
+    // whether the sidebar commit resolves, rejects, or throws synchronously.
+    const helperDeclaration = "function commitReparentAndEndGesture(";
+    const helperStart = source.indexOf(helperDeclaration);
+    expect(helperStart, `"${helperDeclaration}" not found`).toBeGreaterThan(-1);
+    const helperBraceStart = source.indexOf("{", helperStart);
+    // Params sit between the declaration and the body's opening brace, so the
+    // signature check reads that header, not the body braceBody returns.
+    const helperHeader = source.slice(helperStart, helperBraceStart);
+    expect(helperHeader).toContain("endGesture: () => void");
+    const helperBody = functionBody(source, helperDeclaration);
+    const helperCalls = helperBody.split("endGesture();").length - 1;
+    expect(
+      helperCalls,
+      "commitReparentAndEndGesture should call endGesture() exactly once",
+    ).toBe(1);
+    // Anchored on "} finally {" (the catch block's close immediately
+    // followed by the keyword), not the bare word - a comment earlier in this
+    // function's try block explains the finally in prose and would otherwise
+    // match first.
+    const finallyIndex = helperBody.indexOf("} finally {");
+    expect(
+      finallyIndex,
+      "commitReparentAndEndGesture should end its gesture from a finally block",
+    ).toBeGreaterThan(-1);
+    const finallyBlock = braceBody(helperBody, finallyIndex);
+    expect(finallyBlock.slice(1, -1).trim()).toBe("endGesture();");
 
     // COUNT, not adjacency. This asserts how many bare `return;` statements
     // drag-end contains, which is not the same as proving each one is preceded

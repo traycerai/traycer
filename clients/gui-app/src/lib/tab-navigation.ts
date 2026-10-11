@@ -48,10 +48,12 @@ import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
+  coordinatedSelection,
   type CoordinatedTabActivation,
   type CoordinatedTabActivationTarget,
   type PairTabsCommand,
 } from "@/stores/tabs/tab-command-coordinator";
+import { topLevelDemand } from "@/stores/tabs/surface-demand";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
@@ -548,9 +550,12 @@ function pendingDestinationMatches(
   return refIsMaterialized(pending.expectedRef);
 }
 
-function currentBackingMatches(destination: TabNavigationDestination): boolean {
+function currentBackingMatches(
+  destination: TabNavigationDestination,
+  layout: PersistedTabStripLayout,
+): boolean {
   if (destination.kind === "route") return isLandingPath(destination.pathname);
-  const ref = backingRefOfLayout(currentLayout());
+  const ref = backingRefOfLayout(layout);
   return ref !== null && tabRefKey(ref) === destination.refKey;
 }
 
@@ -617,6 +622,7 @@ export class TabNavigationController {
   private lastObservedKey: string | null = null;
   private locationReader: TabNavigationLocationReader | null = null;
   private navigator: NavigateFn | null = null;
+  private previewOrigin: PersistedTabStripLayout | null = null;
   private queuedActivation: QueuedActivation | null = null;
   private queuedExternal: QueuedExternal | null = null;
   private resolutionFailure: TabNavigationResolutionFailure | null = null;
@@ -792,7 +798,10 @@ export class TabNavigationController {
     if (envelope.serial === this.authoritySerial) {
       if (
         destinationMatches(envelope.destination, location) &&
-        currentBackingMatches(envelope.destination)
+        currentBackingMatches(
+          envelope.destination,
+          this.previewOrigin ?? currentLayout(),
+        )
       ) {
         this.refreshCurrentAuthorityRoute(location, envelope.destination);
         return;
@@ -927,6 +936,7 @@ export class TabNavigationController {
     this.queuedActivation = null;
     this.queuedExternal = null;
     this.resolutionFailure = null;
+    this.previewOrigin = null;
     this.pending.clear();
     this.latestRouteByRef.clear();
     this.correctionKeys.clear();
@@ -944,8 +954,9 @@ export class TabNavigationController {
     requestedIntent: TabActivationIntent,
     options: TabNavigationOptions | undefined,
   ): boolean {
-    const layoutBefore = currentLayout();
-    if (requestedIntent.kind === "open-epic") {
+    const demand = requestedIntent.demand ?? "settled";
+    const layoutBefore = this.previewOrigin ?? currentLayout();
+    if (demand === "settled" && requestedIntent.kind === "open-epic") {
       const prepared = this.prepareDraftSwap(requestedIntent, layoutBefore);
       if (prepared !== null) {
         this.issuePreparedSwap(navigate, requestedIntent, prepared, options);
@@ -960,11 +971,23 @@ export class TabNavigationController {
     // tab-command-coordinator.ts) - treat that the same as a `null` result.
     let activation: CoordinatedTabActivation | null;
     try {
-      activation = tabCommandCoordinator.activateTab(activationTarget);
+      activation = tabCommandCoordinator.activateTabWithDemand(
+        activationTarget,
+        demand,
+      );
     } catch {
       return false;
     }
     if (activation === null) return false;
+    if (demand === "preview") {
+      this.previewOrigin ??= layoutBefore;
+      return true;
+    }
+    this.previewOrigin = null;
+    activation = {
+      ...activation,
+      priorSelection: coordinatedSelection(layoutBefore),
+    };
     const intent = this.canonicalIntent(requestedIntent, activation.ref);
     if (intent === null) {
       tabCommandCoordinator.restoreTabActivation(activation);
@@ -1246,6 +1269,7 @@ export class TabNavigationController {
   }
 
   private establishExternalAuthority(): void {
+    this.previewOrigin = null;
     this.supersedeAll();
     this.nextAuthoritySerial();
   }
@@ -1352,7 +1376,16 @@ export class TabNavigationController {
     }
     this.pending.delete(token);
     if (pending.activation !== null) {
-      tabCommandCoordinator.restoreTabActivation(pending.activation);
+      if (this.previewOrigin !== null) {
+        const prior = pending.activation.priorSelection;
+        this.previewOrigin = {
+          ...this.previewOrigin,
+          items: prior.items,
+          activeItemId: prior.activeItemId,
+        };
+      } else {
+        tabCommandCoordinator.restoreTabActivation(pending.activation);
+      }
     }
     if (pending.preparedPair !== null) {
       this.restorePreparedPair(pending.preparedPair);
@@ -1421,7 +1454,7 @@ export class TabNavigationController {
   }
 
   private backingNavigation(): BackingNavigation {
-    const ref = backingRefOfLayout(currentLayout());
+    const ref = backingRefOfLayout(this.previewOrigin ?? currentLayout());
     if (ref === null) {
       return {
         destination: { kind: "route", pathname: "/" },
@@ -1645,6 +1678,15 @@ export class TabNavigationController {
     location: TabNavigationLocation,
     navigate: NavigateFn,
   ): void {
+    if (this.previewOrigin !== null) {
+      const backing = this.backingNavigation();
+      if (destinationMatches(backing.destination, location)) {
+        this.refreshCurrentAuthorityRoute(location, backing.destination);
+      } else if (this.pending.size === 0) {
+        this.repairStaleLocation(location, navigate);
+      }
+      return;
+    }
     const routed = routedTabTarget(location.pathname);
     if (
       routed !== null &&
@@ -1697,7 +1739,10 @@ export class TabNavigationController {
       // perfectly good epic route. Deliberately keyed on the FOCUSED ref
       // rather than the backing one: a split focused on its empty side still
       // backs this route, and re-focusing it there is a real move.
-      if (refsEqual(focusedRefOfLayout(currentLayout()), ref)) {
+      if (
+        refsEqual(focusedRefOfLayout(currentLayout()), ref) &&
+        topLevelDemand(tabRefKey(ref)) === "settled"
+      ) {
         const intent = intentForRef(ref, location.pathname, location.search);
         if (intent !== null) this.rememberRoute(ref, intent, location.search);
         return;

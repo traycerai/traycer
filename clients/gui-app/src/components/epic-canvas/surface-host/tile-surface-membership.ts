@@ -45,8 +45,8 @@
  *    reconciles - additions and MRU eviction alike - exactly once, from the
  *    coordinator's own settle notification.
  *
- * Membership is recomputed and diffed on every notification from
- * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
+ * Membership is recomputed and diffed on relevant canvas slice changes and
+ * notifications from `useTabsStore`, `tabCommandCoordinator`, and
  * `remote-deleted-chat-registry.ts` - deriving from observed state at each
  * checkpoint rather than trusting any one store's change to imply the others
  * are consistent (the same observation-over-claim lesson slice 1's identity
@@ -59,9 +59,14 @@
  * by slice 2's existing membership-loss subscription instead of lingering
  * alongside the inline `DeletedArtifactBody`.
  */
+import {
+  paneDemand,
+  topLevelDemand,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import type { TileLayoutNode } from "@/stores/epics/canvas/tile-tree";
 import {
   RETAINED_PANE_CHAT_CAP,
   retainedPaneChatInstanceIds,
@@ -84,41 +89,70 @@ import { isEpicParked, subscribeEpicParking } from "@/lib/epics/epic-parking";
 
 export type SurfaceMembershipListener = () => void;
 
-/**
- * Layer 1 (pure, standalone-testable): every chat `instanceId` a pane keeps
- * alive - shown or recently-active - across the complete `canvasByTabId`
- * snapshot, mapped to the top-level tab id that owns it.
- */
+// Trees are structurally shared: selecting one pane only invalidates that
+// pane and its ancestors. Cache candidates, never deletion/parking eligibility.
+const retainedCandidates = new WeakMap<
+  TileLayoutNode,
+  {
+    readonly tiles: EpicCanvasState["tilesByInstanceId"];
+    readonly demand: "preview" | "settled";
+    readonly instanceIds: ReadonlyArray<string>;
+  }
+>();
+
+function retainedChatCandidates(
+  node: TileLayoutNode,
+  tiles: EpicCanvasState["tilesByInstanceId"],
+): ReadonlyArray<string> {
+  const cached = retainedCandidates.get(node);
+  const demand = node.kind === "pane" ? paneDemand(node.id) : "settled";
+  if (
+    node.kind === "pane" &&
+    cached?.tiles === tiles &&
+    cached.demand === demand
+  ) {
+    return cached.instanceIds;
+  }
+  const instanceIds =
+    node.kind === "pane"
+      ? retainedPaneChatInstanceIds({
+          pane: node,
+          cap: RETAINED_PANE_CHAT_CAP,
+          demand,
+          tileFor: (instanceId) => tiles[instanceId],
+        })
+      : node.children.flatMap((child) => retainedChatCandidates(child, tiles));
+  retainedCandidates.set(node, { tiles, instanceIds, demand });
+  return instanceIds;
+}
+
+function eligibleRetainedChats(canvas: EpicCanvasState): ReadonlyArray<string> {
+  if (canvas.root === null) return [];
+  return retainedChatCandidates(canvas.root, canvas.tilesByInstanceId).filter(
+    (instanceId) => {
+      const tile = canvas.tilesByInstanceId[instanceId];
+      // Apply eligibility AFTER the shared retention cap so the host and pane
+      // keep the same window, including when a retained chat is remote-deleted.
+      return (
+        tile !== undefined &&
+        isHostedSurfaceEligible({
+          node: tile,
+          isRemoteDeleted: isChatRemoteDeleted(instanceId),
+        })
+      );
+    },
+  );
+}
+
+/** Every retained chat instance mapped to its owning top-level tab. */
 export function collectCanvasWideRetainedChatMembership(
   canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
 ): ReadonlyMap<string, string> {
   const instanceIdToTabId = new Map<string, string>();
   for (const [tabId, canvas] of Object.entries(canvasByTabId)) {
     if (canvas === undefined) continue;
-    for (const pane of collectPanes(canvas.root)) {
-      // The WINDOW is picked on tile kind alone, identically to
-      // `use-mounted-pane-tabs.ts`. Eligibility is applied to the result,
-      // AFTER the cap - injecting it into the selection would shift this
-      // window relative to the render side's and strand a member with no slot
-      // (cold review F1; see `retained-pane-chats.ts`).
-      const retained = retainedPaneChatInstanceIds({
-        pane,
-        cap: RETAINED_PANE_CHAT_CAP,
-        tileFor: (instanceId) => canvas.tilesByInstanceId[instanceId],
-      });
-      for (const instanceId of retained) {
-        const tile = canvas.tilesByInstanceId[instanceId];
-        if (tile === undefined) continue;
-        if (
-          !isHostedSurfaceEligible({
-            node: tile,
-            isRemoteDeleted: isChatRemoteDeleted(instanceId),
-          })
-        ) {
-          continue;
-        }
-        instanceIdToTabId.set(instanceId, tabId);
-      }
+    for (const instanceId of eligibleRetainedChats(canvas)) {
+      instanceIdToTabId.set(instanceId, tabId);
     }
   }
   return instanceIdToTabId;
@@ -148,13 +182,13 @@ function computeRetainedTopLevelRefKeys(): ReadonlyArray<string> {
           .map(tabRefKey)
           .filter((key) => knownRefKeys.has(key));
 
-  topLevelRecency = advanceTopLevelSurfaceRecency(
-    activeRefKeys,
-    topLevelRecency,
+  const settledKeys = activeRefKeys.filter(
+    (key) => topLevelDemand(key) === "settled",
   );
+  topLevelRecency = advanceTopLevelSurfaceRecency(settledKeys, topLevelRecency);
   return retainedTopLevelSurfaceKeys(
     availableRefKeys,
-    activeRefKeys,
+    settledKeys,
     topLevelRecency,
   );
 }
@@ -187,13 +221,13 @@ function recomputeMembership(): void {
   if (tabCommandCoordinator.getLedger().suppressionDepth > 0) return;
 
   const canvasState = useEpicCanvasStore.getState();
-  const retainedRefKeys = new Set(computeRetainedTopLevelRefKeys());
-  const instanceIdToTabId = collectCanvasWideRetainedChatMembership(
-    canvasState.canvasByTabId,
-  );
-  const nextMembership = new Set<string>();
-  for (const [instanceId, tabId] of instanceIdToTabId) {
-    if (!retainedRefKeys.has(tabRefKey({ kind: "epic", id: tabId }))) continue;
+  const retainedRefKeys = computeRetainedTopLevelRefKeys();
+  const retainedCanvases: [string, EpicCanvasState][] = [];
+  for (const refKey of retainedRefKeys) {
+    if (!refKey.startsWith("epic:")) continue;
+    const tabId = refKey.slice("epic:".length);
+    const canvas = canvasState.canvasByTabId[tabId];
+    if (canvas === undefined) continue;
     // Layer 4: renderer parking (plan C, decision C1). A hosted body is
     // mounted by `StableTileSurfaceHost`, which lives ABOVE every
     // `EpicSessionProvider` - so unlike an inline tile it does not unmount
@@ -209,8 +243,13 @@ function recomputeMembership(): void {
     // instance and the pane re-slots it.
     const epicId = canvasState.tabsById[tabId]?.epicId;
     if (epicId !== undefined && isEpicParked(epicId)) continue;
-    nextMembership.add(instanceId);
+    retainedCanvases.push([tabId, canvas]);
   }
+  const nextMembership = new Set(
+    collectCanvasWideRetainedChatMembership(
+      Object.fromEntries(retainedCanvases),
+    ).keys(),
+  );
 
   if (setsEqual(nextMembership, currentMembership)) return;
   currentMembership = nextMembership;
@@ -235,7 +274,16 @@ export function resetTileSurfaceMembershipForTesting(): void {
   recomputeMembership();
 }
 
-useEpicCanvasStore.subscribe(recomputeMembership);
+useEpicCanvasStore.subscribe((state, previous) => {
+  if (
+    state.canvasByTabId !== previous.canvasByTabId ||
+    state.tabsById !== previous.tabsById ||
+    state.openTabOrder !== previous.openTabOrder
+  ) {
+    recomputeMembership();
+  }
+});
+useSurfaceDemandStore.subscribe(recomputeMembership);
 useTabsStore.subscribe(recomputeMembership);
 useLandingDraftStore.subscribe(recomputeMembership);
 tabCommandCoordinator.subscribe(recomputeMembership);

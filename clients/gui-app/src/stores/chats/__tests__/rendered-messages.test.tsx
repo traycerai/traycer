@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
@@ -11,6 +11,7 @@ import type {
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   ChatActiveTurn,
   ChatQueuedPromptItem,
@@ -24,10 +25,10 @@ import type {
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import type {
   SubagentSegment,
   ToolSegment,
@@ -1408,8 +1409,10 @@ describe("useRenderedMessages", () => {
     });
     // `provider` comes from the sender's harnessId; the labels come from the
     // display context; reasoningEffort/serviceTier flow from the persisted
-    // message through the turn accumulator.
+    // message through the turn accumulator; the raw sender rides along so the
+    // row leaf can resolve its own presentation.
     expect(result.current[0]?.assistantMeta).toEqual({
+      sender: a.sender,
       provider: "claude",
       providerLabel: "Claude Code",
       profileLabel: null,
@@ -6952,6 +6955,800 @@ describe("assistant turn render cache invalidation", () => {
 
     const after = driver.result.current.find((row) => row.role === "assistant");
     expect(textOf(after)).toContain("corrected answer");
+  });
+});
+
+// W3-R3: equivalence + cost pins for the settled/active-turn split and the
+// ranked settled/changing merge in rendered-messages.ts.
+
+function runningActiveTurn(turnId: string, startedAt: number): ChatActiveTurn {
+  return {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
+    turnId,
+    status: "running",
+    harnessId: "claude",
+    model: "claude-sonnet-4-5",
+    profileId: null,
+    userMessageId: null,
+    startedAt,
+    updatedAt: startedAt,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
+function streamedToolBlock(input: {
+  readonly blockId: string;
+  readonly toolName: string;
+  readonly toolInput: unknown;
+  readonly timestamp: number;
+  readonly status: "streaming" | "completed";
+  readonly endedAt: number | null;
+  // `ContentBlock`'s `imageResults` field (zod `z.array(...)`) is a mutable
+  // array, not a readonly one - matched here rather than widened, since a
+  // readonly source can't be assigned into it.
+  readonly imageResults: ImageGenerationResult[];
+}): ContentBlock {
+  return {
+    type: "tool_call",
+    blockId: input.blockId,
+    toolName: input.toolName,
+    ...toolCallInputFields(input.toolName, input.toolInput),
+    error: null,
+    agentMessageSend: null,
+    managedCommand: null,
+    agentMessageReceipt: null,
+    progress: null,
+    backgroundOutput: null,
+    backgroundTask: false,
+    stopped: false,
+    status: input.status,
+    timestamp: input.timestamp,
+    startedAt: input.timestamp,
+    endedAt: input.endedAt,
+    imageResults: input.imageResults,
+    page: null,
+    mcpApp: null,
+  };
+}
+
+function eqImageGenerationResult(input: {
+  readonly attachmentHash: string;
+  readonly filePath: string | null;
+}): ImageGenerationResult {
+  return {
+    mediaType: "image/png",
+    byteLength: 128,
+    width: null,
+    height: null,
+    alt: null,
+    revisedPrompt: null,
+    filePath: input.filePath,
+    attachmentHash: input.attachmentHash,
+  };
+}
+
+function eqSteerBlock(input: {
+  readonly blockId: string;
+  readonly timestamp: number;
+  readonly queueItemId: string;
+  readonly messageId: string;
+}): ContentBlock {
+  return {
+    type: "steer",
+    blockId: input.blockId,
+    status: "completed",
+    timestamp: input.timestamp,
+    queueItemId: input.queueItemId,
+    messageId: input.messageId,
+    mode: "safe_point",
+    sender: null,
+    content: CONTENT,
+  };
+}
+
+describe("useRenderedMessages incremental-vs-fresh equivalence", () => {
+  // Single named oracle a differential pre-change run only needs to swap.
+  function renderFreshRenderedMessages(input: RenderedMessagesInput) {
+    const freshContext = { ...displayContext };
+    const hook = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, freshContext),
+      { initialProps: { value: input } },
+    );
+    const value = hook.result.current;
+    hook.unmount();
+    return value;
+  }
+
+  // Compares against a fresh mount after EVERY step, not just the final one:
+  // an idle final state can take a full-walk path that hides an intermediate
+  // divergence.
+  function expectIncrementalMatchesFresh(
+    steps: ReadonlyArray<Partial<RenderedMessagesInput>>,
+  ): void {
+    const driver = renderRenderedMessages(steps[0]);
+    let cumulative: RenderedMessagesInput = {
+      ...CANONICAL_RENDERED_MESSAGES_INPUT,
+      ...steps[0],
+    };
+    expect(driver.result.current).toEqual(
+      renderFreshRenderedMessages(cumulative),
+    );
+    for (const step of steps.slice(1)) {
+      driver.patch(step);
+      cumulative = { ...cumulative, ...step };
+      expect(driver.result.current).toEqual(
+        renderFreshRenderedMessages(cumulative),
+      );
+    }
+  }
+
+  it("matches a fresh mount when a live text turn accumulates across streamed deltas", () => {
+    const u1 = userMessage("u1");
+    const priorTurn: Message = {
+      ...assistantMessage("turn-prior-eq", 1800),
+      blocks: [plainTextBlock("prior-eq-block", 1800, "Prior turn done.")],
+    };
+    const liveStep = (text: string): LiveAssistantMessage => ({
+      turnId: "turn-live-eq",
+      sender: ASSISTANT_SENDER,
+      blocks: [plainTextBlock("live-eq-block", 4001, text)],
+      startedAt: 4000,
+      blocksVersion: 1,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
+      timestamp: 4001,
+      reasoningEffort: null,
+      serviceTier: null,
+    });
+
+    expectIncrementalMatchesFresh([
+      {
+        messages: [u1, priorTurn],
+        liveAssistantMessage: liveStep("Hel"),
+        activeTurn: runningActiveTurn("turn-live-eq", 4000),
+        runStatus: "running",
+      },
+      { liveAssistantMessage: liveStep("Hello") },
+      { liveAssistantMessage: liveStep("Hello world") },
+    ]);
+  });
+
+  it("matches a fresh mount when a tool call streams from pending to completed", () => {
+    const u1 = userMessage("u1");
+    const toolAt = 2002;
+    const toolStep = (status: "streaming" | "completed"): Message => ({
+      ...assistantMessage("turn-tool-eq", 2000),
+      blocks: [
+        streamedToolBlock({
+          blockId: "tool-eq-1",
+          toolName: "read_file",
+          toolInput: { path: "/repo/src/app.ts" },
+          timestamp: toolAt,
+          status,
+          endedAt: status === "completed" ? toolAt + 1 : null,
+          imageResults: [],
+        }),
+      ],
+    });
+
+    expectIncrementalMatchesFresh([
+      {
+        messages: [u1, toolStep("streaming")],
+        activeTurn: runningActiveTurn("turn-tool-eq", 2000),
+        runStatus: "running",
+      },
+      {
+        messages: [u1, toolStep("completed")],
+        activeTurn: null,
+        runStatus: "idle",
+      },
+    ]);
+  });
+
+  it("matches a fresh mount when a historical subagent block updates while another turn is active", () => {
+    // Proves the per-turn cache invalidates a SETTLED subagent turn's block
+    // update even while a different turn is the active one AND still
+    // streaming (activeTurn/runStatus unchanged across the update step).
+    const u1 = userMessage("u1");
+    const subagentStep = (
+      progressUpdates: ReadonlyArray<string>,
+      status: "streaming" | "completed",
+      result: string | null,
+    ): Message => ({
+      ...assistantMessage("turn-subagent-eq", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-eq-1",
+          name: "explorer",
+          task: "Investigate the bug.",
+          progressUpdates: [...progressUpdates],
+          result,
+          status,
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+      ],
+    });
+    const activeAt = 5000;
+    const activeStep = (text: string): Message => ({
+      ...assistantMessage("turn-active-after-subagent-eq", activeAt),
+      blocks: [
+        plainTextBlock("active-after-subagent-eq-block", activeAt, text),
+      ],
+    });
+    const activeTurnRunning = runningActiveTurn(
+      "turn-active-after-subagent-eq",
+      activeAt,
+    );
+
+    const step1: RenderedMessagesInput = {
+      ...CANONICAL_RENDERED_MESSAGES_INPUT,
+      messages: [u1, subagentStep(["Reading sentry.ts"], "streaming", null)],
+    };
+    const step2: RenderedMessagesInput = {
+      ...step1,
+      messages: [
+        u1,
+        subagentStep(["Reading sentry.ts"], "streaming", null),
+        activeStep("Hel"),
+      ],
+      activeTurn: activeTurnRunning,
+      runStatus: "running",
+    };
+    const step3: RenderedMessagesInput = {
+      ...step2,
+      messages: [
+        u1,
+        subagentStep(
+          ["Reading sentry.ts", "Found the bug"],
+          "completed",
+          "Fixed it.",
+        ),
+        activeStep("Hello"),
+      ],
+    };
+    const step4: RenderedMessagesInput = {
+      ...step3,
+      messages: [
+        u1,
+        subagentStep(
+          ["Reading sentry.ts", "Found the bug"],
+          "completed",
+          "Fixed it.",
+        ),
+        activeStep("Hello world"),
+      ],
+      activeTurn: null,
+      runStatus: "idle",
+    };
+
+    const driver = renderRenderedMessages(step1);
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step1));
+
+    driver.patch(step2);
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step2));
+
+    driver.patch(step3);
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step3));
+    const subagentSegment = driver.result.current
+      .find((row) => row.id === "assistant:turn-subagent-eq")
+      ?.segments.find(
+        (segment): segment is SubagentSegment => segment.kind === "subagent",
+      );
+    expect(subagentSegment).toMatchObject({
+      result: "Fixed it.",
+      progressUpdates: ["Reading sentry.ts", "Found the bug"],
+    });
+    const stillActiveRow = driver.result.current.find(
+      (row) => row.id === "assistant:turn-active-after-subagent-eq",
+    );
+    expect(stillActiveRow?.runState).toBe("running");
+
+    driver.patch(step4);
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step4));
+    const finishedActiveRow = driver.result.current.find(
+      (row) => row.id === "assistant:turn-active-after-subagent-eq",
+    );
+    expect(finishedActiveRow?.runState).toBeNull();
+  });
+
+  it("matches a fresh mount when an image-generation tool call resolves its results incrementally", () => {
+    const u1 = userMessage("u1");
+    const imgAt = 2002;
+    const imgStep = (
+      status: "streaming" | "completed",
+      results: ImageGenerationResult[],
+    ): Message => ({
+      ...assistantMessage("turn-image-eq", 2000),
+      blocks: [
+        streamedToolBlock({
+          blockId: "image-eq-1",
+          toolName: "image_generation",
+          toolInput: { prompt: "a cat" },
+          timestamp: imgAt,
+          status,
+          endedAt: status === "completed" ? imgAt : null,
+          imageResults: results,
+        }),
+      ],
+    });
+
+    expectIncrementalMatchesFresh([
+      {
+        messages: [u1, imgStep("streaming", [])],
+        activeTurn: runningActiveTurn("turn-image-eq", 2000),
+        runStatus: "running",
+      },
+      {
+        messages: [
+          u1,
+          imgStep("completed", [
+            eqImageGenerationResult({
+              attachmentHash: "hash-eq-1",
+              filePath: null,
+            }),
+          ]),
+        ],
+        activeTurn: null,
+        runStatus: "idle",
+      },
+    ]);
+  });
+
+  it("matches a fresh mount when a steer lands mid-turn and output continues after it", () => {
+    const u1 = userMessage("u1");
+    const beforeOnly: Message = {
+      ...assistantMessage("turn-steer-eq", 2000),
+      blocks: [plainTextBlock("steer-eq-before", 2001, "Before steer")],
+    };
+    const withSteer: Message = {
+      ...assistantMessage("turn-steer-eq", 2000),
+      blocks: [
+        plainTextBlock("steer-eq-before", 2001, "Before steer"),
+        eqSteerBlock({
+          blockId: "steer-eq-1",
+          timestamp: 2002,
+          queueItemId: "queue-steer-eq",
+          messageId: "message-steer-eq",
+        }),
+      ],
+    };
+    const withAfter: Message = {
+      ...assistantMessage("turn-steer-eq", 2000),
+      blocks: [
+        plainTextBlock("steer-eq-before", 2001, "Before steer"),
+        eqSteerBlock({
+          blockId: "steer-eq-1",
+          timestamp: 2002,
+          queueItemId: "queue-steer-eq",
+          messageId: "message-steer-eq",
+        }),
+        plainTextBlock("steer-eq-after", 2003, "After steer"),
+      ],
+    };
+    const steeredUser: Message = {
+      ...userMessage("message-steer-eq"),
+      message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+
+    expectIncrementalMatchesFresh([
+      {
+        messages: [u1, beforeOnly],
+        activeTurn: runningActiveTurn("turn-steer-eq", 2000),
+        runStatus: "running",
+      },
+      { messages: [u1, withSteer, steeredUser] },
+      {
+        messages: [u1, withAfter, steeredUser],
+        activeTurn: null,
+        runStatus: "idle",
+      },
+    ]);
+  });
+
+  it("matches a fresh mount for the optimistic pending echo -> mid-chat setup card ordering", () => {
+    const pendingEcho: PendingUserMessage = {
+      clientActionId: "action-1",
+      messageId: "echo-msg",
+      content: CONTENT,
+      attachments: [],
+      sender: { type: "user", userId: "owner-1" },
+      settings: SETTINGS,
+      accountContext: { type: "PERSONAL" },
+      deliveryPolicy: null,
+      timestamp: 1010,
+      restore: { content: CONTENT, browserAnnotations: [] },
+      restoreWorktreeIntent: null,
+    };
+
+    expectIncrementalMatchesFresh([
+      {
+        messages: [userMessage("m0")],
+        pendingUserMessages: [pendingEcho],
+      },
+      {
+        events: [
+          setupEvent({
+            eventId: "creating",
+            type: "setup.creating",
+            timestamp: 5000,
+            metadata: {
+              workspacePath: "/repo",
+              branch: "feat",
+              triggeringMessageId: "echo-msg",
+            },
+          }),
+        ],
+      },
+    ]);
+  });
+
+  it("matches a fresh mount when a modern seated active turn (no liveAssistantMessage) receives a token update as a contiguous suffix record", () => {
+    const u1 = userMessage("u1");
+    const u2 = userMessageAt("u2", 4000);
+    const settledTurn: Message = {
+      ...assistantMessage("turn-settled-modern", 2000),
+      blocks: [plainTextBlock("settled-modern-block", 2000, "Earlier reply.")],
+    };
+    const activeAt = 5000;
+    const activeStep = (text: string): Message => ({
+      ...assistantMessage("turn-active-modern", activeAt),
+      blocks: [plainTextBlock("active-modern-block", activeAt, text)],
+    });
+
+    expectIncrementalMatchesFresh([
+      {
+        messages: [u1, settledTurn, u2, activeStep("Hel")],
+        liveAssistantMessage: null,
+        activeTurn: runningActiveTurn("turn-active-modern", activeAt),
+        runStatus: "running",
+      },
+      { messages: [u1, settledTurn, u2, activeStep("Hello")] },
+    ]);
+  });
+
+  it("matches a fresh mount when the seated active turn's record is interleaved with a later same-timestamp message (non-contiguous fallback)", () => {
+    // Equivalence alone can't pin this: fresh and incremental share the same
+    // partitioner, so a broken contiguity guard would agree with itself.
+    // Assert the exact id order instead.
+    const u1 = userMessage("u1");
+    const activeAt = 5000;
+    const activeStep = (text: string): Message => ({
+      ...assistantMessage("turn-active-interleaved", activeAt),
+      blocks: [plainTextBlock("active-interleaved-block", activeAt, text)],
+    });
+    // Same timestamp, appended AFTER the active record: not a tail anymore.
+    const laterTie = userMessageAt("later-tie", activeAt);
+
+    const step1: RenderedMessagesInput = {
+      ...CANONICAL_RENDERED_MESSAGES_INPUT,
+      messages: [u1, activeStep("Hel"), laterTie],
+      activeTurn: runningActiveTurn("turn-active-interleaved", activeAt),
+      runStatus: "running",
+    };
+    const step2: RenderedMessagesInput = {
+      ...step1,
+      messages: [u1, activeStep("Hello"), laterTie],
+    };
+    const expectedOrder = [
+      "u1",
+      "assistant:turn-active-interleaved",
+      "later-tie",
+    ];
+
+    const driver = renderRenderedMessages(step1);
+    expect(driver.result.current.map((row) => row.id)).toEqual(expectedOrder);
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step1));
+
+    driver.patch(step2);
+    expect(driver.result.current.map((row) => row.id)).toEqual(expectedOrder);
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step2));
+  });
+
+  it("matches a fresh mount when the seated active turn's persisted record is legacy (startedAt null)", () => {
+    const u1 = userMessage("u1");
+    const activeAt = 9000;
+    const legacyActiveStep = (text: string): Message => ({
+      ...assistantMessage("turn-active-legacy", activeAt),
+      startedAt: null,
+      blocks: [plainTextBlock("active-legacy-block", activeAt, text)],
+    });
+
+    const step1: RenderedMessagesInput = {
+      ...CANONICAL_RENDERED_MESSAGES_INPUT,
+      messages: [u1, legacyActiveStep("Hel")],
+      activeTurn: runningActiveTurn("turn-active-legacy", activeAt),
+      runStatus: "running",
+    };
+    const step2: RenderedMessagesInput = {
+      ...step1,
+      messages: [u1, legacyActiveStep("Hello")],
+    };
+
+    const driver = renderRenderedMessages(step1);
+    const assertLegacyAnchor = (): void => {
+      const row = driver.result.current.find(
+        (message) => message.role === "assistant",
+      );
+      // Fallback full walk anchors on u1's timestamp (1002), not the legacy
+      // record's own timestamp (9000) - a broken guard would isolate the
+      // walk from u1 and collapse onto 9000.
+      expect(row?.createdAt).toBe(1002);
+      expect(row?.elapsedStartedAt).toBeUndefined();
+    };
+    assertLegacyAnchor();
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step1));
+
+    driver.patch(step2);
+    assertLegacyAnchor();
+    expect(driver.result.current).toEqual(renderFreshRenderedMessages(step2));
+  });
+
+  it("keeps a settled/active row pair tied on createdAt in original stable-emission order", () => {
+    // On a `createdAt` tie, settled (rank 0) must still sort before active (rank 1).
+    const u1 = userMessage("u1");
+    const tieAt = 7000;
+    const settledTie: Message = {
+      ...assistantMessage("turn-settled-tie", tieAt),
+      blocks: [plainTextBlock("settled-tie-block", tieAt, "Settled tie.")],
+    };
+    const activeTie = (text: string): Message => ({
+      ...assistantMessage("turn-active-tie", tieAt),
+      blocks: [plainTextBlock("active-tie-block", tieAt, text)],
+    });
+
+    const driver = renderRenderedMessages({
+      messages: [u1, settledTie, activeTie("Hel")],
+      liveAssistantMessage: null,
+      activeTurn: runningActiveTurn("turn-active-tie", tieAt),
+      runStatus: "running",
+    });
+
+    expect(driver.result.current.map((row) => row.id)).toEqual([
+      "u1",
+      "assistant:turn-settled-tie",
+      "assistant:turn-active-tie",
+    ]);
+
+    driver.patch({ messages: [u1, settledTie, activeTie("Hello")] });
+
+    expect(driver.result.current.map((row) => row.id)).toEqual([
+      "u1",
+      "assistant:turn-settled-tie",
+      "assistant:turn-active-tie",
+    ]);
+  });
+});
+
+describe("useRenderedMessages cost pin: bounded incremental recompute", () => {
+  // 1,000 turns = 2,000 settled rows (one user + one assistant row each).
+  const SETTLED_TURN_COUNT = 1000;
+  const SENTINEL_INDICES = [
+    0,
+    Math.floor(SETTLED_TURN_COUNT / 2),
+    SETTLED_TURN_COUNT - 1,
+  ];
+  const SENTINEL_TURN_IDS = SENTINEL_INDICES.map(
+    (index) => `settled-turn-${index}`,
+  );
+  // The "changing" set (active turn + live + trailing) is a handful of rows.
+  const MAX_EXPECTED_SORT_SIZE = 20;
+
+  function settledPair(index: number): {
+    readonly user: Message;
+    readonly assistant: Message;
+  } {
+    const userAt = 10_000 + index * 10;
+    const assistantAt = userAt + 5;
+    return {
+      user: userMessageAt(`settled-user-${index}`, userAt),
+      assistant: {
+        ...assistantMessage(`settled-turn-${index}`, assistantAt),
+        blocks: [
+          plainTextBlock(
+            `settled-block-${index}`,
+            assistantAt,
+            `Settled reply ${index}`,
+          ),
+        ],
+      },
+    };
+  }
+
+  function buildSettledHistory(count: number): Message[] {
+    const messages: Message[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const pair = settledPair(index);
+      messages.push(pair.user, pair.assistant);
+    }
+    return messages;
+  }
+
+  // Counts reads of `startedAt`, which only the settled walk reads (not the
+  // profile-label walk) - a real field, so this needs no production seam.
+  function instrumentStartedAtReads(
+    messages: ReadonlyArray<Message>,
+    turnIds: ReadonlyArray<string>,
+  ): ReadonlyArray<{ count: number }> {
+    return turnIds.map((turnId) => {
+      const record = messages.find(
+        (message): message is Extract<Message, { role: "assistant" }> =>
+          message.role === "assistant" && message.turnId === turnId,
+      );
+      if (record === undefined) {
+        throw new Error(`expected a settled assistant record for ${turnId}`);
+      }
+      const counter = { count: 0 };
+      const startedAt = record.startedAt;
+      Object.defineProperty(record, "startedAt", {
+        configurable: true,
+        enumerable: true,
+        get(): number | null {
+          counter.count += 1;
+          return startedAt;
+        },
+      });
+      return counter;
+    });
+  }
+
+  // Records the length sorted on each `Array.prototype.sort` call (no
+  // implementation installed, so the real sort still runs). Read `sizes()`
+  // before `restore()`, which clears the recorded calls.
+  function spyOnArraySortSizes(): {
+    readonly sizes: () => number[];
+    readonly restore: () => void;
+  } {
+    const spy = vi.spyOn(Array.prototype, "sort");
+    return {
+      sizes: () =>
+        spy.mock.contexts.flatMap((context) =>
+          Array.isArray(context) ? [context.length] : [],
+        ),
+      restore: () => {
+        spy.mockRestore();
+      },
+    };
+  }
+
+  it("does not re-walk or re-sort settled history when a standalone live turn streams a token", () => {
+    const settledMessages = buildSettledHistory(SETTLED_TURN_COUNT);
+    const counters = instrumentStartedAtReads(
+      settledMessages,
+      SENTINEL_TURN_IDS,
+    );
+    const liveStep = (text: string): LiveAssistantMessage => ({
+      turnId: "turn-live-cost",
+      sender: ASSISTANT_SENDER,
+      blocks: [plainTextBlock("live-cost-block", 90_000, text)],
+      startedAt: 89_000,
+      blocksVersion: 1,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
+      timestamp: 90_000,
+      reasoningEffort: null,
+      serviceTier: null,
+    });
+
+    const driver = renderRenderedMessages({
+      messages: settledMessages,
+      liveAssistantMessage: liveStep("token one"),
+      activeTurn: runningActiveTurn("turn-live-cost", 89_000),
+      runStatus: "running",
+    });
+
+    const before = driver.result.current;
+    const historicalBefore = new Map<string, unknown>();
+    SENTINEL_TURN_IDS.forEach((turnId) => {
+      historicalBefore.set(
+        turnId,
+        before.find((row) => row.id === `assistant:${turnId}`),
+      );
+    });
+    counters.forEach((counter) => {
+      counter.count = 0;
+    });
+
+    const sortSpy = spyOnArraySortSizes();
+    let sortSizes: number[] = [];
+    try {
+      driver.patch({ liveAssistantMessage: liveStep("token one token two") });
+      sortSizes = sortSpy.sizes();
+    } finally {
+      sortSpy.restore();
+    }
+
+    counters.forEach((counter) => {
+      expect(counter.count).toBe(0);
+    });
+    expect(Math.max(0, ...sortSizes)).toBeLessThan(MAX_EXPECTED_SORT_SIZE);
+
+    const after = driver.result.current;
+    SENTINEL_TURN_IDS.forEach((turnId) => {
+      expect(after.find((row) => row.id === `assistant:${turnId}`)).toBe(
+        historicalBefore.get(turnId),
+      );
+    });
+    const liveRow = after.find((row) => row.id === "assistant:turn-live-cost");
+    expect(
+      liveRow?.segments.some(
+        (segment) =>
+          segment.kind === "text" && segment.markdown.includes("token two"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not re-walk or re-sort settled history when a modern seated active turn (no liveAssistantMessage) updates in messages", () => {
+    const settledMessages = buildSettledHistory(SETTLED_TURN_COUNT);
+    const counters = instrumentStartedAtReads(
+      settledMessages,
+      SENTINEL_TURN_IDS,
+    );
+    const activeTimestamp = 10_000 + SETTLED_TURN_COUNT * 10 + 1_000;
+    const activeAssistant = (text: string): Message => ({
+      ...assistantMessage("turn-active-cost", activeTimestamp),
+      blocks: [plainTextBlock("active-cost-block", activeTimestamp, text)],
+    });
+
+    const driver = renderRenderedMessages({
+      messages: [...settledMessages, activeAssistant("token one")],
+      liveAssistantMessage: null,
+      activeTurn: runningActiveTurn("turn-active-cost", activeTimestamp),
+      runStatus: "running",
+    });
+
+    const before = driver.result.current;
+    const historicalBefore = new Map<string, unknown>();
+    SENTINEL_TURN_IDS.forEach((turnId) => {
+      historicalBefore.set(
+        turnId,
+        before.find((row) => row.id === `assistant:${turnId}`),
+      );
+    });
+    counters.forEach((counter) => {
+      counter.count = 0;
+    });
+
+    const sortSpy = spyOnArraySortSizes();
+    let sortSizes: number[] = [];
+    try {
+      driver.patch({
+        messages: [...settledMessages, activeAssistant("token one token two")],
+      });
+      sortSizes = sortSpy.sizes();
+    } finally {
+      sortSpy.restore();
+    }
+
+    counters.forEach((counter) => {
+      expect(counter.count).toBe(0);
+    });
+    expect(Math.max(0, ...sortSizes)).toBeLessThan(MAX_EXPECTED_SORT_SIZE);
+
+    const after = driver.result.current;
+    SENTINEL_TURN_IDS.forEach((turnId) => {
+      expect(after.find((row) => row.id === `assistant:${turnId}`)).toBe(
+        historicalBefore.get(turnId),
+      );
+    });
+    const activeRow = after.find(
+      (row) => row.id === "assistant:turn-active-cost",
+    );
+    expect(
+      activeRow?.segments.some(
+        (segment) =>
+          segment.kind === "text" && segment.markdown.includes("token two"),
+      ),
+    ).toBe(true);
   });
 });
 

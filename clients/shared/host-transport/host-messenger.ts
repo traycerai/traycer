@@ -39,6 +39,8 @@ export interface HostRequestAuthority {
   readonly endpoint: HostTransportEndpoint;
   readonly bearer: OpenFrameBearerSource;
   readonly abortSignal: AbortSignal;
+  /** Opt-in for coordinated reads whose results can be safely discarded. */
+  readonly cancelAfterDispatch?: boolean;
   /**
    * Whether the session behind `bearer` may spend a CLOUD CAPABILITY, carried
    * to the host on this request's `open` frame so a context the host registers

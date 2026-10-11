@@ -41,7 +41,10 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
-import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
+import {
+  useProvidersMcpMutate,
+  type McpMutateVariables,
+} from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { useProvidersMcpDiscover } from "@/hooks/providers/use-providers-mcp-discover-mutation";
 import { useProvidersMcpAuth } from "@/hooks/providers/use-providers-mcp-auth-mutation";
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
@@ -224,6 +227,50 @@ function mcpMutationFlags(
     canAuth,
     toolsReadOnly,
   };
+}
+
+async function toggleAllMcpTools({
+  server,
+  enabled,
+  scopeTuple,
+  mutate,
+  setRowError,
+  markPending,
+}: {
+  server: ProviderMcpServer;
+  enabled: boolean;
+  scopeTuple: Pick<
+    McpMutateVariables,
+    "providerId" | "scope" | "workspaceRoot"
+  >;
+  mutate: (variables: McpMutateVariables) => Promise<unknown>;
+  setRowError: (name: string, message: string) => void;
+  markPending: (name: string, pending: boolean) => void;
+}): Promise<void> {
+  try {
+    for (const tool of server.tools) {
+      if (tool.readOnly || tool.enabled === enabled) continue;
+      await mutate({
+        ...scopeTuple,
+        mutation: {
+          action: "toggleTool",
+          serverName: server.name,
+          toolName: tool.name,
+          enabled,
+        },
+        suppressToast: true,
+      });
+    }
+  } catch (error) {
+    if (isProviderNativeRpcError(error)) {
+      setRowError(
+        server.name,
+        nativeErrorMessage(error.nativeCode, error.nativeDetail),
+      );
+    }
+  } finally {
+    markPending(server.name, false);
+  }
 }
 
 export function ProviderMcpTab(props: {
@@ -523,30 +570,14 @@ export function ProviderMcpTab(props: {
     async (server: ProviderMcpServer, enabled: boolean) => {
       markPending(server.name, true);
       clearRowError(server.name);
-      try {
-        for (const tool of server.tools) {
-          if (tool.readOnly || tool.enabled === enabled) continue;
-          await mutate.mutateAsync({
-            ...scopeTuple,
-            mutation: {
-              action: "toggleTool",
-              serverName: server.name,
-              toolName: tool.name,
-              enabled,
-            },
-            suppressToast: true,
-          });
-        }
-      } catch (error) {
-        if (isProviderNativeRpcError(error)) {
-          setRowError(
-            server.name,
-            nativeErrorMessage(error.nativeCode, error.nativeDetail),
-          );
-        }
-      } finally {
-        markPending(server.name, false);
-      }
+      await toggleAllMcpTools({
+        server,
+        enabled,
+        scopeTuple,
+        mutate: mutate.mutateAsync,
+        setRowError,
+        markPending,
+      });
     },
     [clearRowError, markPending, mutate, scopeTuple, setRowError],
   );

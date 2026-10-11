@@ -1,3 +1,4 @@
+import { usePresentedChatMessage } from "./chat-row-presentation";
 import { memo, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import type {
@@ -230,7 +231,8 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 }
 
 function ChatMessageImpl(props: ChatMessageProps) {
-  const { actions, message } = props;
+  const { actions } = props;
+  const message = usePresentedChatMessage(props.message);
   // The list withholds these rows (`withholdUnpaintedRows`); this is the same
   // predicate for a model that reaches a `ChatMessage` some other way. It
   // returns before the role branches below, so the row's `system` role and
@@ -241,7 +243,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
     return renderSpecialSegment(specialSegment);
   }
   if (message.role === "assistant") {
-    return renderAssistantMessage(props);
+    return renderAssistantMessage({ ...props, message });
   }
 
   const senderLabel = message.senderLabel ?? ROLE_LABELS[message.role];

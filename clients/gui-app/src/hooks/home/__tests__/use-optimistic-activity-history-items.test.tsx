@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
+  historyActivitySnapshot,
   observeActiveHistoryEdges,
   observeOwnHistoryRecordChange,
   projectOptimisticHistoryItems,
@@ -98,6 +99,21 @@ function historyItem(
   };
 }
 
+/** The hook's projection, over the snapshot its store subscription reads. */
+function project(
+  userId: string,
+  pageItems: readonly HistoryItem[],
+  backfilled: readonly HistoryItem[],
+  nowMs: number,
+): readonly HistoryItem[] {
+  return projectOptimisticHistoryItems(historyActivitySnapshot().stamps, {
+    userId,
+    pageItems,
+    backfilled,
+    nowMs,
+  });
+}
+
 function taskContext(epicId: string): ListTaskLight {
   return {
     epic: {
@@ -156,7 +172,7 @@ describe("optimistic activity history projection", () => {
     const ids = Array.from({ length: 70 }, (_, index) => `epic-${index}`);
     expect(observeActiveHistoryEdges(userId, new Set(ids), 1000)).toBe(true);
 
-    const projected = projectOptimisticHistoryItems(
+    const projected = project(
       userId,
       ids.map((id) => historyItem(id, 1, undefined)),
       [],
@@ -211,7 +227,7 @@ describe("optimistic activity history projection", () => {
     // The surplus id waits, in a stable order, until an active latch frees.
     const freed = new Set(ids.filter((id) => id !== "latch-000"));
     expect(observe(freed, 3_000)).toEqual({ added: true, published: 1 });
-    const [surplus] = projectOptimisticHistoryItems(
+    const [surplus] = project(
       userId,
       [historyItem("latch-256", 1, undefined)],
       [],
@@ -255,12 +271,7 @@ describe("optimistic activity history projection", () => {
     ];
     const backfilled = [historyItem("active-b", 50, undefined)];
 
-    const projected = projectOptimisticHistoryItems(
-      userId,
-      pageItems,
-      backfilled,
-      300,
-    );
+    const projected = project(userId, pageItems, backfilled, 300);
     expect(projected.map((item) => item.epicId)).toEqual([
       "active-b",
       "active-a",
@@ -270,23 +281,13 @@ describe("optimistic activity history projection", () => {
     expect(projected[1].recentAtMs).toBe(300);
 
     settleHistoryActivity(userId, [historyItem("active-a", 100, 300)]);
-    const afterFirstKey = projectOptimisticHistoryItems(
-      userId,
-      pageItems,
-      backfilled,
-      300,
-    );
+    const afterFirstKey = project(userId, pageItems, backfilled, 300);
     expect(
       afterFirstKey.find((item) => item.epicId === "active-a")?.recentAtMs,
     ).toBe(300);
 
     settleHistoryActivity(userId, [historyItem("active-a", 100, 301)]);
-    const afterCatchUp = projectOptimisticHistoryItems(
-      userId,
-      pageItems,
-      backfilled,
-      300,
-    );
+    const afterCatchUp = project(userId, pageItems, backfilled, 300);
     expect(
       afterCatchUp.find((item) => item.epicId === "active-a")?.recentAtMs,
     ).toBe(100);
@@ -304,16 +305,14 @@ describe("optimistic activity history projection", () => {
 
     settleHistoryActivity(userId, [baseline]);
     const olderDurableRow = historyItem(epicId, 9_000, 9_000);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 20_000)[0]
-        ?.recentAtMs,
-    ).toBe(10_000);
+    expect(project(userId, [olderDurableRow], [], 20_000)[0]?.recentAtMs).toBe(
+      10_000,
+    );
 
     settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 21_000)[0]
-        ?.recentAtMs,
-    ).toBe(9_000);
+    expect(project(userId, [olderDurableRow], [], 21_000)[0]?.recentAtMs).toBe(
+      9_000,
+    );
   });
 
   it("keeps an accepted record pending until a newer durable key arrives", () => {
@@ -326,16 +325,14 @@ describe("optimistic activity history projection", () => {
     observeOwnHistoryRecordChange(userId, epicId, 3_000);
 
     settleHistoryActivity(userId, [baseline]);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 20_000)[0]
-        ?.recentAtMs,
-    ).toBe(10_000);
+    expect(project(userId, [olderDurableRow], [], 20_000)[0]?.recentAtMs).toBe(
+      10_000,
+    );
 
     settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 21_000)[0]
-        ?.recentAtMs,
-    ).toBe(9_000);
+    expect(project(userId, [olderDurableRow], [], 21_000)[0]?.recentAtMs).toBe(
+      9_000,
+    );
   });
 
   it("uses the first off-page durable key as a baseline before settling", () => {
@@ -345,16 +342,14 @@ describe("optimistic activity history projection", () => {
 
     settleHistoryActivity(userId, [historyItem(epicId, 20_000, 20_000)]);
     const olderCachedRow = historyItem(epicId, 9_000, 9_000);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 20_000)[0]
-        ?.recentAtMs,
-    ).toBe(10_000);
+    expect(project(userId, [olderCachedRow], [], 20_000)[0]?.recentAtMs).toBe(
+      10_000,
+    );
 
     settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 21_000)[0]
-        ?.recentAtMs,
-    ).toBe(9_000);
+    expect(project(userId, [olderCachedRow], [], 21_000)[0]?.recentAtMs).toBe(
+      9_000,
+    );
   });
 
   it("uses the first durable key as baseline after an own-record event", () => {
@@ -365,16 +360,14 @@ describe("optimistic activity history projection", () => {
 
     settleHistoryActivity(userId, [historyItem(epicId, 20_000, 20_000)]);
     const olderCachedRow = historyItem(epicId, 1_000, 1_000);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 20_000)[0]
-        ?.recentAtMs,
-    ).toBe(10_000);
+    expect(project(userId, [olderCachedRow], [], 20_000)[0]?.recentAtMs).toBe(
+      10_000,
+    );
 
     settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 21_000)[0]
-        ?.recentAtMs,
-    ).toBe(1_000);
+    expect(project(userId, [olderCachedRow], [], 21_000)[0]?.recentAtMs).toBe(
+      1_000,
+    );
   });
 
   it("settles the first durable key accepted after an off-page active edge", () => {
@@ -385,10 +378,9 @@ describe("optimistic activity history projection", () => {
 
     settleHistoryActivity(userId, [historyItem(epicId, 3_000, 3_000)]);
     const olderCachedRow = historyItem(epicId, 1_000, 1_000);
-    expect(
-      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 10_000)[0]
-        ?.recentAtMs,
-    ).toBe(1_000);
+    expect(project(userId, [olderCachedRow], [], 10_000)[0]?.recentAtMs).toBe(
+      1_000,
+    );
   });
 
   it("settles a baseline key when its own-record event arrives afterward", () => {
@@ -402,12 +394,8 @@ describe("optimistic activity history projection", () => {
     settleHistoryActivity(userId, firstDurablePage);
 
     expect(
-      projectOptimisticHistoryItems(
-        userId,
-        [historyItem(epicId, 1_000, 1_000)],
-        [],
-        10_000,
-      )[0]?.recentAtMs,
+      project(userId, [historyItem(epicId, 1_000, 1_000)], [], 10_000)[0]
+        ?.recentAtMs,
     ).toBe(1_000);
   });
 
@@ -422,12 +410,8 @@ describe("optimistic activity history projection", () => {
     settleHistoryActivity(userId, baselinePage);
 
     expect(
-      projectOptimisticHistoryItems(
-        userId,
-        [historyItem(epicId, 1_000, 1_000)],
-        [],
-        10_000,
-      )[0]?.recentAtMs,
+      project(userId, [historyItem(epicId, 1_000, 1_000)], [], 10_000)[0]
+        ?.recentAtMs,
     ).toBe(10_000);
   });
 
@@ -443,7 +427,7 @@ describe("optimistic activity history projection", () => {
     settleHistoryActivity(userId, [advancedLegacyRow]);
 
     expect(
-      projectOptimisticHistoryItems(
+      project(
         userId,
         [{ ...historyItem(epicId, 9_000, 9_000), recentAtMs: undefined }],
         [],
@@ -463,13 +447,11 @@ describe("optimistic activity history projection", () => {
     ];
 
     expect(
-      projectOptimisticHistoryItems(userId, authoritativeItems, [], 1_000).map(
-        (item) => item.epicId,
-      ),
+      project(userId, authoritativeItems, [], 1_000).map((item) => item.epicId),
     ).toEqual(["server-first", "server-second"]);
 
     observeOwnHistoryRecordChange(userId, "stamped-old-peer", 500);
-    const projected = projectOptimisticHistoryItems(
+    const projected = project(
       userId,
       authoritativeItems,
       [historyItem("stamped-old-peer", 50, undefined)],

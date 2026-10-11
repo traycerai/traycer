@@ -537,20 +537,27 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
       ),
     );
 
-    const publish = (revision: number, value: unknown): void => {
-      pair.worker.post(
-        { frame: "event", event: { kind: "projection", revision, value } },
-        [],
-      );
+    const publish = (
+      revision: number,
+      value: unknown,
+      baseRevision: number | null,
+    ): void => {
+      const projectionFrame = {
+        kind: "projection",
+        revision,
+        value,
+        baseRevision,
+      };
+      pair.worker.post({ frame: "event", event: projectionFrame }, []);
     };
-    return { applied, rejected, publish, handle };
+    return { applied, rejected, publish, pair, handle };
   }
 
   it("delivers ordered publications through to apply", () => {
     const { applied, publish, handle } = setupProjection();
 
-    publish(1, { title: "a" });
-    publish(2, { title: "b" });
+    publish(1, { title: "a" }, 0);
+    publish(2, { title: "b" }, 1);
 
     expect(applied).toEqual([
       { value: { title: "a" }, revision: 1 },
@@ -562,8 +569,8 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
   it("drops a stale revision rather than rolling the slice back", () => {
     const { applied, rejected, publish, handle } = setupProjection();
 
-    publish(2, { title: "b" });
-    publish(1, { title: "a" });
+    publish(2, { title: "b" }, 0);
+    publish(1, { title: "a" }, 0);
 
     expect(applied).toEqual([{ value: { title: "b" }, revision: 2 }]);
     expect(rejected).toEqual([{ reason: "stale", revision: 1 }]);
@@ -573,22 +580,52 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
   it("drops a re-delivery of the revision it just applied", () => {
     const { applied, rejected, publish, handle } = setupProjection();
 
-    publish(2, { title: "b" });
-    publish(2, { title: "b-again" });
+    publish(2, { title: "b" }, 0);
+    publish(2, { title: "b-again" }, 0);
 
     expect(applied).toEqual([{ value: { title: "b" }, revision: 2 }]);
     expect(rejected).toEqual([{ reason: "stale", revision: 2 }]);
     handle.dispose();
   });
 
-  it("does not advance the watermark on a frame it could not narrow", () => {
+  it("does not advance the watermark on a frame it could not narrow, and blocks deltas until a snapshot repairs it", () => {
     const { applied, rejected, publish, handle } = setupProjection();
 
-    publish(1, { nope: 1 });
-    publish(1, { title: "a" });
+    publish(1, { nope: 1 }, 0);
+    publish(1, { title: "a" }, 0);
+    expect(applied).toEqual([]);
 
-    expect(rejected).toEqual([{ reason: "unrecognised", revision: 1 }]);
+    publish(1, { title: "a" }, null);
+
+    expect(rejected).toContainEqual({ reason: "unrecognised", revision: 1 });
     expect(applied).toEqual([{ value: { title: "a" }, revision: 1 }]);
+    handle.dispose();
+  });
+
+  it("asks the worker to resync once on a gap, then repairs and resumes from the snapshot", async () => {
+    const { applied, publish, pair, handle } = setupProjection();
+
+    publish(1, { title: "a" }, 0);
+    publish(5, { title: "e" }, 3);
+    // requestResync posts through a queued microtask.
+    await Promise.resolve();
+    expect(
+      mainEvents(pair).filter((event) => event.kind === "projection/resync"),
+    ).toHaveLength(1);
+
+    // Still pending: a second bad delta must not ask again.
+    publish(6, { title: "f" }, 3);
+    await Promise.resolve();
+    expect(
+      mainEvents(pair).filter((event) => event.kind === "projection/resync"),
+    ).toHaveLength(1);
+
+    publish(7, { title: "g" }, null);
+
+    expect(applied).toEqual([
+      { value: { title: "a" }, revision: 1 },
+      { value: { title: "g" }, revision: 7 },
+    ]);
     handle.dispose();
   });
 });

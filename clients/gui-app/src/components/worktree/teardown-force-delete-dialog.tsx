@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,9 @@ export function TeardownForceDeleteDialog(props: {
   readonly onDismiss: () => void;
 }) {
   const agentNames = useTeardownAgentNames(props.holders);
+  const [everOpened, setEverOpened] = useState(props.open);
+  if (props.open && !everOpened) setEverOpened(true);
+  if (!props.open && !everOpened) return null;
   return (
     <Dialog
       open={props.open}

@@ -124,6 +124,19 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsState.value,
 }));
 
+// The row list reads the narrowed inventory selector (`use-browser-sessions.ts`),
+// not the full context above - project the same fixture state the way
+// `selectBrowserInventory` does in production.
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsInventory: () => ({
+    items: sessionsState.value.items,
+    lifecycle: sessionsState.value.lifecycle,
+    errorMessage: sessionsState.value.errorMessage,
+    retry: sessionsState.value.retry,
+    closeTab: sessionsState.value.closeTab,
+  }),
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => [{ id: "chat-driver", title: "Checkout agent" }],
 }));

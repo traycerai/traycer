@@ -3,9 +3,14 @@ import * as schemas from "./profile-sync-link-schemas";
 
 /** Profile sync: the app asks the source host for statuses and intent; the
  * three `host.*` methods carry a sign-in between two linked hosts of one
- * user and never answer an app. */
+ * user and never answer an app.
+ *
+ * `cancelAfterDispatch`: a read of statuses or of the peer's current sign-in
+ * may be discarded once sent; every verb that records, drives a sync or
+ * applies a sign-in may not. */
 export const PROFILE_SYNC_LINK_RPC_METHODS = {
   "providers.profileSync.overview": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -24,6 +29,7 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
     },
   },
   "providers.profileSync.syncNow": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -42,6 +48,7 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
     },
   },
   "providers.profileSync.setKeepInSync": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -60,6 +67,7 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
     },
   },
   "providers.profileSync.acceptAccount": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -78,6 +86,7 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
     },
   },
   "host.profileSync.apply": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -96,6 +105,7 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
     },
   },
   "host.profileSync.offerCredential": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -114,6 +124,7 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
     },
   },
   "host.profileSync.fetchCredential": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,

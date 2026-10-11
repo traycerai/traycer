@@ -11,9 +11,9 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { invalidateHostMutationQueries } from "@/lib/query-keys/providers-query-keys";
 import {
   agentMutationKeys,
-  hostQueryKeys,
   providersMutationKeys,
   workspaceMutationKeys,
 } from "@/lib/query-keys";
@@ -165,11 +165,12 @@ export function useHostScopedMutationForClient<
         // id is a reason to skip invalidation, not to skip the caller.
         args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
         if (ctx.hostId === null) return;
-        for (const method of args.invalidateMethods) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(ctx.hostId, method),
-          });
-        }
+        invalidateHostMutationQueries(
+          queryClient,
+          ctx.hostId,
+          args.invalidateMethods,
+          variables,
+        );
       },
       onError: (error) => {
         if (args.silentCodes?.includes(error.code) === true) return;

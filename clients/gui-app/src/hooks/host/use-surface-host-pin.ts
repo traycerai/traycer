@@ -1,20 +1,18 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useEpicNodeHostIds } from "@/hooks/epic/use-epic-node-host-ids";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useHostLeases } from "@/hooks/host/use-host-lease";
-import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   gitDiffPanelSurfaceKey,
   isSurfacePinDeposed,
   isSurfacePinFleetKnown,
   isTaskPanelSurfaceKey,
-  resolvedSurfaceHostId,
   tabSurfaceKey,
   useSurfaceHostSelectionStore,
   type SurfaceHostSelection,
   type SurfaceKind,
-  type SurfacePinFleetView,
 } from "@/stores/host/surface-host-selection-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -142,33 +140,37 @@ function useSurfaceHostPinResolved(
     (state) => state.clearPinsForHost,
   );
   const effectiveHostId = useEffectiveHostId();
-  const leases = useHostLeases();
-  const authorityAttached = useSelectionAuthorityAttached();
-  const fleet = useMemo<SurfacePinFleetView>(
-    () => ({ authorityAttached, leases }),
-    [authorityAttached, leases],
-  );
-  const honoredSelection: SurfaceHostSelection =
-    selection !== null && isSurfacePinDeposed(selection, fleet)
-      ? null
-      : selection;
-  // A task's sole agent host precedes the caller's existing fallback (the
-  // canvas host for PRs). Apply the pin's lease rule to both, so a dead task
-  // host falls through while an expected restart holds its selection.
-  const honoredDefaultHostId =
-    [taskHostId, defaultHostId].find(
-      (hostId) => hostId !== null && !isSurfacePinDeposed(hostId, fleet),
-    ) ?? null;
+  const { honoredSelection, honoredDefaultHostId, pinRemoved } =
+    useSelectionAuthorityStore(
+      useShallow((state) => {
+        const fleet = {
+          authorityAttached: state.attached,
+          leases: state.leases,
+        };
+        return {
+          honoredSelection:
+            selection !== null && isSurfacePinDeposed(selection, fleet)
+              ? null
+              : selection,
+          // Expected restarts hold both incumbent tiers, just as pins do.
+          honoredDefaultHostId:
+            [taskHostId, defaultHostId].find(
+              (hostId) =>
+                hostId !== null && !isSurfacePinDeposed(hostId, fleet),
+            ) ?? null,
+          pinRemoved:
+            selection !== null &&
+            isSurfacePinFleetKnown(fleet) &&
+            !state.leases.some((lease) => lease.hostId === selection),
+        };
+      }),
+    );
   // ONE local, deliberately: `resolvedHostId` falls back to this exact value,
   // and consumers compare the two to ask "would unpinning move me?"
   // (`resolvedHostId !== followingHostId`). That question is only answerable
   // while both are the same expression, so they must not be able to drift.
   const followingHostId = honoredDefaultHostId ?? effectiveHostId;
-  const resolvedHostId = resolvedSurfaceHostId(
-    selection,
-    followingHostId,
-    fleet,
-  );
+  const resolvedHostId = honoredSelection ?? followingHostId;
   const resolvedFrom = resolvedTier(honoredSelection, honoredDefaultHostId);
 
   // Deregistration clears the pin; death never does. Runs as an effect rather
@@ -177,10 +179,9 @@ function useSurfaceHostPinResolved(
   // resolver's own absence arm means it is never SERVED in the meantime.
   useEffect(() => {
     if (selection === null) return;
-    if (!isSurfacePinFleetKnown(fleet)) return;
-    if (fleet.leases.some((lease) => lease.hostId === selection)) return;
+    if (!pinRemoved) return;
     clearPinsForHost(selection);
-  }, [clearPinsForHost, fleet, selection]);
+  }, [clearPinsForHost, pinRemoved, selection]);
 
   const setSelection = useCallback(
     (next: SurfaceHostSelection) => {

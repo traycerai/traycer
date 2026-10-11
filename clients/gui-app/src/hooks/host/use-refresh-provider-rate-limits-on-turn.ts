@@ -15,7 +15,7 @@ import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-f
 
 /**
  * While mounted, refreshes `host.getRateLimitUsage` for the current host scope
- * whenever a chat turn on `providerId`'s harness completes - the provider-pull
+ * whenever a chat turn on this host/profile and `providerId`'s harness completes - the provider-pull
  * analog of `useRefreshRateLimitUsageOnTraycerTurn`. Branches on the provider's
  * fetch lane:
  *
@@ -65,10 +65,15 @@ export function useRefreshProviderRateLimitsOnTurn(
     // previous provider's cooldown timestamp and can skip its own first,
     // otherwise-due invalidation.
     lastInvalidatedAtRef.current = 0;
-    if (providerId === null || !fetchEligible) return;
+    if (providerId === null || !fetchEligible || fetchScope === null) return;
     const harnessId = providerIdToGuiHarnessId(providerId);
     return subscribeChatTurnCompletions((completion) => {
-      if (completion.harnessId !== harnessId) return;
+      if (
+        completion.harnessId !== harnessId ||
+        completion.hostId !== fetchScope.hostId ||
+        completion.profileId !== profileId
+      )
+        return;
       const now = Date.now();
       if (
         now - lastInvalidatedAtRef.current <
@@ -94,7 +99,7 @@ export function useRefreshProviderRateLimitsOnTurn(
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
           "host.getRateLimitUsage"
-        >(fetchScope?.hostId ?? null, "host.getRateLimitUsage", {
+        >(fetchScope.hostId, "host.getRateLimitUsage", {
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
           providerId,
           profileId,

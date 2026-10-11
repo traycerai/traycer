@@ -291,11 +291,114 @@ describe("TileCanvas re-measures hosted geometry on a position-only placement ch
     // one rect update, at the post-drop position.
     expect(rects).toEqual([{ left: 500, top: 0, width: 500, height: 600 }]);
 
-    // Direct sanity check on the coordinator itself: an explicit remeasure
-    // right now (same rect, still unmoved) applies again with no error,
-    // confirming the registration survived the drop's re-render.
+    // Direct sanity check on the coordinator itself: the registration
+    // survived the drop's re-render. Move the anchor again and remeasure -
+    // a real change must still be read and delivered.
     rects.length = 0;
+    stubRect(anchor, { left: 700, top: 0, width: 500, height: 600 });
     remeasureTileSurfaceGeometry();
-    expect(rects).toEqual([{ left: 500, top: 0, width: 500, height: 600 }]);
+    expect(rects).toEqual([{ left: 700, top: 0, width: 500, height: 600 }]);
+  });
+});
+
+describe("TileCanvas remeasure gate: tab selection alone must not remeasure (perf fix W1-B item 3)", () => {
+  let rects: TileSurfaceRect[] = [];
+  const CHAT_INSTANCE_ID_2 = "chat-2-selection";
+
+  beforeEach(() => {
+    resetTileSurfaceGeometryCoordinatorForTesting();
+    resetCanvasStore();
+    useInitialChatHandoffStore.getState().resetForTests();
+    rects = [];
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetTileSurfaceGeometryCoordinatorForTesting();
+    resetCanvasStore();
+    useInitialChatHandoffStore.getState().resetForTests();
+  });
+
+  function seedTwoChatPane(): void {
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [TAB_ID]: {
+          root: pane(PANE_CHAT, [CHAT_INSTANCE_ID, CHAT_INSTANCE_ID_2]),
+          activePaneId: PANE_CHAT,
+          tilesByInstanceId: {
+            [CHAT_INSTANCE_ID]: {
+              id: CHAT_INSTANCE_ID,
+              instanceId: CHAT_INSTANCE_ID,
+              type: "chat" as const,
+              name: "Chat 1",
+              hostId: TEST_HOST_ID,
+            },
+            [CHAT_INSTANCE_ID_2]: {
+              id: CHAT_INSTANCE_ID_2,
+              instanceId: CHAT_INSTANCE_ID_2,
+              type: "chat" as const,
+              name: "Chat 2",
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+  }
+
+  /**
+   * The remeasure layout effect must key off the geometry tree's structure
+   * (pane ids, split shape), never the selected tab. `rects` staying empty
+   * alone would not catch a regression here, since an unchanged rect is
+   * suppressed downstream regardless of whether a remeasure ran - so this
+   * asserts zero `getBoundingClientRect` reads too.
+   */
+  it("selecting the pane's other tab does not remeasure hosted geometry", () => {
+    const host = document.createElement("div");
+    stubRect(host, { left: 0, top: 0, width: 1000, height: 600 });
+    registerTileSurfaceGeometryHost(host);
+
+    const anchor = document.createElement("div");
+    stubRect(anchor, { left: 0, top: 0, width: 500, height: 600 });
+    registerTileSurfaceGeometrySlot(CHAT_INSTANCE_ID, anchor, (rect) =>
+      rects.push(rect),
+    );
+    rects.length = 0;
+
+    seedTwoChatPane();
+    render(<TileCanvas epicId={EPIC_ID} tabId={TAB_ID} />);
+    // Clear the unconditional mount-time delivery.
+    rects.length = 0;
+
+    const hostReadSpy = vi.spyOn(host, "getBoundingClientRect");
+    const anchorReadSpy = vi.spyOn(anchor, "getBoundingClientRect");
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(TAB_ID, PANE_CHAT, CHAT_INSTANCE_ID_2);
+    });
+
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+    if (
+      canvas === undefined ||
+      canvas.root === null ||
+      canvas.root.kind !== "pane"
+    ) {
+      throw new Error("expected a live single-pane canvas after selection");
+    }
+    expect(canvas.root.activeTabId).toBe(CHAT_INSTANCE_ID_2);
+
+    // No DOM reads at all - not just no delivered rect - proves the layout
+    // effect itself did not run, rather than running and being suppressed.
+    expect(hostReadSpy).not.toHaveBeenCalled();
+    expect(anchorReadSpy).not.toHaveBeenCalled();
+    expect(rects).toEqual([]);
+
+    hostReadSpy.mockRestore();
+    anchorReadSpy.mockRestore();
   });
 });

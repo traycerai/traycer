@@ -137,6 +137,57 @@ describe("OnboardingCoachmark lifecycle", () => {
     expect(replacement.hasAttribute("data-first-task-highlight")).toBe(false);
   });
 
+  it("moves the card and dimming with the SAME target reparented into and out of a modal", async () => {
+    render(<CoachmarkHarness />);
+    const root = screen.getByTestId("guide-root");
+    const target = createVisibleTarget();
+    root.append(target);
+    const card = await screen.findByTestId("guide-coachmark");
+    // Outside any modal: the card floats on the body and the app is dimmed.
+    expect(card.closest('[data-slot="dialog-content"]')).toBeNull();
+    expect(screen.getByTestId("guide-coachmark-dim")).toBeTruthy();
+
+    // The target element (and every prop) stays identical; only its ancestry
+    // changes, so nothing but a DOM subscription can make the card look again.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("data-slot", "dialog-content");
+    dialog.setAttribute("data-state", "open");
+    act(() => {
+      root.append(dialog);
+      dialog.append(target);
+    });
+
+    await waitFor(() => {
+      const inside = screen.getByTestId("guide-coachmark");
+      expect(inside.closest('[data-slot="dialog-content"]')).toBe(dialog);
+    });
+    // A target inside an overlay must not dim the surface that owns attention.
+    expect(screen.queryByTestId("guide-coachmark-dim")).toBeNull();
+    expect(
+      screen
+        .getByTestId("guide-coachmark-halo")
+        .getAttribute("data-over-overlay"),
+    ).toBe("true");
+
+    act(() => {
+      root.append(target);
+      dialog.remove();
+    });
+
+    // The dialog was a picker-shaped overlay that just closed, so the anchor
+    // waits out its settle window before the card returns to the body.
+    await waitFor(() => {
+      const outside = screen.getByTestId("guide-coachmark");
+      expect(outside.closest('[data-slot="dialog-content"]')).toBeNull();
+      expect(screen.getByTestId("guide-coachmark-dim")).toBeTruthy();
+    });
+    expect(
+      screen
+        .getByTestId("guide-coachmark-halo")
+        .getAttribute("data-over-overlay"),
+    ).toBe("false");
+  });
+
   it("holds the next anchor until a closing picker has settled", async () => {
     vi.useFakeTimers();
     render(<CoachmarkHarness />);

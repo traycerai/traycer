@@ -22,7 +22,6 @@ import {
   deriveMermaidAriaLabel,
   deriveMermaidErrorMessage,
   ensureMermaidReady,
-  parseMermaid,
   renderMermaidSvg,
   subscribeMermaidTheme,
 } from "./mermaid-service";
@@ -101,10 +100,12 @@ export function MermaidNodeView(props: NodeViewProps) {
 
   // Debounced render - avoids reparsing on every keystroke.
   const renderTimerRef = useRef<number | null>(null);
-  const renderTokenRef = useRef(0);
+  const renderAbortRef = useRef<AbortController | null>(null);
 
   const triggerRender = useCallback((code: string) => {
-    const token = (renderTokenRef.current += 1);
+    renderAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    renderAbortRef.current = ctrl;
     if (code.trim().length === 0) {
       setRender({ status: "idle", svg: "", error: "" });
       return;
@@ -112,15 +113,12 @@ export function MermaidNodeView(props: NodeViewProps) {
     setRender((prev) => ({ ...prev, status: "pending" }));
     void (async (): Promise<void> => {
       try {
-        await parseMermaid(code);
-        if (token === renderTokenRef.current) {
-          const { svg } = await renderMermaidSvg(code);
-          if (token === renderTokenRef.current) {
-            setRender({ status: "ready", svg, error: "" });
-          }
+        const { svg } = await renderMermaidSvg(code, ctrl.signal);
+        if (!ctrl.signal.aborted) {
+          setRender({ status: "ready", svg, error: "" });
         }
       } catch (err) {
-        if (token !== renderTokenRef.current) return;
+        if (ctrl.signal.aborted) return;
         const message = deriveMermaidErrorMessage(err);
         setRender({ status: "error", svg: "", error: message });
       }
@@ -136,6 +134,7 @@ export function MermaidNodeView(props: NodeViewProps) {
       triggerRender(activeCode);
     }, RENDER_DEBOUNCE_MS);
     return () => {
+      renderAbortRef.current?.abort();
       if (renderTimerRef.current !== null) {
         window.clearTimeout(renderTimerRef.current);
         renderTimerRef.current = null;

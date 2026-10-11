@@ -1,14 +1,16 @@
 import { useMemo } from "react";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import {
   useNotificationFeedMode,
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import { cloudNotificationsStoreApi } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   mergeLocalPartitionIntoCloudIndicators,
-  selectCloudNotificationIndicatorProjection,
+  selectNotificationIndicatorsForEntities,
+  surfaceNotificationIndicatorsEqual,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
@@ -101,26 +103,29 @@ export function useNotificationIndicators(
   // same-id tabs with them. Taking the id from the query instead of asking a
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
-  const cloudRows = useCloudNotificationsStore((state) => state.rows);
-  const cloudIndicators = useMemo<SurfaceNotificationIndicators>(() => {
-    if (!isMixed || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
-    const projection = selectCloudNotificationIndicatorProjection(
-      cloudRows,
-      args.epicIds,
-      args.chatIds,
-    );
-    return {
-      ...projection.aggregate,
-      byOriginHostId: projection.byOriginHostId,
-    };
-  }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  return isMixed
-    ? mergeLocalPartitionIntoCloudIndicators(
-        cloudIndicators,
-        hostIndicators.data,
-        readHostId,
-      )
-    : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
+  const cloudIndicators = useStoreWithEqualityFn(
+    cloudNotificationsStoreApi,
+    (state) =>
+      !isMixed || !args.enabled
+        ? EMPTY_INDICATOR_STATE_RESPONSE
+        : selectNotificationIndicatorsForEntities(
+            state.indicators,
+            args.epicIds,
+            args.chatIds,
+          ),
+    surfaceNotificationIndicatorsEqual,
+  );
+  return useMemo(
+    () =>
+      isMixed
+        ? mergeLocalPartitionIntoCloudIndicators(
+            cloudIndicators,
+            hostIndicators.data,
+            readHostId,
+          )
+        : scopeIndicatorsToOrigin(hostIndicators.data, readHostId),
+    [isMixed, cloudIndicators, hostIndicators.data, readHostId],
+  );
 }
 
 function scopeIndicatorsToOrigin(

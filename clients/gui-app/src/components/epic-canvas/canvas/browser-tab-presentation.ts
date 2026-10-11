@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
-import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
+import { useBrowserSessionsSelectorForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
   browserTabOrigin,
@@ -11,6 +11,27 @@ import {
 export type BrowserTabPresentation = SettledTabIdentity & {
   readonly isolated: boolean;
 };
+
+interface BrowserTabDisplay {
+  readonly liveTab: BrowserTabInfo;
+  readonly isolated: boolean;
+}
+
+function browserTabDisplayEqual(
+  a: BrowserTabDisplay | null,
+  b: BrowserTabDisplay | null,
+): boolean {
+  return (
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.isolated === b.isolated &&
+      a.liveTab.tabId === b.liveTab.tabId &&
+      a.liveTab.title === b.liveTab.title &&
+      a.liveTab.url === b.liveTab.url &&
+      a.liveTab.status === b.liveTab.status)
+  );
+}
 
 function settleBrowserTabPresentation(
   previous: BrowserTabPresentation | null,
@@ -32,42 +53,43 @@ export function useBrowserTabPresentation(
   tab: EpicCanvasTileRef,
   epicId: string,
 ): BrowserTabPresentation | null {
-  const sessions = useBrowserSessionsForHost({
-    hostId: tab.type === "browser-session" ? tab.hostId : null,
-    scope: { kind: "epic", epicId },
-  });
-  const session =
-    tab.type === "browser-session"
-      ? sessions.items.find(
-          (candidate) =>
-            candidate.hostId === tab.hostId &&
-            candidate.sessionId === tab.sessionId,
-        )
-      : undefined;
-  const liveTab =
-    tab.type === "browser-session"
-      ? session?.tabs.find((candidate) => candidate.tabId === tab.tabId)
-      : undefined;
-  const [state, setState] = useState(() => ({
-    liveTab,
-    presentation:
-      liveTab === undefined || session === undefined
+  const display = useBrowserSessionsSelectorForHost(
+    {
+      hostId: tab.type === "browser-session" ? tab.hostId : null,
+      scope: { kind: "epic", epicId },
+    },
+    (sessions) => {
+      if (tab.type !== "browser-session") return null;
+      const session = sessions.items.find(
+        (candidate) =>
+          candidate.hostId === tab.hostId &&
+          candidate.sessionId === tab.sessionId,
+      );
+      const liveTab = session?.tabs.find(
+        (candidate) => candidate.tabId === tab.tabId,
+      );
+      return session === undefined || liveTab === undefined
         ? null
-        : settleBrowserTabPresentation(
-            null,
-            liveTab,
-            session.profile === "isolated",
-          ),
+        : { liveTab, isolated: session.profile === "isolated" };
+    },
+    browserTabDisplayEqual,
+  );
+  const [state, setState] = useState(() => ({
+    display,
+    presentation:
+      display === null
+        ? null
+        : settleBrowserTabPresentation(null, display.liveTab, display.isolated),
   }));
-  if (state.liveTab === liveTab) return state.presentation;
+  if (browserTabDisplayEqual(state.display, display)) return state.presentation;
   const presentation =
-    liveTab === undefined || session === undefined
+    display === null
       ? null
       : settleBrowserTabPresentation(
           state.presentation,
-          liveTab,
-          session.profile === "isolated",
+          display.liveTab,
+          display.isolated,
         );
-  setState({ liveTab, presentation });
+  setState({ display, presentation });
   return presentation;
 }

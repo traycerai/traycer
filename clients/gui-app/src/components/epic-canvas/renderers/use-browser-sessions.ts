@@ -1,11 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useStoreWithEqualityFn } from "zustand/traditional";
+import { shallow } from "zustand/shallow";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -27,9 +22,8 @@ import {
 import {
   acquireBrowserSessionsCoordinator,
   browserSessionsCoordinatorKey,
-  browserSessionsCoordinatorState,
+  browserSessionsCoordinatorStore,
   hasBrowserSessionsCoordinator,
-  subscribeToBrowserSessionsCoordinator,
   upsertBrowserSessionsCoordinatorConsumer,
   type BrowserSessionsOwner,
   type BrowserSessionsState,
@@ -37,6 +31,7 @@ import {
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useMaybeBrowserSessionsCoordinatorKey } from "./browser-sessions-context";
 
 function browserSessionsOwnerIdentityKey(
   hostClient: HostClient<HostRpcRegistry> | null,
@@ -55,16 +50,48 @@ export function useBrowserSessionsForHost(args: {
   readonly hostId: string | null;
   readonly scope: HostResourceScope;
 }): BrowserSessionsState {
+  return useBrowserSessionsSelectorForHost(args, (state) => state, Object.is);
+}
+
+export function useBrowserSessionsSelectorForHost<T>(
+  args: { readonly hostId: string | null; readonly scope: HostResourceScope },
+  selector: (state: BrowserSessionsState) => T,
+  equality: (a: T, b: T) => boolean,
+): T {
   const runnerHost = useRunnerHost();
   const hostClient = useHostClientForHostId(args.hostId);
   const localHostId = useReactiveLocalHostId();
-  return useBrowserSessions({
-    hostId: args.hostId,
-    hostClient,
-    scope: args.scope,
-    browserView: runnerHost.browserView,
-    localHostId,
-  }).state;
+  return useSelectedBrowserSessions(
+    {
+      hostId: args.hostId,
+      hostClient,
+      scope: args.scope,
+      browserView: runnerHost.browserView,
+      localHostId,
+    },
+    selector,
+    equality,
+  ).state;
+}
+
+const EMPTY_SESSIONS = unavailableBrowserSessionsState(null);
+
+function selectBrowserInventory(state: BrowserSessionsState | null) {
+  const sessions = state ?? EMPTY_SESSIONS;
+  return {
+    items: sessions.items,
+    lifecycle: sessions.lifecycle,
+    errorMessage: sessions.errorMessage,
+    retry: sessions.retry,
+    closeTab: sessions.closeTab,
+  };
+}
+
+/** The surrounding provider owns acquisition; lists only read inventory. */
+export function useBrowserSessionsInventory() {
+  const key = useMaybeBrowserSessionsCoordinatorKey();
+  const store = useMemo(() => browserSessionsCoordinatorStore(key), [key]);
+  return useStoreWithEqualityFn(store, selectBrowserInventory, shallow);
 }
 
 interface UseBrowserSessionsArgs {
@@ -90,6 +117,14 @@ interface BrowserSessionsHookResult {
 export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
+  return useSelectedBrowserSessions(args, (state) => state, Object.is);
+}
+
+function useSelectedBrowserSessions<T>(
+  args: UseBrowserSessionsArgs,
+  selector: (state: BrowserSessionsState) => T,
+  equality: (a: T, b: T) => boolean,
+): { readonly state: T; readonly coordinatorKey: string | null } {
   const { hostId, scope, browserView, localHostId } = args;
   const navigateNested = useEpicNestedFocusNavigation();
   const viewTabId = useEpicViewTabId();
@@ -183,21 +218,20 @@ export function useBrowserSessions(
     presentation,
   ]);
 
-  const subscribe = useCallback(
-    (listener: () => void) =>
-      subscribeToBrowserSessionsCoordinator(coordinatorKey, listener),
+  const store = useMemo(
+    () => browserSessionsCoordinatorStore(coordinatorKey),
     [coordinatorKey],
   );
-  const getSnapshot = useCallback(
-    () => browserSessionsCoordinatorState(coordinatorKey),
-    [coordinatorKey],
-  );
-  const state = useSyncExternalStore(subscribe, getSnapshot, () => null);
   const unavailableState = useMemo(
     () => unavailableBrowserSessionsState(hostId),
     [hostId],
   );
-  return { state: state ?? unavailableState, coordinatorKey };
+  const state = useStoreWithEqualityFn(
+    store,
+    (snapshot) => selector(snapshot ?? unavailableState),
+    equality,
+  );
+  return { state, coordinatorKey };
 }
 
 function unavailableBrowserSessionsState(

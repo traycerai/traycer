@@ -1626,6 +1626,15 @@ export async function ingestCloudDraftSummary(input: {
     landingDraftIsRetired(input.document.draftId)
   ) {
     settleCloudDraftHead(input.summary, SETTLED_WITHOUT_MIRROR);
+  } else if (
+    input.document.kind === "landing" &&
+    !cloudIngestSeqByDraft.has(input.document.draftId)
+  ) {
+    // An absence sweep dropped the row while the apply waited on its images
+    // (it removed the apply's reservation). A mount that lists the row again
+    // skipped this head as already reading, so it is woken rather than left
+    // until its next directory delivery.
+    abandonCloudDraftHeadRead(input.summary, "released");
   } else {
     releaseCloudDraftHeadRead(input.summary);
   }
@@ -2447,6 +2456,13 @@ export function sweepAbsentCloudDraftMirrors(
   });
   // A dropped mirror's head is no longer settled here: the same head listed
   // again later (a row that reappears) is read and applied again.
+  // An apply of the row still parked on its blob reads started before this
+  // directory was dispatched, so it is superseded too, or it would install
+  // the row the directory just removed: its reservation goes, which is also
+  // how its ingest tells this refusal from the others
+  // (`ingestCloudDraftSummary`). Removed rather than advanced, so the row's
+  // fence is what it would be had the apply never run.
+  for (const id of dropped) cloudIngestSeqByDraft.delete(id);
   if (dropped.length > 0) forgetCloudDraftHeadsOfMirrors(new Set(dropped));
   return dropped;
 }

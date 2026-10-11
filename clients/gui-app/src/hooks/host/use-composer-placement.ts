@@ -2,8 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useHostLeases } from "@/hooks/host/use-host-lease";
-import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useSurfaceHostPinWithDefault,
   type SurfaceHostPin,
@@ -172,11 +171,14 @@ function useComposerPlacementForPin(
   //
   // Derived from the lease, on the same rule the pin resolver uses, so the two
   // cannot disagree about what "dead" means.
-  const leases = useHostLeases();
-  const authorityAttached = useSelectionAuthorityAttached();
-  const namedHostDead =
-    overrideHostId !== null &&
-    isSurfacePinDeposed(overrideHostId, { authorityAttached, leases });
+  const namedHostDead = useSelectionAuthorityStore(
+    (state) =>
+      overrideHostId !== null &&
+      isSurfacePinDeposed(overrideHostId, {
+        authorityAttached: state.attached,
+        leases: state.leases,
+      }),
+  );
   const directory = useHostDirectoryList();
   const entries = directory.data ?? null;
   const hostLabelFor = useCallback(

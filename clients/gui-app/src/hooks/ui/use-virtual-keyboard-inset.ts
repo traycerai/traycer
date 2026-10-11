@@ -38,17 +38,36 @@ export function readVirtualKeyboardInset(): number {
   return inset < MIN_KEYBOARD_INSET_PX ? 0 : inset;
 }
 
+// One permanent listener per visual viewport keeps the last measured inset
+// warm for every subscriber, so the store snapshot never forces layout during
+// a render and each viewport event measures once, not once per subscriber.
+let cachedInset = 0;
+const insetListeners = new Set<() => void>();
+const measuredViewports = new WeakSet<VisualViewport>();
+
 function subscribeToViewportChanges(onChange: () => void): () => void {
   const viewport = window.visualViewport ?? null;
   if (viewport === null) return () => {};
-  // `resize` covers keyboard show/hide; `scroll` covers iOS moving the visual
-  // viewport within the layout viewport while the keyboard stays up.
-  viewport.addEventListener("resize", onChange);
-  viewport.addEventListener("scroll", onChange);
+  if (!measuredViewports.has(viewport)) {
+    measuredViewports.add(viewport);
+    cachedInset = readVirtualKeyboardInset();
+    const measure = (): void => {
+      cachedInset = readVirtualKeyboardInset();
+      for (const listener of insetListeners) listener();
+    };
+    // `resize` covers keyboard show/hide; `scroll` covers iOS moving the
+    // visual viewport within the layout viewport while the keyboard stays up.
+    viewport.addEventListener("resize", measure);
+    viewport.addEventListener("scroll", measure);
+  }
+  insetListeners.add(onChange);
   return () => {
-    viewport.removeEventListener("resize", onChange);
-    viewport.removeEventListener("scroll", onChange);
+    insetListeners.delete(onChange);
   };
+}
+
+function readCachedInset(): number {
+  return cachedInset;
 }
 
 function readServerSnapshot(): number {
@@ -58,7 +77,7 @@ function readServerSnapshot(): number {
 export function useVirtualKeyboardInset(): number {
   return React.useSyncExternalStore(
     subscribeToViewportChanges,
-    readVirtualKeyboardInset,
+    readCachedInset,
     readServerSnapshot,
   );
 }

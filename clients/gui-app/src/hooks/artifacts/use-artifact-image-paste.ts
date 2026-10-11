@@ -14,7 +14,10 @@ import type {
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { commitArtifactImageWithRetry } from "./commit-artifact-image-with-retry";
-import { useArtifactImageOperations } from "./use-artifact-image-operations";
+import {
+  useArtifactImageOperations,
+  type ArtifactImagePreparation,
+} from "./use-artifact-image-operations";
 
 export interface PreparedArtifactImage {
   readonly operationId: string;
@@ -95,6 +98,60 @@ function removeArtifactImage(
   editor.view.dispatch(editor.state.tr.delete(position, position + 1));
 }
 
+async function convertArtifactImages(
+  files: readonly File[],
+  signal: AbortSignal,
+  prepareBytes: (bytes: Uint8Array) => Promise<ArtifactImagePreparation>,
+  abortOperation: (operationId: string) => Promise<unknown>,
+): Promise<ComposerImageConversionResult<PreparedArtifactImage>> {
+  const prepared: PreparedArtifactImage[] = [];
+  try {
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > MAX_ARTIFACT_IMAGE_BYTES) {
+        throw new Error(
+          `${file.name || "Image"} exceeds the 30 MB artifact image limit.`,
+        );
+      }
+      signal.throwIfAborted();
+      const response = await prepareBytes(
+        new Uint8Array(await file.arrayBuffer()),
+      );
+      prepared.push({
+        operationId: response.operationId,
+        src: response.src,
+        alt: file.name || "Image",
+        attachmentHash: response.attachmentHash,
+        mediaType: response.mediaType,
+        abortPending: true,
+      });
+      signal.throwIfAborted();
+    }
+    return {
+      attrs: prepared,
+      release: () => {
+        prepared
+          .filter((image) => image.abortPending)
+          .forEach((image) => {
+            void abortOperation(image.operationId)
+              .then(() => {
+                image.abortPending = false;
+              })
+              .catch(() => {});
+          });
+      },
+    };
+  } catch (error) {
+    await Promise.allSettled(
+      prepared.map(async (image) => {
+        await abortOperation(image.operationId);
+        image.abortPending = false;
+      }),
+    );
+    throw error;
+  }
+}
+
 export function useArtifactImagePaste(
   editor: Editor | null,
   epicId: string,
@@ -115,57 +172,13 @@ export function useArtifactImagePaste(
 
   const imageIngest = useMemo(
     (): ComposerImageIngest<PreparedArtifactImage> => ({
-      convert: async (
-        files,
-        signal,
-      ): Promise<ComposerImageConversionResult<PreparedArtifactImage>> => {
-        const prepared: PreparedArtifactImage[] = [];
-        try {
-          for (const file of files) {
-            if (!file.type.startsWith("image/")) continue;
-            if (file.size > MAX_ARTIFACT_IMAGE_BYTES) {
-              throw new Error(
-                `${file.name || "Image"} exceeds the 30 MB artifact image limit.`,
-              );
-            }
-            signal.throwIfAborted();
-            const response = await operations.prepareBytes(
-              new Uint8Array(await file.arrayBuffer()),
-            );
-            prepared.push({
-              operationId: response.operationId,
-              src: response.src,
-              alt: file.name || "Image",
-              attachmentHash: response.attachmentHash,
-              mediaType: response.mediaType,
-              abortPending: true,
-            });
-            signal.throwIfAborted();
-          }
-          return {
-            attrs: prepared,
-            release: () => {
-              prepared
-                .filter((image) => image.abortPending)
-                .forEach((image) => {
-                  void abortOperation(image.operationId)
-                    .then(() => {
-                      image.abortPending = false;
-                    })
-                    .catch(() => {});
-                });
-            },
-          };
-        } catch (error) {
-          await Promise.allSettled(
-            prepared.map(async (image) => {
-              await abortOperation(image.operationId);
-              image.abortPending = false;
-            }),
-          );
-          throw error;
-        }
-      },
+      convert: (files, signal) =>
+        convertArtifactImages(
+          files,
+          signal,
+          operations.prepareBytes,
+          abortOperation,
+        ),
       onSettled: async (accepted, converted) => {
         const acceptedIds = new Set(accepted.map((image) => image.operationId));
         await Promise.allSettled(
@@ -188,10 +201,11 @@ export function useArtifactImagePaste(
           }
           void abortOperation(image.operationId).catch(() => {});
           image.abortPending = false;
-          failure ??=
-            result.reason instanceof Error
-              ? result.reason
-              : new Error("The artifact image could not be committed.");
+          if (failure === null)
+            failure =
+              result.reason instanceof Error
+                ? result.reason
+                : new Error("The artifact image could not be committed.");
           removeArtifactImage(editor, image);
         }
         if (failure !== null) throw failure;

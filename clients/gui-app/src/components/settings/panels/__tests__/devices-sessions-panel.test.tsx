@@ -63,11 +63,19 @@ vi.mock("@/hooks/auth/use-user-sessions-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/auth/use-revoke-user-session-mutation", () => ({
-  useAuthRevokeUserSession: () => ({
+// W3-I1: wrapped in its own `vi.fn()` (not just the inner `mutateAsync`) so a
+// test can use its call count as a sentinel for how many times `SessionRow`
+// itself rendered - this hook is called once per `SessionRow` render body,
+// so a re-render invokes it again regardless of what it returns.
+const useAuthRevokeUserSessionMock = vi.hoisted(() =>
+  vi.fn((_familyId: string) => ({
     isPending: false,
     mutateAsync: revokeMutateAsync,
-  }),
+  })),
+);
+
+vi.mock("@/hooks/auth/use-revoke-user-session-mutation", () => ({
+  useAuthRevokeUserSession: useAuthRevokeUserSessionMock,
 }));
 
 vi.mock("@/hooks/auth/use-revoke-all-sessions-mutation", () => ({
@@ -171,6 +179,7 @@ describe("<DevicesSessionsPanel />", () => {
     revokeMutateAsync.mockRejectedValue(new StepUpRequiredError());
     revokeAllMutateAsync.mockReset();
     revokeAllMutateAsync.mockResolvedValue({ ok: true });
+    useAuthRevokeUserSessionMock.mockClear();
     signOutMock.mockReset();
     sessionsState.sessions = [
       makeSession({ familyId: "family-other", current: false }),
@@ -184,6 +193,7 @@ describe("<DevicesSessionsPanel />", () => {
   afterEach(() => {
     cleanup();
     signOut();
+    vi.useRealTimers();
   });
 
   it("renders the sessions section description with the expanded client list", () => {
@@ -281,6 +291,80 @@ describe("<DevicesSessionsPanel />", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     // Pre-fix: cancel used to surface the literal StepUpCanceledError message.
     expect(screen.queryByText("Verification canceled.")).toBeNull();
+  });
+
+  // W3-I1: SessionRow now reads `now` from the shared `useSampledNow()`
+  // minute clock instead of calling `Date.now()` at render, so its timeline
+  // line has to advance on a clock tick even with no other state change.
+  it("updates the created/last-seen line on the shared minute clock's tick", () => {
+    vi.useFakeTimers();
+    const mountAt = Date.now();
+    const fiveMinutesAgo = new Date(mountAt - 5 * 60_000).toISOString();
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-clock",
+        createdAt: fiveMinutesAgo,
+        lastSeenAt: fiveMinutesAgo,
+      }),
+    ];
+
+    render(<DevicesSessionsPanel />);
+    expect(
+      screen.getByText("Created 5 minutes ago · Last seen 5 minutes ago"),
+    ).toBeDefined();
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    // Falsification: reading Date.now() directly in render never re-renders
+    // on a tick with no other prop/state change, so this would still read
+    // "5 minutes ago" here.
+    expect(
+      screen.getByText("Created 6 minutes ago · Last seen 6 minutes ago"),
+    ).toBeDefined();
+  });
+
+  // W3-I1: SessionRow no longer calls `useSampledNow()` itself - the minute
+  // hook moved into a private `SessionTimelineLabel` leaf it renders, so a
+  // clock tick must repaint only that leaf, not the row (and everything
+  // beside it: the icon, the badges, the sign-out button) around it.
+  it("does not itself re-render on the shared minute clock's tick - only the timeline leaf does", () => {
+    vi.useFakeTimers();
+    const mountAt = Date.now();
+    const fiveMinutesAgo = new Date(mountAt - 5 * 60_000).toISOString();
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-leaf-isolation",
+        createdAt: fiveMinutesAgo,
+        lastSeenAt: fiveMinutesAgo,
+      }),
+    ];
+
+    render(<DevicesSessionsPanel />);
+    expect(
+      screen.getByText("Created 5 minutes ago · Last seen 5 minutes ago"),
+    ).toBeDefined();
+    // `useAuthRevokeUserSession` runs in `SessionRow`'s own render body, so
+    // its call count is a direct sentinel for how many times the ROW (not
+    // just its leaf) has rendered.
+    const rowRendersBeforeTick = useAuthRevokeUserSessionMock.mock.calls.length;
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    // The visible line still moves - proves the tick reached the tree at all.
+    expect(
+      screen.getByText("Created 6 minutes ago · Last seen 6 minutes ago"),
+    ).toBeDefined();
+    // Falsification: moving `useSampledNow()` back into `SessionRow` itself
+    // (or any other change that re-subscribes the row to the clock) calls
+    // this hook again on the tick, since it runs in the row's own render
+    // body - this count would be greater than the pre-tick count instead of
+    // equal to it.
+    expect(useAuthRevokeUserSessionMock.mock.calls.length).toBe(
+      rowRendersBeforeTick,
+    );
   });
 
   it("shows an alert banner when a real revoke failure occurs", async () => {

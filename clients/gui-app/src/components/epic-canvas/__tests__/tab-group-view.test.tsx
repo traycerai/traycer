@@ -18,6 +18,10 @@ import {
 import { useLayoutEffect, type ReactNode } from "react";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
+import {
+  setPaneDemand,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -90,10 +94,14 @@ const VIEW_TAB_ID = "view-tab-1";
 // store otherwise defaults to `signed-out`.
 beforeEach(() => {
   useAuthStore.setState({ status: "signed-in" });
+  // Activation writes demand through the shared coordinator; a previous
+  // suite's leftovers must not decide this suite's surface membership.
+  useSurfaceDemandStore.setState(useSurfaceDemandStore.getInitialState(), true);
 });
 
 afterEach(() => {
   useAuthStore.setState({ status: "signed-out" });
+  useSurfaceDemandStore.setState(useSurfaceDemandStore.getInitialState(), true);
 });
 
 interface TestState {
@@ -232,6 +240,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // non-throwing) selectors, so both forms are answered here.
   useEpicAgentActivityTiers: () => new Map<string, false>(),
   useRegisteredEpicAgentActivityTiers: () => new Map<string, false>(),
+  useRegisteredEpicAgentActivityTier: () => undefined,
   useRegisteredEpicPermissionRole: () => "owner",
 }));
 
@@ -652,6 +661,10 @@ describe("<TabGroupView />", () => {
     testState.missingArtifactIds.clear();
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useSurfaceDemandStore.setState(
+      useSurfaceDemandStore.getInitialState(),
+      true,
+    );
     usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
   });
 
@@ -831,6 +844,73 @@ describe("<TabGroupView />", () => {
     seedCanvas(tabs, "inst-spec-1");
     rerender(groupView(tabs, "inst-spec-1", true));
     expect(testState.mounts.get("spec-1")).toBe(2);
+  });
+
+  it("previewing a cold tab shows only the static shell and mounts nothing, keeps warm tabs mounted, and settling mounts it", async () => {
+    const tabs = [specTab(1), specTab(2), specTab(3)];
+    seedCanvas(tabs, "inst-spec-1");
+    const { container, rerender } = render(
+      groupView(tabs, "inst-spec-1", true),
+    );
+    seedCanvas(tabs, "inst-spec-2");
+    rerender(groupView(tabs, "inst-spec-2", true));
+    await waitFor(() => {
+      expect(testState.mounts.get("spec-2")).toBe(1);
+    });
+
+    // The cursor lands on spec-3, which was never mounted: it is selected and
+    // visible but owns no resource, and the warm tabs behind it stay mounted.
+    act(() => setPaneDemand("group-1", "inst-spec-3", "preview"));
+    seedCanvas(tabs, "inst-spec-3");
+    rerender(groupView(tabs, "inst-spec-3", true));
+    const previewLayer = container.querySelector(
+      '[data-tab-instance-id="inst-spec-3"]',
+    );
+    expect(previewLayer?.getAttribute("data-selected")).toBe("true");
+    expect(
+      previewLayer?.querySelector('[data-testid="surface-preview-shell"]'),
+    ).not.toBeNull();
+    expect(testState.mounts.get("spec-3")).toBeUndefined();
+    expect(testState.unmounts.get("spec-1")).toBeUndefined();
+    expect(testState.unmounts.get("spec-2")).toBeUndefined();
+
+    // Settling the same target mounts its real body.
+    act(() => setPaneDemand("group-1", "inst-spec-3", "settled"));
+    await waitFor(() => {
+      expect(testState.mounts.get("spec-3")).toBe(1);
+    });
+    expect(
+      container
+        .querySelector('[data-tab-instance-id="inst-spec-3"]')
+        ?.querySelector('[data-testid="surface-preview-shell"]'),
+    ).toBeNull();
+  });
+
+  it("previewing an already-mounted tab reveals its live body without a remount or a shell", async () => {
+    const tabs = [specTab(1), specTab(2)];
+    seedCanvas(tabs, "inst-spec-1");
+    const { container, rerender } = render(
+      groupView(tabs, "inst-spec-1", true),
+    );
+    seedCanvas(tabs, "inst-spec-2");
+    rerender(groupView(tabs, "inst-spec-2", true));
+    await waitFor(() => {
+      expect(testState.mounts.get("spec-2")).toBe(1);
+    });
+
+    act(() => setPaneDemand("group-1", "inst-spec-1", "preview"));
+    seedCanvas(tabs, "inst-spec-1");
+    rerender(groupView(tabs, "inst-spec-1", true));
+
+    const warmLayer = container.querySelector(
+      '[data-tab-instance-id="inst-spec-1"]',
+    );
+    expect(warmLayer?.getAttribute("data-selected")).toBe("true");
+    expect(
+      warmLayer?.querySelector('[data-testid="surface-preview-shell"]'),
+    ).toBeNull();
+    expect(testState.mounts.get("spec-1")).toBe(1);
+    expect(testState.unmounts.get("spec-1")).toBeUndefined();
   });
 
   it("collapses a hidden pane to the active tab plus terminals", async () => {

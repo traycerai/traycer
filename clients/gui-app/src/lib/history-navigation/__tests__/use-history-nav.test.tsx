@@ -15,6 +15,7 @@ import {
   createPersistentMemoryHistory,
   getHistoryController,
 } from "@/lib/persistent-history";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import { useHistoryNavAvailable } from "@/lib/history-navigation/use-history-nav-available";
 import { useHistoryNavState } from "@/lib/history-navigation/use-history-nav-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -58,6 +59,8 @@ function wrapperFor(router: AppRouter) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  // Clearing storage does not drop a queued write a prior test left pending.
+  cancelDeferredJsonWrites();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
@@ -65,6 +68,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  cancelDeferredJsonWrites();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 

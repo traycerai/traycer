@@ -31,7 +31,7 @@ import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { resetComposerDraftPersistence } from "@/stores/composer/__tests__/composer-draft-rows";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -461,7 +461,7 @@ function emitChatSnapshot(
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   installLegendListViewportMetrics();
   window.localStorage.clear();
   useAuthStore.setState({
@@ -473,7 +473,10 @@ beforeEach(() => {
     },
     contextMetadata: { userId: "owner-1", username: "Owner" },
   });
-  useComposerDraftStore.setState({ drafts: {} });
+  // After the sign-in above: the store is on `owner-1`'s namespace, and this
+  // also drops the storage adapter's revision baseline so a row an earlier test
+  // flushed cannot make this test's edit-restore barrier report a conflict.
+  await resetComposerDraftPersistence();
   useComposerRunSettingsStore.getState().resetForTests();
   useComposerHarnessMemoryStore.getState().resetForTests();
   useSettingsStore.setState({

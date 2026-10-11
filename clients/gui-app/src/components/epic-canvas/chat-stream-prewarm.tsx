@@ -147,6 +147,7 @@ function ChatStreamPrewarmLease(props: {
     props.chatId,
     props.hostId,
     startedBeforeSnapshot && !handedOff,
+    "startup",
   );
   return null;
 }

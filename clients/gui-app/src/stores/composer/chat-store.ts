@@ -6,6 +6,10 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
+  OpenAgentSender,
+  OpenUserMessageSender,
+} from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import type {
   ApprovalDecision,
   ChatSessionAnchor,
   GuiHarnessId,
@@ -644,6 +648,7 @@ export interface ChatMessageSteerBadge {
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
 export interface AssistantTurnMeta {
+  readonly sender?: OpenAgentSender;
   /**
    * Raw harness id, used to pick the provider's mono icon for the footer. An
    * open string: a transcript row's sender may name a harness this build does
@@ -727,6 +732,7 @@ export interface ChatMessageStoppedInfo {
 }
 
 export interface ChatMessage {
+  readonly sender?: OpenUserMessageSender | null;
   id: string;
   role: ChatMessageRole;
   content: string;

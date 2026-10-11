@@ -106,6 +106,7 @@ export function routerAdapterFor(
       const api = getSystemTabModalApi();
       if (
         api !== null &&
+        intent.demand !== "preview" &&
         intent.kind !== "open-epic" &&
         intent.kind !== "open-phase-migration" &&
         intent.kind !== "new-draft" &&

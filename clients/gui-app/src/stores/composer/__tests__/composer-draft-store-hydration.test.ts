@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { legacyComposerDraftId } from "@/lib/drafts/draft-ids";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 
 import {
   pendingSubmittedDraftDeletesForHost,
@@ -7,8 +8,14 @@ import {
   useComposerDraftStore,
   type DraftState,
 } from "../composer-draft-store";
+import {
+  ANON_NAME,
+  readStoredRow,
+  resetComposerDraftPersistence,
+  seedRows,
+} from "./composer-draft-rows";
 
-const STORAGE_KEY = "traycer-gui-app:composer-drafts";
+const DEBOUNCE_MS = 100;
 
 const MENTION_DRAFT: DraftState = {
   content: {
@@ -54,15 +61,23 @@ const MENTION_DRAFT: DraftState = {
   epicTitle: null,
 };
 
-beforeEach(() => {
-  window.localStorage.clear();
+beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // Empty anonymous namespace, with the storage adapter re-baselined on it.
+  await resetComposerDraftPersistence();
 });
 afterEach(() => {
-  window.localStorage.clear();
+  // Reset (which schedules a deferred write through the persist middleware)
+  // BEFORE cancel (which wipes it), and both while still on fake timers -
+  // otherwise the reset's write arms a real 100ms timeout that fires mid a
+  // later test.
   useComposerDraftStore.setState({
     drafts: {},
     pendingSubmittedDraftDeletes: {},
   });
+  cancelDeferredJsonWrites();
+  vi.useRealTimers();
+  window.localStorage.clear();
 });
 
 const EMPTY_DOC: DraftState["content"] = {
@@ -73,13 +88,7 @@ const EMPTY_SELECTION: DraftState["selection"] = { from: 1, to: 1 };
 
 describe("composer draft store hydration", () => {
   it("bumps resetEpoch on every persisted draft after hydration so editors push the JSON into Tiptap", async () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: { drafts: { task1: MENTION_DRAFT } },
-      }),
-    );
+    seedRows({ drafts: { task1: MENTION_DRAFT } }, ANON_NAME);
 
     await useComposerDraftStore.persist.rehydrate();
 
@@ -115,20 +124,17 @@ describe("composer draft store hydration", () => {
     // `detachSubmittedDraft` writes null so the NEXT edit mints a fresh host
     // row; resurrecting the derived legacy id here would publish new content
     // under the row being tombstoned.
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            detached: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: null,
-            },
+    seedRows(
+      {
+        drafts: {
+          detached: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: null,
           },
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -141,16 +147,13 @@ describe("composer draft store hydration", () => {
     // `merge` output is never persisted back, so a second window hydrates
     // the same id-less legacy draft again. A minted id would differ per
     // window and both would publish; the derived id converges.
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            legacy: { content: MENTION_DRAFT.content, selection: null },
-          },
+    seedRows(
+      {
+        drafts: {
+          legacy: { content: MENTION_DRAFT.content, selection: null },
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -168,18 +171,15 @@ describe("composer draft store hydration", () => {
       selection: null,
       revision: 3,
     };
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            nullEntry: null,
-            malformedEntry: { content: null, selection: null },
-            legacy: legacyDraft,
-          },
+    seedRows(
+      {
+        drafts: {
+          nullEntry: null,
+          malformedEntry: { content: null, selection: null },
+          legacy: legacyDraft,
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -224,14 +224,19 @@ describe("composer draft store hydration", () => {
     useComposerDraftStore
       .getState()
       .fenceAndDetachSubmittedDraft("chat-fenced", draftId, "host-a");
-    const persisted = window.localStorage.getItem(STORAGE_KEY);
-    expect(persisted).not.toBeNull();
+    // Flush before reading disk - the write is queued, not synchronous.
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(readStoredRow("delete", draftId, ANON_NAME)?.value).toEqual({
+      hostId: "host-a",
+      retract: false,
+    });
 
+    // The reset queues tombstones, which the explicit rehydrate below cancels:
+    // what survives is what the flush put on disk.
     useComposerDraftStore.setState({
       drafts: {},
       pendingSubmittedDraftDeletes: {},
     });
-    if (persisted !== null) window.localStorage.setItem(STORAGE_KEY, persisted);
     await useComposerDraftStore.persist.rehydrate();
 
     expect(
@@ -247,41 +252,38 @@ describe("composer draft store hydration", () => {
   it("maps a persisted legacy-composer-prefixed id, its supersedes pointer and its delete fence to the uuid v5 form", async () => {
     const legacy = "legacy-composer-7f1c1d2a-9b4e-4d8e-8f2a-3c5b6d7e8f90";
     const derived = "de1163cc-8dfa-5d11-9ad0-a350cc095612";
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            edited: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: legacy,
-              hostRevision: 2,
-            },
-            forkedFromLegacy: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: "d-fork",
-              supersedes: legacy,
-            },
-            detached: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: null,
-            },
-            minted: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: "d-minted",
-            },
+    seedRows(
+      {
+        drafts: {
+          edited: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: legacy,
+            hostRevision: 2,
           },
-          pendingSubmittedDraftDeletes: {
-            [legacy]: { hostId: "host-a", retract: false },
-            "d-other": { hostId: "host-b", retract: true },
+          forkedFromLegacy: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: "d-fork",
+            supersedes: legacy,
+          },
+          detached: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: null,
+          },
+          minted: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: "d-minted",
           },
         },
-      }),
+        pendingSubmittedDraftDeletes: {
+          [legacy]: { hostId: "host-a", retract: false },
+          "d-other": { hostId: "host-b", retract: true },
+        },
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -302,26 +304,23 @@ describe("composer draft store hydration", () => {
   });
 
   it("hydrates a persisted supersedes value, and treats an absent one as null", async () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            forked: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: "d-new",
-              supersedes: "d-old",
-            },
-            plain: {
-              content: MENTION_DRAFT.content,
-              selection: null,
-              draftId: "d-plain",
-            },
+    seedRows(
+      {
+        drafts: {
+          forked: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: "d-new",
+            supersedes: "d-old",
+          },
+          plain: {
+            content: MENTION_DRAFT.content,
+            selection: null,
+            draftId: "d-plain",
           },
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -334,17 +333,14 @@ describe("composer draft store hydration", () => {
 
 describe("composer draft store: pending submitted draft retract entries", () => {
   it("hydrates a persisted pendingSubmittedDraftDeletes entry missing retract to retract: false", async () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {},
-          pendingSubmittedDraftDeletes: {
-            "legacy-pending-delete": { hostId: "host-a" },
-          },
+    seedRows(
+      {
+        drafts: {},
+        pendingSubmittedDraftDeletes: {
+          "legacy-pending-delete": { hostId: "host-a" },
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -501,12 +497,9 @@ describe("composer draft store revision (CAS token)", () => {
   });
 
   it("does not bump a finite revision on hydration finish (only resetEpoch)", async () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: { drafts: { task1: { ...MENTION_DRAFT, revision: 7 } } },
-      }),
+    seedRows(
+      { drafts: { task1: { ...MENTION_DRAFT, revision: 7 } } },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -529,13 +522,7 @@ describe("composer draft store revision (CAS token)", () => {
       resetEpoch: 0,
     };
     expect("revision" in legacyDraft).toBe(false);
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: { drafts: { "legacy-task": legacyDraft } },
-      }),
-    );
+    seedRows({ drafts: { "legacy-task": legacyDraft } }, ANON_NAME);
 
     await useComposerDraftStore.persist.rehydrate();
 

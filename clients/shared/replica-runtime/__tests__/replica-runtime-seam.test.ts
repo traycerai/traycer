@@ -1631,6 +1631,105 @@ describe("createSessionRegistry", () => {
       expect(scheduleSpy.mock.calls[1][0]).toBe(1000);
     });
   });
+
+  describe("reevaluate", () => {
+    it("evicts immediately when the TTL already elapsed while active work was blocking expiry", () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1000,
+        maxActiveDeferMs: null, // indefinite defer while busy - no timer armed
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      session.busy = true;
+      registry.acquire("s1", "scope", () => session);
+      registry.release("s1", "warm"); // parks; busy defers indefinitely
+
+      // Positive premise: nothing is scheduled while busy defers indefinitely.
+      expect(environment.pendingTimerCount()).toBe(0);
+
+      // The TTL window has long since elapsed on the clock, but nothing ever
+      // rechecked it - that is what "no timer armed" means.
+      environment.advanceClock(5000);
+      expect(registry.peek("s1")).toBe(session);
+
+      session.busy = false; // the work settles
+      registry.reevaluate("s1");
+
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+    });
+
+    it("re-arms for what is left of the ORIGINAL window when the TTL has not yet elapsed", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1000,
+        maxActiveDeferMs: null,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      session.busy = true;
+      registry.acquire("s1", "scope", () => session);
+      registry.release("s1", "warm"); // parks at t=0; busy defers, no timer
+
+      expect(scheduleSpy).not.toHaveBeenCalled();
+
+      environment.advanceClock(400); // only 400 of the 1000ms window elapsed
+      session.busy = false;
+      registry.reevaluate("s1");
+
+      // Not evicted, and a timer was armed for the REMAINDER of the
+      // ORIGINAL window (600ms) - not a fresh full TTL from this recheck.
+      expect(session.disposed).toBe(false);
+      expect(registry.peek("s1")).toBe(session);
+      expect(scheduleSpy).toHaveBeenCalledTimes(1);
+      expect(scheduleSpy.mock.calls[0][0]).toBe(600);
+
+      environment.advanceClock(600);
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+    });
+
+    it("enforces the warm cap once work clears, evicting the now-idle session from an unchanged over-cap population", () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: null, // isolate the cap path from the TTL path
+        maxWarm: 1,
+        warmCapScope: "demand-free",
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const sessionA = makeSession("A");
+      sessionA.busy = true;
+      const sessionB = makeSession("B");
+      sessionB.busy = true;
+      registry.acquire("A", "scope", () => sessionA);
+      registry.release("A", "warm");
+      registry.acquire("B", "scope", () => sessionB);
+      registry.release("B", "warm");
+
+      // Positive premise: both busy sessions are over the cap of 1, but both
+      // are held - B's own release walked the cap and evicted neither.
+      expect(registry.peek("A")).toBe(sessionA);
+      expect(registry.peek("B")).toBe(sessionB);
+      expect(policy.disposeSpy).not.toHaveBeenCalled();
+
+      sessionA.busy = false; // A's work settles; B is still busy
+      registry.reevaluate("A");
+
+      // A is now the sole evictable entry in a population still over the
+      // cap and is reclaimed; B, still busy, is left alone.
+      expect(sessionA.disposed).toBe(true);
+      expect(registry.peek("A")).toBeNull();
+      expect(registry.peek("B")).toBe(sessionB);
+    });
+  });
 });
 
 describe("createSessionRegistry.evictOldestEligible", () => {

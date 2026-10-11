@@ -43,8 +43,11 @@ const MAX_TEST_WORKERS = Math.min(
 // were invisible for the same reason: the suite ran them uncompiled while the
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
+// `chat-timeline` (W4 R-B round 3): its rows hook reads a stale-cached
+// mutable WeakMap entry when compiled, dropping `visible` from the inserted
+// memoization scope - only compiled coverage catches it.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card|chat-timeline|routing-card)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

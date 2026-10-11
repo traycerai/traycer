@@ -60,6 +60,7 @@ import type {
 } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
+import { changedComposerImages } from "./composer-image-changes";
 
 const composerEditorIncarnations = new WeakMap<
   Editor,
@@ -191,10 +192,13 @@ export interface ComposerPromptEditorProps {
    * A real document mutation (Tiptap's own `docChanged`-gated `update` event -
    * typing, pasting, an image insert/remove, or a programmatic `setContent`).
    * Never fired for a caret-only move; see `onSelectionChange`.
+   * `changedImages` contains only image nodes in inserted/replaced ranges,
+   * or null when the edit introduced none, for incremental image ingestion.
    */
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { readonly from: number; readonly to: number },
+    changedImages: JsonContent | null,
   ) => void;
   /**
    * Caret/selection moved with no document mutation. Deliberately carries no
@@ -385,16 +389,21 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       editorProps: {
         attributes: editorAttributesObject,
       },
-      onUpdate({ editor: updatedEditor }) {
-        // Tiptap only fires `update` when a transaction actually changed the
-        // document (gated internally on `docChanged` plus a structural
-        // doc-equality check) - so every call here is a real mutation, never
-        // a caret-only echo. `getJSON()` is safe precisely because of that
-        // gate, not despite it.
-        onDocumentChangeRef.current(updatedEditor.getJSON(), {
-          from: updatedEditor.state.selection.from,
-          to: updatedEditor.state.selection.to,
-        });
+      onUpdate({ editor: updatedEditor, transaction, appendedTransactions }) {
+        // The canonical draft still needs one snapshot per real document edit.
+        // Image ingestion only needs nodes inserted by this transaction batch.
+        const changedImages = changedComposerImages(updatedEditor.state.doc, [
+          transaction,
+          ...appendedTransactions,
+        ]);
+        onDocumentChangeRef.current(
+          updatedEditor.getJSON(),
+          {
+            from: updatedEditor.state.selection.from,
+            to: updatedEditor.state.selection.to,
+          },
+          changedImages,
+        );
       },
       onSelectionUpdate({ editor: updatedEditor }) {
         // Never call `getJSON()` here - a selection-only event must not
@@ -431,7 +440,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     // (e.g. the moment a submission starts) would otherwise fire a phantom
     // `onDocumentChange` for a document that never changed. Suppress it: this
     // call carries no content change to report.
-    editor.setEditable(!disabled, false);
+    if (editor.isEditable !== !disabled) editor.setEditable(!disabled, false);
   }, [editor, disabled]);
 
   useLayoutEffect(() => {
@@ -495,20 +504,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     focusActiveComposer();
   }, [editor, isActive, paneActivationFocusIntent]);
 
+  const decoratedPlaceholderRef = useRef(placeholder);
   useEffect(() => {
-    if (editor === null) return;
-    Object.entries(editorAttributesObject).forEach(([name, value]) => {
-      editor.view.dom.setAttribute(name, value);
-    });
-  }, [editor, editorAttributesObject]);
-
-  useEffect(() => {
-    // The Placeholder decoration only re-reads the getter on a transaction. Poke
-    // an empty one when the placeholder changes and the editor is showing it
-    // (empty), so a mid-turn steer hint appears without waiting for a keystroke.
-    // Skipped while non-empty to avoid disturbing an in-progress edit / IME.
-    // `usePlaceholderGetter`'s layout effect has already landed the new value.
-    if (editor !== null && editor.isEmpty) {
+    const changed = decoratedPlaceholderRef.current !== placeholder;
+    decoratedPlaceholderRef.current = placeholder;
+    // Creation already decorated the initial document. Only an actual hint
+    // change needs a transaction; useEditor's options sync owns attributes.
+    if (changed && editor !== null && editor.isEmpty) {
       editor.view.dispatch(editor.state.tr);
     }
   }, [editor, placeholder]);

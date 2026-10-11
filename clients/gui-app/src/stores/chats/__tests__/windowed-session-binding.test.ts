@@ -513,6 +513,94 @@ describe("windowed snapshot with a hydrated tail", () => {
   });
 });
 
+describe("surface visibility gates viewport hydration", () => {
+  it("suppresses a visible-range gap while hidden and requests it once revealed", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 1,
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      harness.handle.setSurfaceVisibility("tab-a", false);
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+
+      // Hidden: the reading range is retained but not planned against.
+      expect(harness.rangeRequests).toEqual([]);
+
+      harness.handle.setSurfaceVisibility("tab-a", true);
+
+      // Reveal resumes planning against the range retained while hidden,
+      // with no need to re-report it.
+      expect(harness.rangeRequests).toHaveLength(1);
+      expect(harness.rangeRequests[0]).toMatchObject({
+        fromOrdinal: 10,
+        toOrdinal: 19,
+      });
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("still requests a visible-range gap while one surface is hidden and a sibling stays visible", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 1,
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      harness.handle.setSurfaceVisibility("tab-a", true);
+      harness.handle.setSurfaceVisibility("tab-b", false);
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+
+      expect(harness.rangeRequests).toHaveLength(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("still requests an unhydrated tail while hidden, since required hydration is not viewport-gated", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.handle.setSurfaceVisibility("tab-a", false);
+
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 1,
+          rowCount: 40,
+          tailFromOrdinal: 40,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+
+      expect(harness.rangeRequests).toHaveLength(1);
+      expect(harness.rangeRequests[0]).toMatchObject({
+        epoch: 1,
+        fromOrdinal: 20,
+        toOrdinal: 39,
+      });
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
 /**
  * The two answers a windowed client can no longer read out of an ABSENCE.
  *
@@ -3673,6 +3761,163 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
       );
     } finally {
       warn.mockRestore();
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * `applyBufferedDeltas` folds a whole coalescing tick's staged `text.delta`
+   * frames through one window write-through, not one per delta. `clock`
+   * bumps once per write-through, so it is the observable proxy for that.
+   */
+  it("coalesces a tick's staged text deltas into one ordered, one-notify window write-through, leaving other rows untouched", () => {
+    const harness = createDeferredFlushHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("Hello", 1)],
+        }),
+      );
+      expect(publishedTurnText(harness)).toBe("Hello");
+      const clockBeforeStaging =
+        harness.handle.store.getState().transcriptWindow.clock;
+      const tailBeforeStaging = harness.handle.store
+        .getState()
+        .messages.find((message) => message.messageId === "tail");
+      if (tailBeforeStaging === undefined) {
+        throw new Error("expected seatedTail's row to be hydrated");
+      }
+
+      const notified = vi.fn();
+      const unsubscribe = harness.handle.store.subscribe(notified);
+      try {
+        // Three token deltas staged inside one coalescing tick, unflushed.
+        streamTextDelta(harness, ", world");
+        streamTextDelta(harness, "!");
+        streamTextDelta(harness, " (streamed)");
+
+        expect(publishedTurnText(harness)).toBe("Hello");
+        expect(harness.handle.store.getState().transcriptWindow.clock).toBe(
+          clockBeforeStaging,
+        );
+        expect(notified).not.toHaveBeenCalled();
+
+        harness.flushDeltas();
+
+        // Order preserved, one write-through, one notification.
+        expect(publishedTurnText(harness)).toBe("Hello, world! (streamed)");
+        expect(harness.handle.store.getState().transcriptWindow.clock).toBe(
+          clockBeforeStaging + 1,
+        );
+        expect(notified).toHaveBeenCalledTimes(1);
+        // A row the batch never touched keeps its identity through the flush.
+        expect(
+          harness.handle.store
+            .getState()
+            .messages.find((message) => message.messageId === "tail"),
+        ).toBe(tailBeforeStaging);
+      } finally {
+        unsubscribe();
+      }
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * A "now"-charged rewrite (`image_resolution.updated`) staged between two
+   * deferred text deltas in the SAME flush must commit the preceding deferred
+   * write before its own rewrite, so no text is lost or reordered around it.
+   */
+  it("commits a charged image-resolution rewrite between two deferred text deltas in one flush", () => {
+    const harness = createDeferredFlushHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("Hello", 1)],
+        }),
+      );
+      const tailBeforeStaging = harness.handle.store
+        .getState()
+        .messages.find((message) => message.messageId === "tail");
+      if (tailBeforeStaging === undefined) {
+        throw new Error("expected seatedTail's row to be hydrated");
+      }
+
+      streamTextDelta(harness, ", world");
+      harness.callbacks().onBlockDelta(
+        createImageResolutionUpdatedFrame({
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event: {
+            type: "image_resolution.updated",
+            blockId: "assistant-10",
+            messageId: "assistant-10",
+            timestamp: 5,
+            turnId: "t-9",
+            entry: {
+              source: "chart.png",
+              canonicalSource: "chart.png",
+              state: "resolved",
+              attachmentHash: "hash-1",
+              mediaType: "image/png",
+              width: null,
+              height: null,
+            },
+          },
+        }),
+      );
+      streamTextDelta(harness, "!");
+
+      harness.flushDeltas();
+
+      expect(publishedTurnText(harness)).toBe("Hello, world!");
+      const row = harness.handle.store
+        .getState()
+        .messages.find((message) => message.messageId === "assistant-10");
+      expect(
+        row?.role === "assistant" ? row.imageResolutions : [],
+      ).toHaveLength(1);
+
+      // Survives a subsequent event republish too, not just the flush.
+      harness.callbacks().onEventAppended(appendedEvent("e-image-barrier"));
+      const rowAfterRepublish = harness.handle.store
+        .getState()
+        .messages.find((message) => message.messageId === "assistant-10");
+      expect(publishedTurnText(harness)).toBe("Hello, world!");
+      expect(
+        rowAfterRepublish?.role === "assistant"
+          ? rowAfterRepublish.imageResolutions
+          : [],
+      ).toHaveLength(1);
+      expect(
+        harness.handle.store
+          .getState()
+          .messages.find((message) => message.messageId === "tail"),
+      ).toBe(tailBeforeStaging);
+    } finally {
       harness.handle.dispose();
     }
   });

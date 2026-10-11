@@ -18,6 +18,7 @@ export interface SummonHotkeyState {
 
 type StoreListener = () => void;
 
+// render-cache: stable per-key instance; state read via subscription (useSyncExternalStore).
 const stores = new WeakMap<
   DesktopGlobalShortcutsBridge,
   GlobalShortcutsStore

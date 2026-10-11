@@ -1,3 +1,7 @@
+import {
+  SurfaceDemandContext,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 /** Restores the contexts lost when a chat moves into the stable surface host. */
 import type { ReactNode } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -24,6 +28,12 @@ export function HostedChatSurfaceContextBridge(props: {
   readonly environment: ReadyTileSurfaceEnvironment;
 }): ReactNode {
   const { environment } = props;
+  const preview = useSurfaceDemandStore(
+    (state) =>
+      state.topLevelPreviewKeys.includes(
+        `epic:${environment.placement.viewTabId}`,
+      ) || state.panePreviewTargets[environment.placement.paneId] !== undefined,
+  );
   const hostId = getEpicSessionHandleHostId(
     environment.services.openEpicHandle,
   );
@@ -56,7 +66,11 @@ export function HostedChatSurfaceContextBridge(props: {
                     <TabBodySelectedContext.Provider
                       value={environment.canvasActivity.tabSelected}
                     >
-                      <HostedChatSurfaceBody environment={environment} />
+                      <SurfaceDemandContext.Provider
+                        value={preview ? "preview" : "settled"}
+                      >
+                        <HostedChatSurfaceBody environment={environment} />
+                      </SurfaceDemandContext.Provider>
                     </TabBodySelectedContext.Provider>
                   </PanePortalContainerContext.Provider>
                 </PaneFocusProbeContext.Provider>
