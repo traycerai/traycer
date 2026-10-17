@@ -1,148 +1,262 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d828422b45e463c229bd937d39ea416278055dde..6e7482f753468e2e3ea9e2564623aa5944230c61 100644
+index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771a911fad7 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -4788,6 +4788,85 @@ function createInlineMarkdownSpec(options) {
+@@ -45,6 +45,7 @@ __export(index_exports, {
+   attrsEqual: () => attrsEqual,
+   callOrReturn: () => callOrReturn,
+   canInsertNode: () => canInsertNode,
++  collectMarkdownListItem: () => collectMarkdownListItem,
+   combineTransactionSteps: () => combineTransactionSteps,
+   commands: () => commands_exports,
+   createAtomBlockMarkdownSpec: () => createAtomBlockMarkdownSpec,
+@@ -143,6 +144,7 @@ __export(index_exports, {
+   markInputRule: () => markInputRule,
+   markPasteRule: () => markPasteRule,
+   markdown: () => markdown_exports,
++  markdownNextBulletRegex: () => markdownNextBulletRegex,
+   marksEqual: () => marksEqual,
+   mergeAttributes: () => mergeAttributes,
+   mergeDeep: () => mergeDeep,
+@@ -4402,9 +4404,11 @@ function isString(value) {
+ // src/utilities/markdown/index.ts
+ var markdown_exports = {};
+ __export(markdown_exports, {
++  collectMarkdownListItem: () => collectMarkdownListItem,
+   createAtomBlockMarkdownSpec: () => createAtomBlockMarkdownSpec,
+   createBlockMarkdownSpec: () => createBlockMarkdownSpec,
+   createInlineMarkdownSpec: () => createInlineMarkdownSpec,
++  markdownNextBulletRegex: () => markdownNextBulletRegex,
+   parseAttributes: () => parseAttributes,
+   parseIndentedBlocks: () => parseIndentedBlocks,
+   renderNestedMarkdownContent: () => renderNestedMarkdownContent,
+@@ -4788,84 +4792,148 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
-+// The column a line's text starts at, a tab advancing to the next stop of 4.
-+function leadingColumns(line) {
-+  let column = 0;
++function isBlankLine(line) {
++  return !/[^ \t]/.test(line);
++}
++function expandTabs(line, column) {
++  let col = column;
++  let expanded = "";
 +  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
++    if (char === "	") {
++      const added = 4 - col % 4;
++      expanded += " ".repeat(added);
++      col += added;
++    } else {
++      expanded += char;
++      col += 1;
++    }
 +  }
-+  return column;
++  return expanded;
 +}
-+// A line without its first `columns` columns of indent, a tab advancing to
-+// the next stop of 4. A tab that reaches past `columns` keeps the rest of its
-+// width as spaces, and a line indented less loses all of its indent.
-+function stripColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+    index += 1;
++function markdownNextBulletRegex(indent) {
++  return new RegExp(
++    `^ {0,${Math.min(3, indent - 1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ \\t][^\\n]*)?(?:\\n|$))`
++  );
++}
++function collectMarkdownListItem(lines, start, markerEnd, rest, options) {
++  let line = expandTabs(rest, markerEnd);
++  let blankLine = isBlankLine(line);
++  let indent;
++  let text = "";
++  if (blankLine) {
++    indent = markerEnd + 1;
++  } else {
++    indent = line.search(/[^ ]/);
++    indent = indent > 4 ? 1 : indent;
++    text = line.slice(indent);
++    indent += markerEnd;
 +  }
-+  return " ".repeat(Math.max(column - columns, 0)) + line.slice(index);
-+}
-+// A paragraph continuation line as text: without the item's content column
-+// of indent, keeping up to 3 more spaces, and without all of its indent when
-+// 4 or more remain.
-+function continuationText(line, contentColumn) {
-+  const text = stripColumns(line, contentColumn);
-+  return leadingColumns(text) >= 4 ? stripColumns(text, 4) : text;
-+}
-+// Whether a block token is a setext heading: text underlined by `===` or `---`.
-+function isSetextHeading(token) {
-+  return token.type === "heading" && !/^ {0,3}#/.test(token.raw);
-+}
-+// Whether marked's block lexer reads `line` as more of the paragraph whose
-+// last line is `paragraphLine`. It does when its first block covers both
-+// lines as a paragraph or as a setext heading. When `line` is that heading's
-+// underline, the item's paragraph keeps it as text only if the underline
-+// alone is a paragraph (`===`), not a thematic break (`---`). Undefined when
-+// `paragraphLine` alone opens some other block.
-+function continuesParagraph(paragraphLine, line, nextLine, lexer) {
-+  const probe = nextLine === void 0 ? [paragraphLine, line] : [paragraphLine, line, nextLine];
-+  const [first] = lexer.probeBlockTokens(probe.join("\n"));
-+  if (first === void 0 || first.type !== "paragraph" && !isSetextHeading(first)) return void 0;
-+  const coveredLines = first.raw.replace(/\n+$/, "").split("\n").length;
-+  if (coveredLines < 2) return false;
-+  if (coveredLines === 2 && isSetextHeading(first)) {
-+    const [alone] = lexer.probeBlockTokens(line);
-+    return alone !== void 0 && alone.type === "paragraph";
++  let end = start + 1;
++  if (blankLine && end < lines.length && isBlankLine(lines[end])) {
++    return { text, end: end + 1, indent };
 +  }
-+  return true;
-+}
-+// Whether this line cannot continue the item's first paragraph. While that
-+// paragraph is empty, a line at or left of the item's own indent has no
-+// paragraph to continue, so the item ends. Otherwise the decision is
-+// marked's, the lexer the nested content is parsed with, asked through
-+// `probeBlockTokens`: in top mode, the mode of CommonMark's paragraph rules,
-+// and without leaving a reference definition, queued inline work or a state
-+// change on the document's lexer. The line and the one
-+// after it, without the item's content column of indent, are lexed after the
-+// paragraph's last line, or alone while the paragraph is empty, and the line
-+// continues the paragraph only if the lexer reads it as paragraph text. So
-+// indented code, a list, a fence, a blockquote, a heading, a thematic break,
-+// an HTML block or a table opens here exactly when marked would open it.
-+function opensItemBlock(line, nextLine, indentLevel, contentColumn, paragraph, lexer) {
-+  var _a;
-+  if (paragraph === "" && leadingColumns(line) <= indentLevel) return true;
-+  const text = stripColumns(line, contentColumn);
-+  const next = nextLine === void 0 ? void 0 : stripColumns(nextLine, contentColumn);
-+  if (paragraph === "") {
-+    const [first] = lexer.probeBlockTokens(next === void 0 ? text : `${text}\n${next}`);
-+    return first === void 0 || first.type !== "paragraph" && !isSetextHeading(first);
++  const begins = (column) => {
++    const spaces = Math.min(3, column - 1);
++    return {
++      fences: new RegExp(`^ {0,${spaces}}(?:\`\`\`|~~~)`),
++      heading: new RegExp(`^ {0,${spaces}}#`),
++      html: new RegExp(`^ {0,${spaces}}<(?:[a-z].*>|!--)`, "i"),
++      blockquote: new RegExp(`^ {0,${spaces}}>`),
++      hr: new RegExp(`^ {0,${spaces}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`)
++    };
++  };
++  let opens = begins(indent);
++  while (end < lines.length) {
++    const nextLine = lines[end];
++    const nextLineWithoutTabs = nextLine.replace(/\t/g, "    ");
++    const legacy = options.legacy;
++    if (legacy !== void 0 && legacy.column < indent && nextLineWithoutTabs.search(/[^ ]/) === legacy.column && legacy.opens(nextLineWithoutTabs.slice(legacy.column))) {
++      indent = legacy.column;
++      opens = begins(indent);
++    }
++    if (opens.fences.test(nextLine) || opens.heading.test(nextLine) || opens.html.test(nextLine) || opens.blockquote.test(nextLine) || options.endsItem(nextLine, indent) || opens.hr.test(nextLine)) {
++      break;
++    }
++    if (nextLineWithoutTabs.search(/[^ ]/) >= indent || isBlankLine(nextLine)) {
++      text += `
++${nextLineWithoutTabs.slice(indent)}`;
++    } else {
++      if (blankLine) {
++        break;
++      }
++      if (line.replace(/\t/g, "    ").search(/[^ ]/) >= 4) {
++        break;
++      }
++      if (opens.fences.test(line) || opens.heading.test(line) || opens.hr.test(line)) {
++        break;
++      }
++      text += `
++${nextLine}`;
++    }
++    blankLine = isBlankLine(nextLine);
++    end += 1;
++    line = nextLineWithoutTabs.slice(indent);
 +  }
-+  const lastLine = paragraph.slice(paragraph.lastIndexOf("\n") + 1);
-+  const continues = (_a = continuesParagraph(lastLine, text, next, lexer)) != null ? _a : continuesParagraph("a", text, next, lexer);
-+  return continues !== true;
++  return { text, end, indent };
++}
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
 +}
  function parseIndentedBlocks(src, config, lexer) {
-   var _a, _b, _c, _d;
+-  var _a, _b, _c, _d;
    const lines = src.split("\n");
-@@ -4801,7 +4880,7 @@ function parseIndentedBlocks(src, config, lexer) {
-     if (!itemMatch) {
-       if (items.length > 0) {
+-  const items = [];
+-  let totalRaw = "";
++  const found = [];
++  let consumed = 0;
+   let i = 0;
+-  const baseIndentSize = config.baseIndentSize || 2;
+   while (i < lines.length) {
+     const currentLine = lines[i];
+     const itemMatch = currentLine.match(config.itemPattern);
+-    if (!itemMatch) {
+-      if (items.length > 0) {
++    const markerEnd = itemMatch ? (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length : 0;
++    const item = itemMatch ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
++      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line)
++    }) : void 0;
++    if (!itemMatch || !item || config.checkbox && !/^\[[ xX]\](?=[ \n]|$)/.test(item.text)) {
++      if (found.length > 0) {
          break;
 -      } else if (currentLine.trim() === "") {
-+      } else if (!/[^ \t]/.test(currentLine)) {
++      } else if (isBlankLine(currentLine)) {
          i += 1;
-         totalRaw = `${totalRaw}${currentLine}
- `;
-@@ -4818,13 +4897,20 @@ function parseIndentedBlocks(src, config, lexer) {
-     i += 1;
-     while (i < lines.length) {
-       const nextLine = lines[i];
+-        totalRaw = `${totalRaw}${currentLine}
+-`;
+         continue;
+       } else {
+         return void 0;
+       }
+     }
+-    const itemData = config.extractItemData(itemMatch);
+-    const { indentLevel, mainContent } = itemData;
+-    totalRaw = `${totalRaw}${currentLine}
+-`;
+-    const itemContent = [mainContent];
+-    i += 1;
+-    while (i < lines.length) {
+-      const nextLine = lines[i];
 -      if (nextLine.trim() === "") {
 -        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
-+      if (!/[^ \t]/.test(nextLine) || config.itemPattern.test(nextLine) || opensItemBlock(nextLine, lines[i + 1], indentLevel, indentLevel + baseIndentSize, itemData.mainContent, lexer)) break;
-+      itemData.mainContent = itemData.mainContent === "" ? continuationText(nextLine, indentLevel + baseIndentSize) : `${itemData.mainContent}\n${continuationText(nextLine, indentLevel + baseIndentSize)}`;
-+      totalRaw = `${totalRaw}${nextLine}\n`;
-+      i += 1;
-+    }
-+    while (i < lines.length) {
-+      const nextLine = lines[i];
-+      if (!/[^ \t]/.test(nextLine)) {
-+        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => /[^ \t]/.test(l));
-         if (nextNonEmptyIndex === -1) {
-           break;
-         }
-         const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
+-        if (nextNonEmptyIndex === -1) {
+-          break;
+-        }
+-        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
 -        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^(\s*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
-+        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^([ \t]*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
-         if (nextIndent2 > indentLevel) {
-           itemContent.push(nextLine);
-           totalRaw = `${totalRaw}${nextLine}
-@@ -4835,7 +4921,7 @@ function parseIndentedBlocks(src, config, lexer) {
-           break;
-         }
-       }
+-        if (nextIndent2 > indentLevel) {
+-          itemContent.push(nextLine);
+-          totalRaw = `${totalRaw}${nextLine}
+-`;
+-          i += 1;
+-          continue;
+-        } else {
+-          break;
+-        }
+-      }
 -      const nextIndent = ((_d = (_c = nextLine.match(/^(\s*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
-+      const nextIndent = ((_d = (_c = nextLine.match(/^([ \t]*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
-       if (nextIndent > indentLevel) {
-         itemContent.push(nextLine);
-         totalRaw = `${totalRaw}${nextLine}
-@@ -4848,8 +4934,8 @@ function parseIndentedBlocks(src, config, lexer) {
-     let nestedTokens;
-     const nestedContent = itemContent.slice(1);
-     if (nestedContent.length > 0) {
+-      if (nextIndent > indentLevel) {
+-        itemContent.push(nextLine);
+-        totalRaw = `${totalRaw}${nextLine}
+-`;
+-        i += 1;
+-      } else {
+-        break;
+-      }
+-    }
+-    let nestedTokens;
+-    const nestedContent = itemContent.slice(1);
+-    if (nestedContent.length > 0) {
 -      const dedentedNested = nestedContent.map((nestedLine) => nestedLine.slice(indentLevel + baseIndentSize)).join("\n");
 -      if (dedentedNested.trim()) {
-+      const dedentedNested = nestedContent.map((nestedLine) => stripColumns(nestedLine, indentLevel + baseIndentSize)).join("\n");
-+      if (/[^ \t\n]/.test(dedentedNested)) {
-         if (config.customNestedParser) {
-           nestedTokens = config.customNestedParser(dedentedNested);
-         } else {
+-        if (config.customNestedParser) {
+-          nestedTokens = config.customNestedParser(dedentedNested);
+-        } else {
+-          nestedTokens = lexer.blockTokens(dedentedNested);
+-        }
+-      }
+-    }
+-    const token = config.createToken(itemData, nestedTokens);
+-    items.push(token);
++    found.push({ match: itemMatch, text: item.text });
++    i = item.end;
++    consumed = i;
+   }
+-  if (items.length === 0) {
++  if (found.length === 0) {
+     return void 0;
+   }
++  const last = found[found.length - 1];
++  last.text = last.text.replace(/[ \t\n]+$/, "");
++  const items = found.map(({ match, text }) => {
++    const data = config.extractItemData(match);
++    let content = text;
++    const task = config.checkbox === true && /^\[[ xX]\] +[^ \t\n]/.test(content);
++    if (config.checkbox && !task) {
++      content = content.replace(/^\[[ xX]\] */, "");
++    }
++    const tokens = lexer.listItemBlockTokens(content);
++    const first = tokens.findIndex((token) => token.type !== "space");
++    if (task && first !== -1 && tokens[first].type === "heading") {
++      const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, "");
++      tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) };
++    }
++    const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
++    data.mainContent = opensWithText ? tokens[first].text : "";
++    if (task && opensWithText) {
++      data.mainContent = data.mainContent.replace(/^\[[ xX]\] +/, "");
++    }
++    const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
++    return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
++  });
+   return {
+     items,
+-    raw: totalRaw
++    raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+   };
+ }
+
+@@ -8642,6 +8710,7 @@ var Tracker = class {
+   attrsEqual,
+   callOrReturn,
+   canInsertNode,
++  collectMarkdownListItem,
+   combineTransactionSteps,
+   commands,
+   createAtomBlockMarkdownSpec,
+@@ -8740,6 +8809,7 @@ var Tracker = class {
+   markInputRule,
+   markPasteRule,
+   markdown,
++  markdownNextBulletRegex,
+   marksEqual,
+   mergeAttributes,
+   mergeDeep,
 diff --git a/dist/index.d.cts b/dist/index.d.cts
-index 6f803b5c646b232b8507e7a9dfd9857606d02161..36b599def85fa59ce2d17208b711408ee9e2594a 100644
+index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371561da331 100644
 --- a/dist/index.d.cts
 +++ b/dist/index.d.cts
 @@ -2266,6 +2266,14 @@ type MarkdownLexerConfiguration = {
@@ -150,26 +264,159 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..36b599def85fa59ce2d17208b711408e
       */
      blockTokens: (src: string) => MarkdownToken[];
 +    /**
-+     * Transforms source text into block-level tokens in top mode without leaving
-+     * any trace on the lexer: no reference definition, queued inline work or
-+     * state change survives the call. For a tokenizer that only looks ahead.
++     * Transforms a list item's content into block-level tokens as marked's list
++     * tokenizer lexes an item's: outside top mode, so the item's first
++     * paragraph is a `text` token. The lexer's mode is restored after.
 +     * @param src
 +     * @returns Array of block-level tokens
 +     */
-+    probeBlockTokens: (src: string) => MarkdownToken[];
++    listItemBlockTokens: (src: string) => MarkdownToken[];
  };
  /** Custom tokenizer function for marked.js extensions */
  type MarkdownTokenizer = {
-@@ -5584,6 +5592,7 @@ interface BlockParserConfig {
+@@ -5525,7 +5533,11 @@ interface ParsedBlock {
+     [key: string]: any;
+ }
+ interface BlockParserConfig {
+-    /** Regex pattern to match block items */
++    /**
++     * Regex pattern to match block items: its first group is the indent before
++     * the item's marker and its second the marker, which nothing but its own
++     * width separates from the indent.
++     */
+     itemPattern: RegExp;
+     /** Function to extract data from regex match */
+     extractItemData: (match: RegExpMatchArray) => {
+@@ -5535,55 +5547,59 @@ interface BlockParserConfig {
+     };
+     /** Function to create the final token */
+     createToken: (data: any, nestedTokens?: any[]) => ParsedBlock;
+-    /** Base indentation to remove from nested content (default: 2 spaces) */
+-    baseIndentSize?: number;
+     /**
+-     * Custom parser for nested content. If provided, this will be called instead
+-     * of the default lexer.blockTokens() for parsing nested content.
+-     * This allows recursive parsing of the same block type.
++     * Whether an item's text starts with a task checkbox (`[ ]`, `[x]`), as
++     * after a task item's bullet. A line the pattern matches whose text does
++     * not, such as one with indented code after the bullet, is no such item.
+      */
+-    customNestedParser?: (dedentedContent: string) => any[] | undefined;
++    checkbox?: boolean;
+ }
+ /**
+- * Parses markdown text into hierarchical indented blocks with proper nesting.
+- *
+- * This utility handles:
+- * - Line-by-line parsing with pattern matching
+- * - Hierarchical nesting based on indentation levels
+- * - Nested content collection and parsing
+- * - Empty line handling
+- * - Content dedenting for nested blocks
+- *
+- * The key difference from flat parsing is that this maintains the hierarchical
+- * structure where nested items become `nestedTokens` of their parent items,
+- * rather than being flattened into a single array.
+- *
+- * @param src - The markdown source text to parse
+- * @param config - Configuration object defining how to parse and create tokens
+- * @param lexer - Markdown lexer for parsing nested content
+- * @returns Parsed result with hierarchical items, or undefined if no matches
+- *
+- * @example
+- * ```ts
+- * const result = parseIndentedBlocks(src, {
+- *   itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
+- *   extractItemData: (match) => ({
+- *     indentLevel: match[1].length,
+- *     mainContent: match[4],
+- *     checked: match[3].toLowerCase() === 'x'
+- *   }),
+- *   createToken: (data, nestedTokens) => ({
+- *     type: 'taskItem',
+- *     checked: data.checked,
+- *     text: data.mainContent,
+- *     nestedTokens
+- *   })
+- * }, lexer)
+- * ```
++ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
++ * item instead of continuing an item whose content starts at `indent`.
++ */
++declare function markdownNextBulletRegex(indent: number): RegExp;
++interface MarkdownListItemOptions {
++    /**
++     * Whether `line` starts a new item, for an item whose content starts at
++     * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
++     */
++    endsItem: (line: string, indent: number) => boolean;
++    /**
++     * An ordered list written before nested lists were indented to the item's
++     * content column put them, and fences, two columns past the marker: at
++     * `column`. A list marker or fence at exactly that column, short of the
++     * content column, keeps the item open, and the item's content column is
++     * `column` from that line on. marked would end the item there instead.
++     */
++    legacy?: {
++        column: number;
++        opens: (text: string) => boolean;
++    };
++}
++/**
++ * A list item as marked 17.0.6's list tokenizer reads it (`Tokenizer.list`,
++ * src/Tokenizer.ts), for the marker line `lines[start]` whose marker, with any
++ * indent before it, ends at column `markerEnd` and is followed by `rest`:
++ * the item's content, every line dedented as marked dedents it, and the index
++ * of the first line after the item. The cited line numbers are marked's.
++ */
++declare function collectMarkdownListItem(lines: string[], start: number, markerEnd: number, rest: string, options: MarkdownListItemOptions): {
++    text: string;
++    end: number;
++    indent: number;
++};
++/**
++ * Parses a run of list items whose markers match `config.itemPattern`, each
++ * item read as marked reads one (`collectMarkdownListItem`) and its content
++ * lexed as marked lexes an item's (`lexer.listItemBlockTokens`): the item's
++ * text is its first block when that is text, and the blocks after it, nested
++ * lists included, are its nested tokens.
+  */
  declare function parseIndentedBlocks(src: string, config: BlockParserConfig, lexer: {
      inlineTokens: (src: string) => any[];
      blockTokens: (src: string) => any[];
-+    probeBlockTokens: (src: string) => any[];
++    listItemBlockTokens: (src: string) => any[];
  }): {
      items: ParsedBlock[];
      raw: string;
+@@ -5659,16 +5675,19 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
+ type index_BlockMarkdownSpecOptions = BlockMarkdownSpecOptions;
+ type index_BlockParserConfig = BlockParserConfig;
+ type index_InlineMarkdownSpecOptions = InlineMarkdownSpecOptions;
++type index_MarkdownListItemOptions = MarkdownListItemOptions;
+ type index_ParsedBlock = ParsedBlock;
++declare const index_collectMarkdownListItem: typeof collectMarkdownListItem;
+ declare const index_createAtomBlockMarkdownSpec: typeof createAtomBlockMarkdownSpec;
+ declare const index_createBlockMarkdownSpec: typeof createBlockMarkdownSpec;
+ declare const index_createInlineMarkdownSpec: typeof createInlineMarkdownSpec;
++declare const index_markdownNextBulletRegex: typeof markdownNextBulletRegex;
+ declare const index_parseAttributes: typeof parseAttributes;
+ declare const index_parseIndentedBlocks: typeof parseIndentedBlocks;
+ declare const index_renderNestedMarkdownContent: typeof renderNestedMarkdownContent;
+ declare const index_serializeAttributes: typeof serializeAttributes;
+ declare namespace index {
+-  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_ParsedBlock as ParsedBlock, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
++  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_MarkdownListItemOptions as MarkdownListItemOptions, type index_ParsedBlock as ParsedBlock, index_collectMarkdownListItem as collectMarkdownListItem, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_markdownNextBulletRegex as markdownNextBulletRegex, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
+ }
+
+ /**
+@@ -5712,4 +5731,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
+     (value: any, replacer?: (number | string)[] | null, space?: string | number): string;
+ }): T[];
+
+-export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
++export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 6f803b5c646b232b8507e7a9dfd9857606d02161..36b599def85fa59ce2d17208b711408ee9e2594a 100644
+index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371561da331 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -2266,6 +2266,14 @@ type MarkdownLexerConfiguration = {
@@ -177,169 +424,400 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..36b599def85fa59ce2d17208b711408e
       */
      blockTokens: (src: string) => MarkdownToken[];
 +    /**
-+     * Transforms source text into block-level tokens in top mode without leaving
-+     * any trace on the lexer: no reference definition, queued inline work or
-+     * state change survives the call. For a tokenizer that only looks ahead.
++     * Transforms a list item's content into block-level tokens as marked's list
++     * tokenizer lexes an item's: outside top mode, so the item's first
++     * paragraph is a `text` token. The lexer's mode is restored after.
 +     * @param src
 +     * @returns Array of block-level tokens
 +     */
-+    probeBlockTokens: (src: string) => MarkdownToken[];
++    listItemBlockTokens: (src: string) => MarkdownToken[];
  };
  /** Custom tokenizer function for marked.js extensions */
  type MarkdownTokenizer = {
-@@ -5584,6 +5592,7 @@ interface BlockParserConfig {
+@@ -5525,7 +5533,11 @@ interface ParsedBlock {
+     [key: string]: any;
+ }
+ interface BlockParserConfig {
+-    /** Regex pattern to match block items */
++    /**
++     * Regex pattern to match block items: its first group is the indent before
++     * the item's marker and its second the marker, which nothing but its own
++     * width separates from the indent.
++     */
+     itemPattern: RegExp;
+     /** Function to extract data from regex match */
+     extractItemData: (match: RegExpMatchArray) => {
+@@ -5535,55 +5547,59 @@ interface BlockParserConfig {
+     };
+     /** Function to create the final token */
+     createToken: (data: any, nestedTokens?: any[]) => ParsedBlock;
+-    /** Base indentation to remove from nested content (default: 2 spaces) */
+-    baseIndentSize?: number;
+     /**
+-     * Custom parser for nested content. If provided, this will be called instead
+-     * of the default lexer.blockTokens() for parsing nested content.
+-     * This allows recursive parsing of the same block type.
++     * Whether an item's text starts with a task checkbox (`[ ]`, `[x]`), as
++     * after a task item's bullet. A line the pattern matches whose text does
++     * not, such as one with indented code after the bullet, is no such item.
+      */
+-    customNestedParser?: (dedentedContent: string) => any[] | undefined;
++    checkbox?: boolean;
+ }
+ /**
+- * Parses markdown text into hierarchical indented blocks with proper nesting.
+- *
+- * This utility handles:
+- * - Line-by-line parsing with pattern matching
+- * - Hierarchical nesting based on indentation levels
+- * - Nested content collection and parsing
+- * - Empty line handling
+- * - Content dedenting for nested blocks
+- *
+- * The key difference from flat parsing is that this maintains the hierarchical
+- * structure where nested items become `nestedTokens` of their parent items,
+- * rather than being flattened into a single array.
+- *
+- * @param src - The markdown source text to parse
+- * @param config - Configuration object defining how to parse and create tokens
+- * @param lexer - Markdown lexer for parsing nested content
+- * @returns Parsed result with hierarchical items, or undefined if no matches
+- *
+- * @example
+- * ```ts
+- * const result = parseIndentedBlocks(src, {
+- *   itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
+- *   extractItemData: (match) => ({
+- *     indentLevel: match[1].length,
+- *     mainContent: match[4],
+- *     checked: match[3].toLowerCase() === 'x'
+- *   }),
+- *   createToken: (data, nestedTokens) => ({
+- *     type: 'taskItem',
+- *     checked: data.checked,
+- *     text: data.mainContent,
+- *     nestedTokens
+- *   })
+- * }, lexer)
+- * ```
++ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
++ * item instead of continuing an item whose content starts at `indent`.
++ */
++declare function markdownNextBulletRegex(indent: number): RegExp;
++interface MarkdownListItemOptions {
++    /**
++     * Whether `line` starts a new item, for an item whose content starts at
++     * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
++     */
++    endsItem: (line: string, indent: number) => boolean;
++    /**
++     * An ordered list written before nested lists were indented to the item's
++     * content column put them, and fences, two columns past the marker: at
++     * `column`. A list marker or fence at exactly that column, short of the
++     * content column, keeps the item open, and the item's content column is
++     * `column` from that line on. marked would end the item there instead.
++     */
++    legacy?: {
++        column: number;
++        opens: (text: string) => boolean;
++    };
++}
++/**
++ * A list item as marked 17.0.6's list tokenizer reads it (`Tokenizer.list`,
++ * src/Tokenizer.ts), for the marker line `lines[start]` whose marker, with any
++ * indent before it, ends at column `markerEnd` and is followed by `rest`:
++ * the item's content, every line dedented as marked dedents it, and the index
++ * of the first line after the item. The cited line numbers are marked's.
++ */
++declare function collectMarkdownListItem(lines: string[], start: number, markerEnd: number, rest: string, options: MarkdownListItemOptions): {
++    text: string;
++    end: number;
++    indent: number;
++};
++/**
++ * Parses a run of list items whose markers match `config.itemPattern`, each
++ * item read as marked reads one (`collectMarkdownListItem`) and its content
++ * lexed as marked lexes an item's (`lexer.listItemBlockTokens`): the item's
++ * text is its first block when that is text, and the blocks after it, nested
++ * lists included, are its nested tokens.
+  */
  declare function parseIndentedBlocks(src: string, config: BlockParserConfig, lexer: {
      inlineTokens: (src: string) => any[];
      blockTokens: (src: string) => any[];
-+    probeBlockTokens: (src: string) => any[];
++    listItemBlockTokens: (src: string) => any[];
  }): {
      items: ParsedBlock[];
      raw: string;
+@@ -5659,16 +5675,19 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
+ type index_BlockMarkdownSpecOptions = BlockMarkdownSpecOptions;
+ type index_BlockParserConfig = BlockParserConfig;
+ type index_InlineMarkdownSpecOptions = InlineMarkdownSpecOptions;
++type index_MarkdownListItemOptions = MarkdownListItemOptions;
+ type index_ParsedBlock = ParsedBlock;
++declare const index_collectMarkdownListItem: typeof collectMarkdownListItem;
+ declare const index_createAtomBlockMarkdownSpec: typeof createAtomBlockMarkdownSpec;
+ declare const index_createBlockMarkdownSpec: typeof createBlockMarkdownSpec;
+ declare const index_createInlineMarkdownSpec: typeof createInlineMarkdownSpec;
++declare const index_markdownNextBulletRegex: typeof markdownNextBulletRegex;
+ declare const index_parseAttributes: typeof parseAttributes;
+ declare const index_parseIndentedBlocks: typeof parseIndentedBlocks;
+ declare const index_renderNestedMarkdownContent: typeof renderNestedMarkdownContent;
+ declare const index_serializeAttributes: typeof serializeAttributes;
+ declare namespace index {
+-  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_ParsedBlock as ParsedBlock, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
++  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_MarkdownListItemOptions as MarkdownListItemOptions, type index_ParsedBlock as ParsedBlock, index_collectMarkdownListItem as collectMarkdownListItem, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_markdownNextBulletRegex as markdownNextBulletRegex, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
+ }
+
+ /**
+@@ -5712,4 +5731,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
+     (value: any, replacer?: (number | string)[] | null, space?: string | number): string;
+ }): T[];
+
+-export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
++export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 diff --git a/dist/index.js b/dist/index.js
-index a0f6db230e5c24f99066beda95637818680b3fd2..0dcc9b07404125f524de7235f77f665ef22b8b4f 100644
+index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650b73eb2fb 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -4626,6 +4626,85 @@ function createInlineMarkdownSpec(options) {
+@@ -4240,9 +4240,11 @@ function isString(value) {
+ // src/utilities/markdown/index.ts
+ var markdown_exports = {};
+ __export(markdown_exports, {
++  collectMarkdownListItem: () => collectMarkdownListItem,
+   createAtomBlockMarkdownSpec: () => createAtomBlockMarkdownSpec,
+   createBlockMarkdownSpec: () => createBlockMarkdownSpec,
+   createInlineMarkdownSpec: () => createInlineMarkdownSpec,
++  markdownNextBulletRegex: () => markdownNextBulletRegex,
+   parseAttributes: () => parseAttributes,
+   parseIndentedBlocks: () => parseIndentedBlocks,
+   renderNestedMarkdownContent: () => renderNestedMarkdownContent,
+@@ -4626,84 +4628,148 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
-+// The column a line's text starts at, a tab advancing to the next stop of 4.
-+function leadingColumns(line) {
-+  let column = 0;
++function isBlankLine(line) {
++  return !/[^ \t]/.test(line);
++}
++function expandTabs(line, column) {
++  let col = column;
++  let expanded = "";
 +  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
++    if (char === "	") {
++      const added = 4 - col % 4;
++      expanded += " ".repeat(added);
++      col += added;
++    } else {
++      expanded += char;
++      col += 1;
++    }
 +  }
-+  return column;
++  return expanded;
 +}
-+// A line without its first `columns` columns of indent, a tab advancing to
-+// the next stop of 4. A tab that reaches past `columns` keeps the rest of its
-+// width as spaces, and a line indented less loses all of its indent.
-+function stripColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+    index += 1;
++function markdownNextBulletRegex(indent) {
++  return new RegExp(
++    `^ {0,${Math.min(3, indent - 1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ \\t][^\\n]*)?(?:\\n|$))`
++  );
++}
++function collectMarkdownListItem(lines, start, markerEnd, rest, options) {
++  let line = expandTabs(rest, markerEnd);
++  let blankLine = isBlankLine(line);
++  let indent;
++  let text = "";
++  if (blankLine) {
++    indent = markerEnd + 1;
++  } else {
++    indent = line.search(/[^ ]/);
++    indent = indent > 4 ? 1 : indent;
++    text = line.slice(indent);
++    indent += markerEnd;
 +  }
-+  return " ".repeat(Math.max(column - columns, 0)) + line.slice(index);
-+}
-+// A paragraph continuation line as text: without the item's content column
-+// of indent, keeping up to 3 more spaces, and without all of its indent when
-+// 4 or more remain.
-+function continuationText(line, contentColumn) {
-+  const text = stripColumns(line, contentColumn);
-+  return leadingColumns(text) >= 4 ? stripColumns(text, 4) : text;
-+}
-+// Whether a block token is a setext heading: text underlined by `===` or `---`.
-+function isSetextHeading(token) {
-+  return token.type === "heading" && !/^ {0,3}#/.test(token.raw);
-+}
-+// Whether marked's block lexer reads `line` as more of the paragraph whose
-+// last line is `paragraphLine`. It does when its first block covers both
-+// lines as a paragraph or as a setext heading. When `line` is that heading's
-+// underline, the item's paragraph keeps it as text only if the underline
-+// alone is a paragraph (`===`), not a thematic break (`---`). Undefined when
-+// `paragraphLine` alone opens some other block.
-+function continuesParagraph(paragraphLine, line, nextLine, lexer) {
-+  const probe = nextLine === void 0 ? [paragraphLine, line] : [paragraphLine, line, nextLine];
-+  const [first] = lexer.probeBlockTokens(probe.join("\n"));
-+  if (first === void 0 || first.type !== "paragraph" && !isSetextHeading(first)) return void 0;
-+  const coveredLines = first.raw.replace(/\n+$/, "").split("\n").length;
-+  if (coveredLines < 2) return false;
-+  if (coveredLines === 2 && isSetextHeading(first)) {
-+    const [alone] = lexer.probeBlockTokens(line);
-+    return alone !== void 0 && alone.type === "paragraph";
++  let end = start + 1;
++  if (blankLine && end < lines.length && isBlankLine(lines[end])) {
++    return { text, end: end + 1, indent };
 +  }
-+  return true;
-+}
-+// Whether this line cannot continue the item's first paragraph. While that
-+// paragraph is empty, a line at or left of the item's own indent has no
-+// paragraph to continue, so the item ends. Otherwise the decision is
-+// marked's, the lexer the nested content is parsed with, asked through
-+// `probeBlockTokens`: in top mode, the mode of CommonMark's paragraph rules,
-+// and without leaving a reference definition, queued inline work or a state
-+// change on the document's lexer. The line and the one
-+// after it, without the item's content column of indent, are lexed after the
-+// paragraph's last line, or alone while the paragraph is empty, and the line
-+// continues the paragraph only if the lexer reads it as paragraph text. So
-+// indented code, a list, a fence, a blockquote, a heading, a thematic break,
-+// an HTML block or a table opens here exactly when marked would open it.
-+function opensItemBlock(line, nextLine, indentLevel, contentColumn, paragraph, lexer) {
-+  var _a;
-+  if (paragraph === "" && leadingColumns(line) <= indentLevel) return true;
-+  const text = stripColumns(line, contentColumn);
-+  const next = nextLine === void 0 ? void 0 : stripColumns(nextLine, contentColumn);
-+  if (paragraph === "") {
-+    const [first] = lexer.probeBlockTokens(next === void 0 ? text : `${text}\n${next}`);
-+    return first === void 0 || first.type !== "paragraph" && !isSetextHeading(first);
++  const begins = (column) => {
++    const spaces = Math.min(3, column - 1);
++    return {
++      fences: new RegExp(`^ {0,${spaces}}(?:\`\`\`|~~~)`),
++      heading: new RegExp(`^ {0,${spaces}}#`),
++      html: new RegExp(`^ {0,${spaces}}<(?:[a-z].*>|!--)`, "i"),
++      blockquote: new RegExp(`^ {0,${spaces}}>`),
++      hr: new RegExp(`^ {0,${spaces}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`)
++    };
++  };
++  let opens = begins(indent);
++  while (end < lines.length) {
++    const nextLine = lines[end];
++    const nextLineWithoutTabs = nextLine.replace(/\t/g, "    ");
++    const legacy = options.legacy;
++    if (legacy !== void 0 && legacy.column < indent && nextLineWithoutTabs.search(/[^ ]/) === legacy.column && legacy.opens(nextLineWithoutTabs.slice(legacy.column))) {
++      indent = legacy.column;
++      opens = begins(indent);
++    }
++    if (opens.fences.test(nextLine) || opens.heading.test(nextLine) || opens.html.test(nextLine) || opens.blockquote.test(nextLine) || options.endsItem(nextLine, indent) || opens.hr.test(nextLine)) {
++      break;
++    }
++    if (nextLineWithoutTabs.search(/[^ ]/) >= indent || isBlankLine(nextLine)) {
++      text += `
++${nextLineWithoutTabs.slice(indent)}`;
++    } else {
++      if (blankLine) {
++        break;
++      }
++      if (line.replace(/\t/g, "    ").search(/[^ ]/) >= 4) {
++        break;
++      }
++      if (opens.fences.test(line) || opens.heading.test(line) || opens.hr.test(line)) {
++        break;
++      }
++      text += `
++${nextLine}`;
++    }
++    blankLine = isBlankLine(nextLine);
++    end += 1;
++    line = nextLineWithoutTabs.slice(indent);
 +  }
-+  const lastLine = paragraph.slice(paragraph.lastIndexOf("\n") + 1);
-+  const continues = (_a = continuesParagraph(lastLine, text, next, lexer)) != null ? _a : continuesParagraph("a", text, next, lexer);
-+  return continues !== true;
++  return { text, end, indent };
++}
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
 +}
  function parseIndentedBlocks(src, config, lexer) {
-   var _a, _b, _c, _d;
+-  var _a, _b, _c, _d;
    const lines = src.split("\n");
-@@ -4639,7 +4718,7 @@ function parseIndentedBlocks(src, config, lexer) {
-     if (!itemMatch) {
-       if (items.length > 0) {
+-  const items = [];
+-  let totalRaw = "";
++  const found = [];
++  let consumed = 0;
+   let i = 0;
+-  const baseIndentSize = config.baseIndentSize || 2;
+   while (i < lines.length) {
+     const currentLine = lines[i];
+     const itemMatch = currentLine.match(config.itemPattern);
+-    if (!itemMatch) {
+-      if (items.length > 0) {
++    const markerEnd = itemMatch ? (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length : 0;
++    const item = itemMatch ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
++      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line)
++    }) : void 0;
++    if (!itemMatch || !item || config.checkbox && !/^\[[ xX]\](?=[ \n]|$)/.test(item.text)) {
++      if (found.length > 0) {
          break;
 -      } else if (currentLine.trim() === "") {
-+      } else if (!/[^ \t]/.test(currentLine)) {
++      } else if (isBlankLine(currentLine)) {
          i += 1;
-         totalRaw = `${totalRaw}${currentLine}
- `;
-@@ -4656,13 +4735,20 @@ function parseIndentedBlocks(src, config, lexer) {
-     i += 1;
-     while (i < lines.length) {
-       const nextLine = lines[i];
+-        totalRaw = `${totalRaw}${currentLine}
+-`;
+         continue;
+       } else {
+         return void 0;
+       }
+     }
+-    const itemData = config.extractItemData(itemMatch);
+-    const { indentLevel, mainContent } = itemData;
+-    totalRaw = `${totalRaw}${currentLine}
+-`;
+-    const itemContent = [mainContent];
+-    i += 1;
+-    while (i < lines.length) {
+-      const nextLine = lines[i];
 -      if (nextLine.trim() === "") {
 -        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
-+      if (!/[^ \t]/.test(nextLine) || config.itemPattern.test(nextLine) || opensItemBlock(nextLine, lines[i + 1], indentLevel, indentLevel + baseIndentSize, itemData.mainContent, lexer)) break;
-+      itemData.mainContent = itemData.mainContent === "" ? continuationText(nextLine, indentLevel + baseIndentSize) : `${itemData.mainContent}\n${continuationText(nextLine, indentLevel + baseIndentSize)}`;
-+      totalRaw = `${totalRaw}${nextLine}\n`;
-+      i += 1;
-+    }
-+    while (i < lines.length) {
-+      const nextLine = lines[i];
-+      if (!/[^ \t]/.test(nextLine)) {
-+        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => /[^ \t]/.test(l));
-         if (nextNonEmptyIndex === -1) {
-           break;
-         }
-         const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
+-        if (nextNonEmptyIndex === -1) {
+-          break;
+-        }
+-        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
 -        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^(\s*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
-+        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^([ \t]*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
-         if (nextIndent2 > indentLevel) {
-           itemContent.push(nextLine);
-           totalRaw = `${totalRaw}${nextLine}
-@@ -4673,7 +4759,7 @@ function parseIndentedBlocks(src, config, lexer) {
-           break;
-         }
-       }
+-        if (nextIndent2 > indentLevel) {
+-          itemContent.push(nextLine);
+-          totalRaw = `${totalRaw}${nextLine}
+-`;
+-          i += 1;
+-          continue;
+-        } else {
+-          break;
+-        }
+-      }
 -      const nextIndent = ((_d = (_c = nextLine.match(/^(\s*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
-+      const nextIndent = ((_d = (_c = nextLine.match(/^([ \t]*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
-       if (nextIndent > indentLevel) {
-         itemContent.push(nextLine);
-         totalRaw = `${totalRaw}${nextLine}
-@@ -4686,8 +4772,8 @@ function parseIndentedBlocks(src, config, lexer) {
-     let nestedTokens;
-     const nestedContent = itemContent.slice(1);
-     if (nestedContent.length > 0) {
+-      if (nextIndent > indentLevel) {
+-        itemContent.push(nextLine);
+-        totalRaw = `${totalRaw}${nextLine}
+-`;
+-        i += 1;
+-      } else {
+-        break;
+-      }
+-    }
+-    let nestedTokens;
+-    const nestedContent = itemContent.slice(1);
+-    if (nestedContent.length > 0) {
 -      const dedentedNested = nestedContent.map((nestedLine) => nestedLine.slice(indentLevel + baseIndentSize)).join("\n");
 -      if (dedentedNested.trim()) {
-+      const dedentedNested = nestedContent.map((nestedLine) => stripColumns(nestedLine, indentLevel + baseIndentSize)).join("\n");
-+      if (/[^ \t\n]/.test(dedentedNested)) {
-         if (config.customNestedParser) {
-           nestedTokens = config.customNestedParser(dedentedNested);
-         } else {
+-        if (config.customNestedParser) {
+-          nestedTokens = config.customNestedParser(dedentedNested);
+-        } else {
+-          nestedTokens = lexer.blockTokens(dedentedNested);
+-        }
+-      }
+-    }
+-    const token = config.createToken(itemData, nestedTokens);
+-    items.push(token);
++    found.push({ match: itemMatch, text: item.text });
++    i = item.end;
++    consumed = i;
+   }
+-  if (items.length === 0) {
++  if (found.length === 0) {
+     return void 0;
+   }
++  const last = found[found.length - 1];
++  last.text = last.text.replace(/[ \t\n]+$/, "");
++  const items = found.map(({ match, text }) => {
++    const data = config.extractItemData(match);
++    let content = text;
++    const task = config.checkbox === true && /^\[[ xX]\] +[^ \t\n]/.test(content);
++    if (config.checkbox && !task) {
++      content = content.replace(/^\[[ xX]\] */, "");
++    }
++    const tokens = lexer.listItemBlockTokens(content);
++    const first = tokens.findIndex((token) => token.type !== "space");
++    if (task && first !== -1 && tokens[first].type === "heading") {
++      const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, "");
++      tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) };
++    }
++    const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
++    data.mainContent = opensWithText ? tokens[first].text : "";
++    if (task && opensWithText) {
++      data.mainContent = data.mainContent.replace(/^\[[ xX]\] +/, "");
++    }
++    const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
++    return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
++  });
+   return {
+     items,
+-    raw: totalRaw
++    raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+   };
+ }
+
+@@ -8479,6 +8545,7 @@ export {
+   attrsEqual,
+   callOrReturn,
+   canInsertNode,
++  collectMarkdownListItem,
+   combineTransactionSteps,
+   commands_exports as commands,
+   createAtomBlockMarkdownSpec,
+@@ -8577,6 +8644,7 @@ export {
+   markInputRule,
+   markPasteRule,
+   markdown_exports as markdown,
++  markdownNextBulletRegex,
+   marksEqual,
+   mergeAttributes,
+   mergeDeep,
 diff --git a/src/types.ts b/src/types.ts
-index 0fdbb9f8a835b3bb43310ce5ebc1ef4b10595558..409bb2c00b9a03978c9cf899fc09300934eeab6d 100644
+index 0fdbb9f8a835b3bb43310ce5ebc1ef4b10595558..b87796beeed9e3839aad8ec21d6b43f4b90dc71a 100644
 --- a/src/types.ts
 +++ b/src/types.ts
 @@ -1023,6 +1023,15 @@ export type MarkdownLexerConfiguration = {
@@ -348,245 +826,435 @@ index 0fdbb9f8a835b3bb43310ce5ebc1ef4b10595558..409bb2c00b9a03978c9cf899fc093009
    blockTokens: (src: string) => MarkdownToken[]
 +
 +  /**
-+   * Transforms source text into block-level tokens in top mode without leaving
-+   * any trace on the lexer: no reference definition, queued inline work or
-+   * state change survives the call. For a tokenizer that only looks ahead.
++   * Transforms a list item's content into block-level tokens as marked's list
++   * tokenizer lexes an item's: outside top mode, so the item's first
++   * paragraph is a `text` token. The lexer's mode is restored after.
 +   * @param src
 +   * @returns Array of block-level tokens
 +   */
-+  probeBlockTokens: (src: string) => MarkdownToken[]
++  listItemBlockTokens: (src: string) => MarkdownToken[]
  }
 
  /** Custom tokenizer function for marked.js extensions */
 diff --git a/src/utilities/markdown/parseIndentedBlocks.ts b/src/utilities/markdown/parseIndentedBlocks.ts
-index ae4956bd21ffe5489a64d08486cf323e82859c06..f26bfe6b0d4f9368c4c774f5bf55019b17e7c286 100644
+index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860db29ec61 100644
 --- a/src/utilities/markdown/parseIndentedBlocks.ts
 +++ b/src/utilities/markdown/parseIndentedBlocks.ts
-@@ -37,6 +37,133 @@ export interface BlockParserConfig {
-   customNestedParser?: (dedentedContent: string) => any[] | undefined
+@@ -17,7 +17,11 @@ export interface ParsedBlock {
  }
 
-+/**
-+ * The column a line's text starts at, a tab advancing to the next stop of 4.
-+ */
-+function leadingColumns(line: string): number {
-+  let column = 0
-+  for (const char of line) {
-+    if (char === ' ') {
-+      column += 1
-+    } else if (char === '\t') {
-+      column += 4 - (column % 4)
-+    } else {
-+      break
-+    }
-+  }
-+  return column
-+}
-+
-+/**
-+ * A line without its first `columns` columns of indent, a tab advancing to the
-+ * next stop of 4. A tab that reaches past `columns` keeps the rest of its width
-+ * as spaces, and a line indented less loses all of its indent.
-+ */
-+function stripColumns(line: string, columns: number): string {
-+  let column = 0
-+  let index = 0
-+  while (index < line.length && column < columns) {
-+    const char = line[index]
-+    if (char === ' ') {
-+      column += 1
-+    } else if (char === '\t') {
-+      column += 4 - (column % 4)
-+    } else {
-+      break
-+    }
-+    index += 1
-+  }
-+  return ' '.repeat(Math.max(column - columns, 0)) + line.slice(index)
-+}
-+
-+/**
-+ * A paragraph continuation line as text, as marked reads one in a bullet item:
-+ * without the item's content column of indent, keeping up to 3 more columns,
-+ * and 4 columns fewer when 4 or more remain.
-+ */
-+function continuationText(line: string, contentColumn: number): string {
-+  const text = stripColumns(line, contentColumn)
-+  return leadingColumns(text) >= 4 ? stripColumns(text, 4) : text
-+}
-+
-+type BlockLexer = { probeBlockTokens: (src: string) => any[] }
-+
-+/**
-+ * Whether a block token is a setext heading: text underlined by `===` or `---`.
-+ */
-+function isSetextHeading(token: any): boolean {
-+  return token.type === 'heading' && !/^ {0,3}#/.test(token.raw)
-+}
-+
-+/**
-+ * Whether marked's block lexer reads `line` as more of the paragraph whose last
-+ * line is `paragraphLine`. It does when its first block covers both lines as a
-+ * paragraph or as a setext heading. When `line` is that heading's underline,
-+ * the item's paragraph keeps it as text only if the underline alone is a
-+ * paragraph (`===`), not a thematic break (`---`). Undefined when
-+ * `paragraphLine` alone opens some other block.
-+ */
-+function continuesParagraph(
-+  paragraphLine: string,
-+  line: string,
-+  nextLine: string | undefined,
-+  lexer: BlockLexer,
-+): boolean | undefined {
-+  const probe = nextLine === undefined ? [paragraphLine, line] : [paragraphLine, line, nextLine]
-+  const [first] = lexer.probeBlockTokens(probe.join('\n'))
-+  if (first === undefined || (first.type !== 'paragraph' && !isSetextHeading(first))) {
-+    return undefined
-+  }
-+  const coveredLines = first.raw.replace(/\n+$/, '').split('\n').length
-+  if (coveredLines < 2) {
-+    return false
-+  }
-+  if (coveredLines === 2 && isSetextHeading(first)) {
-+    const [alone] = lexer.probeBlockTokens(line)
-+    return alone !== undefined && alone.type === 'paragraph'
-+  }
-+  return true
-+}
-+
-+/**
-+ * Whether this line cannot continue the item's first paragraph. While that
-+ * paragraph is empty, a line at or left of the item's own indent has no
-+ * paragraph to continue, so the item ends. Otherwise the decision is marked's,
-+ * the lexer the nested content is parsed with, asked through
-+ * `probeBlockTokens`: in top mode, the mode of CommonMark's paragraph rules,
-+ * and without leaving a reference definition, queued inline work or a state
-+ * change on the document's lexer. The line and the one after it,
-+ * without the item's content column of indent, are lexed after the
-+ * paragraph's last line, or alone while the paragraph is empty, and the line
-+ * continues the paragraph only if the lexer reads it as paragraph text. So
-+ * indented code, a list, a fence, a blockquote, a heading, a thematic break,
-+ * an HTML block or a table opens here exactly when marked would open it.
-+ */
-+function opensItemBlock(
-+  line: string,
-+  nextLine: string | undefined,
-+  indentLevel: number,
-+  contentColumn: number,
-+  paragraph: string,
-+  lexer: BlockLexer,
-+): boolean {
-+  if (paragraph === '' && leadingColumns(line) <= indentLevel) {
-+    return true
-+  }
-+  const text = stripColumns(line, contentColumn)
-+  const next = nextLine === undefined ? undefined : stripColumns(nextLine, contentColumn)
-+  if (paragraph === '') {
-+    const [first] = lexer.probeBlockTokens(next === undefined ? text : `${text}\n${next}`)
-+    return first === undefined || (first.type !== 'paragraph' && !isSetextHeading(first))
-+  }
-+  // A paragraph line that opens a block on its own (the item's text can be
-+  // `# x`) is still paragraph text here, so a plain line stands in for it.
-+  const lastLine = paragraph.slice(paragraph.lastIndexOf('\n') + 1)
-+  const continues =
-+    continuesParagraph(lastLine, text, next, lexer) ?? continuesParagraph('a', text, next, lexer)
-+  return continues !== true
-+}
-+
+ export interface BlockParserConfig {
+-  /** Regex pattern to match block items */
++  /**
++   * Regex pattern to match block items: its first group is the indent before
++   * the item's marker and its second the marker, which nothing but its own
++   * width separates from the indent.
++   */
+   itemPattern: RegExp
+   /** Function to extract data from regex match */
+   extractItemData: (match: RegExpMatchArray) => {
+@@ -27,52 +31,191 @@ export interface BlockParserConfig {
+   }
+   /** Function to create the final token */
+   createToken: (data: any, nestedTokens?: any[]) => ParsedBlock
+-  /** Base indentation to remove from nested content (default: 2 spaces) */
+-  baseIndentSize?: number
+   /**
+-   * Custom parser for nested content. If provided, this will be called instead
+-   * of the default lexer.blockTokens() for parsing nested content.
+-   * This allows recursive parsing of the same block type.
++   * Whether an item's text starts with a task checkbox (`[ ]`, `[x]`), as
++   * after a task item's bullet. A line the pattern matches whose text does
++   * not, such as one with indented code after the bullet, is no such item.
+    */
+-  customNestedParser?: (dedentedContent: string) => any[] | undefined
++  checkbox?: boolean
+ }
+
  /**
-  * Parses markdown text into hierarchical indented blocks with proper nesting.
-  *
-@@ -80,6 +207,7 @@ export function parseIndentedBlocks(
+- * Parses markdown text into hierarchical indented blocks with proper nesting.
+- *
+- * This utility handles:
+- * - Line-by-line parsing with pattern matching
+- * - Hierarchical nesting based on indentation levels
+- * - Nested content collection and parsing
+- * - Empty line handling
+- * - Content dedenting for nested blocks
+- *
+- * The key difference from flat parsing is that this maintains the hierarchical
+- * structure where nested items become `nestedTokens` of their parent items,
+- * rather than being flattened into a single array.
+- *
+- * @param src - The markdown source text to parse
+- * @param config - Configuration object defining how to parse and create tokens
+- * @param lexer - Markdown lexer for parsing nested content
+- * @returns Parsed result with hierarchical items, or undefined if no matches
+- *
+- * @example
+- * ```ts
+- * const result = parseIndentedBlocks(src, {
+- *   itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
+- *   extractItemData: (match) => ({
+- *     indentLevel: match[1].length,
+- *     mainContent: match[4],
+- *     checked: match[3].toLowerCase() === 'x'
+- *   }),
+- *   createToken: (data, nestedTokens) => ({
+- *     type: 'taskItem',
+- *     checked: data.checked,
+- *     text: data.mainContent,
+- *     nestedTokens
+- *   })
+- * }, lexer)
+- * ```
++ * Whether a line is blank: spaces and tabs only, as CommonMark defines it.
++ * marked tests `!line.trim()`, which also counts a line of no-break spaces as
++ * blank and then drops them; that is the one place this port departs from it.
++ */
++function isBlankLine(line: string): boolean {
++  return !/[^ \t]/.test(line)
++}
++
++/**
++ * marked's `expandTabs` (src/helpers.ts): a tab advances to the next stop of 4,
++ * counted from `column`.
++ */
++function expandTabs(line: string, column: number): string {
++  let col = column
++  let expanded = ''
++  for (const char of line) {
++    if (char === '\t') {
++      const added = 4 - (col % 4)
++      expanded += ' '.repeat(added)
++      col += added
++    } else {
++      expanded += char
++      col += 1
++    }
++  }
++  return expanded
++}
++
++/**
++ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
++ * item instead of continuing an item whose content starts at `indent`.
++ */
++export function markdownNextBulletRegex(indent: number): RegExp {
++  return new RegExp(
++    `^ {0,${Math.min(3, indent - 1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ \\t][^\\n]*)?(?:\\n|$))`,
++  )
++}
++
++export interface MarkdownListItemOptions {
++  /**
++   * Whether `line` starts a new item, for an item whose content starts at
++   * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
++   */
++  endsItem: (line: string, indent: number) => boolean
++  /**
++   * An ordered list written before nested lists were indented to the item's
++   * content column put them, and fences, two columns past the marker: at
++   * `column`. A list marker or fence at exactly that column, short of the
++   * content column, keeps the item open, and the item's content column is
++   * `column` from that line on. marked would end the item there instead.
++   */
++  legacy?: { column: number; opens: (text: string) => boolean }
++}
++
++/**
++ * A list item as marked 17.0.6's list tokenizer reads it (`Tokenizer.list`,
++ * src/Tokenizer.ts), for the marker line `lines[start]` whose marker, with any
++ * indent before it, ends at column `markerEnd` and is followed by `rest`:
++ * the item's content, every line dedented as marked dedents it, and the index
++ * of the first line after the item. The cited line numbers are marked's.
++ */
++export function collectMarkdownListItem(
++  lines: string[],
++  start: number,
++  markerEnd: number,
++  rest: string,
++  options: MarkdownListItemOptions,
++): { text: string; end: number; indent: number } {
++  // 271-273: the marker line, tabs expanded from the marker's end.
++  let line = expandTabs(rest, markerEnd)
++  let blankLine = isBlankLine(line)
++  let indent: number
++  let text = ''
++
++  // 279-286: the content column, past 1 to 4 columns of space, or one column
++  // when more follow (indented code) or the line is blank.
++  if (blankLine) {
++    indent = markerEnd + 1
++  } else {
++    indent = line.search(/[^ ]/)
++    indent = indent > 4 ? 1 : indent
++    text = line.slice(indent)
++    indent += markerEnd
++  }
++
++  let end = start + 1
++
++  // 288-292: an item begins with at most one blank line.
++  if (blankLine && end < lines.length && isBlankLine(lines[end])) {
++    return { text, end: end + 1, indent }
++  }
++
++  const begins = (column: number) => {
++    const spaces = Math.min(3, column - 1)
++    return {
++      fences: new RegExp(`^ {0,${spaces}}(?:\`\`\`|~~~)`),
++      heading: new RegExp(`^ {0,${spaces}}#`),
++      html: new RegExp(`^ {0,${spaces}}<(?:[a-z].*>|!--)`, 'i'),
++      blockquote: new RegExp(`^ {0,${spaces}}>`),
++      hr: new RegExp(`^ {0,${spaces}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),
++    }
++  }
++  let opens = begins(indent)
++
++  // 303-376: the lines that continue the item.
++  while (end < lines.length) {
++    const nextLine = lines[end]
++    // 313: every tab becomes 4 spaces.
++    const nextLineWithoutTabs = nextLine.replace(/\t/g, '    ')
++
++    const legacy = options.legacy
++    if (
++      legacy !== undefined &&
++      legacy.column < indent &&
++      nextLineWithoutTabs.search(/[^ ]/) === legacy.column &&
++      legacy.opens(nextLineWithoutTabs.slice(legacy.column))
++    ) {
++      indent = legacy.column
++      opens = begins(indent)
++    }
++
++    // 316-344: a fence, heading, HTML block, quote, list marker or rule short
++    // of the content column ends the item.
++    if (
++      opens.fences.test(nextLine) ||
++      opens.heading.test(nextLine) ||
++      opens.html.test(nextLine) ||
++      opens.blockquote.test(nextLine) ||
++      options.endsItem(nextLine, indent) ||
++      opens.hr.test(nextLine)
++    ) {
++      break
++    }
++
++    // 346-369: a line indented to the content column, or blank, is dedented;
++    // a shorter one is a lazy paragraph continuation, kept as written, unless
++    // it follows a blank line or a line that cannot be continued.
++    if (nextLineWithoutTabs.search(/[^ ]/) >= indent || isBlankLine(nextLine)) {
++      text += `\n${nextLineWithoutTabs.slice(indent)}`
++    } else {
++      if (blankLine) {
++        break
++      }
++      if (line.replace(/\t/g, '    ').search(/[^ ]/) >= 4) {
++        break
++      }
++      if (opens.fences.test(line) || opens.heading.test(line) || opens.hr.test(line)) {
++        break
++      }
++      text += `\n${nextLine}`
++    }
++
++    // 371-375
++    blankLine = isBlankLine(nextLine)
++    end += 1
++    line = nextLineWithoutTabs.slice(indent)
++  }
++
++  return { text, end, indent }
++}
++
++/**
++ * A block-level `text` token as the paragraph it is: marked lexes an item's
++ * blocks outside top mode, where a paragraph is a `text` token, and an item
++ * holds no bare text.
++ */
++function asParagraph(token: any): any {
++  return token.type === 'text' && token.tokens ? { ...token, type: 'paragraph' } : token
++}
++
++/**
++ * Parses a run of list items whose markers match `config.itemPattern`, each
++ * item read as marked reads one (`collectMarkdownListItem`) and its content
++ * lexed as marked lexes an item's (`lexer.listItemBlockTokens`): the item's
++ * text is its first block when that is text, and the blocks after it, nested
++ * lists included, are its nested tokens.
+  */
+ export function parseIndentedBlocks(
+   src: string,
+@@ -80,6 +223,7 @@ export function parseIndentedBlocks(
    lexer: {
      inlineTokens: (src: string) => any[]
      blockTokens: (src: string) => any[]
-+    probeBlockTokens: (src: string) => any[]
++    listItemBlockTokens: (src: string) => any[]
    },
  ):
    | {
-@@ -101,7 +229,7 @@ export function parseIndentedBlocks(
+@@ -88,107 +232,83 @@ export function parseIndentedBlocks(
+     }
+   | undefined {
+   const lines = src.split('\n')
+-  const items: ParsedBlock[] = []
+-  let totalRaw = ''
++  const found: Array<{ match: RegExpMatchArray; text: string }> = []
++  let consumed = 0
+   let i = 0
+-  const baseIndentSize = config.baseIndentSize || 2
+
+   while (i < lines.length) {
+     const currentLine = lines[i]
+     const itemMatch = currentLine.match(config.itemPattern)
++    const markerEnd = itemMatch ? (itemMatch[1] ?? '').length + (itemMatch[2] ?? '').length : 0
++    const item = itemMatch
++      ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
++          endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line),
++        })
++      : undefined
+
+-    if (!itemMatch) {
++    if (!itemMatch || !item || (config.checkbox && !/^\[[ xX]\](?=[ \n]|$)/.test(item.text))) {
        // Not a matching item - stop if we have items, otherwise this isn't our block type
-       if (items.length > 0) {
+-      if (items.length > 0) {
++      if (found.length > 0) {
          break
 -      } else if (currentLine.trim() === '') {
-+      } else if (!/[^ \t]/.test(currentLine)) {
++      } else if (isBlankLine(currentLine)) {
          i += 1
-         totalRaw = `${totalRaw}${currentLine}\n`
+-        totalRaw = `${totalRaw}${currentLine}\n`
          continue
-@@ -118,20 +246,50 @@ export function parseIndentedBlocks(
-     const itemContent = [mainContent] // Start with the main text
-     i += 1
-
-+    // A paragraph continuation of the item's first line (indented, or lazy at
-+    // column 0) joins it, so a hard break stays inside the item's paragraph.
-+    // An item with an empty first line takes the continuation as its text.
-+    // A continuation line loses the item's content column of indent and keeps
-+    // up to 3 spaces past it as text, as in a bullet item; 4 or more are the
-+    // indent of a code line that cannot interrupt the paragraph, and go.
-+    while (i < lines.length) {
-+      const nextLine = lines[i]
-+      if (
-+        !/[^ \t]/.test(nextLine) ||
-+        config.itemPattern.test(nextLine) ||
-+        opensItemBlock(
-+          nextLine,
-+          lines[i + 1],
-+          indentLevel,
-+          indentLevel + baseIndentSize,
-+          itemData.mainContent,
-+          lexer,
-+        )
-+      ) {
-+        break
-+      }
-+      itemData.mainContent =
-+        itemData.mainContent === ''
-+          ? continuationText(nextLine, indentLevel + baseIndentSize)
-+          : `${itemData.mainContent}\n${continuationText(nextLine, indentLevel + baseIndentSize)}`
-+      totalRaw = `${totalRaw}${nextLine}\n`
-+      i += 1
-+    }
-+
-     // Look ahead for nested content (indented more than current item)
-     while (i < lines.length) {
-       const nextLine = lines[i]
-
--      if (nextLine.trim() === '') {
-+      if (!/[^ \t]/.test(nextLine)) {
-         // Empty line - might be end of nested content
--        const nextNonEmptyIndex = lines.slice(i + 1).findIndex(l => l.trim() !== '')
-+        const nextNonEmptyIndex = lines.slice(i + 1).findIndex(l => /[^ \t]/.test(l))
-         if (nextNonEmptyIndex === -1) {
-           // No more content
-           break
-         }
-
-         const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex]
--        const nextIndent = nextNonEmpty.match(/^(\s*)/)?.[1]?.length || 0
-+        const nextIndent = nextNonEmpty.match(/^([ \t]*)/)?.[1]?.length || 0
-
-         if (nextIndent > indentLevel) {
-           // Nested content continues after empty line
-@@ -145,7 +303,7 @@ export function parseIndentedBlocks(
-         }
+       } else {
+         return undefined
        }
+     }
 
+-    const itemData = config.extractItemData(itemMatch)
+-    const { indentLevel, mainContent } = itemData
+-    totalRaw = `${totalRaw}${currentLine}\n`
+-
+-    // Collect content for this item (including nested items)
+-    const itemContent = [mainContent] // Start with the main text
+-    i += 1
+-
+-    // Look ahead for nested content (indented more than current item)
+-    while (i < lines.length) {
+-      const nextLine = lines[i]
+-
+-      if (nextLine.trim() === '') {
+-        // Empty line - might be end of nested content
+-        const nextNonEmptyIndex = lines.slice(i + 1).findIndex(l => l.trim() !== '')
+-        if (nextNonEmptyIndex === -1) {
+-          // No more content
+-          break
+-        }
+-
+-        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex]
+-        const nextIndent = nextNonEmpty.match(/^(\s*)/)?.[1]?.length || 0
+-
+-        if (nextIndent > indentLevel) {
+-          // Nested content continues after empty line
+-          itemContent.push(nextLine)
+-          totalRaw = `${totalRaw}${nextLine}\n`
+-          i += 1
+-          continue
+-        } else {
+-          // End of nested content
+-          break
+-        }
+-      }
+-
 -      const nextIndent = nextLine.match(/^(\s*)/)?.[1]?.length || 0
-+      const nextIndent = nextLine.match(/^([ \t]*)/)?.[1]?.length || 0
-
-       if (nextIndent > indentLevel) {
-         // This is nested content for the current item
-@@ -165,10 +323,11 @@ export function parseIndentedBlocks(
-     if (nestedContent.length > 0) {
-       // Remove the base indentation from nested content
-       const dedentedNested = nestedContent
+-
+-      if (nextIndent > indentLevel) {
+-        // This is nested content for the current item
+-        itemContent.push(nextLine)
+-        totalRaw = `${totalRaw}${nextLine}\n`
+-        i += 1
+-      } else {
+-        // Same or less indentation - this belongs to parent level
+-        break
+-      }
+-    }
+-
+-    // Parse nested content if present
+-    let nestedTokens: any[] | undefined
+-    const nestedContent = itemContent.slice(1)
+-
+-    if (nestedContent.length > 0) {
+-      // Remove the base indentation from nested content
+-      const dedentedNested = nestedContent
 -        .map(nestedLine => nestedLine.slice(indentLevel + baseIndentSize)) // Remove base indent + 2 spaces
-+        // Remove base indent + 2 spaces, counted in columns: a tab is not one.
-+        .map(nestedLine => stripColumns(nestedLine, indentLevel + baseIndentSize))
-         .join('\n')
-
+-        .join('\n')
+-
 -      if (dedentedNested.trim()) {
-+      if (/[^ \t\n]/.test(dedentedNested)) {
-         // Use custom nested parser if provided, otherwise fall back to default
-         if (config.customNestedParser) {
-           nestedTokens = config.customNestedParser(dedentedNested)
+-        // Use custom nested parser if provided, otherwise fall back to default
+-        if (config.customNestedParser) {
+-          nestedTokens = config.customNestedParser(dedentedNested)
+-        } else {
+-          nestedTokens = lexer.blockTokens(dedentedNested)
+-        }
+-      }
+-    }
+-
+-    // Create the token using the provided factory function
+-    const token = config.createToken(itemData, nestedTokens)
+-    items.push(token)
++    found.push({ match: itemMatch, text: item.text })
++    i = item.end
++    consumed = i
+   }
+
+-  if (items.length === 0) {
++  if (found.length === 0) {
+     return undefined
+   }
+
++  // 400-409: the list does not take the blank lines after its last item, and
++  // that item's text loses its trailing spaces, tabs and line breaks (marked's
++  // `trimEnd` would take a no-break space too).
++  const last = found[found.length - 1]
++  last.text = last.text.replace(/[ \t\n]+$/, '')
++
++  const items = found.map(({ match, text }) => {
++    const data = config.extractItemData(match)
++    let content = text
++    // 391, 415-421: a task item's checkbox is lexed with its text, so that
++    // text is never read as a block of its own, and taken off the first
++    // block after; an item whose first line holds the checkbox alone, which
++    // marked would not read as a task, loses it before its content is lexed.
++    // Text after the checkbox's space may start with a no-break space, which
++    // marked's `\S` refuses: a task whose text starts with one is written so.
++    const task = config.checkbox === true && /^\[[ xX]\] +[^ \t\n]/.test(content)
++    if (config.checkbox && !task) {
++      content = content.replace(/^\[[ xX]\] */, '')
++    }
++    const tokens = lexer.listItemBlockTokens(content)
++    const first = tokens.findIndex(token => token.type !== 'space')
++    // marked leaves the checkbox in the text of a setext heading the first
++    // line opens; it is the item's state, not its text, so it goes there too.
++    if (task && first !== -1 && tokens[first].type === 'heading') {
++      const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, '')
++      tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) }
++    }
++    const opensWithText =
++      first !== -1 && (tokens[first].type === 'text' || tokens[first].type === 'paragraph')
++    data.mainContent = opensWithText ? tokens[first].text : ''
++    if (task && opensWithText) {
++      data.mainContent = data.mainContent.replace(/^\[[ xX]\] +/, '')
++    }
++    const nestedTokens = tokens
++      .slice(opensWithText ? first + 1 : Math.max(first, 0))
++      .filter(token => first !== -1 || token.type !== 'space')
++      .map(asParagraph)
++    return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : undefined)
++  })
++
+   return {
+     items,
+-    raw: totalRaw,
++    raw: lines.slice(0, consumed).join('\n').replace(/[ \t\n]+$/, ''),
+   }
+ }

@@ -645,12 +645,71 @@ function findTaskItem(parsed: JsonContent): JsonContent {
   return ((taskList ?? first).content ?? [])[0];
 }
 
+function bulletChildren(
+  lines: ReadonlyArray<string>,
+  first: string,
+): JsonContent[] {
+  const markdown = [`- ${first}`, ...lines.map((line) => `  ${line}`)].join(
+    "\n",
+  );
+  const list = (parseMarkdown(markdown).content ?? [])[0];
+  return (list.content ?? [])[0].content ?? [];
+}
+
+function blockTitle(block: BlockLine, first: string): string {
+  if (first === "") return block.name;
+  if (block.name === "a thematic break") {
+    return "a thematic break underlines it as a level-2 heading, as marked reads it";
+  }
+  if (block.name === "a setext underline") {
+    return "a setext underline makes it a level-1 heading, as marked reads it";
+  }
+  if (block.name === "a lone open tag") {
+    return "a lone open tag ends the paragraph and opens an HTML block, as marked reads it";
+  }
+  return block.name;
+}
+
+/**
+ * The rows where marked ends a task item's non-empty first line with a block
+ * of its own, as in a bullet item: a lone open tag opens an HTML block, which
+ * the editor keeps as an empty paragraph, and `---` or `===` makes the first
+ * line a setext heading. Returns whether the row was one of them.
+ */
+function expectMarkedBlockAfterFirstLine(
+  block: BlockLine,
+  first: string,
+  item: JsonContent,
+): boolean {
+  if (first === "") return false;
+  const children = item.content ?? [];
+  if (block.kind === "openTagAlone") {
+    expect(childTypes(item)).toEqual(["paragraph", "paragraph"]);
+    expect(paragraphText(children[0])).toBe("first");
+  } else if (
+    block.name === "a thematic break" ||
+    block.name === "a setext underline"
+  ) {
+    const level = block.name === "a thematic break" ? 2 : 1;
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect(paragraphText(children[0])).toBe("");
+    expect(children[1].attrs?.level).toBe(level);
+    expect(paragraphText(children[1])).toBe(first);
+  } else {
+    return false;
+  }
+  expect(skeleton({ content: children })).toBe(
+    skeleton({ content: bulletChildren(block.lines, first) }),
+  );
+  return true;
+}
+
 describe("a task item's continuation joins its paragraph only where no block opens", () => {
   for (const context of TASK_CONTEXTS) {
     for (const first of ["", "first"]) {
       for (const block of BLOCK_LINES) {
         const label = first === "" ? "empty" : "non-empty";
-        it(`${label} first paragraph, ${block.name}, under ${context.name}`, () => {
+        it(`${label} first paragraph, ${blockTitle(block, first)}, under ${context.name}`, () => {
           const markdown = [
             ...context.parentLines,
             `${context.taskIndent}- [ ] ${first}`,
@@ -671,11 +730,7 @@ describe("a task item's continuation joins its paragraph only where no block ope
             return;
           }
 
-          if (block.kind === "openTagAlone" && first !== "") {
-            expect(childTypes(item)).toEqual(["paragraph"]);
-            expect(paragraphText(children[0]).startsWith("first\n")).toBe(true);
-            return;
-          }
+          if (expectMarkedBlockAfterFirstLine(block, first, item)) return;
 
           if (
             block.kind === "plain" ||
@@ -705,32 +760,59 @@ describe("a task item's continuation joins its paragraph only where no block ope
   }
 });
 
+describe("a task item's setext heading text", () => {
+  it("never holds the checkbox, unlike marked's own heading text", () => {
+    for (const underline of ["---", "==="]) {
+      const item = onlyListItem(`- [ ] first\n  ${underline}`, "taskList");
+      expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+      expect(paragraphText((item.content ?? [])[1])).toBe("first");
+    }
+  });
+});
+
 describe("a task item's lazy continuation line", () => {
-  const LAZY_CASES: ReadonlyArray<readonly [string, string, string]> = [
-    ["empty", "", "plain"],
-    ["empty", " ", "plain"],
-    ["non-empty", "", "first\nplain"],
-    ["non-empty", " ", "first\nplain"],
+  const LAZY_CASES: ReadonlyArray<readonly [string, string, string, string]> = [
+    [
+      "empty",
+      "",
+      "plain",
+      "plain line at column 0 is a lazy continuation of the task item, as marked reads it",
+    ],
+    [
+      "empty",
+      " ",
+      " plain",
+      "plain line at column 1 is a lazy continuation that keeps its space, as marked reads it",
+    ],
+    [
+      "non-empty",
+      "",
+      "first\nplain",
+      "plain line at column 0 is a lazy continuation, as marked reads it",
+    ],
+    [
+      "non-empty",
+      " ",
+      "first\n plain",
+      "plain line at column 1 is a lazy continuation that keeps its space, as marked reads it",
+    ],
   ];
 
-  for (const [state, lead, expectedText] of LAZY_CASES) {
-    it(`${state} first paragraph, plain line at column ${String(lead.length)}`, () => {
+  for (const [state, lead, expectedText, title] of LAZY_CASES) {
+    it(`${state} first paragraph, ${title}`, () => {
       const first = state === "empty" ? "" : "first";
       const parsed = parseMarkdown(`- [ ] ${first}\n${lead}plain`);
       const top = parsed.content ?? [];
-
-      if (state === "empty" && lead === "") {
-        // The empty item ends at the blank-looking line: the text is top level.
-        expect(top.map((node) => node.type)).toEqual(["taskList", "paragraph"]);
-        expect(paragraphText(top[1])).toBe("plain");
-        expect(childTypes((top[0].content ?? [])[0])).toEqual(["paragraph"]);
-        return;
-      }
-
       expect(top.map((node) => node.type)).toEqual(["taskList"]);
       const item = (top[0].content ?? [])[0];
       expect(childTypes(item)).toEqual(["paragraph"]);
       expect(paragraphText((item.content ?? [])[0])).toBe(expectedText);
+      if (state === "non-empty") {
+        const bullet = (parseMarkdown(`- first\n${lead}plain`).content ??
+          [])[0];
+        const bulletItem = (bullet.content ?? [])[0];
+        expect(paragraphText((bulletItem.content ?? [])[0])).toBe(expectedText);
+      }
     });
   }
 });
@@ -1202,28 +1284,30 @@ describe("an HTML block opener with any attribute grammar keeps its body literal
 
 describe("an HTML block opener after a non-empty task paragraph", () => {
   for (const [name, opener] of HTML_OPENERS) {
-    it(`joins the paragraph and nests the list: ${name}`, () => {
-      const item = onlyListItem(`- [ ] first\n  ${opener}\n  - x`, "taskList");
-      // An inline HTML tag in paragraph text is dropped by the editor, so the
-      // opener's own text is not asserted.
-      expect(childTypes(item)).toEqual(["paragraph", "bulletList"]);
-      expect(paragraphText((item.content ?? [])[0]).startsWith("first")).toBe(
-        true,
-      );
-      const nested = (item.content ?? [])[1];
-      expect(skeleton(nested)).toBe(
-        skeleton(listWith("bulletList", [itemOf(textPara("x"))], 1)),
+    it(`ends the paragraph and keeps the list line in the HTML block, as a bullet item does: ${name}`, () => {
+      const task = onlyListItem(`- [ ] first\n  ${opener}\n  - x`, "taskList");
+      const bullet = onlyListItem(`- first\n  ${opener}\n  - x`, "bulletList");
+      expect(childTypes(task)).toEqual(["paragraph", "paragraph"]);
+      expect(paragraphText((task.content ?? [])[0])).toBe("first");
+      expect(paragraphText((task.content ?? [])[1])).toContain("- x");
+      expect(hasNodeType(task, "bulletList")).toBe(false);
+      expect(skeleton(task)).toBe(
+        skeleton(bullet).replace("listItem", "taskItem"),
       );
     });
   }
 });
 
 describe("a continuation line follows marked's block rules under a task item", () => {
-  it("joins `2. x` as text, because only `1.` interrupts a paragraph", () => {
+  it("opens an ordered list at `2. x`, as marked reads a bullet item", () => {
     const item = onlyListItem("- [ ] first\n  2. x", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph"]);
-    expect(paragraphText((item.content ?? [])[0])).toBe("first\n2. x");
-    expect(hasNodeType(item, "orderedList")).toBe(false);
+    const bullet = onlyListItem("- first\n  2. x", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("first");
+    expect((item.content ?? [])[1].attrs?.start).toBe(2);
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 
   it("opens an ordered list at `1. x`", () => {
@@ -1231,10 +1315,15 @@ describe("a continuation line follows marked's block rules under a task item", (
     expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
   });
 
-  it("joins a lazy `===` at column zero as text", () => {
+  it("reads a lazy `===` at column zero as a level-1 setext underline, as marked does", () => {
     const item = onlyListItem("- [ ] first\n===", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph"]);
-    expect(paragraphText((item.content ?? [])[0])).toBe("first\n===");
+    const bullet = onlyListItem("- first\n===", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect((item.content ?? [])[1].attrs?.level).toBe(1);
+    expect(paragraphText((item.content ?? [])[1])).toBe("first");
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 
   it("ends the item at a lazy `---` at column zero", () => {
@@ -1245,15 +1334,25 @@ describe("a continuation line follows marked's block rules under a task item", (
     ]);
   });
 
-  it("joins an indented `===` as text", () => {
+  it("reads an indented `===` as a level-1 setext underline, as marked does", () => {
     const item = onlyListItem("- [ ] first\n  ===", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph"]);
-    expect(paragraphText((item.content ?? [])[0])).toBe("first\n===");
+    const bullet = onlyListItem("- first\n  ===", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect((item.content ?? [])[1].attrs?.level).toBe(1);
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 
-  it("makes an indented `---` a horizontal rule inside the item", () => {
+  it("reads an indented `---` as a level-2 setext underline, as marked does", () => {
     const item = onlyListItem("- [ ] first\n  ---", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph", "horizontalRule"]);
+    const bullet = onlyListItem("- first\n  ---", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect((item.content ?? [])[1].attrs?.level).toBe(2);
+    expect(paragraphText((item.content ?? [])[1])).toBe("first");
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 });
 
@@ -1330,12 +1429,12 @@ function firstThenParagraph(children: ReadonlyArray<JsonContent>): void {
 
 const CONTINUATION_ROWS: ReadonlyArray<ContinuationRow> = [
   {
-    name: "a quoted-attribute tag then a list line",
+    name: "a quoted-attribute tag ends the paragraph and keeps the list line in its HTML block",
     markdown: '- [ ] First\n  <span title=">">\n  - x',
     check: (children) => {
-      expect(children.map((c) => c.type)).toEqual(["paragraph", "bulletList"]);
-      expect(textOfNode(children[0]).startsWith("First")).toBe(true);
-      expect(textOfNode(children[1])).toBe("x");
+      expect(children.map((c) => c.type)).toEqual(["paragraph", "paragraph"]);
+      expect(textOfNode(children[0])).toBe("First");
+      expect(textOfNode(children[1])).toContain("- x");
     },
   },
   {
@@ -1361,9 +1460,9 @@ const CONTINUATION_ROWS: ReadonlyArray<ContinuationRow> = [
     check: firstThenParagraph,
   },
   {
-    name: "`2. x`",
+    name: "`2. x` opens an ordered list starting at 2, as marked reads a bullet item",
     markdown: "- [ ] First\n  2. x",
-    check: onlyParagraph("First\n2. x"),
+    check: paragraphThen("orderedList", "x"),
   },
   {
     name: "`1. x`",

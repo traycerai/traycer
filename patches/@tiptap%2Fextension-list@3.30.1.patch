@@ -1,10 +1,23 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02dd8d1733c 100644
+index 4c729511471466d470d01dae4ae2ab7393eb6e2d..084b88e882ee9bcfcc9ba4f19a0d4a0e53f0ade6 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -487,7 +487,10 @@ var ListItem = import_core3.Node.create({
+@@ -430,6 +430,9 @@ function isSameLineOrderedListToken(token) {
+     token.text && ((_b = token.tokens) == null ? void 0 : _b.length) === 1 && (nestedToken == null ? void 0 : nestedToken.type) === "list" && nestedToken.ordered && nestedToken.raw === token.text
+   );
+ }
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
++}
+ function parseSameLineOrderedListText(text, helpers) {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text));
+@@ -485,9 +488,12 @@ var ListItem = import_core3.Node.create({
+       }
+       const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
        if (hasParagraphTokens) {
-         content = parseBlockChildren(token.tokens);
+-        content = parseBlockChildren(token.tokens);
++        content = parseBlockChildren(token.tokens.map(asParagraph));
        } else {
 -        const firstToken = token.tokens[0];
 +        let leadingSpaces = 0;
@@ -14,18 +27,21 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02d
          if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
            const inlineContent = helpers.parseInline(firstToken.tokens);
            content = [
-@@ -496,8 +499,8 @@ var ListItem = import_core3.Node.create({
+@@ -496,22 +502,23 @@ var ListItem = import_core3.Node.create({
                content: inlineContent
              }
            ];
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1);
+-            const additionalContent = parseBlockChildren(remainingTokens);
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1);
-             const additionalContent = parseBlockChildren(remainingTokens);
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph));
              content.push(...additionalContent);
            }
-@@ -506,12 +509,13 @@ var ListItem = import_core3.Node.create({
+         } else {
+-          content = parseBlockChildren(token.tokens);
++          content = parseBlockChildren(token.tokens.map(asParagraph));
          }
        }
      }
@@ -41,24 +57,23 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02d
        ];
      }
      return {
-@@ -881,54 +885,74 @@ var import_core11 = require("@tiptap/core");
+@@ -880,131 +887,79 @@ var import_state2 = require("@tiptap/pm/state");
+ var import_core11 = require("@tiptap/core");
 
  // src/ordered-list/utils.ts
++var import_core_list_items = require("@tiptap/core");
  var ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`
  );
 -var INDENTED_LINE_REGEX = /^\s/;
-+var INDENTED_LINE_REGEX = /^[ \t]/;
- var PARAGRAPH_INTERRUPTERS = {
+-var PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
- };
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
+-};
 -function isOrderedListMarkerLine(line) {
 -  return ORDERED_LIST_ITEM_REGEX.test(line.trimStart());
 -}
@@ -69,9 +84,9 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02d
 -  PARAGRAPH_INTERRUPTERS.thematicBreak.test(trimmedLine) && !trimmedLine.startsWith("-") || // oxlint-disable-next-line prefer-string-starts-ends-with
 -  /^>\s?/.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.codeFence.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.blockMath.test(trimmedLine);
 -}
- function interruptsLazyContinuation(line) {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
- }
+-function interruptsLazyContinuation(line) {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
+-}
 -function splitItemContent(contentLines) {
 -  const paragraphLines = [];
 -  const blockLines = [];
@@ -90,197 +105,210 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02d
 -      reachedBlockBoundary = true;
 -      blockLines.push(line);
 -      return;
-+function leadingIndentColumns(line) {
-+  let column = 0;
-+  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+  }
-+  return column;
-+}
-+function stripIndentColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") {
-+      column += 1;
-+    } else if (char === "\t") {
-+      const next = column + 4 - column % 4;
-+      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
-+      column = next;
-+    } else {
-+      break;
-     }
+-    }
 -    paragraphLines.push(line);
 -  });
 -  return {
 -    paragraphLines,
 -    blockLines
 -  };
-+    index += 1;
++function matchOrderedListMarker(line) {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX);
++  if (match === null) {
++    return null;
 +  }
-+  return line.slice(index);
-+}
-+// The run of a fence a line opens, without its indent, as marked's lexer
-+// reads one: three or more backticks with no backtick after them, or three or
-+// more tildes.
-+function fenceRun(text) {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
-+  return fence === null ? void 0 : fence[1];
-+}
-+// Whether a line, without its indent, closes the fence `run` opened, as
-+// marked's lexer reads it: that run, then only backticks or tildes, then
-+// spaces.
-+function closesFence(text, run) {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
-+}
-+// The content column of a container whose marker, `markerWidth` wide (a
-+// bullet, an ordered marker with its separator, or `>`), starts `text` at
-+// `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+// space after a list marker, or one column when more follow or none.
-+function containerContentColumn(text, column, markerWidth) {
-+  const markerEnd = column + markerWidth;
-+  let end = markerEnd;
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === " ") end += 1;
-+    else if (char === "\t") end += 4 - end % 4;
-+    else break;
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null;
 +  }
-+  const spaces = end - markerEnd;
-+  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1);
++  return match;
  }
  function collectOrderedListItems(lines) {
    const listItems = [];
-@@ -945,27 +969,71 @@ function collectOrderedListItems(lines) {
+   let currentLineIndex = 0;
+-  let consumed = 0;
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex];
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX);
++    const match = matchOrderedListMarker(line);
+     if (!match) {
+       break;
+     }
+-    const [, indent, marker, _separator, content] = match;
+-    const indentLevel = indent.length;
++    const [markerLine, indent, marker] = match;
      const number = parseInt(marker, 10);
-     const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number;
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number;
 -    const itemContentLines = [content];
-     let nextLineIndex = currentLineIndex + 1;
-     const itemLines = [line];
-     let sawBlankLine = false;
-+    const itemContentColumn = containerContentColumn(line.slice(indent.length), leadingIndentColumns(indent), marker.length + _separator.length);
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length;
-+    const itemContentLines = [
-+      stripIndentColumns(" ".repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length), itemContentColumn)
-+    ];
-+    const innerBlocks = [];
-+    let openFence;
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, "");
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0]);
-+    if (firstText !== "" && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText);
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX);
-+      if (run !== void 0) {
-+        openFence = { run, column: itemContentColumn };
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1
-+          )
-+        });
-+      }
-+    }
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex];
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-    let nextLineIndex = currentLineIndex + 1;
+-    const itemLines = [line];
+-    let sawBlankLine = false;
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex];
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
 -      if (nextMatch) {
-+      const nextColumn = leadingIndentColumns(nextLine);
-+      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))) {
-+        openFence = void 0;
-+      }
-+      if (openFence === void 0 && /[^ \t]/.test(nextLine) && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
-+        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
-+      }
-+      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
-         break;
-       }
+-        break;
+-      }
 -      if (nextLine.trim() === "") {
-+      if (!/[^ \t]/.test(nextLine)) {
-         itemLines.push(nextLine);
-         itemContentLines.push("");
-         sawBlankLine = true;
-         nextLineIndex += 1;
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        itemLines.push(nextLine);
+-        itemContentLines.push("");
+-        sawBlankLine = true;
+-        nextLineIndex += 1;
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
 -        const contentIndent = indentLevel + marker.length + 1;
-         itemLines.push(nextLine);
+-        itemLines.push(nextLine);
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
-         nextLineIndex += 1;
-+        const text = nextLine.replace(/^[ \t]+/, "");
-+        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
-+        if (openFence !== void 0) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
-+          if (run !== void 0) {
-+            openFence = { run, column: blockColumn };
-+          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
-+            });
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break;
-@@ -979,7 +1047,7 @@ function collectOrderedListItems(lines) {
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1;
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break;
++    const legacyColumn = indent.length + 2;
++    const item = (0, import_core_list_items.collectMarkdownListItem)(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine);
++          return (0, import_core_list_items.markdownNextBulletRegex)(contentColumn).test(nextLine) || nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1);
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: (text) => /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null
+         }
+-        itemLines.push(nextLine);
+-        itemContentLines.push(nextLine);
+-        nextLineIndex += 1;
+       }
+-    }
++    );
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join("\n").trim(),
-+      content: itemContentLines.join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, ""),
-       contentLines: itemContentLines,
-       raw: itemLines.join("\n")
+-      contentLines: itemContentLines,
+-      raw: itemLines.join("\n")
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : void 0,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join("\n")
      });
-@@ -1026,14 +1094,27 @@ function parsePlainTextOrderedListPaste(text) {
+-    consumed = nextLineIndex;
+-    currentLineIndex = nextLineIndex;
++    currentLineIndex = item.end;
+   }
+-  return [listItems, consumed];
++  const last = listItems[listItems.length - 1];
++  if (last !== void 0) {
++    last.text = last.text.replace(/[ \t\n]+$/, "");
++    last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  }
++  return [listItems, currentLineIndex];
+ }
+-var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`
+-);
+ function parsePlainTextOrderedListPaste(text) {
+-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+-  if (lines.length === 0) {
++  const lines = text.split(/\r?\n/);
++  const [items, consumed] = collectOrderedListItems(lines);
++  if (items.length === 0 || lines.slice(consumed).some((line) => /[^ \t]/.test(line))) {
+     return null;
+   }
+   const parsedItems = [];
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX);
+-    if (!match) {
++  for (const item of items) {
++    const [content, ...rest] = item.text.split("\n");
++    if (!/^[^ ]/.test(content) || rest.some((line) => /[^ \t]/.test(line))) {
+       return null;
+     }
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3]
++      marker: item.marker,
++      content
+     });
+   }
+   const markers = parsedItems.map((item) => item.marker);
+@@ -1026,57 +981,6 @@ function parsePlainTextOrderedListPaste(text) {
      }))
    };
  }
-+function continuationText(line) {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line;
-+}
-+function splitAtFirstParagraph(contentLines, lexer) {
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join("\n")}\n`);
-+  const first = tokens.findIndex((token) => token.type !== "space");
-+  if (first === -1 || tokens[first].type !== "paragraph") {
-+    return { paragraphLines: [], blockLines: contentLines };
-+  }
-+  const start = tokens.slice(0, first).map((token) => token.raw).join("").split("\n").length - 1;
-+  const end = start + tokens[first].raw.replace(/\n+$/, "").split("\n").length;
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) };
-+}
- function buildNestedStructure(items, baseIndent, lexer) {
-   const result = [];
-   let currentIndex = 0;
-   while (currentIndex < items.length) {
-     const item = items[currentIndex];
-     if (item.indent === baseIndent) {
+-function buildNestedStructure(items, baseIndent, lexer) {
+-  const result = [];
+-  let currentIndex = 0;
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex];
+-    if (item.indent === baseIndent) {
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines);
 -      const mainText = paragraphLines.join("\n").trim();
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer);
-+      const mainText = paragraphLines.map((line, index) => index === 0 ? line : continuationText(line)).join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, "");
-       const tokens = [];
-       if (mainText) {
-         tokens.push({
-@@ -1042,7 +1123,7 @@ function buildNestedStructure(items, baseIndent, lexer) {
-           tokens: lexer.inlineTokens(mainText)
-         });
-       }
+-      const tokens = [];
+-      if (mainText) {
+-        tokens.push({
+-          type: "paragraph",
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText)
+-        });
+-      }
 -      const additionalContent = blockLines.join("\n").trim();
-+      const additionalContent = blockLines.join("\n").replace(/^(?:[ \t]*\n)+/, "").replace(/[ \t\n]+$/, "");
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent);
-         tokens.push(...blockTokens);
-@@ -1101,6 +1182,9 @@ function parseListItems(items, helpers) {
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent);
+-        tokens.push(...blockTokens);
+-      }
+-      let lookAheadIndex = currentIndex + 1;
+-      const nestedItems = [];
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex]);
+-        lookAheadIndex += 1;
+-      }
+-      if (nestedItems.length > 0) {
+-        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer);
+-        tokens.push({
+-          type: "list",
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+-        });
+-      }
+-      result.push({
+-        type: "list_item",
+-        raw: item.raw,
+-        tokens
+-      });
+-      currentIndex = lookAheadIndex;
+-    } else {
+-      currentIndex += 1;
+-    }
+-  }
+-  return result;
+-}
+ function parseListItems(items, helpers) {
+   return items.map((item) => {
+     if (item.type !== "list_item") {
+@@ -1088,11 +992,7 @@ function parseListItems(items, helpers) {
+         if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+           content.push(...helpers.parseChildren([itemToken]));
+         } else if (itemToken.type === "text" && itemToken.tokens) {
+-          const inlineContent = helpers.parseChildren([itemToken]);
+-          content.push({
+-            type: "paragraph",
+-            content: inlineContent
+-          });
++          content.push(...helpers.parseChildren([{ ...itemToken, type: "paragraph" }]));
+         } else {
+           const parsed = helpers.parseChildren([itemToken]);
+           if (parsed.length > 0) {
+@@ -1101,6 +1001,9 @@ function parseListItems(items, helpers) {
          }
        });
      }
@@ -290,7 +318,56 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02d
      return {
        type: "listItem",
        content
-@@ -1601,7 +1685,7 @@ var TaskList = import_core13.Node.create({
+@@ -1113,11 +1016,11 @@ var ListItemName2 = "listItem";
+ var TextStyleName2 = "textStyle";
+ var orderedListInputRegex = /^(\d+)\.\s$/;
+ function cssListStyleTypeToHtmlType(style) {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i);
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i);
+   if (!match) {
+     return null;
+   }
+-  const cssValue = match[1].trim().toLowerCase();
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "").toLowerCase();
+   switch (cssValue) {
+     case "upper-roman":
+       return "I";
+@@ -1251,10 +1154,12 @@ var OrderedList = import_core11.Node.create({
+       if (listItems.length === 0) {
+         return void 0;
+       }
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer);
+-      if (items.length === 0) {
+-        return void 0;
+-      }
++      const items = listItems.map((item) => ({
++        type: "list_item",
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text)
++      }));
+       const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
+       const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
+       return {
+@@ -1263,7 +1168,7 @@ var OrderedList = import_core11.Node.create({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join("\n")
++        raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+       };
+     }
+   },
+@@ -1292,7 +1197,7 @@ var OrderedList = import_core11.Node.create({
+           handlePaste: (view, event) => {
+             var _a, _b;
+             const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
+-            if (html == null ? void 0 : html.trim()) {
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false;
+             }
+             const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
+@@ -1601,53 +1506,14 @@ var TaskList = import_core13.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -299,40 +376,83 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..c5efc4095ae987b3acb81ecf26c1e02d
        return index !== void 0 ? index : -1;
      },
      tokenize(src, tokens, lexer) {
-@@ -1609,7 +1693,7 @@ var TaskList = import_core13.Node.create({
-         const nestedResult = (0, import_core13.parseIndentedBlocks)(
-           content,
-           {
+-      const parseTaskListContent = (content) => {
+-        const nestedResult = (0, import_core13.parseIndentedBlocks)(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: (match) => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -1637,7 +1721,7 @@ var TaskList = import_core13.Node.create({
-             items: nestedResult.items
-           };
-           const remainder = content.slice(nestedResult.raw.length);
+-            extractItemData: (match) => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === "x"
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: "taskItem",
+-              raw: "",
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent
+-          },
+-          lexer
+-        );
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: "taskList",
+-            raw: nestedResult.raw,
+-            items: nestedResult.items
+-          };
+-          const remainder = content.slice(nestedResult.raw.length);
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)];
-           }
-           return [taskListToken];
-@@ -1647,7 +1731,7 @@ var TaskList = import_core13.Node.create({
+-            return [taskListToken, ...lexer.blockTokens(remainder)];
+-          }
+-          return [taskListToken];
+-        }
+-        return lexer.blockTokens(content);
+-      };
        const result = (0, import_core13.parseIndentedBlocks)(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -1663,8 +1529,7 @@ var TaskList = import_core13.Node.create({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent
++          checkbox: true
+         },
+         lexer
+       );
 diff --git a/dist/index.js b/dist/index.js
-index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e69af8553d 100644
+index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..dc7e1b72be06b28fe3dbc516abfe597b7ca132ad 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -447,7 +447,10 @@ var ListItem = Node2.create({
+@@ -390,6 +390,9 @@ function isSameLineOrderedListToken(token) {
+     token.text && ((_b = token.tokens) == null ? void 0 : _b.length) === 1 && (nestedToken == null ? void 0 : nestedToken.type) === "list" && nestedToken.ordered && nestedToken.raw === token.text
+   );
+ }
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
++}
+ function parseSameLineOrderedListText(text, helpers) {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text));
+@@ -445,9 +448,12 @@ var ListItem = Node2.create({
+       }
+       const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
        if (hasParagraphTokens) {
-         content = parseBlockChildren(token.tokens);
+-        content = parseBlockChildren(token.tokens);
++        content = parseBlockChildren(token.tokens.map(asParagraph));
        } else {
 -        const firstToken = token.tokens[0];
 +        let leadingSpaces = 0;
@@ -342,18 +462,21 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e6
          if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
            const inlineContent = helpers.parseInline(firstToken.tokens);
            content = [
-@@ -456,8 +459,8 @@ var ListItem = Node2.create({
+@@ -456,22 +462,23 @@ var ListItem = Node2.create({
                content: inlineContent
              }
            ];
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1);
+-            const additionalContent = parseBlockChildren(remainingTokens);
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1);
-             const additionalContent = parseBlockChildren(remainingTokens);
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph));
              content.push(...additionalContent);
            }
-@@ -466,12 +469,13 @@ var ListItem = Node2.create({
+         } else {
+-          content = parseBlockChildren(token.tokens);
++          content = parseBlockChildren(token.tokens.map(asParagraph));
          }
        }
      }
@@ -369,24 +492,23 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e6
        ];
      }
      return {
-@@ -841,54 +845,74 @@ import { mergeAttributes as mergeAttributes3, Node as Node3, wrappingInputRule a
+@@ -840,131 +847,79 @@ import { Plugin } from "@tiptap/pm/state";
+ import { mergeAttributes as mergeAttributes3, Node as Node3, wrappingInputRule as wrappingInputRule2 } from "@tiptap/core";
 
  // src/ordered-list/utils.ts
++import { collectMarkdownListItem, markdownNextBulletRegex } from "@tiptap/core";
  var ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`
  );
 -var INDENTED_LINE_REGEX = /^\s/;
-+var INDENTED_LINE_REGEX = /^[ \t]/;
- var PARAGRAPH_INTERRUPTERS = {
+-var PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
- };
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
+-};
 -function isOrderedListMarkerLine(line) {
 -  return ORDERED_LIST_ITEM_REGEX.test(line.trimStart());
 -}
@@ -397,9 +519,9 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e6
 -  PARAGRAPH_INTERRUPTERS.thematicBreak.test(trimmedLine) && !trimmedLine.startsWith("-") || // oxlint-disable-next-line prefer-string-starts-ends-with
 -  /^>\s?/.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.codeFence.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.blockMath.test(trimmedLine);
 -}
- function interruptsLazyContinuation(line) {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
- }
+-function interruptsLazyContinuation(line) {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
+-}
 -function splitItemContent(contentLines) {
 -  const paragraphLines = [];
 -  const blockLines = [];
@@ -418,197 +540,210 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e6
 -      reachedBlockBoundary = true;
 -      blockLines.push(line);
 -      return;
-+function leadingIndentColumns(line) {
-+  let column = 0;
-+  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+  }
-+  return column;
-+}
-+function stripIndentColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") {
-+      column += 1;
-+    } else if (char === "\t") {
-+      const next = column + 4 - column % 4;
-+      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
-+      column = next;
-+    } else {
-+      break;
-     }
+-    }
 -    paragraphLines.push(line);
 -  });
 -  return {
 -    paragraphLines,
 -    blockLines
 -  };
-+    index += 1;
++function matchOrderedListMarker(line) {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX);
++  if (match === null) {
++    return null;
 +  }
-+  return line.slice(index);
-+}
-+// The run of a fence a line opens, without its indent, as marked's lexer
-+// reads one: three or more backticks with no backtick after them, or three or
-+// more tildes.
-+function fenceRun(text) {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
-+  return fence === null ? void 0 : fence[1];
-+}
-+// Whether a line, without its indent, closes the fence `run` opened, as
-+// marked's lexer reads it: that run, then only backticks or tildes, then
-+// spaces.
-+function closesFence(text, run) {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
-+}
-+// The content column of a container whose marker, `markerWidth` wide (a
-+// bullet, an ordered marker with its separator, or `>`), starts `text` at
-+// `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+// space after a list marker, or one column when more follow or none.
-+function containerContentColumn(text, column, markerWidth) {
-+  const markerEnd = column + markerWidth;
-+  let end = markerEnd;
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === " ") end += 1;
-+    else if (char === "\t") end += 4 - end % 4;
-+    else break;
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null;
 +  }
-+  const spaces = end - markerEnd;
-+  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1);
++  return match;
  }
  function collectOrderedListItems(lines) {
    const listItems = [];
-@@ -905,27 +929,71 @@ function collectOrderedListItems(lines) {
+   let currentLineIndex = 0;
+-  let consumed = 0;
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex];
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX);
++    const match = matchOrderedListMarker(line);
+     if (!match) {
+       break;
+     }
+-    const [, indent, marker, _separator, content] = match;
+-    const indentLevel = indent.length;
++    const [markerLine, indent, marker] = match;
      const number = parseInt(marker, 10);
-     const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number;
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number;
 -    const itemContentLines = [content];
-     let nextLineIndex = currentLineIndex + 1;
-     const itemLines = [line];
-     let sawBlankLine = false;
-+    const itemContentColumn = containerContentColumn(line.slice(indent.length), leadingIndentColumns(indent), marker.length + _separator.length);
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length;
-+    const itemContentLines = [
-+      stripIndentColumns(" ".repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length), itemContentColumn)
-+    ];
-+    const innerBlocks = [];
-+    let openFence;
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, "");
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0]);
-+    if (firstText !== "" && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText);
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX);
-+      if (run !== void 0) {
-+        openFence = { run, column: itemContentColumn };
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1
-+          )
-+        });
-+      }
-+    }
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex];
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-    let nextLineIndex = currentLineIndex + 1;
+-    const itemLines = [line];
+-    let sawBlankLine = false;
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex];
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
 -      if (nextMatch) {
-+      const nextColumn = leadingIndentColumns(nextLine);
-+      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))) {
-+        openFence = void 0;
-+      }
-+      if (openFence === void 0 && /[^ \t]/.test(nextLine) && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
-+        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
-+      }
-+      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
-         break;
-       }
+-        break;
+-      }
 -      if (nextLine.trim() === "") {
-+      if (!/[^ \t]/.test(nextLine)) {
-         itemLines.push(nextLine);
-         itemContentLines.push("");
-         sawBlankLine = true;
-         nextLineIndex += 1;
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        itemLines.push(nextLine);
+-        itemContentLines.push("");
+-        sawBlankLine = true;
+-        nextLineIndex += 1;
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
 -        const contentIndent = indentLevel + marker.length + 1;
-         itemLines.push(nextLine);
+-        itemLines.push(nextLine);
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
-         nextLineIndex += 1;
-+        const text = nextLine.replace(/^[ \t]+/, "");
-+        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
-+        if (openFence !== void 0) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
-+          if (run !== void 0) {
-+            openFence = { run, column: blockColumn };
-+          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
-+            });
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break;
-@@ -939,7 +1007,7 @@ function collectOrderedListItems(lines) {
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1;
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break;
++    const legacyColumn = indent.length + 2;
++    const item = collectMarkdownListItem(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine);
++          return markdownNextBulletRegex(contentColumn).test(nextLine) || nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1);
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: (text) => /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null
+         }
+-        itemLines.push(nextLine);
+-        itemContentLines.push(nextLine);
+-        nextLineIndex += 1;
+       }
+-    }
++    );
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join("\n").trim(),
-+      content: itemContentLines.join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, ""),
-       contentLines: itemContentLines,
-       raw: itemLines.join("\n")
+-      contentLines: itemContentLines,
+-      raw: itemLines.join("\n")
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : void 0,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join("\n")
      });
-@@ -986,14 +1054,27 @@ function parsePlainTextOrderedListPaste(text) {
+-    consumed = nextLineIndex;
+-    currentLineIndex = nextLineIndex;
++    currentLineIndex = item.end;
+   }
+-  return [listItems, consumed];
++  const last = listItems[listItems.length - 1];
++  if (last !== void 0) {
++    last.text = last.text.replace(/[ \t\n]+$/, "");
++    last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  }
++  return [listItems, currentLineIndex];
+ }
+-var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`
+-);
+ function parsePlainTextOrderedListPaste(text) {
+-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+-  if (lines.length === 0) {
++  const lines = text.split(/\r?\n/);
++  const [items, consumed] = collectOrderedListItems(lines);
++  if (items.length === 0 || lines.slice(consumed).some((line) => /[^ \t]/.test(line))) {
+     return null;
+   }
+   const parsedItems = [];
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX);
+-    if (!match) {
++  for (const item of items) {
++    const [content, ...rest] = item.text.split("\n");
++    if (!/^[^ ]/.test(content) || rest.some((line) => /[^ \t]/.test(line))) {
+       return null;
+     }
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3]
++      marker: item.marker,
++      content
+     });
+   }
+   const markers = parsedItems.map((item) => item.marker);
+@@ -986,57 +941,6 @@ function parsePlainTextOrderedListPaste(text) {
      }))
    };
  }
-+function continuationText(line) {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line;
-+}
-+function splitAtFirstParagraph(contentLines, lexer) {
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join("\n")}\n`);
-+  const first = tokens.findIndex((token) => token.type !== "space");
-+  if (first === -1 || tokens[first].type !== "paragraph") {
-+    return { paragraphLines: [], blockLines: contentLines };
-+  }
-+  const start = tokens.slice(0, first).map((token) => token.raw).join("").split("\n").length - 1;
-+  const end = start + tokens[first].raw.replace(/\n+$/, "").split("\n").length;
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) };
-+}
- function buildNestedStructure(items, baseIndent, lexer) {
-   const result = [];
-   let currentIndex = 0;
-   while (currentIndex < items.length) {
-     const item = items[currentIndex];
-     if (item.indent === baseIndent) {
+-function buildNestedStructure(items, baseIndent, lexer) {
+-  const result = [];
+-  let currentIndex = 0;
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex];
+-    if (item.indent === baseIndent) {
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines);
 -      const mainText = paragraphLines.join("\n").trim();
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer);
-+      const mainText = paragraphLines.map((line, index) => index === 0 ? line : continuationText(line)).join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, "");
-       const tokens = [];
-       if (mainText) {
-         tokens.push({
-@@ -1002,7 +1083,7 @@ function buildNestedStructure(items, baseIndent, lexer) {
-           tokens: lexer.inlineTokens(mainText)
-         });
-       }
+-      const tokens = [];
+-      if (mainText) {
+-        tokens.push({
+-          type: "paragraph",
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText)
+-        });
+-      }
 -      const additionalContent = blockLines.join("\n").trim();
-+      const additionalContent = blockLines.join("\n").replace(/^(?:[ \t]*\n)+/, "").replace(/[ \t\n]+$/, "");
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent);
-         tokens.push(...blockTokens);
-@@ -1061,6 +1142,9 @@ function parseListItems(items, helpers) {
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent);
+-        tokens.push(...blockTokens);
+-      }
+-      let lookAheadIndex = currentIndex + 1;
+-      const nestedItems = [];
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex]);
+-        lookAheadIndex += 1;
+-      }
+-      if (nestedItems.length > 0) {
+-        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer);
+-        tokens.push({
+-          type: "list",
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+-        });
+-      }
+-      result.push({
+-        type: "list_item",
+-        raw: item.raw,
+-        tokens
+-      });
+-      currentIndex = lookAheadIndex;
+-    } else {
+-      currentIndex += 1;
+-    }
+-  }
+-  return result;
+-}
+ function parseListItems(items, helpers) {
+   return items.map((item) => {
+     if (item.type !== "list_item") {
+@@ -1048,11 +952,7 @@ function parseListItems(items, helpers) {
+         if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+           content.push(...helpers.parseChildren([itemToken]));
+         } else if (itemToken.type === "text" && itemToken.tokens) {
+-          const inlineContent = helpers.parseChildren([itemToken]);
+-          content.push({
+-            type: "paragraph",
+-            content: inlineContent
+-          });
++          content.push(...helpers.parseChildren([{ ...itemToken, type: "paragraph" }]));
+         } else {
+           const parsed = helpers.parseChildren([itemToken]);
+           if (parsed.length > 0) {
+@@ -1061,6 +961,9 @@ function parseListItems(items, helpers) {
          }
        });
      }
@@ -618,7 +753,56 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e6
      return {
        type: "listItem",
        content
-@@ -1567,7 +1651,7 @@ var TaskList = Node5.create({
+@@ -1073,11 +976,11 @@ var ListItemName2 = "listItem";
+ var TextStyleName2 = "textStyle";
+ var orderedListInputRegex = /^(\d+)\.\s$/;
+ function cssListStyleTypeToHtmlType(style) {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i);
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i);
+   if (!match) {
+     return null;
+   }
+-  const cssValue = match[1].trim().toLowerCase();
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "").toLowerCase();
+   switch (cssValue) {
+     case "upper-roman":
+       return "I";
+@@ -1211,10 +1114,12 @@ var OrderedList = Node3.create({
+       if (listItems.length === 0) {
+         return void 0;
+       }
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer);
+-      if (items.length === 0) {
+-        return void 0;
+-      }
++      const items = listItems.map((item) => ({
++        type: "list_item",
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text)
++      }));
+       const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
+       const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
+       return {
+@@ -1223,7 +1128,7 @@ var OrderedList = Node3.create({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join("\n")
++        raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+       };
+     }
+   },
+@@ -1252,7 +1157,7 @@ var OrderedList = Node3.create({
+           handlePaste: (view, event) => {
+             var _a, _b;
+             const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
+-            if (html == null ? void 0 : html.trim()) {
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false;
+             }
+             const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
+@@ -1567,53 +1472,14 @@ var TaskList = Node5.create({
      level: "block",
      start(src) {
        var _a;
@@ -627,40 +811,83 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..7376bd0b7830c542f08a6b001ceff3e6
        return index !== void 0 ? index : -1;
      },
      tokenize(src, tokens, lexer) {
-@@ -1575,7 +1659,7 @@ var TaskList = Node5.create({
-         const nestedResult = parseIndentedBlocks(
-           content,
-           {
+-      const parseTaskListContent = (content) => {
+-        const nestedResult = parseIndentedBlocks(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: (match) => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -1603,7 +1687,7 @@ var TaskList = Node5.create({
-             items: nestedResult.items
-           };
-           const remainder = content.slice(nestedResult.raw.length);
+-            extractItemData: (match) => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === "x"
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: "taskItem",
+-              raw: "",
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent
+-          },
+-          lexer
+-        );
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: "taskList",
+-            raw: nestedResult.raw,
+-            items: nestedResult.items
+-          };
+-          const remainder = content.slice(nestedResult.raw.length);
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)];
-           }
-           return [taskListToken];
-@@ -1613,7 +1697,7 @@ var TaskList = Node5.create({
+-            return [taskListToken, ...lexer.blockTokens(remainder)];
+-          }
+-          return [taskListToken];
+-        }
+-        return lexer.blockTokens(content);
+-      };
        const result = parseIndentedBlocks(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -1629,8 +1495,7 @@ var TaskList = Node5.create({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent
++          checkbox: true
+         },
+         lexer
+       );
 diff --git a/dist/item/index.cjs b/dist/item/index.cjs
-index 2ebaf87e5350f25a1aed1458527ae01925b8e64c..374990b33e2767d80a599473eb6c70aafcdc8af4 100644
+index 2ebaf87e5350f25a1aed1458527ae01925b8e64c..445df31085b84de8e7608fd982ce9e229cbc30b6 100644
 --- a/dist/item/index.cjs
 +++ b/dist/item/index.cjs
-@@ -262,7 +262,10 @@ var ListItem = import_core2.Node.create({
+@@ -205,6 +205,9 @@ function isSameLineOrderedListToken(token) {
+     token.text && ((_b = token.tokens) == null ? void 0 : _b.length) === 1 && (nestedToken == null ? void 0 : nestedToken.type) === "list" && nestedToken.ordered && nestedToken.raw === token.text
+   );
+ }
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
++}
+ function parseSameLineOrderedListText(text, helpers) {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text));
+@@ -260,9 +263,12 @@ var ListItem = import_core2.Node.create({
+       }
+       const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
        if (hasParagraphTokens) {
-         content = parseBlockChildren(token.tokens);
+-        content = parseBlockChildren(token.tokens);
++        content = parseBlockChildren(token.tokens.map(asParagraph));
        } else {
 -        const firstToken = token.tokens[0];
 +        let leadingSpaces = 0;
@@ -670,18 +897,21 @@ index 2ebaf87e5350f25a1aed1458527ae01925b8e64c..374990b33e2767d80a599473eb6c70aa
          if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
            const inlineContent = helpers.parseInline(firstToken.tokens);
            content = [
-@@ -271,8 +274,8 @@ var ListItem = import_core2.Node.create({
+@@ -271,22 +277,23 @@ var ListItem = import_core2.Node.create({
                content: inlineContent
              }
            ];
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1);
+-            const additionalContent = parseBlockChildren(remainingTokens);
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1);
-             const additionalContent = parseBlockChildren(remainingTokens);
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph));
              content.push(...additionalContent);
            }
-@@ -281,12 +284,13 @@ var ListItem = import_core2.Node.create({
+         } else {
+-          content = parseBlockChildren(token.tokens);
++          content = parseBlockChildren(token.tokens.map(asParagraph));
          }
        }
      }
@@ -698,12 +928,25 @@ index 2ebaf87e5350f25a1aed1458527ae01925b8e64c..374990b33e2767d80a599473eb6c70aa
      }
      return {
 diff --git a/dist/item/index.js b/dist/item/index.js
-index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..a0883fe1b0ce47466b4beaf187f2b2874ab327bb 100644
+index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..59376f0588121596903ab1a5d8b2e2e43a0099a8 100644
 --- a/dist/item/index.js
 +++ b/dist/item/index.js
-@@ -236,7 +236,10 @@ var ListItem = Node.create({
+@@ -179,6 +179,9 @@ function isSameLineOrderedListToken(token) {
+     token.text && ((_b = token.tokens) == null ? void 0 : _b.length) === 1 && (nestedToken == null ? void 0 : nestedToken.type) === "list" && nestedToken.ordered && nestedToken.raw === token.text
+   );
+ }
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
++}
+ function parseSameLineOrderedListText(text, helpers) {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text));
+@@ -234,9 +237,12 @@ var ListItem = Node.create({
+       }
+       const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
        if (hasParagraphTokens) {
-         content = parseBlockChildren(token.tokens);
+-        content = parseBlockChildren(token.tokens);
++        content = parseBlockChildren(token.tokens.map(asParagraph));
        } else {
 -        const firstToken = token.tokens[0];
 +        let leadingSpaces = 0;
@@ -713,18 +956,21 @@ index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..a0883fe1b0ce47466b4beaf187f2b287
          if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
            const inlineContent = helpers.parseInline(firstToken.tokens);
            content = [
-@@ -245,8 +248,8 @@ var ListItem = Node.create({
+@@ -245,22 +251,23 @@ var ListItem = Node.create({
                content: inlineContent
              }
            ];
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1);
+-            const additionalContent = parseBlockChildren(remainingTokens);
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1);
-             const additionalContent = parseBlockChildren(remainingTokens);
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph));
              content.push(...additionalContent);
            }
-@@ -255,12 +258,13 @@ var ListItem = Node.create({
+         } else {
+-          content = parseBlockChildren(token.tokens);
++          content = parseBlockChildren(token.tokens.map(asParagraph));
          }
        }
      }
@@ -741,12 +987,25 @@ index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..a0883fe1b0ce47466b4beaf187f2b287
      }
      return {
 diff --git a/dist/kit/index.cjs b/dist/kit/index.cjs
-index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e88373d07b 100644
+index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..7750854f68fa93a8bcc69723d14c0259e577cf7a 100644
 --- a/dist/kit/index.cjs
 +++ b/dist/kit/index.cjs
-@@ -468,7 +468,10 @@ var ListItem = import_core3.Node.create({
+@@ -411,6 +411,9 @@ function isSameLineOrderedListToken(token) {
+     token.text && ((_b = token.tokens) == null ? void 0 : _b.length) === 1 && (nestedToken == null ? void 0 : nestedToken.type) === "list" && nestedToken.ordered && nestedToken.raw === token.text
+   );
+ }
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
++}
+ function parseSameLineOrderedListText(text, helpers) {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text));
+@@ -466,9 +469,12 @@ var ListItem = import_core3.Node.create({
+       }
+       const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
        if (hasParagraphTokens) {
-         content = parseBlockChildren(token.tokens);
+-        content = parseBlockChildren(token.tokens);
++        content = parseBlockChildren(token.tokens.map(asParagraph));
        } else {
 -        const firstToken = token.tokens[0];
 +        let leadingSpaces = 0;
@@ -756,18 +1015,21 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e8
          if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
            const inlineContent = helpers.parseInline(firstToken.tokens);
            content = [
-@@ -477,8 +480,8 @@ var ListItem = import_core3.Node.create({
+@@ -477,22 +483,23 @@ var ListItem = import_core3.Node.create({
                content: inlineContent
              }
            ];
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1);
+-            const additionalContent = parseBlockChildren(remainingTokens);
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1);
-             const additionalContent = parseBlockChildren(remainingTokens);
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph));
              content.push(...additionalContent);
            }
-@@ -487,12 +490,13 @@ var ListItem = import_core3.Node.create({
+         } else {
+-          content = parseBlockChildren(token.tokens);
++          content = parseBlockChildren(token.tokens.map(asParagraph));
          }
        }
      }
@@ -783,24 +1045,23 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e8
        ];
      }
      return {
-@@ -859,54 +863,74 @@ var import_core11 = require("@tiptap/core");
+@@ -858,131 +865,79 @@ var import_state2 = require("@tiptap/pm/state");
+ var import_core11 = require("@tiptap/core");
 
  // src/ordered-list/utils.ts
++var import_core_list_items = require("@tiptap/core");
  var ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`
  );
 -var INDENTED_LINE_REGEX = /^\s/;
-+var INDENTED_LINE_REGEX = /^[ \t]/;
- var PARAGRAPH_INTERRUPTERS = {
+-var PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
- };
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
+-};
 -function isOrderedListMarkerLine(line) {
 -  return ORDERED_LIST_ITEM_REGEX.test(line.trimStart());
 -}
@@ -811,9 +1072,9 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e8
 -  PARAGRAPH_INTERRUPTERS.thematicBreak.test(trimmedLine) && !trimmedLine.startsWith("-") || // oxlint-disable-next-line prefer-string-starts-ends-with
 -  /^>\s?/.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.codeFence.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.blockMath.test(trimmedLine);
 -}
- function interruptsLazyContinuation(line) {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
- }
+-function interruptsLazyContinuation(line) {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
+-}
 -function splitItemContent(contentLines) {
 -  const paragraphLines = [];
 -  const blockLines = [];
@@ -832,197 +1093,210 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e8
 -      reachedBlockBoundary = true;
 -      blockLines.push(line);
 -      return;
-+function leadingIndentColumns(line) {
-+  let column = 0;
-+  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+  }
-+  return column;
-+}
-+function stripIndentColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") {
-+      column += 1;
-+    } else if (char === "\t") {
-+      const next = column + 4 - column % 4;
-+      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
-+      column = next;
-+    } else {
-+      break;
-     }
+-    }
 -    paragraphLines.push(line);
 -  });
 -  return {
 -    paragraphLines,
 -    blockLines
 -  };
-+    index += 1;
++function matchOrderedListMarker(line) {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX);
++  if (match === null) {
++    return null;
 +  }
-+  return line.slice(index);
-+}
-+// The run of a fence a line opens, without its indent, as marked's lexer
-+// reads one: three or more backticks with no backtick after them, or three or
-+// more tildes.
-+function fenceRun(text) {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
-+  return fence === null ? void 0 : fence[1];
-+}
-+// Whether a line, without its indent, closes the fence `run` opened, as
-+// marked's lexer reads it: that run, then only backticks or tildes, then
-+// spaces.
-+function closesFence(text, run) {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
-+}
-+// The content column of a container whose marker, `markerWidth` wide (a
-+// bullet, an ordered marker with its separator, or `>`), starts `text` at
-+// `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+// space after a list marker, or one column when more follow or none.
-+function containerContentColumn(text, column, markerWidth) {
-+  const markerEnd = column + markerWidth;
-+  let end = markerEnd;
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === " ") end += 1;
-+    else if (char === "\t") end += 4 - end % 4;
-+    else break;
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null;
 +  }
-+  const spaces = end - markerEnd;
-+  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1);
++  return match;
  }
  function collectOrderedListItems(lines) {
    const listItems = [];
-@@ -923,27 +947,71 @@ function collectOrderedListItems(lines) {
+   let currentLineIndex = 0;
+-  let consumed = 0;
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex];
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX);
++    const match = matchOrderedListMarker(line);
+     if (!match) {
+       break;
+     }
+-    const [, indent, marker, _separator, content] = match;
+-    const indentLevel = indent.length;
++    const [markerLine, indent, marker] = match;
      const number = parseInt(marker, 10);
-     const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number;
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number;
 -    const itemContentLines = [content];
-     let nextLineIndex = currentLineIndex + 1;
-     const itemLines = [line];
-     let sawBlankLine = false;
-+    const itemContentColumn = containerContentColumn(line.slice(indent.length), leadingIndentColumns(indent), marker.length + _separator.length);
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length;
-+    const itemContentLines = [
-+      stripIndentColumns(" ".repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length), itemContentColumn)
-+    ];
-+    const innerBlocks = [];
-+    let openFence;
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, "");
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0]);
-+    if (firstText !== "" && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText);
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX);
-+      if (run !== void 0) {
-+        openFence = { run, column: itemContentColumn };
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1
-+          )
-+        });
-+      }
-+    }
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex];
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-    let nextLineIndex = currentLineIndex + 1;
+-    const itemLines = [line];
+-    let sawBlankLine = false;
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex];
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
 -      if (nextMatch) {
-+      const nextColumn = leadingIndentColumns(nextLine);
-+      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))) {
-+        openFence = void 0;
-+      }
-+      if (openFence === void 0 && /[^ \t]/.test(nextLine) && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
-+        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
-+      }
-+      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
-         break;
-       }
+-        break;
+-      }
 -      if (nextLine.trim() === "") {
-+      if (!/[^ \t]/.test(nextLine)) {
-         itemLines.push(nextLine);
-         itemContentLines.push("");
-         sawBlankLine = true;
-         nextLineIndex += 1;
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        itemLines.push(nextLine);
+-        itemContentLines.push("");
+-        sawBlankLine = true;
+-        nextLineIndex += 1;
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
 -        const contentIndent = indentLevel + marker.length + 1;
-         itemLines.push(nextLine);
+-        itemLines.push(nextLine);
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
-         nextLineIndex += 1;
-+        const text = nextLine.replace(/^[ \t]+/, "");
-+        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
-+        if (openFence !== void 0) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
-+          if (run !== void 0) {
-+            openFence = { run, column: blockColumn };
-+          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
-+            });
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break;
-@@ -957,7 +1025,7 @@ function collectOrderedListItems(lines) {
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1;
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break;
++    const legacyColumn = indent.length + 2;
++    const item = (0, import_core_list_items.collectMarkdownListItem)(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine);
++          return (0, import_core_list_items.markdownNextBulletRegex)(contentColumn).test(nextLine) || nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1);
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: (text) => /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null
+         }
+-        itemLines.push(nextLine);
+-        itemContentLines.push(nextLine);
+-        nextLineIndex += 1;
+       }
+-    }
++    );
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join("\n").trim(),
-+      content: itemContentLines.join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, ""),
-       contentLines: itemContentLines,
-       raw: itemLines.join("\n")
+-      contentLines: itemContentLines,
+-      raw: itemLines.join("\n")
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : void 0,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join("\n")
      });
-@@ -1004,14 +1072,27 @@ function parsePlainTextOrderedListPaste(text) {
+-    consumed = nextLineIndex;
+-    currentLineIndex = nextLineIndex;
++    currentLineIndex = item.end;
+   }
+-  return [listItems, consumed];
++  const last = listItems[listItems.length - 1];
++  if (last !== void 0) {
++    last.text = last.text.replace(/[ \t\n]+$/, "");
++    last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  }
++  return [listItems, currentLineIndex];
+ }
+-var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`
+-);
+ function parsePlainTextOrderedListPaste(text) {
+-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+-  if (lines.length === 0) {
++  const lines = text.split(/\r?\n/);
++  const [items, consumed] = collectOrderedListItems(lines);
++  if (items.length === 0 || lines.slice(consumed).some((line) => /[^ \t]/.test(line))) {
+     return null;
+   }
+   const parsedItems = [];
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX);
+-    if (!match) {
++  for (const item of items) {
++    const [content, ...rest] = item.text.split("\n");
++    if (!/^[^ ]/.test(content) || rest.some((line) => /[^ \t]/.test(line))) {
+       return null;
+     }
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3]
++      marker: item.marker,
++      content
+     });
+   }
+   const markers = parsedItems.map((item) => item.marker);
+@@ -1004,57 +959,6 @@ function parsePlainTextOrderedListPaste(text) {
      }))
    };
  }
-+function continuationText(line) {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line;
-+}
-+function splitAtFirstParagraph(contentLines, lexer) {
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join("\n")}\n`);
-+  const first = tokens.findIndex((token) => token.type !== "space");
-+  if (first === -1 || tokens[first].type !== "paragraph") {
-+    return { paragraphLines: [], blockLines: contentLines };
-+  }
-+  const start = tokens.slice(0, first).map((token) => token.raw).join("").split("\n").length - 1;
-+  const end = start + tokens[first].raw.replace(/\n+$/, "").split("\n").length;
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) };
-+}
- function buildNestedStructure(items, baseIndent, lexer) {
-   const result = [];
-   let currentIndex = 0;
-   while (currentIndex < items.length) {
-     const item = items[currentIndex];
-     if (item.indent === baseIndent) {
+-function buildNestedStructure(items, baseIndent, lexer) {
+-  const result = [];
+-  let currentIndex = 0;
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex];
+-    if (item.indent === baseIndent) {
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines);
 -      const mainText = paragraphLines.join("\n").trim();
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer);
-+      const mainText = paragraphLines.map((line, index) => index === 0 ? line : continuationText(line)).join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, "");
-       const tokens = [];
-       if (mainText) {
-         tokens.push({
-@@ -1020,7 +1101,7 @@ function buildNestedStructure(items, baseIndent, lexer) {
-           tokens: lexer.inlineTokens(mainText)
-         });
-       }
+-      const tokens = [];
+-      if (mainText) {
+-        tokens.push({
+-          type: "paragraph",
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText)
+-        });
+-      }
 -      const additionalContent = blockLines.join("\n").trim();
-+      const additionalContent = blockLines.join("\n").replace(/^(?:[ \t]*\n)+/, "").replace(/[ \t\n]+$/, "");
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent);
-         tokens.push(...blockTokens);
-@@ -1079,6 +1160,9 @@ function parseListItems(items, helpers) {
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent);
+-        tokens.push(...blockTokens);
+-      }
+-      let lookAheadIndex = currentIndex + 1;
+-      const nestedItems = [];
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex]);
+-        lookAheadIndex += 1;
+-      }
+-      if (nestedItems.length > 0) {
+-        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer);
+-        tokens.push({
+-          type: "list",
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+-        });
+-      }
+-      result.push({
+-        type: "list_item",
+-        raw: item.raw,
+-        tokens
+-      });
+-      currentIndex = lookAheadIndex;
+-    } else {
+-      currentIndex += 1;
+-    }
+-  }
+-  return result;
+-}
+ function parseListItems(items, helpers) {
+   return items.map((item) => {
+     if (item.type !== "list_item") {
+@@ -1066,11 +970,7 @@ function parseListItems(items, helpers) {
+         if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+           content.push(...helpers.parseChildren([itemToken]));
+         } else if (itemToken.type === "text" && itemToken.tokens) {
+-          const inlineContent = helpers.parseChildren([itemToken]);
+-          content.push({
+-            type: "paragraph",
+-            content: inlineContent
+-          });
++          content.push(...helpers.parseChildren([{ ...itemToken, type: "paragraph" }]));
+         } else {
+           const parsed = helpers.parseChildren([itemToken]);
+           if (parsed.length > 0) {
+@@ -1079,6 +979,9 @@ function parseListItems(items, helpers) {
          }
        });
      }
@@ -1032,7 +1306,56 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e8
      return {
        type: "listItem",
        content
-@@ -1579,7 +1663,7 @@ var TaskList = import_core13.Node.create({
+@@ -1091,11 +994,11 @@ var ListItemName2 = "listItem";
+ var TextStyleName2 = "textStyle";
+ var orderedListInputRegex = /^(\d+)\.\s$/;
+ function cssListStyleTypeToHtmlType(style) {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i);
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i);
+   if (!match) {
+     return null;
+   }
+-  const cssValue = match[1].trim().toLowerCase();
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "").toLowerCase();
+   switch (cssValue) {
+     case "upper-roman":
+       return "I";
+@@ -1229,10 +1132,12 @@ var OrderedList = import_core11.Node.create({
+       if (listItems.length === 0) {
+         return void 0;
+       }
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer);
+-      if (items.length === 0) {
+-        return void 0;
+-      }
++      const items = listItems.map((item) => ({
++        type: "list_item",
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text)
++      }));
+       const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
+       const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
+       return {
+@@ -1241,7 +1146,7 @@ var OrderedList = import_core11.Node.create({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join("\n")
++        raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+       };
+     }
+   },
+@@ -1270,7 +1175,7 @@ var OrderedList = import_core11.Node.create({
+           handlePaste: (view, event) => {
+             var _a, _b;
+             const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
+-            if (html == null ? void 0 : html.trim()) {
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false;
+             }
+             const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
+@@ -1579,53 +1484,14 @@ var TaskList = import_core13.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -1041,40 +1364,83 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..897a4deae80ea71ddca9c3cb5deeb8e8
        return index !== void 0 ? index : -1;
      },
      tokenize(src, tokens, lexer) {
-@@ -1587,7 +1671,7 @@ var TaskList = import_core13.Node.create({
-         const nestedResult = (0, import_core13.parseIndentedBlocks)(
-           content,
-           {
+-      const parseTaskListContent = (content) => {
+-        const nestedResult = (0, import_core13.parseIndentedBlocks)(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: (match) => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -1615,7 +1699,7 @@ var TaskList = import_core13.Node.create({
-             items: nestedResult.items
-           };
-           const remainder = content.slice(nestedResult.raw.length);
+-            extractItemData: (match) => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === "x"
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: "taskItem",
+-              raw: "",
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent
+-          },
+-          lexer
+-        );
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: "taskList",
+-            raw: nestedResult.raw,
+-            items: nestedResult.items
+-          };
+-          const remainder = content.slice(nestedResult.raw.length);
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)];
-           }
-           return [taskListToken];
-@@ -1625,7 +1709,7 @@ var TaskList = import_core13.Node.create({
+-            return [taskListToken, ...lexer.blockTokens(remainder)];
+-          }
+-          return [taskListToken];
+-        }
+-        return lexer.blockTokens(content);
+-      };
        const result = (0, import_core13.parseIndentedBlocks)(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -1641,8 +1507,7 @@ var TaskList = import_core13.Node.create({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent
++          checkbox: true
+         },
+         lexer
+       );
 diff --git a/dist/kit/index.js b/dist/kit/index.js
-index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619eabe8e395 100644
+index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..5f938c9765bd10b7c7fb950cc6c5d8ff29a58a63 100644
 --- a/dist/kit/index.js
 +++ b/dist/kit/index.js
-@@ -450,7 +450,10 @@ var ListItem = Node2.create({
+@@ -393,6 +393,9 @@ function isSameLineOrderedListToken(token) {
+     token.text && ((_b = token.tokens) == null ? void 0 : _b.length) === 1 && (nestedToken == null ? void 0 : nestedToken.type) === "list" && nestedToken.ordered && nestedToken.raw === token.text
+   );
+ }
++function asParagraph(token) {
++  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
++}
+ function parseSameLineOrderedListText(text, helpers) {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text));
+@@ -448,9 +451,12 @@ var ListItem = Node2.create({
+       }
+       const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
        if (hasParagraphTokens) {
-         content = parseBlockChildren(token.tokens);
+-        content = parseBlockChildren(token.tokens);
++        content = parseBlockChildren(token.tokens.map(asParagraph));
        } else {
 -        const firstToken = token.tokens[0];
 +        let leadingSpaces = 0;
@@ -1084,18 +1450,21 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619e
          if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
            const inlineContent = helpers.parseInline(firstToken.tokens);
            content = [
-@@ -459,8 +462,8 @@ var ListItem = Node2.create({
+@@ -459,22 +465,23 @@ var ListItem = Node2.create({
                content: inlineContent
              }
            ];
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1);
+-            const additionalContent = parseBlockChildren(remainingTokens);
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1);
-             const additionalContent = parseBlockChildren(remainingTokens);
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph));
              content.push(...additionalContent);
            }
-@@ -469,12 +472,13 @@ var ListItem = Node2.create({
+         } else {
+-          content = parseBlockChildren(token.tokens);
++          content = parseBlockChildren(token.tokens.map(asParagraph));
          }
        }
      }
@@ -1111,24 +1480,23 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619e
        ];
      }
      return {
-@@ -841,54 +845,74 @@ import { mergeAttributes as mergeAttributes3, Node as Node3, wrappingInputRule a
+@@ -840,131 +847,79 @@ import { Plugin } from "@tiptap/pm/state";
+ import { mergeAttributes as mergeAttributes3, Node as Node3, wrappingInputRule as wrappingInputRule2 } from "@tiptap/core";
 
  // src/ordered-list/utils.ts
++import { collectMarkdownListItem, markdownNextBulletRegex } from "@tiptap/core";
  var ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`
  );
 -var INDENTED_LINE_REGEX = /^\s/;
-+var INDENTED_LINE_REGEX = /^[ \t]/;
- var PARAGRAPH_INTERRUPTERS = {
+-var PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
- };
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
+-};
 -function isOrderedListMarkerLine(line) {
 -  return ORDERED_LIST_ITEM_REGEX.test(line.trimStart());
 -}
@@ -1139,9 +1507,9 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619e
 -  PARAGRAPH_INTERRUPTERS.thematicBreak.test(trimmedLine) && !trimmedLine.startsWith("-") || // oxlint-disable-next-line prefer-string-starts-ends-with
 -  /^>\s?/.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.codeFence.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.blockMath.test(trimmedLine);
 -}
- function interruptsLazyContinuation(line) {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
- }
+-function interruptsLazyContinuation(line) {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
+-}
 -function splitItemContent(contentLines) {
 -  const paragraphLines = [];
 -  const blockLines = [];
@@ -1160,197 +1528,210 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619e
 -      reachedBlockBoundary = true;
 -      blockLines.push(line);
 -      return;
-+function leadingIndentColumns(line) {
-+  let column = 0;
-+  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+  }
-+  return column;
-+}
-+function stripIndentColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") {
-+      column += 1;
-+    } else if (char === "\t") {
-+      const next = column + 4 - column % 4;
-+      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
-+      column = next;
-+    } else {
-+      break;
-     }
+-    }
 -    paragraphLines.push(line);
 -  });
 -  return {
 -    paragraphLines,
 -    blockLines
 -  };
-+    index += 1;
++function matchOrderedListMarker(line) {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX);
++  if (match === null) {
++    return null;
 +  }
-+  return line.slice(index);
-+}
-+// The run of a fence a line opens, without its indent, as marked's lexer
-+// reads one: three or more backticks with no backtick after them, or three or
-+// more tildes.
-+function fenceRun(text) {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
-+  return fence === null ? void 0 : fence[1];
-+}
-+// Whether a line, without its indent, closes the fence `run` opened, as
-+// marked's lexer reads it: that run, then only backticks or tildes, then
-+// spaces.
-+function closesFence(text, run) {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
-+}
-+// The content column of a container whose marker, `markerWidth` wide (a
-+// bullet, an ordered marker with its separator, or `>`), starts `text` at
-+// `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+// space after a list marker, or one column when more follow or none.
-+function containerContentColumn(text, column, markerWidth) {
-+  const markerEnd = column + markerWidth;
-+  let end = markerEnd;
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === " ") end += 1;
-+    else if (char === "\t") end += 4 - end % 4;
-+    else break;
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null;
 +  }
-+  const spaces = end - markerEnd;
-+  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1);
++  return match;
  }
  function collectOrderedListItems(lines) {
    const listItems = [];
-@@ -905,27 +929,71 @@ function collectOrderedListItems(lines) {
+   let currentLineIndex = 0;
+-  let consumed = 0;
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex];
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX);
++    const match = matchOrderedListMarker(line);
+     if (!match) {
+       break;
+     }
+-    const [, indent, marker, _separator, content] = match;
+-    const indentLevel = indent.length;
++    const [markerLine, indent, marker] = match;
      const number = parseInt(marker, 10);
-     const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number;
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number;
 -    const itemContentLines = [content];
-     let nextLineIndex = currentLineIndex + 1;
-     const itemLines = [line];
-     let sawBlankLine = false;
-+    const itemContentColumn = containerContentColumn(line.slice(indent.length), leadingIndentColumns(indent), marker.length + _separator.length);
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length;
-+    const itemContentLines = [
-+      stripIndentColumns(" ".repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length), itemContentColumn)
-+    ];
-+    const innerBlocks = [];
-+    let openFence;
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, "");
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0]);
-+    if (firstText !== "" && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText);
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX);
-+      if (run !== void 0) {
-+        openFence = { run, column: itemContentColumn };
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1
-+          )
-+        });
-+      }
-+    }
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex];
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-    let nextLineIndex = currentLineIndex + 1;
+-    const itemLines = [line];
+-    let sawBlankLine = false;
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex];
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
 -      if (nextMatch) {
-+      const nextColumn = leadingIndentColumns(nextLine);
-+      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))) {
-+        openFence = void 0;
-+      }
-+      if (openFence === void 0 && /[^ \t]/.test(nextLine) && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
-+        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
-+      }
-+      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
-         break;
-       }
+-        break;
+-      }
 -      if (nextLine.trim() === "") {
-+      if (!/[^ \t]/.test(nextLine)) {
-         itemLines.push(nextLine);
-         itemContentLines.push("");
-         sawBlankLine = true;
-         nextLineIndex += 1;
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        itemLines.push(nextLine);
+-        itemContentLines.push("");
+-        sawBlankLine = true;
+-        nextLineIndex += 1;
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
 -        const contentIndent = indentLevel + marker.length + 1;
-         itemLines.push(nextLine);
+-        itemLines.push(nextLine);
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
-         nextLineIndex += 1;
-+        const text = nextLine.replace(/^[ \t]+/, "");
-+        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
-+        if (openFence !== void 0) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
-+          if (run !== void 0) {
-+            openFence = { run, column: blockColumn };
-+          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
-+            });
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break;
-@@ -939,7 +1007,7 @@ function collectOrderedListItems(lines) {
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1;
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break;
++    const legacyColumn = indent.length + 2;
++    const item = collectMarkdownListItem(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine);
++          return markdownNextBulletRegex(contentColumn).test(nextLine) || nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1);
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: (text) => /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null
+         }
+-        itemLines.push(nextLine);
+-        itemContentLines.push(nextLine);
+-        nextLineIndex += 1;
+       }
+-    }
++    );
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join("\n").trim(),
-+      content: itemContentLines.join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, ""),
-       contentLines: itemContentLines,
-       raw: itemLines.join("\n")
+-      contentLines: itemContentLines,
+-      raw: itemLines.join("\n")
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : void 0,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join("\n")
      });
-@@ -986,14 +1054,27 @@ function parsePlainTextOrderedListPaste(text) {
+-    consumed = nextLineIndex;
+-    currentLineIndex = nextLineIndex;
++    currentLineIndex = item.end;
+   }
+-  return [listItems, consumed];
++  const last = listItems[listItems.length - 1];
++  if (last !== void 0) {
++    last.text = last.text.replace(/[ \t\n]+$/, "");
++    last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  }
++  return [listItems, currentLineIndex];
+ }
+-var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`
+-);
+ function parsePlainTextOrderedListPaste(text) {
+-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+-  if (lines.length === 0) {
++  const lines = text.split(/\r?\n/);
++  const [items, consumed] = collectOrderedListItems(lines);
++  if (items.length === 0 || lines.slice(consumed).some((line) => /[^ \t]/.test(line))) {
+     return null;
+   }
+   const parsedItems = [];
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX);
+-    if (!match) {
++  for (const item of items) {
++    const [content, ...rest] = item.text.split("\n");
++    if (!/^[^ ]/.test(content) || rest.some((line) => /[^ \t]/.test(line))) {
+       return null;
+     }
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3]
++      marker: item.marker,
++      content
+     });
+   }
+   const markers = parsedItems.map((item) => item.marker);
+@@ -986,57 +941,6 @@ function parsePlainTextOrderedListPaste(text) {
      }))
    };
  }
-+function continuationText(line) {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line;
-+}
-+function splitAtFirstParagraph(contentLines, lexer) {
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join("\n")}\n`);
-+  const first = tokens.findIndex((token) => token.type !== "space");
-+  if (first === -1 || tokens[first].type !== "paragraph") {
-+    return { paragraphLines: [], blockLines: contentLines };
-+  }
-+  const start = tokens.slice(0, first).map((token) => token.raw).join("").split("\n").length - 1;
-+  const end = start + tokens[first].raw.replace(/\n+$/, "").split("\n").length;
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) };
-+}
- function buildNestedStructure(items, baseIndent, lexer) {
-   const result = [];
-   let currentIndex = 0;
-   while (currentIndex < items.length) {
-     const item = items[currentIndex];
-     if (item.indent === baseIndent) {
+-function buildNestedStructure(items, baseIndent, lexer) {
+-  const result = [];
+-  let currentIndex = 0;
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex];
+-    if (item.indent === baseIndent) {
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines);
 -      const mainText = paragraphLines.join("\n").trim();
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer);
-+      const mainText = paragraphLines.map((line, index) => index === 0 ? line : continuationText(line)).join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, "");
-       const tokens = [];
-       if (mainText) {
-         tokens.push({
-@@ -1002,7 +1083,7 @@ function buildNestedStructure(items, baseIndent, lexer) {
-           tokens: lexer.inlineTokens(mainText)
-         });
-       }
+-      const tokens = [];
+-      if (mainText) {
+-        tokens.push({
+-          type: "paragraph",
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText)
+-        });
+-      }
 -      const additionalContent = blockLines.join("\n").trim();
-+      const additionalContent = blockLines.join("\n").replace(/^(?:[ \t]*\n)+/, "").replace(/[ \t\n]+$/, "");
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent);
-         tokens.push(...blockTokens);
-@@ -1061,6 +1142,9 @@ function parseListItems(items, helpers) {
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent);
+-        tokens.push(...blockTokens);
+-      }
+-      let lookAheadIndex = currentIndex + 1;
+-      const nestedItems = [];
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex]);
+-        lookAheadIndex += 1;
+-      }
+-      if (nestedItems.length > 0) {
+-        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer);
+-        tokens.push({
+-          type: "list",
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+-        });
+-      }
+-      result.push({
+-        type: "list_item",
+-        raw: item.raw,
+-        tokens
+-      });
+-      currentIndex = lookAheadIndex;
+-    } else {
+-      currentIndex += 1;
+-    }
+-  }
+-  return result;
+-}
+ function parseListItems(items, helpers) {
+   return items.map((item) => {
+     if (item.type !== "list_item") {
+@@ -1048,11 +952,7 @@ function parseListItems(items, helpers) {
+         if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+           content.push(...helpers.parseChildren([itemToken]));
+         } else if (itemToken.type === "text" && itemToken.tokens) {
+-          const inlineContent = helpers.parseChildren([itemToken]);
+-          content.push({
+-            type: "paragraph",
+-            content: inlineContent
+-          });
++          content.push(...helpers.parseChildren([{ ...itemToken, type: "paragraph" }]));
+         } else {
+           const parsed = helpers.parseChildren([itemToken]);
+           if (parsed.length > 0) {
+@@ -1061,6 +961,9 @@ function parseListItems(items, helpers) {
          }
        });
      }
@@ -1360,7 +1741,56 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619e
      return {
        type: "listItem",
        content
-@@ -1567,7 +1651,7 @@ var TaskList = Node5.create({
+@@ -1073,11 +976,11 @@ var ListItemName2 = "listItem";
+ var TextStyleName2 = "textStyle";
+ var orderedListInputRegex = /^(\d+)\.\s$/;
+ function cssListStyleTypeToHtmlType(style) {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i);
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i);
+   if (!match) {
+     return null;
+   }
+-  const cssValue = match[1].trim().toLowerCase();
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "").toLowerCase();
+   switch (cssValue) {
+     case "upper-roman":
+       return "I";
+@@ -1211,10 +1114,12 @@ var OrderedList = Node3.create({
+       if (listItems.length === 0) {
+         return void 0;
+       }
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer);
+-      if (items.length === 0) {
+-        return void 0;
+-      }
++      const items = listItems.map((item) => ({
++        type: "list_item",
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text)
++      }));
+       const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
+       const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
+       return {
+@@ -1223,7 +1128,7 @@ var OrderedList = Node3.create({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join("\n")
++        raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+       };
+     }
+   },
+@@ -1252,7 +1157,7 @@ var OrderedList = Node3.create({
+           handlePaste: (view, event) => {
+             var _a, _b;
+             const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
+-            if (html == null ? void 0 : html.trim()) {
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false;
+             }
+             const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
+@@ -1567,53 +1472,14 @@ var TaskList = Node5.create({
      level: "block",
      start(src) {
        var _a;
@@ -1369,55 +1799,84 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..af64b1d5d6f2ee2ea72db54c3866619e
        return index !== void 0 ? index : -1;
      },
      tokenize(src, tokens, lexer) {
-@@ -1575,7 +1659,7 @@ var TaskList = Node5.create({
-         const nestedResult = parseIndentedBlocks(
-           content,
-           {
+-      const parseTaskListContent = (content) => {
+-        const nestedResult = parseIndentedBlocks(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: (match) => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -1603,7 +1687,7 @@ var TaskList = Node5.create({
-             items: nestedResult.items
-           };
-           const remainder = content.slice(nestedResult.raw.length);
+-            extractItemData: (match) => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === "x"
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: "taskItem",
+-              raw: "",
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent
+-          },
+-          lexer
+-        );
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: "taskList",
+-            raw: nestedResult.raw,
+-            items: nestedResult.items
+-          };
+-          const remainder = content.slice(nestedResult.raw.length);
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)];
-           }
-           return [taskListToken];
-@@ -1613,7 +1697,7 @@ var TaskList = Node5.create({
+-            return [taskListToken, ...lexer.blockTokens(remainder)];
+-          }
+-          return [taskListToken];
+-        }
+-        return lexer.blockTokens(content);
+-      };
        const result = parseIndentedBlocks(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -1629,8 +1495,7 @@ var TaskList = Node5.create({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent
++          checkbox: true
+         },
+         lexer
+       );
 diff --git a/dist/ordered-list/index.cjs b/dist/ordered-list/index.cjs
-index 07719ef761bdc543488fcf637043115f5bb032fe..f9eeb9fdccbe765f989deab186d412aa9697e6a5 100644
+index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e072035859b1ae4bc 100644
 --- a/dist/ordered-list/index.cjs
 +++ b/dist/ordered-list/index.cjs
-@@ -229,54 +229,74 @@ function getListMarker(type, index, separator = ". ") {
+@@ -228,131 +228,79 @@ function getListMarker(type, index, separator = ". ") {
+ }
 
  // src/ordered-list/utils.ts
++var import_core_list_items = require("@tiptap/core");
  var ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`
  );
 -var INDENTED_LINE_REGEX = /^\s/;
-+var INDENTED_LINE_REGEX = /^[ \t]/;
- var PARAGRAPH_INTERRUPTERS = {
+-var PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
- };
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
+-};
 -function isOrderedListMarkerLine(line) {
 -  return ORDERED_LIST_ITEM_REGEX.test(line.trimStart());
 -}
@@ -1428,9 +1887,9 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..f9eeb9fdccbe765f989deab186d412aa
 -  PARAGRAPH_INTERRUPTERS.thematicBreak.test(trimmedLine) && !trimmedLine.startsWith("-") || // oxlint-disable-next-line prefer-string-starts-ends-with
 -  /^>\s?/.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.codeFence.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.blockMath.test(trimmedLine);
 -}
- function interruptsLazyContinuation(line) {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
- }
+-function interruptsLazyContinuation(line) {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
+-}
 -function splitItemContent(contentLines) {
 -  const paragraphLines = [];
 -  const blockLines = [];
@@ -1449,197 +1908,210 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..f9eeb9fdccbe765f989deab186d412aa
 -      reachedBlockBoundary = true;
 -      blockLines.push(line);
 -      return;
-+function leadingIndentColumns(line) {
-+  let column = 0;
-+  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+  }
-+  return column;
-+}
-+function stripIndentColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") {
-+      column += 1;
-+    } else if (char === "\t") {
-+      const next = column + 4 - column % 4;
-+      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
-+      column = next;
-+    } else {
-+      break;
-     }
+-    }
 -    paragraphLines.push(line);
 -  });
 -  return {
 -    paragraphLines,
 -    blockLines
 -  };
-+    index += 1;
++function matchOrderedListMarker(line) {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX);
++  if (match === null) {
++    return null;
 +  }
-+  return line.slice(index);
-+}
-+// The run of a fence a line opens, without its indent, as marked's lexer
-+// reads one: three or more backticks with no backtick after them, or three or
-+// more tildes.
-+function fenceRun(text) {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
-+  return fence === null ? void 0 : fence[1];
-+}
-+// Whether a line, without its indent, closes the fence `run` opened, as
-+// marked's lexer reads it: that run, then only backticks or tildes, then
-+// spaces.
-+function closesFence(text, run) {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
-+}
-+// The content column of a container whose marker, `markerWidth` wide (a
-+// bullet, an ordered marker with its separator, or `>`), starts `text` at
-+// `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+// space after a list marker, or one column when more follow or none.
-+function containerContentColumn(text, column, markerWidth) {
-+  const markerEnd = column + markerWidth;
-+  let end = markerEnd;
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === " ") end += 1;
-+    else if (char === "\t") end += 4 - end % 4;
-+    else break;
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null;
 +  }
-+  const spaces = end - markerEnd;
-+  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1);
++  return match;
  }
  function collectOrderedListItems(lines) {
    const listItems = [];
-@@ -293,27 +313,71 @@ function collectOrderedListItems(lines) {
+   let currentLineIndex = 0;
+-  let consumed = 0;
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex];
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX);
++    const match = matchOrderedListMarker(line);
+     if (!match) {
+       break;
+     }
+-    const [, indent, marker, _separator, content] = match;
+-    const indentLevel = indent.length;
++    const [markerLine, indent, marker] = match;
      const number = parseInt(marker, 10);
-     const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number;
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number;
 -    const itemContentLines = [content];
-     let nextLineIndex = currentLineIndex + 1;
-     const itemLines = [line];
-     let sawBlankLine = false;
-+    const itemContentColumn = containerContentColumn(line.slice(indent.length), leadingIndentColumns(indent), marker.length + _separator.length);
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length;
-+    const itemContentLines = [
-+      stripIndentColumns(" ".repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length), itemContentColumn)
-+    ];
-+    const innerBlocks = [];
-+    let openFence;
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, "");
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0]);
-+    if (firstText !== "" && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText);
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX);
-+      if (run !== void 0) {
-+        openFence = { run, column: itemContentColumn };
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1
-+          )
-+        });
-+      }
-+    }
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex];
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-    let nextLineIndex = currentLineIndex + 1;
+-    const itemLines = [line];
+-    let sawBlankLine = false;
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex];
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
 -      if (nextMatch) {
-+      const nextColumn = leadingIndentColumns(nextLine);
-+      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))) {
-+        openFence = void 0;
-+      }
-+      if (openFence === void 0 && /[^ \t]/.test(nextLine) && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
-+        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
-+      }
-+      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
-         break;
-       }
+-        break;
+-      }
 -      if (nextLine.trim() === "") {
-+      if (!/[^ \t]/.test(nextLine)) {
-         itemLines.push(nextLine);
-         itemContentLines.push("");
-         sawBlankLine = true;
-         nextLineIndex += 1;
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        itemLines.push(nextLine);
+-        itemContentLines.push("");
+-        sawBlankLine = true;
+-        nextLineIndex += 1;
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
 -        const contentIndent = indentLevel + marker.length + 1;
-         itemLines.push(nextLine);
+-        itemLines.push(nextLine);
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
-         nextLineIndex += 1;
-+        const text = nextLine.replace(/^[ \t]+/, "");
-+        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
-+        if (openFence !== void 0) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
-+          if (run !== void 0) {
-+            openFence = { run, column: blockColumn };
-+          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
-+            });
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break;
-@@ -327,7 +391,7 @@ function collectOrderedListItems(lines) {
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1;
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break;
++    const legacyColumn = indent.length + 2;
++    const item = (0, import_core_list_items.collectMarkdownListItem)(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine);
++          return (0, import_core_list_items.markdownNextBulletRegex)(contentColumn).test(nextLine) || nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1);
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: (text) => /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null
+         }
+-        itemLines.push(nextLine);
+-        itemContentLines.push(nextLine);
+-        nextLineIndex += 1;
+       }
+-    }
++    );
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join("\n").trim(),
-+      content: itemContentLines.join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, ""),
-       contentLines: itemContentLines,
-       raw: itemLines.join("\n")
+-      contentLines: itemContentLines,
+-      raw: itemLines.join("\n")
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : void 0,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join("\n")
      });
-@@ -374,14 +438,27 @@ function parsePlainTextOrderedListPaste(text) {
+-    consumed = nextLineIndex;
+-    currentLineIndex = nextLineIndex;
++    currentLineIndex = item.end;
+   }
+-  return [listItems, consumed];
++  const last = listItems[listItems.length - 1];
++  if (last !== void 0) {
++    last.text = last.text.replace(/[ \t\n]+$/, "");
++    last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  }
++  return [listItems, currentLineIndex];
+ }
+-var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`
+-);
+ function parsePlainTextOrderedListPaste(text) {
+-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+-  if (lines.length === 0) {
++  const lines = text.split(/\r?\n/);
++  const [items, consumed] = collectOrderedListItems(lines);
++  if (items.length === 0 || lines.slice(consumed).some((line) => /[^ \t]/.test(line))) {
+     return null;
+   }
+   const parsedItems = [];
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX);
+-    if (!match) {
++  for (const item of items) {
++    const [content, ...rest] = item.text.split("\n");
++    if (!/^[^ ]/.test(content) || rest.some((line) => /[^ \t]/.test(line))) {
+       return null;
+     }
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3]
++      marker: item.marker,
++      content
+     });
+   }
+   const markers = parsedItems.map((item) => item.marker);
+@@ -374,57 +322,6 @@ function parsePlainTextOrderedListPaste(text) {
      }))
    };
  }
-+function continuationText(line) {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line;
-+}
-+function splitAtFirstParagraph(contentLines, lexer) {
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join("\n")}\n`);
-+  const first = tokens.findIndex((token) => token.type !== "space");
-+  if (first === -1 || tokens[first].type !== "paragraph") {
-+    return { paragraphLines: [], blockLines: contentLines };
-+  }
-+  const start = tokens.slice(0, first).map((token) => token.raw).join("").split("\n").length - 1;
-+  const end = start + tokens[first].raw.replace(/\n+$/, "").split("\n").length;
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) };
-+}
- function buildNestedStructure(items, baseIndent, lexer) {
-   const result = [];
-   let currentIndex = 0;
-   while (currentIndex < items.length) {
-     const item = items[currentIndex];
-     if (item.indent === baseIndent) {
+-function buildNestedStructure(items, baseIndent, lexer) {
+-  const result = [];
+-  let currentIndex = 0;
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex];
+-    if (item.indent === baseIndent) {
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines);
 -      const mainText = paragraphLines.join("\n").trim();
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer);
-+      const mainText = paragraphLines.map((line, index) => index === 0 ? line : continuationText(line)).join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, "");
-       const tokens = [];
-       if (mainText) {
-         tokens.push({
-@@ -390,7 +467,7 @@ function buildNestedStructure(items, baseIndent, lexer) {
-           tokens: lexer.inlineTokens(mainText)
-         });
-       }
+-      const tokens = [];
+-      if (mainText) {
+-        tokens.push({
+-          type: "paragraph",
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText)
+-        });
+-      }
 -      const additionalContent = blockLines.join("\n").trim();
-+      const additionalContent = blockLines.join("\n").replace(/^(?:[ \t]*\n)+/, "").replace(/[ \t\n]+$/, "");
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent);
-         tokens.push(...blockTokens);
-@@ -449,6 +526,9 @@ function parseListItems(items, helpers) {
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent);
+-        tokens.push(...blockTokens);
+-      }
+-      let lookAheadIndex = currentIndex + 1;
+-      const nestedItems = [];
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex]);
+-        lookAheadIndex += 1;
+-      }
+-      if (nestedItems.length > 0) {
+-        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer);
+-        tokens.push({
+-          type: "list",
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+-        });
+-      }
+-      result.push({
+-        type: "list_item",
+-        raw: item.raw,
+-        tokens
+-      });
+-      currentIndex = lookAheadIndex;
+-    } else {
+-      currentIndex += 1;
+-    }
+-  }
+-  return result;
+-}
+ function parseListItems(items, helpers) {
+   return items.map((item) => {
+     if (item.type !== "list_item") {
+@@ -436,11 +333,7 @@ function parseListItems(items, helpers) {
+         if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+           content.push(...helpers.parseChildren([itemToken]));
+         } else if (itemToken.type === "text" && itemToken.tokens) {
+-          const inlineContent = helpers.parseChildren([itemToken]);
+-          content.push({
+-            type: "paragraph",
+-            content: inlineContent
+-          });
++          content.push(...helpers.parseChildren([{ ...itemToken, type: "paragraph" }]));
+         } else {
+           const parsed = helpers.parseChildren([itemToken]);
+           if (parsed.length > 0) {
+@@ -449,6 +342,9 @@ function parseListItems(items, helpers) {
          }
        });
      }
@@ -1649,28 +2121,76 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..f9eeb9fdccbe765f989deab186d412aa
      return {
        type: "listItem",
        content
+@@ -461,11 +357,11 @@ var ListItemName = "listItem";
+ var TextStyleName = "textStyle";
+ var orderedListInputRegex = /^(\d+)\.\s$/;
+ function cssListStyleTypeToHtmlType(style) {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i);
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i);
+   if (!match) {
+     return null;
+   }
+-  const cssValue = match[1].trim().toLowerCase();
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "").toLowerCase();
+   switch (cssValue) {
+     case "upper-roman":
+       return "I";
+@@ -599,10 +495,12 @@ var OrderedList = import_core.Node.create({
+       if (listItems.length === 0) {
+         return void 0;
+       }
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer);
+-      if (items.length === 0) {
+-        return void 0;
+-      }
++      const items = listItems.map((item) => ({
++        type: "list_item",
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text)
++      }));
+       const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
+       const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
+       return {
+@@ -611,7 +509,7 @@ var OrderedList = import_core.Node.create({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join("\n")
++        raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+       };
+     }
+   },
+@@ -640,7 +538,7 @@ var OrderedList = import_core.Node.create({
+           handlePaste: (view, event) => {
+             var _a, _b;
+             const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
+-            if (html == null ? void 0 : html.trim()) {
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false;
+             }
+             const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
 diff --git a/dist/ordered-list/index.js b/dist/ordered-list/index.js
-index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..baa925c4744d7537ae49336d079e1c66dfd748ed 100644
+index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12c4b011d6 100644
 --- a/dist/ordered-list/index.js
 +++ b/dist/ordered-list/index.js
-@@ -192,54 +192,74 @@ function getListMarker(type, index, separator = ". ") {
+@@ -191,131 +191,79 @@ function getListMarker(type, index, separator = ". ") {
+ }
 
  // src/ordered-list/utils.ts
++import { collectMarkdownListItem, markdownNextBulletRegex } from "@tiptap/core";
  var ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`
  );
 -var INDENTED_LINE_REGEX = /^\s/;
-+var INDENTED_LINE_REGEX = /^[ \t]/;
- var PARAGRAPH_INTERRUPTERS = {
+-var PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
- };
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/
+-};
 -function isOrderedListMarkerLine(line) {
 -  return ORDERED_LIST_ITEM_REGEX.test(line.trimStart());
 -}
@@ -1681,9 +2201,9 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..baa925c4744d7537ae49336d079e1c66
 -  PARAGRAPH_INTERRUPTERS.thematicBreak.test(trimmedLine) && !trimmedLine.startsWith("-") || // oxlint-disable-next-line prefer-string-starts-ends-with
 -  /^>\s?/.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.codeFence.test(trimmedLine) || PARAGRAPH_INTERRUPTERS.blockMath.test(trimmedLine);
 -}
- function interruptsLazyContinuation(line) {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
- }
+-function interruptsLazyContinuation(line) {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some((pattern) => pattern.test(line));
+-}
 -function splitItemContent(contentLines) {
 -  const paragraphLines = [];
 -  const blockLines = [];
@@ -1702,197 +2222,210 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..baa925c4744d7537ae49336d079e1c66
 -      reachedBlockBoundary = true;
 -      blockLines.push(line);
 -      return;
-+function leadingIndentColumns(line) {
-+  let column = 0;
-+  for (const char of line) {
-+    if (char === " ") column += 1;
-+    else if (char === "\t") column += 4 - column % 4;
-+    else break;
-+  }
-+  return column;
-+}
-+function stripIndentColumns(line, columns) {
-+  let column = 0;
-+  let index = 0;
-+  while (index < line.length && column < columns) {
-+    const char = line[index];
-+    if (char === " ") {
-+      column += 1;
-+    } else if (char === "\t") {
-+      const next = column + 4 - column % 4;
-+      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
-+      column = next;
-+    } else {
-+      break;
-     }
+-    }
 -    paragraphLines.push(line);
 -  });
 -  return {
 -    paragraphLines,
 -    blockLines
 -  };
-+    index += 1;
++function matchOrderedListMarker(line) {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX);
++  if (match === null) {
++    return null;
 +  }
-+  return line.slice(index);
-+}
-+// The run of a fence a line opens, without its indent, as marked's lexer
-+// reads one: three or more backticks with no backtick after them, or three or
-+// more tildes.
-+function fenceRun(text) {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
-+  return fence === null ? void 0 : fence[1];
-+}
-+// Whether a line, without its indent, closes the fence `run` opened, as
-+// marked's lexer reads it: that run, then only backticks or tildes, then
-+// spaces.
-+function closesFence(text, run) {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
-+}
-+// The content column of a container whose marker, `markerWidth` wide (a
-+// bullet, an ordered marker with its separator, or `>`), starts `text` at
-+// `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+// space after a list marker, or one column when more follow or none.
-+function containerContentColumn(text, column, markerWidth) {
-+  const markerEnd = column + markerWidth;
-+  let end = markerEnd;
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === " ") end += 1;
-+    else if (char === "\t") end += 4 - end % 4;
-+    else break;
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null;
 +  }
-+  const spaces = end - markerEnd;
-+  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1);
++  return match;
  }
  function collectOrderedListItems(lines) {
    const listItems = [];
-@@ -256,27 +276,71 @@ function collectOrderedListItems(lines) {
+   let currentLineIndex = 0;
+-  let consumed = 0;
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex];
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX);
++    const match = matchOrderedListMarker(line);
+     if (!match) {
+       break;
+     }
+-    const [, indent, marker, _separator, content] = match;
+-    const indentLevel = indent.length;
++    const [markerLine, indent, marker] = match;
      const number = parseInt(marker, 10);
-     const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number;
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : void 0;
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number;
 -    const itemContentLines = [content];
-     let nextLineIndex = currentLineIndex + 1;
-     const itemLines = [line];
-     let sawBlankLine = false;
-+    const itemContentColumn = containerContentColumn(line.slice(indent.length), leadingIndentColumns(indent), marker.length + _separator.length);
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length;
-+    const itemContentLines = [
-+      stripIndentColumns(" ".repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length), itemContentColumn)
-+    ];
-+    const innerBlocks = [];
-+    let openFence;
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, "");
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0]);
-+    if (firstText !== "" && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText);
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX);
-+      if (run !== void 0) {
-+        openFence = { run, column: itemContentColumn };
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1
-+          )
-+        });
-+      }
-+    }
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex];
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-    let nextLineIndex = currentLineIndex + 1;
+-    const itemLines = [line];
+-    let sawBlankLine = false;
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex];
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
 -      if (nextMatch) {
-+      const nextColumn = leadingIndentColumns(nextLine);
-+      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))) {
-+        openFence = void 0;
-+      }
-+      if (openFence === void 0 && /[^ \t]/.test(nextLine) && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
-+        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
-+      }
-+      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
-         break;
-       }
+-        break;
+-      }
 -      if (nextLine.trim() === "") {
-+      if (!/[^ \t]/.test(nextLine)) {
-         itemLines.push(nextLine);
-         itemContentLines.push("");
-         sawBlankLine = true;
-         nextLineIndex += 1;
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        itemLines.push(nextLine);
+-        itemContentLines.push("");
+-        sawBlankLine = true;
+-        nextLineIndex += 1;
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
 -        const contentIndent = indentLevel + marker.length + 1;
-         itemLines.push(nextLine);
+-        itemLines.push(nextLine);
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
-         nextLineIndex += 1;
-+        const text = nextLine.replace(/^[ \t]+/, "");
-+        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
-+        if (openFence !== void 0) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
-+          if (run !== void 0) {
-+            openFence = { run, column: blockColumn };
-+          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
-+            });
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break;
-@@ -290,7 +354,7 @@ function collectOrderedListItems(lines) {
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1;
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break;
++    const legacyColumn = indent.length + 2;
++    const item = collectMarkdownListItem(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine);
++          return markdownNextBulletRegex(contentColumn).test(nextLine) || nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1);
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: (text) => /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null
+         }
+-        itemLines.push(nextLine);
+-        itemContentLines.push(nextLine);
+-        nextLineIndex += 1;
+       }
+-    }
++    );
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join("\n").trim(),
-+      content: itemContentLines.join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, ""),
-       contentLines: itemContentLines,
-       raw: itemLines.join("\n")
+-      contentLines: itemContentLines,
+-      raw: itemLines.join("\n")
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : void 0,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join("\n")
      });
-@@ -337,14 +401,27 @@ function parsePlainTextOrderedListPaste(text) {
+-    consumed = nextLineIndex;
+-    currentLineIndex = nextLineIndex;
++    currentLineIndex = item.end;
+   }
+-  return [listItems, consumed];
++  const last = listItems[listItems.length - 1];
++  if (last !== void 0) {
++    last.text = last.text.replace(/[ \t\n]+$/, "");
++    last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  }
++  return [listItems, currentLineIndex];
+ }
+-var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`
+-);
+ function parsePlainTextOrderedListPaste(text) {
+-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+-  if (lines.length === 0) {
++  const lines = text.split(/\r?\n/);
++  const [items, consumed] = collectOrderedListItems(lines);
++  if (items.length === 0 || lines.slice(consumed).some((line) => /[^ \t]/.test(line))) {
+     return null;
+   }
+   const parsedItems = [];
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX);
+-    if (!match) {
++  for (const item of items) {
++    const [content, ...rest] = item.text.split("\n");
++    if (!/^[^ ]/.test(content) || rest.some((line) => /[^ \t]/.test(line))) {
+       return null;
+     }
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3]
++      marker: item.marker,
++      content
+     });
+   }
+   const markers = parsedItems.map((item) => item.marker);
+@@ -337,57 +285,6 @@ function parsePlainTextOrderedListPaste(text) {
      }))
    };
  }
-+function continuationText(line) {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line;
-+}
-+function splitAtFirstParagraph(contentLines, lexer) {
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join("\n")}\n`);
-+  const first = tokens.findIndex((token) => token.type !== "space");
-+  if (first === -1 || tokens[first].type !== "paragraph") {
-+    return { paragraphLines: [], blockLines: contentLines };
-+  }
-+  const start = tokens.slice(0, first).map((token) => token.raw).join("").split("\n").length - 1;
-+  const end = start + tokens[first].raw.replace(/\n+$/, "").split("\n").length;
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) };
-+}
- function buildNestedStructure(items, baseIndent, lexer) {
-   const result = [];
-   let currentIndex = 0;
-   while (currentIndex < items.length) {
-     const item = items[currentIndex];
-     if (item.indent === baseIndent) {
+-function buildNestedStructure(items, baseIndent, lexer) {
+-  const result = [];
+-  let currentIndex = 0;
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex];
+-    if (item.indent === baseIndent) {
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines);
 -      const mainText = paragraphLines.join("\n").trim();
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer);
-+      const mainText = paragraphLines.map((line, index) => index === 0 ? line : continuationText(line)).join("\n").replace(/^[ \t\n]+|[ \t\n]+$/g, "");
-       const tokens = [];
-       if (mainText) {
-         tokens.push({
-@@ -353,7 +430,7 @@ function buildNestedStructure(items, baseIndent, lexer) {
-           tokens: lexer.inlineTokens(mainText)
-         });
-       }
+-      const tokens = [];
+-      if (mainText) {
+-        tokens.push({
+-          type: "paragraph",
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText)
+-        });
+-      }
 -      const additionalContent = blockLines.join("\n").trim();
-+      const additionalContent = blockLines.join("\n").replace(/^(?:[ \t]*\n)+/, "").replace(/[ \t\n]+$/, "");
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent);
-         tokens.push(...blockTokens);
-@@ -412,6 +489,9 @@ function parseListItems(items, helpers) {
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent);
+-        tokens.push(...blockTokens);
+-      }
+-      let lookAheadIndex = currentIndex + 1;
+-      const nestedItems = [];
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex]);
+-        lookAheadIndex += 1;
+-      }
+-      if (nestedItems.length > 0) {
+-        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer);
+-        tokens.push({
+-          type: "list",
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+-        });
+-      }
+-      result.push({
+-        type: "list_item",
+-        raw: item.raw,
+-        tokens
+-      });
+-      currentIndex = lookAheadIndex;
+-    } else {
+-      currentIndex += 1;
+-    }
+-  }
+-  return result;
+-}
+ function parseListItems(items, helpers) {
+   return items.map((item) => {
+     if (item.type !== "list_item") {
+@@ -399,11 +296,7 @@ function parseListItems(items, helpers) {
+         if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+           content.push(...helpers.parseChildren([itemToken]));
+         } else if (itemToken.type === "text" && itemToken.tokens) {
+-          const inlineContent = helpers.parseChildren([itemToken]);
+-          content.push({
+-            type: "paragraph",
+-            content: inlineContent
+-          });
++          content.push(...helpers.parseChildren([{ ...itemToken, type: "paragraph" }]));
+         } else {
+           const parsed = helpers.parseChildren([itemToken]);
+           if (parsed.length > 0) {
+@@ -412,6 +305,9 @@ function parseListItems(items, helpers) {
          }
        });
      }
@@ -1902,11 +2435,60 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..baa925c4744d7537ae49336d079e1c66
      return {
        type: "listItem",
        content
+@@ -424,11 +320,11 @@ var ListItemName = "listItem";
+ var TextStyleName = "textStyle";
+ var orderedListInputRegex = /^(\d+)\.\s$/;
+ function cssListStyleTypeToHtmlType(style) {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i);
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i);
+   if (!match) {
+     return null;
+   }
+-  const cssValue = match[1].trim().toLowerCase();
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "").toLowerCase();
+   switch (cssValue) {
+     case "upper-roman":
+       return "I";
+@@ -562,10 +458,12 @@ var OrderedList = Node.create({
+       if (listItems.length === 0) {
+         return void 0;
+       }
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer);
+-      if (items.length === 0) {
+-        return void 0;
+-      }
++      const items = listItems.map((item) => ({
++        type: "list_item",
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text)
++      }));
+       const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
+       const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
+       return {
+@@ -574,7 +472,7 @@ var OrderedList = Node.create({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join("\n")
++        raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
+       };
+     }
+   },
+@@ -603,7 +501,7 @@ var OrderedList = Node.create({
+           handlePaste: (view, event) => {
+             var _a, _b;
+             const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
+-            if (html == null ? void 0 : html.trim()) {
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false;
+             }
+             const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
 diff --git a/dist/task-list/index.cjs b/dist/task-list/index.cjs
-index f7e3f3a8a87172053d42da971b6d8c83f92e3450..397a312d2a10e4ab8ff1d41346d9a100e65f9169 100644
+index f7e3f3a8a87172053d42da971b6d8c83f92e3450..644d6736dd97b9219ef6596f17c6b7d5fc18b0c3 100644
 --- a/dist/task-list/index.cjs
 +++ b/dist/task-list/index.cjs
-@@ -67,7 +67,7 @@ var TaskList = import_core.Node.create({
+@@ -67,53 +67,14 @@ var TaskList = import_core.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -1915,38 +2497,68 @@ index f7e3f3a8a87172053d42da971b6d8c83f92e3450..397a312d2a10e4ab8ff1d41346d9a100
        return index !== void 0 ? index : -1;
      },
      tokenize(src, tokens, lexer) {
-@@ -75,7 +75,7 @@ var TaskList = import_core.Node.create({
-         const nestedResult = (0, import_core.parseIndentedBlocks)(
-           content,
-           {
+-      const parseTaskListContent = (content) => {
+-        const nestedResult = (0, import_core.parseIndentedBlocks)(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: (match) => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -103,7 +103,7 @@ var TaskList = import_core.Node.create({
-             items: nestedResult.items
-           };
-           const remainder = content.slice(nestedResult.raw.length);
+-            extractItemData: (match) => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === "x"
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: "taskItem",
+-              raw: "",
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent
+-          },
+-          lexer
+-        );
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: "taskList",
+-            raw: nestedResult.raw,
+-            items: nestedResult.items
+-          };
+-          const remainder = content.slice(nestedResult.raw.length);
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)];
-           }
-           return [taskListToken];
-@@ -113,7 +113,7 @@ var TaskList = import_core.Node.create({
+-            return [taskListToken, ...lexer.blockTokens(remainder)];
+-          }
+-          return [taskListToken];
+-        }
+-        return lexer.blockTokens(content);
+-      };
        const result = (0, import_core.parseIndentedBlocks)(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -129,8 +90,7 @@ var TaskList = import_core.Node.create({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent
++          checkbox: true
+         },
+         lexer
+       );
 diff --git a/dist/task-list/index.js b/dist/task-list/index.js
-index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..803147944f6dc721d858b35faae4a279fd430ebc 100644
+index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..8bed64e07ea3e94cf5f3fcb93969d39174caab0d 100644
 --- a/dist/task-list/index.js
 +++ b/dist/task-list/index.js
-@@ -41,7 +41,7 @@ var TaskList = Node.create({
+@@ -41,53 +41,14 @@ var TaskList = Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -1955,40 +2567,89 @@ index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..803147944f6dc721d858b35faae4a279
        return index !== void 0 ? index : -1;
      },
      tokenize(src, tokens, lexer) {
-@@ -49,7 +49,7 @@ var TaskList = Node.create({
-         const nestedResult = parseIndentedBlocks(
-           content,
-           {
+-      const parseTaskListContent = (content) => {
+-        const nestedResult = parseIndentedBlocks(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: (match) => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -77,7 +77,7 @@ var TaskList = Node.create({
-             items: nestedResult.items
-           };
-           const remainder = content.slice(nestedResult.raw.length);
+-            extractItemData: (match) => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === "x"
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: "taskItem",
+-              raw: "",
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent
+-          },
+-          lexer
+-        );
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: "taskList",
+-            raw: nestedResult.raw,
+-            items: nestedResult.items
+-          };
+-          const remainder = content.slice(nestedResult.raw.length);
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)];
-           }
-           return [taskListToken];
-@@ -87,7 +87,7 @@ var TaskList = Node.create({
+-            return [taskListToken, ...lexer.blockTokens(remainder)];
+-          }
+-          return [taskListToken];
+-        }
+-        return lexer.blockTokens(content);
+-      };
        const result = parseIndentedBlocks(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -103,8 +64,7 @@ var TaskList = Node.create({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent
++          checkbox: true
+         },
+         lexer
+       );
 diff --git a/src/item/list-item.ts b/src/item/list-item.ts
-index e1227a05262b8e337a1406e7f63685d4f4f00fea..42df91215ab6f5e651a6b9ab6e853a33a021f69f 100644
+index e1227a05262b8e337a1406e7f63685d4f4f00fea..0a6fe93dc0a9ce1cd87eda41e4817ef1b20df7bd 100644
 --- a/src/item/list-item.ts
 +++ b/src/item/list-item.ts
-@@ -115,8 +115,19 @@ export const ListItem = Node.create<ListItemOptions>({
+@@ -40,6 +40,15 @@ function isSameLineOrderedListToken(token: MarkdownToken): boolean {
+   )
+ }
+
++/**
++ * A block-level `text` token as the paragraph it is: marked lexes an item's
++ * blocks outside top mode, where a paragraph is a `text` token, and an item
++ * holds no bare text.
++ */
++function asParagraph(token: MarkdownToken): MarkdownToken {
++  return token.type === 'text' && token.tokens ? { ...token, type: 'paragraph' } : token
++}
++
+ function parseSameLineOrderedListText(text: string, helpers: MarkdownParseHelpers): JSONContent[] {
+   if (helpers.tokenizeInline) {
+     return helpers.parseInline(helpers.tokenizeInline(text))
+@@ -113,10 +122,21 @@ export const ListItem = Node.create<ListItemOptions>({
+
+       if (hasParagraphTokens) {
          // If we have paragraph tokens, parse them as block elements
-         content = parseBlockChildren(token.tokens)
+-        content = parseBlockChildren(token.tokens)
++        content = parseBlockChildren(token.tokens.map(asParagraph))
        } else {
 +        // An empty first line arrives as leading `space` tokens; skip them so
 +        // the first text token still becomes the item's paragraph.
@@ -2007,18 +2668,23 @@ index e1227a05262b8e337a1406e7f63685d4f4f00fea..42df91215ab6f5e651a6b9ab6e853a33
 
          if (
            firstToken &&
-@@ -137,8 +148,8 @@ export const ListItem = Node.create<ListItemOptions>({
+@@ -137,25 +157,28 @@ export const ListItem = Node.create<ListItemOptions>({
 
            // If there are additional tokens after the first text token (like nested lists),
            // parse them as block elements and add them
 -          if (token.tokens.length > 1) {
 -            const remainingTokens = token.tokens.slice(1)
+-            const additionalContent = parseBlockChildren(remainingTokens)
 +          if (itemTokens.length > 1) {
 +            const remainingTokens = itemTokens.slice(1)
-             const additionalContent = parseBlockChildren(remainingTokens)
++            const additionalContent = parseBlockChildren(remainingTokens.map(asParagraph))
              content.push(...additionalContent)
            }
-@@ -149,13 +160,16 @@ export const ListItem = Node.create<ListItemOptions>({
+         } else {
+           // Fallback: parse all tokens as block elements
+-          content = parseBlockChildren(token.tokens)
++          content = parseBlockChildren(token.tokens.map(asParagraph))
+         }
        }
      }
 
@@ -2037,38 +2703,161 @@ index e1227a05262b8e337a1406e7f63685d4f4f00fea..42df91215ab6f5e651a6b9ab6e853a33
        ]
      }
 
+diff --git a/src/ordered-list/ordered-list.ts b/src/ordered-list/ordered-list.ts
+index 21c9c14b66d508552b934455c1d0d20799376e06..08a42cdb95a8d193e2f8f6c980f7bbf2a6e32469 100644
+--- a/src/ordered-list/ordered-list.ts
++++ b/src/ordered-list/ordered-list.ts
+@@ -4,7 +4,6 @@ import { Plugin } from '@tiptap/pm/state'
+ import { mergeAttributes, Node, wrappingInputRule } from '@tiptap/core'
+
+ import {
+-  buildNestedStructure,
+   collectOrderedListItems,
+   parseListItems,
+   parsePlainTextOrderedListPaste,
+@@ -65,12 +64,14 @@ export const orderedListInputRegex = /^(\d+)\.\s$/
+  * Google Docs and Word often use CSS instead of the HTML type attribute.
+  */
+ function cssListStyleTypeToHtmlType(style: string): string | null {
+-  const match = style.match(/list-style-type\s*:\s*([^;]+)/i)
++  // CSS whitespace is spaces, tabs, line feeds, carriage returns and form
++  // feeds; a pasted no-break space is part of the value.
++  const match = style.match(/list-style-type[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)/i)
+   if (!match) {
+     return null
+   }
+
+-  const cssValue = match[1].trim().toLowerCase()
++  const cssValue = match[1].replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, '').toLowerCase()
+
+   switch (cssValue) {
+     case 'upper-roman':
+@@ -243,16 +244,14 @@ export const OrderedList = Node.create<OrderedListOptions>({
+         return undefined
+       }
+
+-      // buildNestedStructure() only includes an item when item.indent matches
+-      // the base indent it's given, so the base must be this list's own
+-      // indentation level (that of its first collected item, e.g. 1 for a
+-      // line with a single leading space) rather than always 0 — a nested
+-      // list is not necessarily flush with the start of the line.
+-      const items = buildNestedStructure(listItems, listItems[0].indent, lexer)
+-
+-      if (items.length === 0) {
+-        return undefined
+-      }
++      // Each item's content is lexed as marked lexes a list item's, so a
++      // nested list, ordered or not, is its own token inside the item.
++      const items = listItems.map(item => ({
++        type: 'list_item',
++        raw: item.raw,
++        text: item.text,
++        tokens: lexer.listItemBlockTokens(item.text),
++      }))
+
+       const startValue = listItems[0]?.number || 1
+       const typeMarker = listItems[0]?.type
+@@ -263,7 +262,7 @@ export const OrderedList = Node.create<OrderedListOptions>({
+         start: startValue,
+         typeMarker,
+         items,
+-        raw: lines.slice(0, consumed).join('\n'),
++        raw: lines.slice(0, consumed).join('\n').replace(/[ \t\n]+$/, ''),
+       } as unknown as object
+     },
+   },
+@@ -301,7 +300,9 @@ export const OrderedList = Node.create<OrderedListOptions>({
+           handlePaste: (view, event) => {
+             const html = event.clipboardData?.getData('text/html')
+
+-            if (html?.trim()) {
++            // HTML whitespace is ASCII whitespace: clipboard HTML holding a
++            // no-break space is content.
++            if (html && /[^ \t\n\r\f]/.test(html)) {
+               return false
+             }
+
 diff --git a/src/ordered-list/utils.ts b/src/ordered-list/utils.ts
-index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..5b5029538f2062dcaec22d409d23264063e6f858 100644
+index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f032cfd59 100644
 --- a/src/ordered-list/utils.ts
 +++ b/src/ordered-list/utils.ts
-@@ -23,22 +23,22 @@ export { ORDERED_LIST_MARKER_PATTERN }
-  * Examples: "1. Item", "  a) Nested item", "    I. Roman item", "iii. Another", "aa. Item 27"
+@@ -1,9 +1,5 @@
+-import type {
+-  JSONContent,
+-  MarkdownLexerConfiguration,
+-  MarkdownParseHelpers,
+-  MarkdownToken,
+-} from '@tiptap/core'
++import type { JSONContent, MarkdownParseHelpers, MarkdownToken } from '@tiptap/core'
++import { collectMarkdownListItem, markdownNextBulletRegex } from '@tiptap/core'
+
+ import {
+   areOrderedListMarkersSequential,
+@@ -16,110 +12,56 @@ import {
+ export { ORDERED_LIST_MARKER_PATTERN }
+
+ /**
+- * Matches an ordered list item line with optional leading whitespace.
+- * Captures: (1) indentation spaces, (2) item marker (number, letter, or roman numeral),
+- * (3) separator (. or )), (4) content after marker
++ * Matches an ordered list item's marker as marked's list tokenizer matches a
++ * marker (`listItemRegex`): up to 3 spaces of indent, a marker (number,
++ * letter, or roman numeral) and its separator, then a space, a tab or the end
++ * of the line. Captures: (1) indentation spaces, (2) item marker, (3)
++ * separator (. or )). The marker's width is the match's.
+  *
+- * Examples: "1. Item", "  a) Nested item", "    I. Roman item", "iii. Another", "aa. Item 27"
++ * Examples: "1. Item", "  a) Item", "iii. Another", "aa. Item 27"
   */
  export const ORDERED_LIST_ITEM_REGEX = new RegExp(
 -  `^(\\s*)(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.*)$`,
-+  `^([ \\t]*)(${ORDERED_LIST_MARKER_PATTERN})([.)])[ \\t]+(.*)$`,
++  `^( {0,3})(${ORDERED_LIST_MARKER_PATTERN})([.)])(?=[ \\t]|$)`,
  )
 
  /**
-  * Matches any line that starts with whitespace (indented content).
-  * Used to identify continuation content that belongs to a list item.
+- * Matches any line that starts with whitespace (indented content).
+- * Used to identify continuation content that belongs to a list item.
++ * The marker a line opens an ordered list item with, as marked reads a
++ * marker: a number has at most 9 digits. A letter or roman numeral is a
++ * marker only with a space or tab after it, so a line such as `I.` stays text.
   */
 -const INDENTED_LINE_REGEX = /^\s/
-+const INDENTED_LINE_REGEX = /^[ \t]/
-
- /**
-  * This are blocks that can interrupt a paragraph, so a line starting with one of
-  * them can never be lazy continuation text of a list item
-  */
- const PARAGRAPH_INTERRUPTERS = {
+-
+-/**
+- * This are blocks that can interrupt a paragraph, so a line starting with one of
+- * them can never be lazy continuation text of a list item
+- */
+-const PARAGRAPH_INTERRUPTERS = {
 -  heading: /^#{1,6}(?:\s|$)/,
 -  bulletItem: /^[-+*]\s+/,
-+  heading: /^#{1,6}(?:[ \t]|$)/,
-+  bulletItem: /^[-+*][ \t]+/,
-   codeFence: /^(?:```|~~~)/,
-   blockMath: /^\$\$/,
-   thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/,
-@@ -56,64 +56,95 @@ export interface OrderedListItem {
+-  codeFence: /^(?:```|~~~)/,
+-  blockMath: /^\$\$/,
+-  thematicBreak: /^(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/,
++function matchOrderedListMarker(line: string): RegExpMatchArray | null {
++  const match = line.match(ORDERED_LIST_ITEM_REGEX)
++  if (match === null) {
++    return null
++  }
++  if (/^\d/.test(match[2]) ? match[2].length > 9 : match[0].length === line.length) {
++    return null
++  }
++  return match
+ }
+
+ /**
+- * Represents a parsed ordered list item with indentation information
++ * Represents a parsed ordered list item: its number or marker type, its
++ * content as marked's list tokenizer reads an item's (dedented, nested lists
++ * included), and the source lines it took.
+  */
+ export interface OrderedListItem {
+-  indent: number
++  marker: string
+   number: number
+   type?: string
+-  content: string
+-  contentLines: string[]
++  text: string
    raw: string
  }
 
@@ -2093,10 +2882,10 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..5b5029538f2062dcaec22d409d232640
 -  )
 -}
 -
- function interruptsLazyContinuation(line: string): boolean {
-   return Object.values(PARAGRAPH_INTERRUPTERS).some(pattern => pattern.test(line))
- }
-
+-function interruptsLazyContinuation(line: string): boolean {
+-  return Object.values(PARAGRAPH_INTERRUPTERS).some(pattern => pattern.test(line))
+-}
+-
 -function splitItemContent(contentLines: string[]): {
 -  paragraphLines: string[]
 -  blockLines: string[]
@@ -2109,339 +2898,320 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..5b5029538f2062dcaec22d409d232640
 -    if (reachedBlockBoundary) {
 -      blockLines.push(line)
 -      return
-+/**
-+ * The column a line's text starts at, a tab advancing to the next stop of 4.
-+ */
-+function leadingIndentColumns(line: string): number {
-+  let column = 0
-+  for (const char of line) {
-+    if (char === ' ') {
-+      column += 1
-+    } else if (char === '\t') {
-+      column += 4 - (column % 4)
-+    } else {
-+      break
-     }
-+  }
-+  return column
-+}
-
+-    }
+-
 -    if (line.trim() === '') {
 -      reachedBlockBoundary = true
 -      blockLines.push(line)
 -      return
-+/**
-+ * A line without its first `columns` columns of indentation, a tab advancing to
-+ * the next stop of 4. A tab that reaches past `columns` leaves the rest of its
-+ * width as spaces, and a line indented less keeps its first non-blank character.
-+ */
-+function stripIndentColumns(line: string, columns: number): string {
-+  let column = 0
-+  let index = 0
-+  while (index < line.length && column < columns) {
-+    const char = line[index]
-+    if (char === ' ') {
-+      column += 1
-+    } else if (char === '\t') {
-+      const next = column + 4 - (column % 4)
-+      if (next > columns) {
-+        return ' '.repeat(next - columns) + line.slice(index + 1)
-+      }
-+      column = next
-+    } else {
-+      break
-     }
-+    index += 1
-+  }
-+  return line.slice(index)
-+}
-
+-    }
+-
 -    if (paragraphLines.length > 0 && isBlockContentLine(line)) {
 -      reachedBlockBoundary = true
 -      blockLines.push(line)
 -      return
 -    }
-+/**
-+ * The run of a fence a line opens, without its indent, as marked's lexer reads
-+ * one: three or more backticks with no backtick after them, or three or more
-+ * tildes.
-+ */
-+function fenceRun(text: string): string | undefined {
-+  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text)
-+  return fence === null ? undefined : fence[1]
-+}
-
+-
 -    paragraphLines.push(line)
 -  })
-+/**
-+ * Whether a line, without its indent, closes the fence `run` opened, as
-+ * marked's lexer reads it: that run, then only backticks or tildes, then
-+ * spaces.
-+ */
-+function closesFence(text: string, run: string): boolean {
-+  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length))
-+}
-
+-
 -  return {
 -    paragraphLines,
 -    blockLines,
-+/**
-+ * The content column of a container whose marker, `markerWidth` wide (a
-+ * bullet, an ordered marker with its separator, or `>`), starts `text` at
-+ * `column`: past one optional space after `>`, and past the 1 to 4 columns of
-+ * space after a list marker, or one column when more follow or none.
-+ */
-+function containerContentColumn(text: string, column: number, markerWidth: number): number {
-+  const markerEnd = column + markerWidth
-+  let end = markerEnd
-+  for (const char of text.slice(markerWidth)) {
-+    if (char === ' ') {
-+      end += 1
-+    } else if (char === '\t') {
-+      end += 4 - (end % 4)
-+    } else {
-+      break
-+    }
-   }
-+  const spaces = end - markerEnd
-+  if (text.startsWith('>')) {
-+    return markerEnd + (spaces > 0 ? 1 : 0)
-+  }
-+  return markerEnd + (spaces >= 1 && spaces <= 4 && /[^ \t]/.test(text.slice(markerWidth)) ? spaces : 1)
- }
-
+-  }
+-}
+-
  /**
-@@ -144,23 +175,96 @@ export function collectOrderedListItems(lines: string[]): [OrderedListItem[], nu
-     const markerType = isNaN(number) ? detectMarkerType(marker) : undefined
-     const itemNumber = isNaN(number) ? markerToStart(marker) : number
+- * Collects all ordered list items from lines, parsing them into a flat array
+- * with indentation information. Stops collecting continuation content when
+- * encountering nested list items, allowing them to be processed separately.
++ * Collects a run of ordered list items, each read as marked's list tokenizer
++ * reads an item (`collectMarkdownListItem`): an item ends at a list marker,
++ * fence, heading, HTML block, quote or rule short of its content column, and
++ * keeps every line indented to that column, dedented, and every lazy
++ * paragraph continuation. An ordered marker of any kind ends an item as a
++ * numbered one does. A list marker or fence two columns past the marker,
++ * where a nested list and a fence in an ordered item used to be written,
++ * stays in the item.
+  *
+  * @param lines - Array of source lines to parse
+  * @returns Tuple of [listItems array, number of lines consumed]
+@@ -127,107 +69,90 @@ function splitItemContent(contentLines: string[]): {
+ export function collectOrderedListItems(lines: string[]): [OrderedListItem[], number] {
+   const listItems: OrderedListItem[] = []
+   let currentLineIndex = 0
+-  let consumed = 0
 
+   while (currentLineIndex < lines.length) {
+     const line = lines[currentLineIndex]
+-    const match = line.match(ORDERED_LIST_ITEM_REGEX)
++    const match = matchOrderedListMarker(line)
+
+     if (!match) {
+       break
+     }
+
+-    const [, indent, marker, _separator, content] = match
+-    const indentLevel = indent.length
++    const [markerLine, indent, marker] = match
+     const number = parseInt(marker, 10)
+-
+-    const markerType = isNaN(number) ? detectMarkerType(marker) : undefined
+-    const itemNumber = isNaN(number) ? markerToStart(marker) : number
+-
 -    const itemContentLines = [content]
-     let nextLineIndex = currentLineIndex + 1
-     const itemLines = [line]
-     let sawBlankLine = false
-+    // Where the item's content starts: past the 1 to 4 columns of space after
-+    // the marker, or one column when more follow.
-+    const itemContentColumn = containerContentColumn(
-+      line.slice(indent.length),
-+      leadingIndentColumns(indent),
-+      marker.length + _separator.length,
-+    )
-+    // The item's first line, read from its content column: past more than 4
-+    // columns of space, the rest is indented code, as marked reads it.
-+    const markerEndColumn = leadingIndentColumns(indent) + marker.length + _separator.length
-+    const itemContentLines = [
-+      stripIndentColumns(
-+        ' '.repeat(markerEndColumn) + line.slice(indent.length + marker.length + _separator.length),
-+        itemContentColumn,
-+      ),
-+    ]
-+    // The containers (bullet items, blockquotes, nested ordered items) open
-+    // inside this item's content, outermost first, with their marker and
-+    // content columns; and an open fence, with the run that opened it and the
-+    // content column of the container it opened in.
-+    const innerBlocks: Array<{ markerColumn: number; contentColumn: number }> = []
-+    let openFence: { run: string; column: number } | undefined
-+    // The first line opens a fence or a container as a continuation line does.
-+    const firstText = itemContentLines[0].replace(/^[ \t]+/, '')
-+    const firstColumn = itemContentColumn + leadingIndentColumns(itemContentLines[0])
-+    if (firstText !== '' && firstColumn - itemContentColumn <= 3) {
-+      const run = fenceRun(firstText)
-+      const firstMatch = firstText.match(ORDERED_LIST_ITEM_REGEX)
-+      if (run !== undefined) {
-+        openFence = { run, column: itemContentColumn }
-+      } else if (firstMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(firstText)) {
-+        innerBlocks.push({
-+          markerColumn: firstColumn,
-+          contentColumn: containerContentColumn(
-+            firstText,
-+            firstColumn,
-+            firstMatch ? firstMatch[2].length + 1 : 1,
-+          ),
-+        })
-+      }
-+    }
-
-     // Collect continuation lines for this item (but NOT nested list items)
-     while (nextLineIndex < lines.length) {
-       const nextLine = lines[nextLineIndex]
-       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX)
-+      const nextColumn = leadingIndentColumns(nextLine)
-+
-+      // A list marker left of the content column of a fence's container ends
-+      // that container, and the fence with it.
-+      if (
-+        openFence !== undefined &&
-+        nextColumn < openFence.column &&
-+        (nextMatch || /^[ \t]*[-+*](?:[ \t]|$)/.test(nextLine))
-+      ) {
-+        openFence = undefined
-+      }
-
+-    let nextLineIndex = currentLineIndex + 1
+-    const itemLines = [line]
+-    let sawBlankLine = false
+-
+-    // Collect continuation lines for this item (but NOT nested list items)
+-    while (nextLineIndex < lines.length) {
+-      const nextLine = lines[nextLineIndex]
+-      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX)
+-
 -      // If it's another list item (nested or not), stop collecting
 -      if (nextMatch) {
-+      // An indented line, or an ordered marker, closes every container whose
-+      // marker sits at or right of its column, so it lands in the innermost one
-+      // it is past.
-+      if (
-+        openFence === undefined &&
-+        /[^ \t]/.test(nextLine) &&
-+        (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)
-+      ) {
-+        while (
-+          innerBlocks.length > 0 &&
-+          innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn
-+        ) {
-+          innerBlocks.pop()
-+        }
-+      }
-+
-+      // If it's another list item (nested or not), stop collecting - unless it
-+      // sits inside a container opened in this item, or a fence is open: then
-+      // it belongs to that block and stays with this item's content. A marker
-+      // left of this item's content column always ends the item.
-+      if (
-+        nextMatch &&
-+        (nextColumn < itemContentColumn || (openFence === undefined && innerBlocks.length === 0))
-+      ) {
-         break
-       }
-
-       // Check for continuation content (non-list content)
+-        break
+-      }
+-
+-      // Check for continuation content (non-list content)
 -      if (nextLine.trim() === '') {
-+      if (!/[^ \t]/.test(nextLine)) {
-         // Empty line
-         itemLines.push(nextLine)
-         itemContentLines.push('')
-@@ -169,12 +273,41 @@ export function collectOrderedListItems(lines: string[]): [OrderedListItem[], nu
-       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
-         // Indented content - part of this item (but not a list item).
-         // Strip the indentation only up to the whitespace that is actually present,
+-        // Empty line
+-        itemLines.push(nextLine)
+-        itemContentLines.push('')
+-        sawBlankLine = true
+-        nextLineIndex += 1
+-      } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        // Indented content - part of this item (but not a list item).
+-        // Strip the indentation only up to the whitespace that is actually present,
 -        // so an under-indented line (e.g. a single leading space) keeps its first character.
 -        const leadingWhitespace = nextLine.length - nextLine.trimStart().length
 -        const contentIndent = indentLevel + marker.length + 1
-+        // so an under-indented line (e.g. a single leading space) keeps its first character,
-+        // and count it in columns, so a tab is not a single column.
-         itemLines.push(nextLine)
+-        itemLines.push(nextLine)
 -        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)))
-+        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn))
-         nextLineIndex += 1
-+
-+        // A fence opens or closes at most 3 columns past the content column
-+        // of its container; further in, the line is code.
-+        const text = nextLine.replace(/^[ \t]+/, '')
-+        const blockColumn =
-+          innerBlocks.length > 0
-+            ? innerBlocks[innerBlocks.length - 1].contentColumn
-+            : itemContentColumn
-+        if (openFence !== undefined) {
-+          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) {
-+            openFence = undefined
-+          }
-+        } else {
-+          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : undefined
-+          if (run !== undefined) {
-+            openFence = { run, column: blockColumn }
-+          } else if (
-+            nextColumn >= itemContentColumn &&
-+            (nextMatch || /^(?:[-+*](?:[ \t]|$)|>)/.test(text))
-+          ) {
-+            innerBlocks.push({
-+              markerColumn: nextColumn,
-+              contentColumn: containerContentColumn(
-+                text,
-+                nextColumn,
-+                nextMatch ? nextMatch[2].length + 1 : 1,
-+              ),
-+            })
-+          }
-+        }
-       } else {
-         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
-           break
-@@ -190,7 +323,7 @@ export function collectOrderedListItems(lines: string[]): [OrderedListItem[], nu
-       indent: indentLevel,
-       number: itemNumber,
-       type: markerType,
+-        nextLineIndex += 1
+-      } else {
+-        if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+-          break
+-        }
+-
+-        itemLines.push(nextLine)
+-        itemContentLines.push(nextLine)
+-        nextLineIndex += 1
+-      }
+-    }
++    const legacyColumn = indent.length + 2
++    const item = collectMarkdownListItem(
++      lines,
++      currentLineIndex,
++      markerLine.length,
++      line.slice(markerLine.length),
++      {
++        endsItem: (nextLine, contentColumn) => {
++          const nextMatch = matchOrderedListMarker(nextLine)
++          return (
++            markdownNextBulletRegex(contentColumn).test(nextLine) ||
++            (nextMatch !== null && nextMatch[1].length <= Math.min(3, contentColumn - 1))
++          )
++        },
++        legacy: {
++          column: legacyColumn,
++          opens: text =>
++            /^(?:[*+-](?:[ \t]|$)|```|~~~)/.test(text) || matchOrderedListMarker(text) !== null,
++        },
++      },
++    )
+
+     listItems.push({
+-      indent: indentLevel,
+-      number: itemNumber,
+-      type: markerType,
 -      content: itemContentLines.join('\n').trim(),
-+      content: itemContentLines.join('\n').replace(/^[ \t\n]+|[ \t\n]+$/g, ''),
-       contentLines: itemContentLines,
-       raw: itemLines.join('\n'),
+-      contentLines: itemContentLines,
+-      raw: itemLines.join('\n'),
++      marker,
++      number: isNaN(number) ? markerToStart(marker) : number,
++      type: isNaN(number) ? detectMarkerType(marker) : undefined,
++      text: item.text,
++      raw: lines.slice(currentLineIndex, item.end).join('\n'),
      })
-@@ -254,6 +387,42 @@ export function parsePlainTextOrderedListPaste(text: string): JSONContent | null
+
+-    consumed = nextLineIndex
+-    currentLineIndex = nextLineIndex
++    currentLineIndex = item.end
+   }
+
+-  return [listItems, consumed]
+-}
++  // marked's list tokenizer: the list does not take the blank lines after its
++  // last item, and that item's text loses its trailing spaces, tabs and line
++  // breaks.
++  const last = listItems[listItems.length - 1]
++  if (last !== undefined) {
++    last.text = last.text.replace(/[ \t\n]+$/, '')
++    last.raw = last.raw.replace(/[ \t\n]+$/, '')
++  }
+
+-const PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
+-  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`,
+-)
++  return [listItems, currentLineIndex]
++}
+
+ /**
+  * Parse plain-text pasted ordered list lines into JSONContent, or null if not a typed list.
++ * The paste is read as markdown reads an ordered list (`collectOrderedListItems`),
++ * and is a typed list only when every line that is not blank (spaces and tabs
++ * only) is the whole text of one item, a paragraph line: no line continues an
++ * item or nests in it, and no item opens with indented code. Each item's text
++ * is that reading's, trimmed only where markdown ends a list: after the last.
+  */
+ export function parsePlainTextOrderedListPaste(text: string): JSONContent | null {
+-  const lines = text.split('\n').filter(l => l.trim().length > 0)
++  const lines = text.split(/\r?\n/)
++  const [items, consumed] = collectOrderedListItems(lines)
+
+-  if (lines.length === 0) {
++  if (items.length === 0 || lines.slice(consumed).some(line => /[^ \t]/.test(line))) {
+     return null
+   }
+
+   const parsedItems: Array<{ marker: string; content: string }> = []
+
+-  for (const line of lines) {
+-    const match = line.trim().match(PLAIN_TEXT_ORDERED_LIST_LINE_REGEX)
++  for (const item of items) {
++    const [content, ...rest] = item.text.split('\n')
+
+-    if (!match) {
++    if (!/^[^ ]/.test(content) || rest.some(line => /[^ \t]/.test(line))) {
+       return null
+     }
+
+     parsedItems.push({
+-      marker: match[1],
+-      content: match[3],
++      marker: item.marker,
++      content,
+     })
+   }
+
+@@ -254,96 +179,6 @@ export function parsePlainTextOrderedListPaste(text: string): JSONContent | null
    }
  }
 
-+/**
-+ * A paragraph continuation line, already without the item's content column of
-+ * indent, as marked reads one in a bullet item: up to 3 more columns stay, and
-+ * 4 columns go when 4 or more remain.
-+ */
-+function continuationText(line: string): string {
-+  return leadingIndentColumns(line) >= 4 ? stripIndentColumns(line, 4) : line
-+}
-+
-+/**
-+ * Splits an ordered item's content where marked ends its first paragraph:
-+ * the lines of that paragraph, and the block content after it. When marked
-+ * opens the content with another block (a heading, quote, rule, fence, HTML
-+ * block, list, indented code or definition), all of it is block content, as
-+ * a bullet item's is.
-+ */
-+function splitAtFirstParagraph(
-+  contentLines: string[],
-+  lexer: MarkdownLexerConfiguration,
-+): { paragraphLines: string[]; blockLines: string[] } {
-+  // Each line ends in a line break in the document, and marked lets a fence
-+  // interrupt a paragraph only when one follows it.
-+  const tokens = lexer.probeBlockTokens(`${contentLines.join('\n')}\n`)
-+  const first = tokens.findIndex(token => token.type !== 'space')
-+  if (first === -1 || tokens[first].type !== 'paragraph') {
-+    return { paragraphLines: [], blockLines: contentLines }
-+  }
-+  const start = tokens
-+    .slice(0, first)
-+    .map(token => token.raw)
-+    .join('')
-+    .split('\n').length - 1
-+  const end = start + tokens[first].raw.replace(/\n+$/, '').split('\n').length
-+  return { paragraphLines: contentLines.slice(start, end), blockLines: contentLines.slice(end) }
-+}
-+
- /**
-  * Recursively builds a nested structure from a flat array of list items
-  * based on their indentation levels. Creates proper markdown tokens with
-@@ -277,8 +446,14 @@ export function buildNestedStructure(
-
-     if (item.indent === baseIndent) {
-       // This item belongs at the current level
+-/**
+- * Recursively builds a nested structure from a flat array of list items
+- * based on their indentation levels. Creates proper markdown tokens with
+- * nested lists where appropriate.
+- *
+- * @param items - Flat array of list items with indentation info
+- * @param baseIndent - The indentation level to process at this recursion level
+- * @param lexer - Markdown lexer for parsing inline and block content
+- * @returns Array of list_item tokens with proper nesting
+- */
+-export function buildNestedStructure(
+-  items: OrderedListItem[],
+-  baseIndent: number,
+-  lexer: MarkdownLexerConfiguration,
+-): unknown[] {
+-  const result: unknown[] = []
+-  let currentIndex = 0
+-
+-  while (currentIndex < items.length) {
+-    const item = items[currentIndex]
+-
+-    if (item.indent === baseIndent) {
+-      // This item belongs at the current level
 -      const { paragraphLines, blockLines } = splitItemContent(item.contentLines)
 -      const mainText = paragraphLines.join('\n').trim()
-+      const { paragraphLines, blockLines } = splitAtFirstParagraph(item.contentLines, lexer)
-+      // A continuation line keeps the indent past the content column as
-+      // marked keeps it in a bullet item (`continuationText`); only spaces
-+      // and tabs are indent, so a no-break space is text.
-+      const mainText = paragraphLines
-+        .map((line, index) => (index === 0 ? line : continuationText(line)))
-+        .join('\n')
-+        .replace(/^[ \t\n]+|[ \t\n]+$/g, '')
-
-       const tokens = []
-
-@@ -291,7 +466,12 @@ export function buildNestedStructure(
-         })
-       }
-
+-
+-      const tokens = []
+-
+-      // Always wrap the main text in a paragraph token
+-      if (mainText) {
+-        tokens.push({
+-          type: 'paragraph',
+-          raw: mainText,
+-          tokens: lexer.inlineTokens(mainText),
+-        })
+-      }
+-
 -      const additionalContent = blockLines.join('\n').trim()
-+      // Leading blank lines go, but not the first block line's indent: a
-+      // fence indented up to 3 columns strips that much from its content.
-+      const additionalContent = blockLines
-+        .join('\n')
-+        .replace(/^(?:[ \t]*\n)+/, '')
-+        .replace(/[ \t\n]+$/, '')
-       if (additionalContent) {
-         const blockTokens = lexer.blockTokens(additionalContent)
-         tokens.push(...blockTokens)
-@@ -391,6 +571,13 @@ export function parseListItems(
+-      if (additionalContent) {
+-        const blockTokens = lexer.blockTokens(additionalContent)
+-        tokens.push(...blockTokens)
+-      }
+-
+-      // Look ahead to find nested items at deeper indent levels
+-      let lookAheadIndex = currentIndex + 1
+-      const nestedItems = []
+-
+-      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+-        nestedItems.push(items[lookAheadIndex])
+-        lookAheadIndex += 1
+-      }
+-
+-      // If we have nested items, recursively build their structure
+-      if (nestedItems.length > 0) {
+-        // Find the next indent level (immediate children)
+-        const nextIndent = Math.min(...nestedItems.map(nestedItem => nestedItem.indent))
+-
+-        // Build the nested list recursively with all nested items
+-        // The recursive call will handle further nesting
+-        const nestedListItems = buildNestedStructure(nestedItems, nextIndent, lexer)
+-
+-        // Create a nested list token
+-        tokens.push({
+-          type: 'list',
+-          ordered: true,
+-          start: nestedItems[0].number,
+-          typeMarker: nestedItems[0].type,
+-          items: nestedListItems,
+-          raw: nestedItems.map(nestedItem => nestedItem.raw).join('\n'),
+-        })
+-      }
+-
+-      result.push({
+-        type: 'list_item',
+-        raw: item.raw,
+-        tokens,
+-      })
+-
+-      // Skip the nested items we just processed
+-      currentIndex = lookAheadIndex
+-    } else {
+-      // This item has deeper indent than we're currently processing
+-      // It should be handled by a recursive call
+-      currentIndex += 1
+-    }
+-  }
+-
+-  return result
+-}
+-
+ /**
+  * Parses markdown list item tokens into Tiptap JSONContent structure,
+  * ensuring text content is properly wrapped in paragraph nodes.
+@@ -375,12 +210,11 @@ export function parseListItems(
+         ) {
+           content.push(...helpers.parseChildren([itemToken]))
+         } else if (itemToken.type === 'text' && itemToken.tokens) {
+-          // If it's inline text tokens, wrap them in a paragraph
+-          const inlineContent = helpers.parseChildren([itemToken])
+-          content.push({
+-            type: 'paragraph',
+-            content: inlineContent,
+-          })
++          // A block-level text token is the paragraph it is: marked lexes an
++          // item's blocks outside top mode, where a paragraph is a `text`
++          // token. Parsed as one, its inline tokens (code, emphasis, links)
++          // are kept.
++          content.push(...helpers.parseChildren([{ ...itemToken, type: 'paragraph' }]))
+         } else {
+           // For any other content, try to parse it
+           const parsed = helpers.parseChildren([itemToken])
+@@ -391,6 +225,13 @@ export function parseListItems(
        })
      }
 
@@ -2456,10 +3226,10 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..5b5029538f2062dcaec22d409d232640
        type: 'listItem',
        content,
 diff --git a/src/task-list/task-list.ts b/src/task-list/task-list.ts
-index 22302cc5515837bda68d467d9c5357f7f2049163..228934fc9a8d0643f9e4e47a253d272d6d6ad294 100644
+index 22302cc5515837bda68d467d9c5357f7f2049163..2155a34972eea89181aec303538de0c2fb170134 100644
 --- a/src/task-list/task-list.ts
 +++ b/src/task-list/task-list.ts
-@@ -82,7 +82,7 @@ export const TaskList = Node.create<TaskListOptions>({
+@@ -82,63 +82,17 @@ export const TaskList = Node.create<TaskListOptions>({
      level: 'block',
      start(src) {
        // Look for the start of a task list item
@@ -2468,30 +3238,73 @@ index 22302cc5515837bda68d467d9c5357f7f2049163..228934fc9a8d0643f9e4e47a253d272d
        return index !== undefined ? index : -1
      },
      tokenize(src, tokens, lexer) {
-@@ -91,7 +91,7 @@ export const TaskList = Node.create<TaskListOptions>({
-         const nestedResult = parseIndentedBlocks(
-           content,
-           {
+-      // Helper function to recursively parse task lists
+-      const parseTaskListContent = (content: string): any[] | undefined => {
+-        const nestedResult = parseIndentedBlocks(
+-          content,
+-          {
 -            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+            itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
-             extractItemData: match => ({
-               indentLevel: match[1].length,
-               mainContent: match[4],
-@@ -124,7 +124,7 @@ export const TaskList = Node.create<TaskListOptions>({
-           // Parse any remaining indented content, such as plain bullets,
-           // and keep it as sibling tokens.
-           const remainder = content.slice(nestedResult.raw.length)
+-            extractItemData: match => ({
+-              indentLevel: match[1].length,
+-              mainContent: match[4],
+-              checked: match[3].toLowerCase() === 'x',
+-            }),
+-            createToken: (data, nestedTokens) => ({
+-              type: 'taskItem',
+-              raw: '',
+-              mainContent: data.mainContent,
+-              indentLevel: data.indentLevel,
+-              checked: data.checked,
+-              text: data.mainContent,
+-              tokens: lexer.inlineTokens(data.mainContent),
+-              nestedTokens,
+-            }),
+-            // Allow recursive nesting
+-            customNestedParser: parseTaskListContent,
+-          },
+-          lexer,
+-        )
+-
+-        if (nestedResult) {
+-          const taskListToken = {
+-            type: 'taskList',
+-            raw: nestedResult.raw,
+-            items: nestedResult.items,
+-          }
+-
+-          // parseIndentedBlocks only consumes checkbox items.
+-          // Parse any remaining indented content, such as plain bullets,
+-          // and keep it as sibling tokens.
+-          const remainder = content.slice(nestedResult.raw.length)
 -          if (remainder.trim()) {
-+          if (/[^ \t\n]/.test(remainder)) {
-             return [taskListToken, ...lexer.blockTokens(remainder)]
-           }
-
-@@ -138,7 +138,7 @@ export const TaskList = Node.create<TaskListOptions>({
+-            return [taskListToken, ...lexer.blockTokens(remainder)]
+-          }
+-
+-          return [taskListToken]
+-        }
+-
+-        // Fall back to regular markdown parsing if not a task list
+-        return lexer.blockTokens(content)
+-      }
+-
++      // Each item is read as marked's list tokenizer reads one, and its
++      // content lexed as marked lexes an item's, so a nested list of tasks, or
++      // of plain items, is its own token inside the item.
        const result = parseIndentedBlocks(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^([ \t]*)([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
            extractItemData: match => ({
              indentLevel: match[1].length,
              mainContent: match[4],
+@@ -154,8 +108,7 @@ export const TaskList = Node.create<TaskListOptions>({
+             tokens: lexer.inlineTokens(data.mainContent),
+             nestedTokens,
+           }),
+-          // Use the recursive parser for nested content
+-          customNestedParser: parseTaskListContent,
++          checkbox: true,
+         },
+         lexer,
+       )

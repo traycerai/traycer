@@ -1,184 +1,357 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..798cc08aba118604ae1517690d1efcd4273a317b 100644
+index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..7972d245976172d775f0b93e3e1836b05ac95181 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -292,8 +292,44 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
-   });
+@@ -115,7 +115,15 @@ function reopenMarksAfterNode(marksToReopen, activeMarks, getMarkOpening) {
+ }
+ function isTaskItem(item) {
+   const raw = item.raw || item.text || "";
+-  const match = raw.match(/^(\s*)[-+*]\s+\[([ xX])\]\s+/);
++  if (typeof item.task === "boolean") {
++    const indentLevel = raw.match(/^[ \t]*/)[0].length;
++    if (item.task) {
++      return { isTask: true, checked: item.checked === true, indentLevel };
++    }
++    const box = (item.text || "").match(/^\[([ xX])\] +[^ \t\n]/);
++    return box ? { isTask: true, checked: box[1].toLowerCase() === "x", indentLevel } : { isTask: false, indentLevel: 0 };
++  }
++  const match = raw.match(/^([ \t]*)[-+*][ \t]+\[([ xX])\] +[^ \t\n]/);
+   if (match) {
+     return { isTask: true, checked: match[2].toLowerCase() === "x", indentLevel: match[1].length };
+   }
+@@ -293,6 +301,15 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
  }
 
  // src/MarkdownManager.ts
-+// Lexes `src` as blocks, in top mode, on the document's own lexer (so with
-+// its tokenizer, extensions and options), and then puts back everything that
-+// call can write. In marked 17 that is: the lexer's `state` (`top`, `inLink`,
-+// `inRawBlock`), the reference definitions it registers in `tokens.links`,
-+// the inline work it queues in `inlineQueue` (and the `src` of an entry it
-+// rewrites there), and the shared tokenizer's `lexer` pointer. The probe's
-+// tokens are returned with their inline tokens never filled; a caller reads
-+// their types and raw text only. `tokens.links` has no prototype, so its
-+// snapshot is a Map: an inherited name such as `constructor` is never taken
-+// for a definition that was there before the probe.
-+function probeBlockTokens(lexer, src) {
-+  const links = new Map(Object.entries(lexer.tokens.links));
-+  const queue = [...lexer.inlineQueue];
-+  const queuedSources = queue.map((entry) => entry.src);
-+  const state = { ...lexer.state };
-+  const tokenizerLexer = lexer.tokenizer.lexer;
-+  lexer.state.top = true;
++function listItemBlockTokens(lexer, src) {
++  const top = lexer.state.top;
++  lexer.state.top = false;
 +  try {
 +    return lexer.blockTokens(src, []);
 +  } finally {
-+    Object.keys(lexer.tokens.links).forEach((tag) => {
-+      if (!links.has(tag)) {
-+        delete lexer.tokens.links[tag];
-+      }
-+    });
-+    links.forEach((link, tag) => {
-+      lexer.tokens.links[tag] = link;
-+    });
-+    lexer.inlineQueue.splice(0, lexer.inlineQueue.length, ...queue);
-+    queue.forEach((entry, index) => {
-+      entry.src = queuedSources[index];
-+    });
-+    Object.assign(lexer.state, state);
-+    lexer.tokenizer.lexer = tokenizerLexer;
++    lexer.state.top = top;
 +  }
 +}
  var MarkdownManager = class {
    /**
     * Create a MarkdownManager.
-    * @param options.marked Optional marked instance to use (injected).
-@@ -409,9 +445,10 @@ var MarkdownManager = class {
-   }
+@@ -410,7 +427,8 @@ var MarkdownManager = class {
    createTokenizerHelpers(lexer) {
      return {
        inlineTokens: (src) => lexer.inlineTokens(src),
 -      blockTokens: (src) => lexer.blockTokens(src)
 +      blockTokens: (src) => lexer.blockTokens(src),
-+      probeBlockTokens: (src) => probeBlockTokens(lexer, src)
++      listItemBlockTokens: (src) => listItemBlockTokens(lexer, src)
      };
    }
    tokenizeInline(src) {
-     var _a;
+@@ -633,33 +651,21 @@ var MarkdownManager = class {
+       const { isTask, checked, indentLevel } = isTaskItem(item);
+       let processedItem = item;
+       if (isTask) {
+-        const raw = item.raw || item.text || "";
+-        const lines = raw.split("\n");
+-        const firstLineMatch = lines[0].match(/^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/);
+-        const mainContent = firstLineMatch ? firstLineMatch[2] : "";
+-        let nestedTokens = [];
+-        if (lines.length > 1) {
+-          const nestedRaw = lines.slice(1).join("\n");
+-          if (nestedRaw.trim()) {
+-            const nestedLines = lines.slice(1);
+-            const nonEmptyLines = nestedLines.filter((line) => line.trim());
+-            if (nonEmptyLines.length > 0) {
+-              const minIndent = Math.min(
+-                ...nonEmptyLines.map((line) => line.length - line.trimStart().length)
+-              );
+-              const trimmedLines = nestedLines.map((line) => {
+-                if (!line.trim()) {
+-                  return "";
+-                }
+-                return line.slice(minIndent);
+-              });
+-              const nestedContent = trimmedLines.join("\n").trim();
+-              if (nestedContent) {
+-                nestedTokens = this.markedInstance.lexer(`${nestedContent}
+-`);
+-              }
+-            }
+-          }
++        const blocks = (item.tokens || []).filter((block) => block.type !== "checkbox");
++        const first = blocks.findIndex((block) => block.type !== "space");
++        const opensWithText = first !== -1 && (blocks[first].type === "text" || blocks[first].type === "paragraph");
++        const firstText = opensWithText ? blocks[first].text : "";
++        const mainContent = item.loose || !item.task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText;
++        const nestedTokens = blocks.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((block) => first !== -1 || block.type !== "space").map(
++          (block) => block.type === "text" && block.tokens ? { ...block, type: "paragraph" } : block
++        );
++        if (mainContent === "" && nestedTokens.length > 0 && nestedTokens[0].type === "heading") {
++          const headingText = (nestedTokens[0].text || "").replace(/^\[[ xX]\] +/, "");
++          nestedTokens[0] = {
++            ...nestedTokens[0],
++            text: headingText,
++            tokens: this.tokenizeInline(headingText)
++          };
+         }
+         processedItem = {
+           type: "taskItem",
+@@ -1098,7 +1104,7 @@ var MarkdownManager = class {
+    *   // → { type: 'paragraph', content: [{ type: 'text', text: '<enter foo>' }] }
+    */
+   htmlAsLiteralText(html, isBlock) {
+-    const text = html.replace(/\s+$/, "");
++    const text = html.replace(/[ \t\n]+$/, "");
+     if (!text) {
+       return null;
+     }
 diff --git a/dist/index.js b/dist/index.js
-index 2626d82021300047fc9e46ba99487097719f8ef9..e2e96c81671e96521d73ac7e59c45642275ba2be 100644
+index 2626d82021300047fc9e46ba99487097719f8ef9..509327e3833ea900fc153fd18f2f1d9cf8e675ed 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -292,8 +292,44 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
-   });
+@@ -115,7 +115,15 @@ function reopenMarksAfterNode(marksToReopen, activeMarks, getMarkOpening) {
+ }
+ function isTaskItem(item) {
+   const raw = item.raw || item.text || "";
+-  const match = raw.match(/^(\s*)[-+*]\s+\[([ xX])\]\s+/);
++  if (typeof item.task === "boolean") {
++    const indentLevel = raw.match(/^[ \t]*/)[0].length;
++    if (item.task) {
++      return { isTask: true, checked: item.checked === true, indentLevel };
++    }
++    const box = (item.text || "").match(/^\[([ xX])\] +[^ \t\n]/);
++    return box ? { isTask: true, checked: box[1].toLowerCase() === "x", indentLevel } : { isTask: false, indentLevel: 0 };
++  }
++  const match = raw.match(/^([ \t]*)[-+*][ \t]+\[([ xX])\] +[^ \t\n]/);
+   if (match) {
+     return { isTask: true, checked: match[2].toLowerCase() === "x", indentLevel: match[1].length };
+   }
+@@ -293,6 +301,15 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
  }
 
  // src/MarkdownManager.ts
-+// Lexes `src` as blocks, in top mode, on the document's own lexer (so with
-+// its tokenizer, extensions and options), and then puts back everything that
-+// call can write. In marked 17 that is: the lexer's `state` (`top`, `inLink`,
-+// `inRawBlock`), the reference definitions it registers in `tokens.links`,
-+// the inline work it queues in `inlineQueue` (and the `src` of an entry it
-+// rewrites there), and the shared tokenizer's `lexer` pointer. The probe's
-+// tokens are returned with their inline tokens never filled; a caller reads
-+// their types and raw text only. `tokens.links` has no prototype, so its
-+// snapshot is a Map: an inherited name such as `constructor` is never taken
-+// for a definition that was there before the probe.
-+function probeBlockTokens(lexer, src) {
-+  const links = new Map(Object.entries(lexer.tokens.links));
-+  const queue = [...lexer.inlineQueue];
-+  const queuedSources = queue.map((entry) => entry.src);
-+  const state = { ...lexer.state };
-+  const tokenizerLexer = lexer.tokenizer.lexer;
-+  lexer.state.top = true;
++function listItemBlockTokens(lexer, src) {
++  const top = lexer.state.top;
++  lexer.state.top = false;
 +  try {
 +    return lexer.blockTokens(src, []);
 +  } finally {
-+    Object.keys(lexer.tokens.links).forEach((tag) => {
-+      if (!links.has(tag)) {
-+        delete lexer.tokens.links[tag];
-+      }
-+    });
-+    links.forEach((link, tag) => {
-+      lexer.tokens.links[tag] = link;
-+    });
-+    lexer.inlineQueue.splice(0, lexer.inlineQueue.length, ...queue);
-+    queue.forEach((entry, index) => {
-+      entry.src = queuedSources[index];
-+    });
-+    Object.assign(lexer.state, state);
-+    lexer.tokenizer.lexer = tokenizerLexer;
++    lexer.state.top = top;
 +  }
 +}
  var MarkdownManager = class {
    /**
     * Create a MarkdownManager.
-    * @param options.marked Optional marked instance to use (injected).
-@@ -409,9 +445,10 @@ var MarkdownManager = class {
-   }
+@@ -410,7 +427,8 @@ var MarkdownManager = class {
    createTokenizerHelpers(lexer) {
      return {
        inlineTokens: (src) => lexer.inlineTokens(src),
 -      blockTokens: (src) => lexer.blockTokens(src)
 +      blockTokens: (src) => lexer.blockTokens(src),
-+      probeBlockTokens: (src) => probeBlockTokens(lexer, src)
++      listItemBlockTokens: (src) => listItemBlockTokens(lexer, src)
      };
    }
    tokenizeInline(src) {
-     var _a;
+@@ -633,33 +651,21 @@ var MarkdownManager = class {
+       const { isTask, checked, indentLevel } = isTaskItem(item);
+       let processedItem = item;
+       if (isTask) {
+-        const raw = item.raw || item.text || "";
+-        const lines = raw.split("\n");
+-        const firstLineMatch = lines[0].match(/^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/);
+-        const mainContent = firstLineMatch ? firstLineMatch[2] : "";
+-        let nestedTokens = [];
+-        if (lines.length > 1) {
+-          const nestedRaw = lines.slice(1).join("\n");
+-          if (nestedRaw.trim()) {
+-            const nestedLines = lines.slice(1);
+-            const nonEmptyLines = nestedLines.filter((line) => line.trim());
+-            if (nonEmptyLines.length > 0) {
+-              const minIndent = Math.min(
+-                ...nonEmptyLines.map((line) => line.length - line.trimStart().length)
+-              );
+-              const trimmedLines = nestedLines.map((line) => {
+-                if (!line.trim()) {
+-                  return "";
+-                }
+-                return line.slice(minIndent);
+-              });
+-              const nestedContent = trimmedLines.join("\n").trim();
+-              if (nestedContent) {
+-                nestedTokens = this.markedInstance.lexer(`${nestedContent}
+-`);
+-              }
+-            }
+-          }
++        const blocks = (item.tokens || []).filter((block) => block.type !== "checkbox");
++        const first = blocks.findIndex((block) => block.type !== "space");
++        const opensWithText = first !== -1 && (blocks[first].type === "text" || blocks[first].type === "paragraph");
++        const firstText = opensWithText ? blocks[first].text : "";
++        const mainContent = item.loose || !item.task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText;
++        const nestedTokens = blocks.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((block) => first !== -1 || block.type !== "space").map(
++          (block) => block.type === "text" && block.tokens ? { ...block, type: "paragraph" } : block
++        );
++        if (mainContent === "" && nestedTokens.length > 0 && nestedTokens[0].type === "heading") {
++          const headingText = (nestedTokens[0].text || "").replace(/^\[[ xX]\] +/, "");
++          nestedTokens[0] = {
++            ...nestedTokens[0],
++            text: headingText,
++            tokens: this.tokenizeInline(headingText)
++          };
+         }
+         processedItem = {
+           type: "taskItem",
+@@ -1098,7 +1104,7 @@ var MarkdownManager = class {
+    *   // → { type: 'paragraph', content: [{ type: 'text', text: '<enter foo>' }] }
+    */
+   htmlAsLiteralText(html, isBlock) {
+-    const text = html.replace(/\s+$/, "");
++    const text = html.replace(/[ \t\n]+$/, "");
+     if (!text) {
+       return null;
+     }
 diff --git a/src/MarkdownManager.ts b/src/MarkdownManager.ts
-index f5478f13e769850a5b3ffeeb60c41a0f6704e441..5eb0e805cf362fb96eea8b6075784eb499061589 100644
+index f5478f13e769850a5b3ffeeb60c41a0f6704e441..415fa6d8bbc25b144d7336ffa602bb1613395e47 100644
 --- a/src/MarkdownManager.ts
 +++ b/src/MarkdownManager.ts
-@@ -34,8 +34,47 @@ import {
-   wrapInMarkdownBlock,
+@@ -35,6 +35,23 @@ import {
  } from './utils.js'
  import { htmlContainsUnrecognizedTag } from './utils/htmlTagDetection.js'
 
 +/**
-+ * Lexes `src` as blocks, in top mode, on the document's own lexer (so with its
-+ * tokenizer, extensions and options), and then puts back everything that call
-+ * can write. In marked 17 that is: the lexer's `state` (`top`, `inLink`,
-+ * `inRawBlock`), the reference definitions it registers in `tokens.links`, the
-+ * inline work it queues in `inlineQueue` (and the `src` of an entry it
-+ * rewrites there), and the shared tokenizer's `lexer` pointer. The probe's
-+ * tokens are returned with their inline tokens never filled; a caller reads
-+ * their types and raw text only. `tokens.links` has no prototype, so its
-+ * snapshot is a Map: an inherited name such as `constructor` is never taken
-+ * for a definition that was there before the probe.
++ * Lexes a list item's content as marked's list tokenizer lexes an item's
++ * (`Tokenizer.list`, src/Tokenizer.ts:413-414): as blocks on the document's
++ * own lexer, outside top mode, so the item's first paragraph is a `text`
++ * token. `blockTokens` leaves the lexer in top mode, and the mode it was in is
++ * put back.
 + */
-+function probeBlockTokens(lexer: Lexer, src: string): Token[] {
-+  const links = new Map(Object.entries(lexer.tokens.links))
-+  const queue = [...lexer.inlineQueue]
-+  const queuedSources = queue.map(entry => entry.src)
-+  const state = { ...lexer.state }
-+  const tokenizerLexer = lexer.tokenizer.lexer
-+  lexer.state.top = true
++function listItemBlockTokens(lexer: Lexer, src: string): Token[] {
++  const top = lexer.state.top
++  lexer.state.top = false
 +  try {
 +    return lexer.blockTokens(src, [])
 +  } finally {
-+    Object.keys(lexer.tokens.links).forEach(tag => {
-+      if (!links.has(tag)) {
-+        delete lexer.tokens.links[tag]
-+      }
-+    })
-+    links.forEach((link, tag) => {
-+      lexer.tokens.links[tag] = link
-+    })
-+    lexer.inlineQueue.splice(0, lexer.inlineQueue.length, ...queue)
-+    queue.forEach((entry, index) => {
-+      entry.src = queuedSources[index]
-+    })
-+    Object.assign(lexer.state, state)
-+    lexer.tokenizer.lexer = tokenizerLexer
++    lexer.state.top = top
 +  }
 +}
 +
  export class MarkdownManager {
    private markedInstance: typeof marked
    private activeParseLexer: Lexer | null = null
-   private registry: Map<string, MarkdownExtensionSpec[]>
-@@ -200,8 +239,9 @@ export class MarkdownManager {
-   private createTokenizerHelpers(lexer: Lexer): MarkdownLexerConfiguration {
+@@ -201,6 +218,7 @@ export class MarkdownManager {
      return {
        inlineTokens: (src: string) => lexer.inlineTokens(src),
        blockTokens: (src: string) => lexer.blockTokens(src),
-+      probeBlockTokens: (src: string) => probeBlockTokens(lexer, src),
++      listItemBlockTokens: (src: string) => listItemBlockTokens(lexer, src),
      }
    }
 
-   private tokenizeInline(src: string): MarkdownToken[] {
+@@ -522,45 +540,31 @@ export class MarkdownManager {
+       let processedItem = item
+
+       if (isTask) {
+-        // Transform list_item into taskItem token
+-        const raw = item.raw || item.text || ''
+-
+-        // Split raw content by lines to separate main content from nested
+-        const lines = raw.split('\n')
+-
+-        // Extract main content from the first line
+-        const firstLineMatch = lines[0].match(/^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/)
+-        const mainContent = firstLineMatch ? firstLineMatch[2] : ''
+-
+-        // Parse nested content from remaining lines
+-        let nestedTokens: MarkdownToken[] = []
+-        if (lines.length > 1) {
+-          // Join all lines after the first
+-          const nestedRaw = lines.slice(1).join('\n')
+-
+-          // Only parse if there's actual content
+-          if (nestedRaw.trim()) {
+-            // Find minimum indentation of non-empty lines
+-            const nestedLines = lines.slice(1)
+-            const nonEmptyLines = nestedLines.filter(line => line.trim())
+-            if (nonEmptyLines.length > 0) {
+-              const minIndent = Math.min(
+-                ...nonEmptyLines.map(line => line.length - line.trimStart().length),
+-              )
+-              // Remove common indentation while preserving structure
+-              const trimmedLines = nestedLines.map(line => {
+-                if (!line.trim()) {
+-                  return '' // Keep empty lines
+-                }
+-                return line.slice(minIndent)
+-              })
+-              const nestedContent = trimmedLines.join('\n').trim()
+-              // Use the lexer to parse nested content
+-              if (nestedContent) {
+-                // Use the full lexer pipeline to ensure inline tokens are populated
+-                nestedTokens = this.markedInstance.lexer(`${nestedContent}\n`)
+-              }
+-            }
++        // marked's list tokenizer has read the item and lexed its content
++        // (Tokenizer.ts:413-453): the first block is the item's text, the
++        // checkbox taken off it, and the blocks after it are nested content.
++        // In a loose list marked puts the checkbox's text back in front of the
++        // first paragraph, it never takes it off a setext heading, and it
++        // leaves it on an item it did not read as a task (`isTaskItem`).
++        const blocks = (item.tokens || []).filter(block => block.type !== 'checkbox')
++        const first = blocks.findIndex(block => block.type !== 'space')
++        const opensWithText =
++          first !== -1 && (blocks[first].type === 'text' || blocks[first].type === 'paragraph')
++        const firstText: string = opensWithText ? blocks[first].text : ''
++        const mainContent =
++          item.loose || !item.task ? firstText.replace(/^\[[ xX]\] +/, '') : firstText
++        const nestedTokens: MarkdownToken[] = blocks
++          .slice(opensWithText ? first + 1 : Math.max(first, 0))
++          .filter(block => first !== -1 || block.type !== 'space')
++          .map(block =>
++            block.type === 'text' && block.tokens ? { ...block, type: 'paragraph' } : block,
++          )
++        if (mainContent === '' && nestedTokens[0]?.type === 'heading') {
++          const headingText = (nestedTokens[0].text || '').replace(/^\[[ xX]\] +/, '')
++          nestedTokens[0] = {
++            ...nestedTokens[0],
++            text: headingText,
++            tokens: this.tokenizeInline(headingText),
+           }
+         }
+
+@@ -1119,7 +1123,8 @@ export class MarkdownManager {
+   private htmlAsLiteralText(html: string, isBlock: boolean): JSONContent | JSONContent[] | null {
+     // Strip trailing whitespace/newlines that marked appends to block HTML
+     // tokens so the rendered text doesn't end with stray blank lines.
+-    const text = html.replace(/\s+$/, '')
++    // Only spaces, tabs and line breaks: a no-break space is the user's text.
++    const text = html.replace(/[ \t\n]+$/, '')
+
+     if (!text) {
+       return null
+diff --git a/src/utils.ts b/src/utils.ts
+index 7660780fb9d99cb6e3e7fd791df4b12e536382a6..90606de9370904aa9819b490dacce7b03b4ed904 100644
+--- a/src/utils.ts
++++ b/src/utils.ts
+@@ -208,8 +208,24 @@ export function isTaskItem(item: MarkdownToken): {
+ } {
+   const raw = item.raw || item.text || ''
+
++  // An item marked's list tokenizer read carries its verdict (`task`, from
++  // `listIsTask`, and `checked`): only spaces and tabs are Markdown
++  // whitespace, and text has to follow the checkbox. That text may also start
++  // with a no-break space, which marked's `\S` refuses: a task whose text
++  // starts with one is written so.
++  if (typeof item.task === 'boolean') {
++    const indentLevel = raw.match(/^[ \t]*/)![0].length
++    if (item.task) {
++      return { isTask: true, checked: item.checked === true, indentLevel }
++    }
++    const box = (item.text || '').match(/^\[([ xX])\] +[^ \t\n]/)
++    return box
++      ? { isTask: true, checked: box[1].toLowerCase() === 'x', indentLevel }
++      : { isTask: false, indentLevel: 0 }
++  }
++
+   // Match patterns like "- [ ] " or "  - [x] "
+-  const match = raw.match(/^(\s*)[-+*]\s+\[([ xX])\]\s+/)
++  const match = raw.match(/^([ \t]*)[-+*][ \t]+\[([ xX])\] +[^ \t\n]/)
+
+   if (match) {
+     return { isTask: true, checked: match[2].toLowerCase() === 'x', indentLevel: match[1].length }
