@@ -134,6 +134,7 @@ function crash(attemptId: string, exitCode: number): HostCrashTelemetry {
     uptimeMs: 800,
     stopRequested: false,
     stderrEmpty: true,
+    stderrFatal: "none",
     reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
   };
 }
@@ -444,6 +445,7 @@ describe("host crash reports across supervisor restarts", () => {
       "cli_version",
       "crash_kind",
       "host_environment",
+      "host_fatal",
       "host_output",
       "host_phase",
       "host_running_version",

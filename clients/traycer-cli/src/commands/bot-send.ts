@@ -83,7 +83,10 @@ export function buildBotSendCommand(opts: {
       if (bot.boundHostId !== endpoint.hostId) {
         throw cliError({
           code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message: `traycer: ${bot.title} runs on another of your hosts; --wait works only there. Send without --wait to queue it.`,
+          message:
+            bot.boundHostId === null
+              ? `traycer: no host runs ${bot.title}; move it to a host first.`
+              : `traycer: ${bot.title} runs on another of your hosts; --wait works only there. Send without --wait to queue it.`,
           details: null,
           exitCode: 1,
         });

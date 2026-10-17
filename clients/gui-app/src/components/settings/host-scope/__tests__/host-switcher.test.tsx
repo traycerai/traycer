@@ -45,6 +45,7 @@ function renderEmpty(props: {
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists ?? (() => undefined)}
       updateViewForHost={null}
+      environmentLabelForHost={null}
     />,
   );
 }
@@ -115,6 +116,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         listsFailed
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -148,6 +150,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         listsFailed
         onRetryLists={onRetryLists}
         updateViewForHost={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -200,6 +203,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -230,6 +234,7 @@ describe("<HostSwitcher /> trigger status", () => {
       listsFailed: false,
       onRetryLists: () => undefined,
       updateViewForHost: null,
+      environmentLabelForHost: null,
     };
     const { rerender } = render(
       <HostSwitcher hosts={[healthy]} selected={healthy} {...common} />,
@@ -285,6 +290,7 @@ describe("<HostSwitcher /> trailing action", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -321,6 +327,7 @@ describe("<HostSwitcher /> trailing action", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -366,6 +373,7 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -381,5 +389,53 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
     );
     expect(localRow.textContent).toContain("setting up");
     expect(remoteRow.textContent).not.toContain("setting up");
+  });
+});
+
+describe("<HostSwitcher /> environment labels (Tracy Bots)", () => {
+  function renderWithResolver(
+    resolver: ((hostId: string) => string | null) | null,
+  ): void {
+    render(
+      <HostSwitcher
+        hosts={[
+          hostScopeOptionFixture({ hostId: "host-a", name: "Host A" }),
+          hostScopeOptionFixture({ hostId: "host-b", name: "Host B" }),
+        ]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        environmentLabelForHost={resolver}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    );
+  }
+
+  it("shows the resolver's label on its own row and nothing on a host it returns null for", () => {
+    renderWithResolver((hostId) => (hostId === "host-a" ? "acme" : null));
+
+    expect(
+      screen.getByTestId("host-option-environment-host-a").textContent,
+    ).toBe("acme");
+    expect(screen.queryByTestId("host-option-environment-host-b")).toBeNull();
+  });
+
+  it("renders no environment label on any row without a resolver", () => {
+    renderWithResolver(null);
+
+    expect(screen.queryByTestId("host-option-environment-host-a")).toBeNull();
+    expect(screen.queryByTestId("host-option-environment-host-b")).toBeNull();
   });
 });

@@ -126,7 +126,11 @@ export type BotStreamClient = Pick<
 export interface BotSnapshot {
   readonly bot: BotRecord;
   readonly tasks: readonly BotTaskEntry[];
-  readonly openRequestCount: number;
+  /**
+   * `null` when the host does not know the count: it is not the bot's bound
+   * host, or it has not read the bot's conversations yet.
+   */
+  readonly openRequestCount: number | null;
 }
 
 /**

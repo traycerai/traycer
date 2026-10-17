@@ -87,6 +87,13 @@ const tileNavigation = vi.hoisted(() => ({
   openTile: vi.fn<(intent: TileOpenIntent) => null>(() => null),
 }));
 
+// The card renders its live form only inside an Epic session (the gate asks
+// the session handle); outside one it is inert, which the bot transcript
+// suite covers. This suite is the in-session half.
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
+  useOpenEpicHandle: () => ({ epicId: "epic-1" }),
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useArtifactById: (id: string | null) =>
     id !== null && Object.hasOwn(projection.artifacts, id)

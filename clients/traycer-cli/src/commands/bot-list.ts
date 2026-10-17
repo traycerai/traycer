@@ -14,10 +14,16 @@ import type { CommandFn } from "../runner/runner";
 export interface BotListRow {
   readonly botId: string;
   readonly title: string;
-  readonly boundHostId: string;
+  /** Null when no host runs the bot until a member claims it onto one. */
+  readonly boundHostId: string | null;
   readonly boundToThisHost: boolean;
-  /** Null when this bot could not be read; the other bots still are. */
+  /**
+   * Null when this bot could not be read, or when the host it was read from
+   * does not know the count (`readFailed` tells the two apart).
+   */
   readonly openRequestCount: number | null;
+  /** This bot could not be read; the other bots still are. */
+  readonly readFailed: boolean;
 }
 
 /** One environment and its bots, in the order the host lists environments. */
@@ -61,13 +67,14 @@ export function buildBotListCommand(): CommandFn {
             ) {
               throw error;
             }
-            return toRow(bot, null, endpoint.hostId);
+            return toRow(bot, null, true, endpoint.hostId);
           }
           // Deleted between the list and the read: not a bot any more.
           if (snapshot === null) return null;
           return toRow(
             snapshot.bot,
             snapshot.openRequestCount,
+            false,
             endpoint.hostId,
           );
         }),
@@ -86,7 +93,7 @@ export function buildBotListCommand(): CommandFn {
       human: renderBotList(groups),
       // Every bot is printed either way; a bot that could not be read makes
       // the run a failure a script can see.
-      exitCode: listed.some((row) => row.openRequestCount === null) ? 1 : 0,
+      exitCode: listed.some((row) => row.readFailed) ? 1 : 0,
     };
   };
 }
@@ -94,6 +101,7 @@ export function buildBotListCommand(): CommandFn {
 function toRow(
   bot: BotRecord,
   openRequestCount: number | null,
+  readFailed: boolean,
   thisHostId: string,
 ): BotListRow {
   return {
@@ -102,6 +110,7 @@ function toRow(
     boundHostId: bot.boundHostId,
     boundToThisHost: bot.boundHostId === thisHostId,
     openRequestCount,
+    readFailed,
   };
 }
 
@@ -150,11 +159,17 @@ export function renderBotList(groups: readonly BotListGroup[]): string {
           ? ["  no bots"]
           : group.bots.map(
               (bot) =>
-                `  ${bot.title}  ${bot.botId}  host ${bot.boundHostId}${bot.boundToThisHost ? " (this host)" : ""}  ${bot.openRequestCount === null ? `could not read ${bot.title}` : formatOpenRequests(bot.openRequestCount)}`,
+                `  ${bot.title}  ${bot.botId}  host ${bot.boundHostId ?? "none"}${bot.boundToThisHost ? " (this host)" : ""}  ${describeOpenRequests(bot)}`,
             );
       return [group.label, ...lines].join("\n");
     })
     .join("\n\n");
+}
+
+function describeOpenRequests(bot: BotListRow): string {
+  if (bot.readFailed) return `could not read ${bot.title}`;
+  if (bot.openRequestCount === null) return "open requests unknown";
+  return formatOpenRequests(bot.openRequestCount);
 }
 
 function formatOpenRequests(count: number): string {

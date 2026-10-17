@@ -1,9 +1,13 @@
-import { memo, type ReactElement } from "react";
+import { memo, useContext, type ReactElement } from "react";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import { ChatConversationRequestContext } from "./chat-conversation-request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
@@ -280,6 +284,48 @@ function ChatMessageImpl(props: ChatMessageProps) {
         message={message}
         actions={actions?.type === "user" ? actions : null}
       />
+      {message.conversationRequest === undefined ? null : (
+        <ConversationRequestLine request={message.conversationRequest} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The state of the request a bot-conversation user row opened: `Open` until
+ * the bot's trunk resolves it, `Resolved` after, with a jump to the reply
+ * that resolved it when the surface can scroll to one. Read off the USER
+ * row, which is where the host keeps it; the reply row is a plain assistant
+ * message and says nothing about the request.
+ */
+function ConversationRequestLine(props: {
+  readonly request: ConversationRequest;
+}): ReactElement {
+  const { request } = props;
+  const scrollToMessage = useContext(ChatConversationRequestContext);
+  const open = request.resolvedAt === null;
+  const replyId = request.resolvedByMessageId;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 text-ui-xs text-muted-foreground"
+      data-testid="conversation-request"
+      data-request-id={request.requestId}
+      data-request-state={open ? "open" : "resolved"}
+    >
+      <Badge variant={open ? "warning" : "success"} size="xs">
+        {open ? "Open" : "Resolved"}
+      </Badge>
+      {open || replyId === null || scrollToMessage === null ? null : (
+        <Button
+          type="button"
+          variant="link"
+          size="xs"
+          onClick={() => scrollToMessage(replyId)}
+          data-testid="conversation-request-reply-link"
+        >
+          See reply
+        </Button>
+      )}
     </div>
   );
 }

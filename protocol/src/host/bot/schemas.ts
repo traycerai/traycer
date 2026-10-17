@@ -39,7 +39,12 @@ export const botRecordSchema = lazySchema(() =>
     botId: botIdSchema,
     /** The environment (team or personal) the bot lives in. */
     environmentId: z.string().min(1),
-    ownerUserId: z.string().min(1),
+    /**
+     * The member who created the bot. Attribution only, never authority;
+     * null once that account was erased, since a team bot outlives its
+     * creator.
+     */
+    createdByUserId: z.string().min(1).nullable(),
     title: botTitleSchema,
     harness: botHarnessSchema,
     model: botModelSchema,
@@ -47,8 +52,11 @@ export const botRecordSchema = lazySchema(() =>
     profile: botProfileSchema,
     /** The trunk chat: a chat row under `task_id = botId`. */
     trunkChatId: z.string().min(1),
-    /** Which host runs the trunk now; `bot.claimAuthority` rebinds it. */
-    boundHostId: hostIdSchema,
+    /**
+     * Which host runs the trunk now; `bot.claimAuthority` rebinds it. Null
+     * when no host runs it until a member claims it onto one.
+     */
+    boundHostId: hostIdSchema.nullable(),
     /** Authority generation: 0 at create, +1 per claim. */
     hostEpoch: z.number().int().nonnegative(),
     createdAt: z.number().int(),
@@ -201,6 +209,255 @@ export const botTaskCadenceSchema = lazySchema(() =>
 );
 export type BotTaskCadence = z.infer<typeof botTaskCadenceSchema>;
 
+// ---- the last delivered check-in --------------------------------------- //
+
+/*
+ * What the trunk was shown about one task in the last check-in it consumed:
+ * the composer's per-task section as structured rows, every row carrying the
+ * ids the bot drills with (agent ids, shell ids, ticket artifact ids and
+ * paths, forward ids). The host bounds it with the same caps it renders the
+ * prompt under: a list holds at most the rows the prompt listed, the rest
+ * are counted in its `omitted`, and text that is not the host's own (a title,
+ * a shell description, a path) is cut to the prompt's per-field length with a
+ * trailing ` [...]`.
+ */
+
+/** An agent created in the task during the window. */
+const botCheckinAgentRowSchema = lazySchema(() =>
+  z.object({
+    agentId: z.string().min(1),
+    /** The agent's title; empty when it has none. */
+    title: z.string(),
+    /** `null` when the host could not read the run settings (a terminal agent has none). */
+    harnessId: z.string().nullable(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable(),
+    startedAt: z.number().int(),
+    /** The agent that created it, from the communication graph; `null` when unknown. */
+    creatorAgentId: z.string().nullable(),
+    isTerminal: z.boolean(),
+  }),
+);
+
+/**
+ * A host-authored event of the task during the window: a shell that exited
+ * or was interrupted by a host restart, or a delivery to one of the task's
+ * agents (a shell's output, a port forward's interruption notice).
+ * `agentTitle` is the title of `agentId`, `null` when the host has none.
+ */
+const botCheckinBackgroundRowSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("shell-exited"),
+      at: z.number().int(),
+      shellId: z.string().min(1),
+      description: z.string(),
+      agentId: z.string().min(1),
+      agentTitle: z.string().nullable(),
+      /** `null` when the shell ended by signal or its code is unknown. */
+      exitCode: z.number().int().nullable(),
+      signal: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("shell-interrupted"),
+      at: z.number().int(),
+      shellId: z.string().min(1),
+      description: z.string(),
+      agentId: z.string().min(1),
+      agentTitle: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("shell-output-delivered"),
+      at: z.number().int(),
+      shellId: z.string().min(1),
+      /** `null` when the shell's record is gone. */
+      description: z.string().nullable(),
+      agentId: z.string().min(1),
+      agentTitle: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("forward-notice-delivered"),
+      at: z.number().int(),
+      forwardId: z.string().min(1),
+      agentId: z.string().min(1),
+      agentTitle: z.string().nullable(),
+    }),
+  ]),
+);
+
+/** A `kind: ticket` artifact of the task whose status moved to in progress or complete. */
+const botCheckinTicketRowSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string().min(1),
+    title: z.string(),
+    /** `epics/<taskId>/artifacts/<folder chain>/index.md`. */
+    path: z.string(),
+    /** `opened`: status moved to 1 (in progress); `closed`: to 2 (complete). */
+    move: z.enum(["opened", "closed"]),
+  }),
+);
+
+/**
+ * A cost figure over the host's usage facts. `knownCostUsd` covers only the
+ * priced turns: `completeness` and `unpricedTurnCount` say how much of
+ * `turnCount` it covers, so a partial figure is never read as a whole one.
+ */
+const botCheckinCostTotalsSchema = lazySchema(() =>
+  z.object({
+    knownCostUsd: z.number().nonnegative(),
+    turnCount: z.number().int().nonnegative(),
+    completeness: z.object({
+      measured: z.number().int().nonnegative(),
+      partial: z.number().int().nonnegative(),
+      absent: z.number().int().nonnegative(),
+    }),
+    unpricedTurnCount: z.number().int().nonnegative(),
+  }),
+);
+
+const botCheckinCostShareSchema = lazySchema(() =>
+  z.object({
+    knownCostUsd: z.number().nonnegative(),
+    turnCount: z.number().int().nonnegative(),
+  }),
+);
+
+/** The window's cost, with its split by agent and by model (each capped, the rest counted). */
+const botCheckinWindowCostSchema = lazySchema(() =>
+  botCheckinCostTotalsSchema.extend({
+    perAgent: z.array(
+      botCheckinCostShareSchema.extend({
+        agentId: z.string().min(1),
+        agentTitle: z.string().nullable(),
+      }),
+    ),
+    perAgentOmitted: z.number().int().nonnegative(),
+    perModel: z.array(
+      botCheckinCostShareSchema.extend({
+        harnessId: z.string(),
+        model: z.string(),
+      }),
+    ),
+    perModelOmitted: z.number().int().nonnegative(),
+  }),
+);
+
+/** What a check-in's still-running part lists, whatever its state. */
+const botCheckinStillRunningListsSchema = lazySchema(() =>
+  z.object({
+    agents: z.array(
+      z.object({
+        agentId: z.string().min(1),
+        agentTitle: z.string().nullable(),
+        /** `turn`: mid-turn; `background`: background work running. */
+        tier: z.enum(["turn", "background"]),
+      }),
+    ),
+    agentsOmitted: z.number().int().nonnegative(),
+    shells: z.array(
+      z.object({
+        shellId: z.string().min(1),
+        description: z.string(),
+        agentId: z.string().min(1),
+        agentTitle: z.string().nullable(),
+      }),
+    ),
+    shellsOmitted: z.number().int().nonnegative(),
+  }),
+);
+
+/**
+ * The five parts of a task's check-in, always all present, in the order the
+ * prompt renders them. A part the host could not read says so
+ * (`available: false`) rather than reading as empty.
+ */
+export const botCheckinSectionsSchema = lazySchema(() =>
+  z.object({
+    agentsStarted: z.object({
+      /** `false` when the task's agent registry could not be read. */
+      available: z.boolean(),
+      rows: z.array(botCheckinAgentRowSchema),
+      /** Rows past the cap; they are in the next check-in's window. */
+      omitted: z.number().int().nonnegative(),
+      /** Too many communication-graph events to read every creator. */
+      creatorsBeyondCap: z.boolean(),
+    }),
+    backgroundEvents: z.object({
+      /** Oldest first. */
+      rows: z.array(botCheckinBackgroundRowSchema),
+      /** Rows past the cap; they are in the next check-in's window. */
+      omitted: z.number().int().nonnegative(),
+    }),
+    tickets: z.object({
+      rows: z.array(botCheckinTicketRowSchema),
+      /** Moves past the cap; the next check-in reports them. */
+      omitted: z.number().int().nonnegative(),
+      /**
+       * `true` on a task's first check-in, which lists tickets UPDATED in the
+       * window with an in-progress or complete status; later ones list
+       * status changes since the previous check-in.
+       */
+      firstCheckin: z.boolean(),
+    }),
+    cost: z.object({
+      /** `false` when the host had no usage facts to read; both figures are then null. */
+      available: z.boolean(),
+      window: botCheckinWindowCostSchema.nullable(),
+      /** The task's whole-life total. */
+      total: botCheckinCostTotalsSchema.nullable(),
+    }),
+    /**
+     * `state` says whether the task counted as running, and `reason` why, in
+     * the only pairings the host writes:
+     * - `idle`, reason `null`: nothing running;
+     * - `running`: an agent is working or a shell is running (`working`, the
+     *   agents and shells listed here), an agent still owes release work (a
+     *   shell it stopped has not finished; `owed-release-work`), or the task
+     *   resumed between the reads, so nothing is listed
+     *   (`resumed-while-composing`);
+     * - `unknown`, reason `check-failed`: the idle check could not be
+     *   completed, so the task counted as running.
+     */
+    stillRunning: z.discriminatedUnion("state", [
+      botCheckinStillRunningListsSchema.extend({
+        state: z.literal("idle"),
+        reason: z.null(),
+      }),
+      botCheckinStillRunningListsSchema.extend({
+        state: z.literal("running"),
+        reason: z.enum([
+          "working",
+          "owed-release-work",
+          "resumed-while-composing",
+        ]),
+      }),
+      botCheckinStillRunningListsSchema.extend({
+        state: z.literal("unknown"),
+        reason: z.literal("check-failed"),
+      }),
+    ]),
+  }),
+);
+export type BotCheckinSections = z.infer<typeof botCheckinSectionsSchema>;
+
+/**
+ * The last check-in the trunk consumed for a task, as the bound host kept it:
+ * replaced by the next one, dropped when the task's entry leaves the list or
+ * the task is deleted. The window is `(since, through]`; `through` is earlier
+ * than the instant the check-in was composed when the rendering budget left
+ * rows for the next one.
+ */
+export const botTaskLastCheckinSchema = lazySchema(() =>
+  z.object({
+    /** When the trunk's queue settled the check-in as delivered. */
+    deliveredAt: z.number().int(),
+    since: z.number().int(),
+    through: z.number().int(),
+    sections: botCheckinSectionsSchema,
+  }),
+);
+export type BotTaskLastCheckin = z.infer<typeof botTaskLastCheckinSchema>;
+
 /**
  * One task the bot created, as the stream lists it (the bot row's task list,
  * written by the task tools and the check-in composer). An ended entry stays
@@ -216,6 +473,12 @@ export const botTaskEntrySchema = lazySchema(() =>
       cadence: botTaskCadenceSchema,
       /** When the last check-in for this task was consumed; null if never. */
       lastCheckinAt: z.number().int().nullable(),
+      /**
+       * What that check-in said, kept by the bot's bound host: `null` from
+       * any other host (the cloud row does not carry it), before the first
+       * check-in, and for a deleted task.
+       */
+      lastCheckin: botTaskLastCheckinSchema.nullable(),
       /** When the next periodic check-in is due; null for any other cadence. */
       nextAt: z.number().int().nullable(),
       state: z.enum(["tracking", "ended"]),
@@ -258,10 +521,11 @@ export type BotSubscribeOpenRequest = z.infer<
 
 /**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
- * re-sent whole whenever the bot row, its task list or its open-request
- * count changes on this host; `deleted` ends it (the bot was archived, or
- * the caller lost it). The conversation rows stay authoritative for open
- * requests; `openRequestCount` is a hint, as the GUI spec says.
+ * re-sent whole whenever the bot row, its task list, a task's last check-in
+ * or its open-request count changes on this host; `deleted` ends it (the bot
+ * was archived, or the caller lost it). The conversation rows stay
+ * authoritative for open requests; `openRequestCount` is a hint, as the GUI
+ * spec says.
  */
 export const botSubscribeServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -269,10 +533,17 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
       kind: z.literal("snapshot"),
       bot: botRecordSchema,
       tasks: z.array(botTaskEntrySchema),
-      openRequestCount: z.number().int().nonnegative(),
+      /**
+       * Requests across the bot's conversations not yet resolved, as the
+       * bound host knows them. `null` when the serving host is not the bound
+       * one, and on the bound host until it has read the conversations once
+       * (a later snapshot carries the count).
+       */
+      openRequestCount: z.number().int().nonnegative().nullable(),
       /** `boundHostId` and `hostEpoch` restated for cheap comparison. */
       boundHost: z.object({
-        hostId: hostIdSchema,
+        /** Null when no host runs the bot. */
+        hostId: hostIdSchema.nullable(),
         epoch: z.number().int().nonnegative(),
         /** Whether the serving host is the bound one. */
         isThisHost: z.boolean(),
