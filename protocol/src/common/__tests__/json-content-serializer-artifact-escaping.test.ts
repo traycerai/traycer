@@ -568,8 +568,9 @@ describe("artifact hard breaks in a quote inside a task item", () => {
         ],
       },
     ]);
-    // Exact string to be confirmed by the first run: the quote's lines carry
-    // `> ` and sit under the task marker.
+    // The quote is the item's first child, so its first line follows the task
+    // marker, and every quote line carries `> ` with its hard break written as
+    // one.
     expect(artifact(content)).toBe("- [ ] > First\\\n  > Second");
   });
 });

@@ -486,7 +486,9 @@ export function startHostHealthMonitor(
       if (snapshot === null) {
         // No host is published, so an offer to force-restart one describes
         // nothing - whatever took the snapshot away (a stop, an uninstall, a
-        // respawn in progress).
+        // respawn in progress). The next published host starts a new outage,
+        // even one that comes back under the same pid.
+        outageHostPid = null;
         clearUnresponsive();
         // A deferred recovery intentionally demotes the snapshot before the
         // foreign lock holder finishes. Keep ownership across that null

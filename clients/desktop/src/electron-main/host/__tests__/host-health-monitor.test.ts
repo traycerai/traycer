@@ -902,6 +902,57 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("starts a new outage when the same host comes back after the snapshot went away: a new offer, timed from the republish (traycer#1563 D3a)", async () => {
+    // The snapshot going null ends the outage the offer was about. The same
+    // pid published again is a new outage: the old clock and the once-per-stall
+    // latch must not carry over.
+    let current: DesktopPublishedHostSnapshot | null = SNAPSHOT;
+    const onHostUnresponsive = vi.fn();
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({ getSnapshot: () => current }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn: vi.fn(async () => {}),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({
+        readLiveness: ALIVE,
+        now: undefined,
+      }),
+      readLiveness: ALIVE,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+      onHostUnresponsive,
+    });
+
+    await ticks(700);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(1);
+    expect(onHostUnresponsive).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pid: SNAPSHOT.pid }),
+    );
+
+    current = null;
+    await ticks(3);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(2);
+    expect(onHostUnresponsive).toHaveBeenLastCalledWith(null);
+
+    // The same pid is published again: no offer at once, the outage restarts.
+    current = SNAPSHOT;
+    await ticks(300);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(2);
+
+    // Past the new outage's own window: one new offer for the same pid.
+    await ticks(320);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(3);
+    const offered = onHostUnresponsive.mock.calls[2]?.[0];
+    expect(offered).toEqual({
+      pid: SNAPSHOT.pid,
+      unreachableForMs: expect.any(Number),
+    });
+    expect(offered?.unreachableForMs).toBeGreaterThanOrEqual(600_000);
+    expect(offered?.unreachableForMs).toBeLessThan(615_000);
+    monitor.dispose();
+  });
+
   it("throttles the liveness re-read while holding a live host busy", async () => {
     // The hold is now unbounded, so the cost guard that used to live behind the
     // demote has to live inside the hold itself: each liveness probe spawns a
