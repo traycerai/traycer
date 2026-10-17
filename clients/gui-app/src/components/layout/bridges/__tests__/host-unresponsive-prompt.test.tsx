@@ -74,14 +74,19 @@ describe("<HostUnresponsivePrompt />", () => {
     });
 
     expect(await screen.findByText(TITLE)).not.toBeNull();
-    expect(screen.getByText(/12 min/)).not.toBeNull();
+    // The duration is the figure at the moment of the report, so it is a
+    // lower bound on how long the host has been silent.
+    expect(screen.getByText(/not answered for at least 12 min/)).not.toBeNull();
     expect(
       screen.getByRole("button", { name: "Force restart" }),
     ).not.toBeNull();
   });
 
-  it("requests one host respawn when the person chooses Force restart", async () => {
+  it("force-restarts the offered host by its pid, not by a bare respawn request", async () => {
     const host = createRunnerHost();
+    const forceRestart = vi
+      .spyOn(host, "forceRestartUnresponsiveHost")
+      .mockResolvedValue({ kind: "restarted" });
     renderPrompt(host);
     act(() => {
       host.setLocalHostUnresponsive({
@@ -91,12 +96,41 @@ describe("<HostUnresponsivePrompt />", () => {
     });
 
     const button = await screen.findByRole("button", { name: "Force restart" });
-    expect(host.requestHostRespawnCalls).toBe(0);
+    expect(forceRestart).not.toHaveBeenCalled();
     fireEvent.click(button);
 
     await waitFor(() => {
-      expect(host.requestHostRespawnCalls).toBe(1);
+      expect(forceRestart).toHaveBeenCalledTimes(1);
     });
+    expect(forceRestart).toHaveBeenCalledWith(4242);
+    expect(host.requestHostRespawnCalls).toBe(0);
+  });
+
+  it("tells the person the host was not restarted when the shell declines", async () => {
+    const host = createRunnerHost();
+    vi.spyOn(host, "forceRestartUnresponsiveHost").mockResolvedValue({
+      kind: "declined",
+      message:
+        "The host started responding again or was replaced, so it was not restarted.",
+    });
+    renderPrompt(host);
+    act(() => {
+      host.setLocalHostUnresponsive({
+        pid: 4242,
+        unreachableForMs: 12 * 60_000,
+      });
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+
+    expect(await screen.findByText("Host not restarted")).not.toBeNull();
+    expect(
+      await screen.findByText(
+        "The host started responding again or was replaced, so it was not restarted.",
+      ),
+    ).not.toBeNull();
   });
 
   it("withdraws the offer when the shell reports the host answering again", async () => {
@@ -122,8 +156,11 @@ describe("<HostUnresponsivePrompt />", () => {
     });
   });
 
-  it("keeps an open offer through a re-render, and Force restart still requests one respawn", async () => {
+  it("keeps an open offer through a re-render, and Force restart still force-restarts the offered pid once", async () => {
     const host = createRunnerHost();
+    const forceRestart = vi
+      .spyOn(host, "forceRestartUnresponsiveHost")
+      .mockResolvedValue({ kind: "restarted" });
     const view = renderPrompt(host);
     act(() => {
       host.setLocalHostUnresponsive({
@@ -142,7 +179,8 @@ describe("<HostUnresponsivePrompt />", () => {
       await screen.findByRole("button", { name: "Force restart" }),
     );
     await waitFor(() => {
-      expect(host.requestHostRespawnCalls).toBe(1);
+      expect(forceRestart).toHaveBeenCalledTimes(1);
     });
+    expect(forceRestart).toHaveBeenCalledWith(4242);
   });
 });

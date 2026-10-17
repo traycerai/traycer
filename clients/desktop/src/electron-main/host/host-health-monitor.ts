@@ -227,6 +227,14 @@ export interface HostHealthMonitorDeps {
 
 export interface HostHealthMonitor {
   dispose(): void;
+  /**
+   * Whether the host with this pid is, right now, the one this monitor holds
+   * unresponsive: still offered a force restart, still published, and its
+   * endpoint still unanswered on a fresh probe. The offer's action asks this
+   * before restarting, so a host that answered or was replaced since the
+   * offer is not restarted from under its work.
+   */
+  stillUnresponsive(pid: number): Promise<boolean>;
 }
 
 interface PublishedHealthMetadata {
@@ -710,6 +718,26 @@ export function startHostHealthMonitor(
     dispose: () => {
       disposed = true;
       clearInterval(timer);
+    },
+    stillUnresponsive: async (pid) => {
+      if (isDisposed() || !unresponsiveReported) return false;
+      const snapshot = deps.host.getSnapshot();
+      if (snapshot === null || snapshot.pid !== pid) return false;
+      const published = await readPublishedMetadata(deps.host.pidMetadataFile);
+      if (
+        isDisposed() ||
+        published === null ||
+        !isCurrentPublishedSnapshot(snapshot, published.snapshot)
+      ) {
+        return false;
+      }
+      const answered = await isPublishedHostEndpointReachable(
+        published.snapshot.websocketUrl,
+        published.snapshot.pid,
+        published.startIdentity,
+        probe,
+      );
+      return !answered && !isDisposed();
     },
   };
 }

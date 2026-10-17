@@ -264,6 +264,7 @@ export interface DesktopPreloadBridge {
   ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
@@ -1148,6 +1149,10 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   requestHostRespawn(): Promise<HostRestartRequestResult> {
     return this.bridge.requestHostRespawn();
+  }
+
+  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult> {
+    return this.bridge.forceRestartUnresponsiveHost(pid);
   }
 
   dispose(): void {

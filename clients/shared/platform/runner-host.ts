@@ -502,7 +502,8 @@ export interface IRunnerHost {
    * synchronously on subscribe with the current state (or `null`), then again
    * whenever it changes; `null` means the host answered again, died, or was
    * never unresponsive. The shell kills nothing on this verdict - restarting
-   * is the person's call (`requestHostRespawn`). Shells without a local host
+   * is the person's call (`forceRestartUnresponsiveHost`). Shells without a
+   * local host
    * emit a single `null` on subscribe and never transition.
    */
   onLocalHostUnresponsive(
@@ -567,6 +568,16 @@ export interface IRunnerHost {
    * on genuine failures.
    */
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+
+  /**
+   * Force-restarts the local host the person was offered a restart for
+   * (`onLocalHostUnresponsive`), and only that host: the shell first checks
+   * that the host with this `pid` is still the one published and still does
+   * not answer. A host that answered again, or was replaced, since the offer
+   * was made is left running, and the call resolves `declined`. Shells
+   * without a local host resolve `declined`.
+   */
+  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult>;
 
   /**
    * OS-service control surface used by the Service Health settings pane.

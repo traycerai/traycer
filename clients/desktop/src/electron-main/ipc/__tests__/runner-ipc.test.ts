@@ -615,6 +615,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.lastKnownLocalHostId,
           RunnerHostInvoke.localHostSnapshot,
           RunnerHostInvoke.localHostUnresponsive,
+          RunnerHostInvoke.forceRestartUnresponsiveHost,
           RunnerHostInvoke.traySetIndicator,
           RunnerHostInvoke.traySetEpics,
           RunnerHostInvoke.setUnsyncedEditsSnapshot,
@@ -4134,6 +4135,113 @@ describe("RunnerIpcBridge", () => {
       "Traycer needs approval in System Settings.",
     );
     bridge.dispose();
+  });
+
+  // The force restart offered for an unresponsive host is about ONE host: the
+  // handler restarts only while the same host is still the reported one and a
+  // fresh look agrees it does not answer (traycer#1563 D3a).
+  describe("forceRestartUnresponsiveHost", () => {
+    const UNRESPONSIVE = { pid: 4242, unreachableForMs: 12 * 60_000 };
+    const STILL_RUNNING_MESSAGE =
+      "The host started responding again or was replaced, so it was not restarted.";
+
+    async function installBridge(
+      confirm: ((pid: number) => Promise<boolean>) | null,
+      verdict: { pid: number; unreachableForMs: number } | null,
+    ) {
+      const mod = await import("../register-runner-ipc");
+      const unresponsive = await import("../../host/local-host-unresponsive");
+      unresponsive.setLocalHostStillUnresponsiveCheck(confirm);
+      unresponsive.publishLocalHostUnresponsive(verdict);
+      const hostController = new FakeHostController();
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+      const handler = ipcMainState.handlers.get(
+        RunnerHostInvoke.forceRestartUnresponsiveHost,
+      );
+      if (handler === undefined) {
+        throw new Error("forceRestartUnresponsiveHost handler missing");
+      }
+      return {
+        hostController,
+        invoke: (pid: unknown) => handler(bareEvent(), pid),
+        dispose: () => {
+          bridge.dispose();
+          unresponsive.setLocalHostStillUnresponsiveCheck(null);
+          unresponsive.publishLocalHostUnresponsive(null);
+        },
+      };
+    }
+
+    it("force-respawns in the background when the same host is still unresponsive", async () => {
+      const confirm = vi.fn(async () => true);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      await expect(harness.invoke(4242)).resolves.toEqual({
+        kind: "restarted",
+      });
+      expect(confirm).toHaveBeenCalledWith(4242);
+      expect(harness.hostController.respawnCallArgs).toEqual([
+        { intent: { kind: "background" }, mode: "force" },
+      ]);
+      harness.dispose();
+    });
+
+    it("declines without a respawn when the fresh check says the host answers again", async () => {
+      const harness = await installBridge(async () => false, UNRESPONSIVE);
+
+      await expect(harness.invoke(4242)).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.respawnCalls).toBe(0);
+      harness.dispose();
+    });
+
+    it.each([
+      ["a string", "4242"],
+      ["a negative number", -1],
+      ["zero", 0],
+      ["a fraction", 1.5],
+      ["undefined", undefined],
+      ["null", null],
+    ])(
+      "declines %s as the pid, without asking the monitor or respawning",
+      async (_name, rawPid) => {
+        const confirm = vi.fn(async () => true);
+        const harness = await installBridge(confirm, UNRESPONSIVE);
+
+        await expect(harness.invoke(rawPid)).resolves.toEqual({
+          kind: "declined",
+          message: STILL_RUNNING_MESSAGE,
+        });
+        expect(confirm).not.toHaveBeenCalled();
+        expect(harness.hostController.respawnCalls).toBe(0);
+        harness.dispose();
+      },
+    );
+
+    it("declines a pid other than the reported host's, without asking the monitor", async () => {
+      const confirm = vi.fn(async () => true);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      await expect(harness.invoke(9999)).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(harness.hostController.respawnCalls).toBe(0);
+      harness.dispose();
+    });
   });
 
   // The renderer's host directory seeds "which id is THIS machine" from this

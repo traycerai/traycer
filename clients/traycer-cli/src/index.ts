@@ -2013,12 +2013,25 @@ function registerHostCommands(program: Command): void {
         ].join("\n"),
       )
       .addOption(lifecycleOriginOption()),
-    (opts) =>
-      buildHostUninstallCommand({
+    // Refused inside the returned command so it flows through the runner's
+    // CliError handling. Without --all nothing is stopped, so a --force there
+    // would read as a forced stop while the bytes go from under a running host.
+    (opts) => (ctx) => {
+      if (opts.force === true && opts.all !== true) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host uninstall: --force only applies with --all, which stops the host. Run 'traycer host uninstall --all --force' to stop it and remove the install.",
+          details: { all: false, force: true },
+          exitCode: 1,
+        });
+      }
+      return buildHostUninstallCommand({
         all: opts.all === true,
         force: opts.force === true,
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
-      }),
+      })(ctx);
+    },
   );
 
   withRunner(

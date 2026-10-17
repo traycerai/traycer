@@ -97,6 +97,11 @@ const CORPUS: ReadonlyArray<{
     md: "first\n\n  \\# h",
     hasHardBreak: false,
   },
+  {
+    name: "escaped text that looks like an image followed by a link",
+    md: "!\\[x](a) \\[y](b)",
+    hasHardBreak: false,
+  },
   // A list item's later paragraph is traycerai/traycer#2574's fixed point.
   { name: "backslash hard break", md: "First\\\nSecond", hasHardBreak: true },
   {

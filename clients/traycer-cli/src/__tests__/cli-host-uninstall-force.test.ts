@@ -1,0 +1,135 @@
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import { Command } from "commander";
+import { buildProgramWithAgentRoles } from "../index";
+import * as cgroupRelocationModule from "../host/cgroup-relocation";
+import * as hostUninstallModule from "../commands/host-uninstall";
+
+// `host uninstall --force` is the forced STOP, and only `--all` stops a host.
+// Without `--all` it would read as a forced stop while the bytes go from under
+// a running host, so it is refused as an invalid argument before the command
+// is built (traycer#1563). The setup mirrors `cli-with-runner-relocation`:
+// the relocation hook and the process terminator are stubbed so the real
+// runner runs from inside a Traycer host's cgroup too.
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+}));
+
+const exitMocks = vi.hoisted(() => ({
+  calls: [] as number[],
+}));
+
+vi.mock("../runner/exit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runner/exit")>();
+  return {
+    ...actual,
+    finishAndExit: async (exitCode: number) => {
+      exitMocks.calls.push(exitCode);
+    },
+  };
+});
+
+function findSubcommand(parent: Command, name: string): Command | null {
+  for (const child of parent.commands) {
+    if (child.name() === name) return child;
+  }
+  return null;
+}
+
+async function parseHostUninstall(argv: readonly string[]): Promise<void> {
+  // `buildProgramWithAgentRoles` rather than `buildProgram`: the latter reads
+  // the developer's real `~/.traycer/cli/config.json`.
+  const program = buildProgramWithAgentRoles(false);
+  program.exitOverride();
+  let cursor: Command = program;
+  for (const segment of ["host", "uninstall"]) {
+    const next = findSubcommand(cursor, segment);
+    if (next === null) throw new Error(`command '${segment}' not found`);
+    next.exitOverride();
+    cursor = next;
+  }
+  await program.parseAsync(["host", "uninstall", ...argv, "--json"], {
+    from: "user",
+  });
+}
+
+function stubCommand(): () => Promise<{
+  readonly data: { readonly ok: true };
+  readonly human: string;
+  readonly exitCode: number;
+}> {
+  return async () => ({ data: { ok: true }, human: "ok", exitCode: 0 });
+}
+
+describe("host uninstall --force", () => {
+  let stdout: string;
+  let stdoutSpy: MockInstance;
+  let buildSpy: MockInstance;
+
+  beforeEach(() => {
+    exitMocks.calls.length = 0;
+    stdout = "";
+    vi.spyOn(
+      cgroupRelocationModule,
+      "relocateOutOfHostCgroupIfNeeded",
+    ).mockResolvedValue({ kind: "not-needed" });
+    vi.spyOn(
+      cgroupRelocationModule,
+      "acknowledgeRelocationEntry",
+    ).mockImplementation(() => undefined);
+    buildSpy = vi
+      .spyOn(hostUninstallModule, "buildHostUninstallCommand")
+      .mockImplementation(stubCommand);
+    stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk);
+        return true;
+      });
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
+    stdoutSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it("refuses --force without --all as an invalid argument and runs no uninstall", async () => {
+    await parseHostUninstall(["--force"]);
+
+    expect(stdout).toContain("E_INVALID_ARGUMENT");
+    expect(stdout).toContain("--force only applies with --all");
+    expect(exitMocks.calls).toEqual([1]);
+    // The refusal is raised before the uninstall command is built at all.
+    expect(buildSpy).not.toHaveBeenCalled();
+  });
+
+  it("still dispatches --all --force to the uninstall command", async () => {
+    await parseHostUninstall(["--all", "--force"]);
+
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(buildSpy.mock.calls[0]?.[0]).toMatchObject({
+      all: true,
+      force: true,
+    });
+    expect(exitMocks.calls).toEqual([0]);
+    expect(stdout).not.toContain("E_INVALID_ARGUMENT");
+  });
+});

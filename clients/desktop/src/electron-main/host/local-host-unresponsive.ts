@@ -23,6 +23,31 @@ export function readLocalHostUnresponsive(): LocalHostUnresponsive | null {
   return current;
 }
 
+/**
+ * Asks the health monitor, now, whether the host with this pid is still the
+ * published one and still not answering. Registered by whoever started the
+ * monitor; `null` while none runs.
+ */
+let stillUnresponsiveCheck: ((pid: number) => Promise<boolean>) | null = null;
+
+export function setLocalHostStillUnresponsiveCheck(
+  check: ((pid: number) => Promise<boolean>) | null,
+): void {
+  stillUnresponsiveCheck = check;
+}
+
+/**
+ * Whether a force restart offered for `pid` may still go ahead: the verdict
+ * still names that host, and a fresh look agrees it does not answer. False
+ * when no monitor runs, since nothing then vouches for the verdict.
+ */
+export async function confirmLocalHostStillUnresponsive(
+  pid: number,
+): Promise<boolean> {
+  if (current?.pid !== pid || stillUnresponsiveCheck === null) return false;
+  return stillUnresponsiveCheck(pid);
+}
+
 export function onLocalHostUnresponsiveChange(
   listener: (state: LocalHostUnresponsive | null) => void,
 ): () => void {

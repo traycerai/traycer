@@ -453,6 +453,14 @@ describe("artifact unresolved image source text", () => {
     expect(artifact(content)).toBe("- ![a](b.png)");
   });
 
+  it("writes an image whose alt text holds balanced brackets verbatim", () => {
+    verbatim("![a [b] c](x)");
+  });
+
+  it("escapes one text node that is an image followed by a link, which is not one image", () => {
+    expect(artifactOf("![x](a) [y](b)")).toBe("!\\[x](a) \\[y](b)");
+  });
+
   it("still escapes the text when more text follows in the same node", () => {
     expect(artifactOf("![a](b.png) tail")).toBe("!\\[a](b.png) tail");
   });

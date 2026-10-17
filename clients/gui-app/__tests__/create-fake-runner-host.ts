@@ -151,6 +151,8 @@ export function createFakeRunnerHost(
     onSystemResumed: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
+    forceRestartUnresponsiveHost: () =>
+      Promise.resolve({ kind: "restarted" as const }),
     getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,
     traycerCli: null,

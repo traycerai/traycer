@@ -2,15 +2,18 @@ import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import type { LocalHostUnresponsive } from "@traycer-clients/shared/platform/runner-host";
 import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
-import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
+import { useRunnerForceRestartUnresponsiveHost } from "@/hooks/runner/use-runner-force-restart-unresponsive-host-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const HOST_UNRESPONSIVE_TOAST_ID = "host-unresponsive";
 const HOST_UNRESPONSIVE_TITLE = "Host is not responding. Force restart?";
 
+// The shell reports the outage once, when it passes the busy window, and the
+// offer stays up for as long as the outage lasts - so the duration it carries
+// is a lower bound, not a running count.
 function hostUnresponsiveDescription(state: LocalHostUnresponsive): string {
   const minutes = Math.floor(state.unreachableForMs / 60_000);
-  return `It has not answered for ${minutes} min. A force restart ends any work in progress on it.`;
+  return `It has not answered for at least ${minutes} min. A force restart ends any work in progress on it.`;
 }
 
 /**
@@ -20,17 +23,20 @@ function hostUnresponsiveDescription(state: LocalHostUnresponsive): string {
  *
  * The shell kills nothing on that verdict - a host that is merely busy must
  * not be restarted from under its work - so this offer is the only way the
- * verdict turns into a restart, and it goes through the same forced respawn as
- * every other "Restart Host" surface.
+ * verdict turns into a restart. It carries the pid the offer was made for, so
+ * a host that answered again or was replaced since is not restarted.
  */
 export function HostUnresponsivePrompt() {
   const runnerHost = useRunnerHost();
   // `mutate` is stable across renders, so the subscription below is not torn
   // down (dismissing an open offer) each time the mutation's state changes.
-  const { mutate: respawnHost } = useRunnerRequestHostRespawn();
-  const forceRestart = useCallback(() => {
-    respawnHost();
-  }, [respawnHost]);
+  const { mutate: restartHost } = useRunnerForceRestartUnresponsiveHost();
+  const forceRestart = useCallback(
+    (pid: number) => {
+      restartHost(pid);
+    },
+    [restartHost],
+  );
 
   useEffect(() => {
     const subscription = runnerHost.onLocalHostUnresponsive((state) => {
@@ -45,7 +51,9 @@ export function HostUnresponsivePrompt() {
           title={HOST_UNRESPONSIVE_TITLE}
           description={hostUnresponsiveDescription(state)}
           actionLabel="Force restart"
-          onAction={forceRestart}
+          onAction={() => {
+            forceRestart(state.pid);
+          }}
           onLater={null}
         />,
         {

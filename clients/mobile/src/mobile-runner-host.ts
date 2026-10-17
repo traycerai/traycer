@@ -723,6 +723,11 @@ export class MobileRunnerHost implements IRunnerHost {
       message: "Restart this host from the machine running it.",
     };
   }
+
+  async forceRestartUnresponsiveHost(): Promise<HostRestartRequestResult> {
+    // The phone runs no local host, so it never offers this restart.
+    return this.requestHostRespawn();
+  }
 }
 
 // The client kind this app signs in as. It labels the minted session on the

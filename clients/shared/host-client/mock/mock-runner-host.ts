@@ -816,6 +816,18 @@ export class MockRunnerHost implements IRunnerHost {
     });
   }
 
+  async forceRestartUnresponsiveHost(
+    pid: number,
+  ): Promise<HostRestartRequestResult> {
+    if (this.localHostUnresponsive?.pid !== pid) {
+      return {
+        kind: "declined",
+        message: "The host is no longer unresponsive.",
+      };
+    }
+    return this.requestHostRespawn();
+  }
+
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
     return { kind: "restarted" };

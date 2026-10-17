@@ -953,6 +953,127 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  describe("stillUnresponsive (traycer#1563 D3a)", () => {
+    // The offer's action asks this before restarting: only the host the offer
+    // was made for, still published, and still not answering a fresh probe.
+    const hostB: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: SNAPSHOT.pid + 1,
+    };
+
+    function startWithOffer(state: {
+      snapshot: DesktopPublishedHostSnapshot;
+      published: DesktopPublishedHostSnapshot;
+      reachable: boolean;
+    }): HostHealthMonitor {
+      return startHostHealthMonitor({
+        host: fakeHost({ getSnapshot: () => state.snapshot }),
+        intervalMs: INTERVAL_MS,
+        probe: vi.fn(async () => state.reachable),
+        readMetadata: vi.fn(async () => state.published),
+        respawn: vi.fn(async () => {}),
+        automaticRecoverySuspended: () => false,
+        governor: createHostRecoveryGovernor({
+          readLiveness: ALIVE,
+          now: undefined,
+        }),
+        readLiveness: ALIVE,
+        readLiveSupervisorPid: () => Promise.resolve(null),
+        onHostUnresponsive: () => undefined,
+      });
+    }
+
+    it("is false before any offer has been made", async () => {
+      const state = {
+        snapshot: SNAPSHOT,
+        published: SNAPSHOT,
+        reachable: false,
+      };
+      const monitor = startWithOffer(state);
+      await ticks(10);
+
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
+        false,
+      );
+      monitor.dispose();
+    });
+
+    it("is true for the offered pid while a fresh probe gets no answer", async () => {
+      const state = {
+        snapshot: SNAPSHOT,
+        published: SNAPSHOT,
+        reachable: false,
+      };
+      const monitor = startWithOffer(state);
+      await ticks(700);
+
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(true);
+      monitor.dispose();
+    });
+
+    it("is false as soon as a fresh probe answers, before the next tick", async () => {
+      const state = {
+        snapshot: SNAPSHOT,
+        published: SNAPSHOT,
+        reachable: false,
+      };
+      const monitor = startWithOffer(state);
+      await ticks(700);
+
+      state.reachable = true;
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
+        false,
+      );
+      monitor.dispose();
+    });
+
+    it("is false for a pid other than the offered one", async () => {
+      const state = {
+        snapshot: SNAPSHOT,
+        published: SNAPSHOT,
+        reachable: false,
+      };
+      const monitor = startWithOffer(state);
+      await ticks(700);
+
+      await expect(monitor.stillUnresponsive(hostB.pid)).resolves.toBe(false);
+      monitor.dispose();
+    });
+
+    it("is false when the lifecycle snapshot now names another host", async () => {
+      const state = {
+        snapshot: SNAPSHOT,
+        published: SNAPSHOT,
+        reachable: false,
+      };
+      const monitor = startWithOffer(state);
+      await ticks(700);
+
+      state.snapshot = hostB;
+      state.published = hostB;
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
+        false,
+      );
+      monitor.dispose();
+    });
+
+    it("is false when pid.json no longer names the offered host", async () => {
+      const state = {
+        snapshot: SNAPSHOT,
+        published: SNAPSHOT,
+        reachable: false,
+      };
+      const monitor = startWithOffer(state);
+      await ticks(700);
+
+      state.published = hostB;
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
+        false,
+      );
+      monitor.dispose();
+    });
+  });
+
   it("throttles the liveness re-read while holding a live host busy", async () => {
     // The hold is now unbounded, so the cost guard that used to live behind the
     // demote has to live inside the hold itself: each liveness probe spawns a

@@ -172,6 +172,7 @@ export interface HostBridgeSurface {
   ): Disposable;
   onSystemResumed(handler: () => void): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
 }
 
@@ -203,6 +204,12 @@ export function buildHostBridge(): HostBridgeSurface {
     requestHostRespawn: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.requestHostRespawn,
+      ) as Promise<HostRestartRequestResult>,
+
+    forceRestartUnresponsiveHost: (pid) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.forceRestartUnresponsiveHost,
+        pid,
       ) as Promise<HostRestartRequestResult>,
 
     getLastKnownLocalHostId: () =>

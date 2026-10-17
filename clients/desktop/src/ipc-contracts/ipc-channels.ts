@@ -113,6 +113,10 @@ export const RunnerHostInvoke = {
   // same reason as `localHostSnapshot`: a window that subscribes after the
   // push asks instead of hoping it was told.
   localHostUnresponsive: "runnerHost:host:localHostUnresponsive",
+  // The force restart offered for an unresponsive host, carrying that host's
+  // pid: main restarts only while the same host is published and still not
+  // answering, never whatever host has replaced it since.
+  forceRestartUnresponsiveHost: "runnerHost:host:forceRestartUnresponsive",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).

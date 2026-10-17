@@ -1032,9 +1032,12 @@ function serializeHeading(node: JsonContent, ctx: SerializerContext): string {
 // whitespace or parentheses (`rawArtifactImageText` in the host's
 // epic-file-sync). Written back verbatim, the next read parses it as an image
 // again, which is how a later write retries it. Escaped, it would stay text
-// for good, so exactly that shape - and nothing looser - is left raw.
+// for good, so exactly that shape - and nothing looser - is left raw. The alt
+// text may hold balanced brackets, as an image's alt can, but no other `]`:
+// one would end the alt early, so `![x](a) [y](b)` is an image followed by a
+// link, not one image, and stays escaped text.
 const UNRESOLVED_IMAGE_SOURCE_TEXT =
-  /^!\[[^\n]*\]\((?:<[^<>\n]*>|[^\s()<>]*)\)$/;
+  /^!\[(?:[^[\]\n]|\[[^[\]\n]*\])*\]\((?:<[^<>\n]*>|[^\s()<>]*)\)$/;
 
 function unresolvedImageSourceText(node: JsonContent): string | null {
   const only = node.content?.length === 1 ? node.content[0] : undefined;

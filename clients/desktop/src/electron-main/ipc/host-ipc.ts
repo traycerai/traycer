@@ -14,6 +14,7 @@ import type { GuardedMutationOutcome } from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
 import { appliedLocalHostCapability } from "../host/local-host-capability";
 import {
+  confirmLocalHostStillUnresponsive,
   onLocalHostUnresponsiveChange,
   readLocalHostUnresponsive,
 } from "../host/local-host-unresponsive";
@@ -87,6 +88,33 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
       // channel restarts THE local host as a role, whatever currently fills
       // it, so there is no expected host id for a lane-head guard to hold
       // the job to. Only the Doctor repairs name a specific host.
+      const outcome = await bridge.options.hostController.respawn(
+        { kind: "background" },
+        "force",
+      );
+      return restartRequestResultFromOutcome(outcome);
+    },
+  );
+
+  // The force restart offered for an unresponsive host. Unlike the channel
+  // above, it is about ONE host: the offer was made for this pid, and a host
+  // that answered again or replaced it since must not be killed in its place.
+  // The check is a fresh probe, so it closes the window between the offer and
+  // the monitor's next tick; the forced respawn still restarts the role.
+  bridge.handleInvoke(
+    RunnerHostInvoke.forceRestartUnresponsiveHost,
+    async (_event, rawPid: unknown): Promise<HostRestartRequestResult> => {
+      const pid =
+        typeof rawPid === "number" && Number.isSafeInteger(rawPid) && rawPid > 0
+          ? rawPid
+          : null;
+      if (pid === null || !(await confirmLocalHostStillUnresponsive(pid))) {
+        return {
+          kind: "declined",
+          message:
+            "The host started responding again or was replaced, so it was not restarted.",
+        };
+      }
       const outcome = await bridge.options.hostController.respawn(
         { kind: "background" },
         "force",
