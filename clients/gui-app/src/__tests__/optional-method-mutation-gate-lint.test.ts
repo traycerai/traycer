@@ -153,6 +153,24 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "same cloud-feed-gated path as host.notifications.cloudFeed.markRead",
   "host.notifications.cloudFeed.clearAll":
     "same cloud-feed-gated path as host.notifications.cloudFeed.markRead",
+  // The `bot.*` namespace is registered as one block whose own comment says a
+  // host that predates bots advertises none of it, so one presence gate on
+  // `bot.list` stands for the family: the sibling-method proxy pattern of
+  // worktree.setAutoCleanupPolicy above.
+  "bot.create":
+    "sibling-method proxy gate: CreateBotForm renders only inside HomeBotsSection (home-bots-group.tsx), which gates on bot.list (home-bots-section.tsx); onError toasts an E_HOST_UNSUPPORTED like any other refusal (use-bot-mutations.ts)",
+  "bot.delete":
+    "same bot.list proxy as bot.create: a bot tab is created only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx); a tab restored from bot-tabs-store re-targets the same bound host, and the hook's onError toasts the refusal",
+  "bot.updateTitle":
+    "same bot.list proxy and onError toast as bot.delete (bot-settings-panel.tsx)",
+  "bot.updateRunSettings":
+    "same bot.list proxy and onError toast as bot.delete (bot-settings-panel.tsx)",
+  "bot.claimAuthority":
+    "same bot.list proxy and onError toast as bot.delete (bot-tab-surface.tsx)",
+  "bot.conversation.send":
+    "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-conversation-view.tsx)",
+  "environment.host.bind":
+    "sibling-method proxy gate: host-environment-section.tsx renders the picker only under useHostMethodSupport(hostId, 'environment.host.read'), registered in the same block as bind; the refusal is the picker's inline notice (use-environment-host-bind-mutation.ts)",
 };
 
 /**
