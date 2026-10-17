@@ -65,6 +65,10 @@ export interface ValidationResult {
 interface SerializerContext {
   options: SerializerOptions;
   listDepth: number;
+  // The column the current list's item markers start at. A nested list starts
+  // at its parent item's content column, which is past an ordered marker's
+  // width (`1. ` is three columns), not at `listDepth * listIndent`.
+  listColumn: number;
   orderedListIndex: number;
   inListItem: boolean;
   // True while rendering the content of a GFM table cell: inline text is
@@ -81,6 +85,7 @@ function createContext(options: SerializerOptions): SerializerContext {
       ...options,
     },
     listDepth: 0,
+    listColumn: 0,
     orderedListIndex: 0,
     inListItem: false,
     inTableCell: false,
@@ -227,6 +232,8 @@ const TABLE_CELL_CONTAINER_TYPES: ReadonlySet<string> = new Set([
   "bulletList",
   "orderedList",
   "listItem",
+  "taskList",
+  "taskItem",
   "table",
 ]);
 
@@ -828,7 +835,15 @@ function serializeSourcedQuote(node: JsonContent): string {
   return `<quoted_artifact artifact_type="${escapedArtifactType}" artifact_id="${escapedArtifactId}" epic_id="${escapedEpicId}">${escapedContent}</quoted_artifact>`;
 }
 
+/**
+ * A thematic break. Under a line of text it would be a setext heading
+ * underline, so a list item writes a blank line before it; at the top level
+ * blocks are already a blank line apart.
+ */
+const THEMATIC_BREAK = "---";
+
 function extractTextFromNode(node: JsonContent): string {
+  if (node.type === "horizontalRule") return THEMATIC_BREAK;
   let text = "";
   if (node.type === "text" && node.text) {
     text += node.text;
@@ -884,47 +899,191 @@ function serializeOrderedList(
   return items.join("\n");
 }
 
+function serializeTaskList(node: JsonContent, ctx: SerializerContext): string {
+  const items: string[] = [];
+  const childCtx: SerializerContext = {
+    ...ctx,
+    listDepth: ctx.listDepth + 1,
+  };
+
+  if (node.content) {
+    for (const child of node.content) {
+      if (child.type === "taskItem") {
+        items.push(serializeTaskItem(child, childCtx));
+      }
+    }
+  }
+
+  return items.join("\n");
+}
+
+// `- [ ] ` / `- [x] `, the GFM task list item the artifact parser reads back
+// as `taskItem` with `checked`. Continuation lines indent to the bullet's
+// content column, not past the checkbox: four more columns would re-parse
+// them as an indented code block.
+function serializeTaskItem(node: JsonContent, ctx: SerializerContext): string {
+  const checked = node.attrs?.checked === true;
+  return serializeListItemWithMarker(
+    node,
+    ctx,
+    ctx.options.bulletMarker ?? "-",
+    checked ? "[x] " : "[ ] ",
+  );
+}
+
 function serializeListItem(
   node: JsonContent,
   ctx: SerializerContext,
   ordered: boolean,
   index: number,
 ): string {
-  const baseIndent = " ".repeat(
-    (ctx.listDepth - 1) * (ctx.options.listIndent ?? 2),
-  );
   const marker = ordered ? `${index}.` : (ctx.options.bulletMarker ?? "-");
+  return serializeListItemWithMarker(node, ctx, marker, "");
+}
+
+const LIST_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  "bulletList",
+  "orderedList",
+  "taskList",
+]);
+
+const BARE_BULLET_LINE = /^[ \t]*-[ \t]*$/;
+
+/** The number an ordered list item's line starts with, if it is one. */
+const ORDERED_MARKER_LINE = /^[ \t]*(\d{1,9})[.)]/;
+
+/**
+ * Whether a nested list's first line, directly under a line of text, would
+ * read back as that text: a bare `-` is a setext heading underline, and an
+ * ordered marker other than 1 cannot interrupt a paragraph.
+ */
+function readsAsTextUnderText(firstLine: string): boolean {
+  if (BARE_BULLET_LINE.test(firstLine)) return true;
+  const ordered = ORDERED_MARKER_LINE.exec(firstLine);
+  return ordered !== null && Number(ordered[1]) !== 1;
+}
+
+const SELF_INDENTING_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  "codeBlock",
+  "mermaidBlock",
+  "uiPreviewBlock",
+]);
+
+function serializeListItemWithMarker(
+  node: JsonContent,
+  ctx: SerializerContext,
+  marker: string,
+  checkbox: string,
+): string {
+  const baseIndent = " ".repeat(ctx.listColumn);
 
   const lines: string[] = [];
   let firstLine = true;
+  let markerOnly = false;
 
   const itemCtx: SerializerContext = {
     ...ctx,
     inListItem: true,
   };
 
+  const continuationIndent = " ".repeat(baseIndent.length + marker.length + 1);
+  // A nested list starts at this item's content column, never short of it:
+  // under `1. ` a list at two columns is not inside the item, and a parser
+  // that strips the content column from it moves it on every pass.
+  const nestedListCtx: SerializerContext = {
+    ...itemCtx,
+    listColumn:
+      baseIndent.length +
+      Math.max(ctx.options.listIndent ?? 2, marker.length + 1),
+  };
+
+  const markerLine = `${baseIndent}${marker} ${checkbox}`;
+
   if (node.content) {
     for (const child of node.content) {
-      const serialized = serializeNode(child, itemCtx);
+      // A fenced block indents itself by list depth; under an item it takes
+      // the continuation indent below instead, or every round trip would
+      // push it one level deeper.
+      const fenced = SELF_INDENTING_BLOCK_TYPES.has(child.type ?? "");
+      const isList = LIST_BLOCK_TYPES.has(child.type ?? "");
+      const rule = child.type === "horizontalRule";
+      const serialized = serializeNode(
+        child,
+        fenced
+          ? { ...itemCtx, listDepth: 0 }
+          : isList
+            ? nestedListCtx
+            : itemCtx,
+      );
+      const childLines = serialized.split("\n");
 
       if (firstLine) {
-        lines.push(`${baseIndent}${marker} ${serialized}`);
-        firstLine = false;
-      } else {
-        const continuationIndent = " ".repeat(
-          baseIndent.length + marker.length + 1,
-        );
-        const childLines = serialized.split("\n");
-        for (const line of childLines) {
-          if (child.type === "bulletList" || child.type === "orderedList") {
-            lines.push(line);
-          } else {
+        if (fenced || isList || rule) {
+          // A fence or a list as the item's FIRST child starts on the line
+          // after an empty marker line: the ordered and task item parsers read
+          // an item's first line as a paragraph, so a fence opened on the
+          // marker line comes back as text, and a list there comes back as
+          // text, a code block or a list split in two. The empty marker line
+          // is also exactly what an item whose first paragraph is empty
+          // writes, so both shapes read back the same. A nested list already
+          // carries the content column. A rule behind the marker would read as
+          // one rule (`- ---`), not an item holding one.
+          lines.push(markerLine);
+          for (const line of childLines) {
+            lines.push(isList ? line : `${continuationIndent}${line}`);
+          }
+        } else {
+          // Every line after the marker line sits at the content column. A
+          // hard break is a bare "\n", and the line after it at column zero
+          // is not inside the item: the task item parser reads only the
+          // marker line as the item's paragraph, so the rest of it leaves the
+          // item.
+          const [head, ...rest] = childLines;
+          lines.push(`${markerLine}${head}`);
+          for (const line of rest) {
             lines.push(`${continuationIndent}${line}`);
           }
+          markerOnly = serialized === "";
+        }
+        firstLine = false;
+      } else {
+        // A later paragraph is its own paragraph only behind a blank line:
+        // directly under the line before, it reads back as that line's
+        // continuation, and on the next pass falls out of the item. Behind
+        // a marker line with nothing on it the blank line would end the item
+        // instead (an item opens with at most one blank line), so there the
+        // paragraph follows directly and reads back as the item's own.
+        if (child.type === "paragraph" && !markerOnly) lines.push("");
+        const underMarkerOnly = markerOnly;
+        markerOnly = false;
+        // A nested list that opens with an empty bullet item starts with a
+        // bare `-` line, and directly under a line of text that reads as a
+        // setext heading underline: the item's paragraph would come back as
+        // a heading. One that starts at a number other than 1 reads as more
+        // of that text, since only a 1 interrupts a paragraph. A blank line
+        // before the list keeps it a list. Under a marker line with nothing on
+        // it there is no text, and a blank line there would end the item.
+        // A rule under a line of text would be that text's setext underline,
+        // so it takes a blank line too.
+        if (
+          (rule || (isList && readsAsTextUnderText(childLines[0] ?? ""))) &&
+          !underMarkerOnly &&
+          lines.length > 0 &&
+          lines[lines.length - 1] !== ""
+        ) {
+          lines.push("");
+        }
+        for (const line of childLines) {
+          lines.push(isList ? line : `${continuationIndent}${line}`);
         }
       }
     }
   }
+
+  // An item with no children still holds its place: the ordered item parser
+  // gives `2. ` with nothing after it no paragraph, and dropping the line
+  // would split the list around it.
+  if (lines.length === 0) lines.push(`${baseIndent}${marker} ${checkbox}`);
 
   return lines.join("\n");
 }
@@ -1046,12 +1205,18 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeOrderedList(node, ctx);
     case "listItem":
       return serializeListItem(node, ctx, false, 0);
+    case "taskList":
+      return serializeTaskList(node, ctx);
+    case "taskItem":
+      return serializeTaskItem(node, ctx);
     case "codeBlock":
       return serializeCodeBlock(node, ctx);
     case "mermaidBlock":
       return serializeMermaidBlock(node, ctx);
     case "uiPreviewBlock":
       return serializeUIPreviewBlock(node, ctx);
+    case "horizontalRule":
+      return THEMATIC_BREAK;
     case "blockquote":
       return serializeBlockquote(node);
     case "sourcedQuote":
@@ -1082,11 +1247,25 @@ function serializeDocument(node: JsonContent, ctx: SerializerContext): string {
   return blocks.join("\n\n");
 }
 
+// An empty task or ordered item keeps the one space after its marker, on the
+// last line too. `- [ ]` alone re-parses as a bullet item whose text is
+// `[ ]`, losing the checkbox, and `1.` alone is not an ordered item to the
+// artifact parser, which needs whitespace after the number.
+const EMPTY_ITEM_MARKER_LINE = /^[ \t]*(?:[-*+] \[[ xX]\]|\d+[.)])$/;
+
 function normalizeMarkdown(md: string): string {
-  return md
+  const normalized = md
     .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+$/gm, "")
-    .trim();
+    .replace(/^(.*?)[ \t]+$/gm, (_line: string, kept: string) =>
+      EMPTY_ITEM_MARKER_LINE.test(kept) ? `${kept} ` : kept,
+    )
+    .trimStart();
+  const trimmed = normalized.trimEnd();
+  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1);
+  return normalized.charAt(trimmed.length) === " " &&
+    EMPTY_ITEM_MARKER_LINE.test(lastLine)
+    ? `${trimmed} `
+    : trimmed;
 }
 
 export function jsonContentToMarkdown(

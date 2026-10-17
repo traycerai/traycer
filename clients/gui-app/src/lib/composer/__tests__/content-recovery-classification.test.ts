@@ -75,9 +75,9 @@ const NESTED_ORDERED_DOC: JsonContent = {
 
 /**
  * `-LJlU`: a `hardBreak` in the item's FIRST paragraph. `serializeHardBreak`
- * returns a bare "\n" and `serializeListItem` pushes the first child as one
- * whole string behind the marker, so the second line sits at column zero -
- * the continuation indent belongs to LATER blocks only.
+ * returns a bare "\n", and the serializer writes every line after the first at
+ * the item's content column - at column zero the parser moves the rest of the
+ * paragraph out of the item.
  */
 const HARD_BREAK_IN_FIRST_PARAGRAPH_DOC: JsonContent = {
   type: "doc",
@@ -94,6 +94,291 @@ const HARD_BREAK_IN_FIRST_PARAGRAPH_DOC: JsonContent = {
                 { type: "text", text: "foo" },
                 { type: "hardBreak" },
                 { type: "text", text: "bar" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** The same break in an ordered item numbered ten: the column is four. */
+const HARD_BREAK_IN_TWO_DIGIT_ORDERED_ITEM_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      attrs: { start: 10 },
+      content: [
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "foo" },
+                { type: "hardBreak" },
+                { type: "text", text: "bar" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * An item whose first paragraph is empty: the marker line stays bare and the
+ * next paragraph follows directly, because a blank line after it ends the item.
+ */
+function emptyFirstParagraphDoc(
+  listType: "bulletList" | "orderedList",
+  start: number,
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: listType,
+        attrs: { start },
+        content: [
+          {
+            type: "listItem",
+            content: [
+              { type: "paragraph" },
+              { type: "paragraph", content: [{ type: "text", text: "b" }] },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+const EMPTY_FIRST_PARAGRAPH_BULLET_DOC = emptyFirstParagraphDoc(
+  "bulletList",
+  1,
+);
+const EMPTY_FIRST_PARAGRAPH_ORDERED_DOC = emptyFirstParagraphDoc(
+  "orderedList",
+  10,
+);
+
+/**
+ * A nested bullet list that opens with an empty item writes a bare `-` right
+ * under the parent's paragraph, which reads as a setext heading underline, so
+ * a blank line goes before the nested list.
+ */
+function nestedEmptyBulletDoc(
+  nestedItemContent: ReadonlyArray<JsonContent>,
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [
+              { type: "paragraph", content: [{ type: "text", text: "a" }] },
+              {
+                type: "bulletList",
+                content: [
+                  { type: "listItem", content: [...nestedItemContent] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+const NESTED_EMPTY_BULLET_DOC = nestedEmptyBulletDoc([]);
+const NESTED_EMPTY_FIRST_PARAGRAPH_DOC = nestedEmptyBulletDoc([
+  { type: "paragraph" },
+  { type: "paragraph", content: [{ type: "text", text: "b" }] },
+]);
+
+/**
+ * A list as an item's FIRST child: the item's marker line stays bare (an
+ * ordered marker keeps its trailing space) and the nested list starts on the
+ * next line at the item's content column.
+ */
+function listFirstChildDoc(
+  outer: "bulletList" | "orderedList",
+  outerStart: number,
+  inner: JsonContent,
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: outer,
+        attrs: { start: outerStart },
+        content: [{ type: "listItem", content: [inner] }],
+      },
+    ],
+  };
+}
+
+function simpleList(
+  type: "bulletList" | "orderedList",
+  texts: ReadonlyArray<string>,
+): JsonContent {
+  return {
+    type,
+    content: texts.map((text): JsonContent => ({
+      type: "listItem",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    })),
+  };
+}
+
+const LIST_FIRST_CHILD_TWO_ITEMS_DOC = listFirstChildDoc(
+  "bulletList",
+  1,
+  simpleList("bulletList", ["x", "y"]),
+);
+const LIST_FIRST_CHILD_THREE_DEEP_DOC = listFirstChildDoc("bulletList", 1, {
+  type: "bulletList",
+  content: [
+    {
+      type: "listItem",
+      content: [simpleList("bulletList", ["x"])],
+    },
+  ],
+});
+const LIST_FIRST_CHILD_UNDER_TEN_DOC = listFirstChildDoc(
+  "orderedList",
+  10,
+  simpleList("bulletList", ["x"]),
+);
+
+/** A nested ordered list that starts above 1 sits behind a blank line. */
+const NESTED_ORDERED_TEN_UNDER_TEXT_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "t" }] },
+            {
+              type: "orderedList",
+              attrs: { start: 10 },
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "a" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+function ruleParagraph(text: string): JsonContent {
+  return { type: "paragraph", content: [{ type: "text", text }] };
+}
+
+const RULE: JsonContent = { type: "horizontalRule" };
+
+function ruleItemDoc(
+  type: "bulletList" | "orderedList",
+  start: number,
+  ...children: JsonContent[]
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type,
+        ...(type === "orderedList" ? { attrs: { start } } : {}),
+        content: [{ type: "listItem", content: children }],
+      },
+    ],
+  };
+}
+
+/** A rule between two paragraphs at the top level. */
+const RULE_BETWEEN_PARAGRAPHS_DOC: JsonContent = {
+  type: "doc",
+  content: [ruleParagraph("a"), RULE, ruleParagraph("b")],
+};
+
+/** A rule after an item's text takes a blank line before it. */
+const RULE_AFTER_TEXT_IN_ITEM_DOC = ruleItemDoc(
+  "bulletList",
+  1,
+  ruleParagraph("a"),
+  RULE,
+);
+
+/** A rule behind an empty first paragraph goes on the line below the marker. */
+const RULE_AFTER_EMPTY_PARAGRAPH_IN_ITEM_DOC = ruleItemDoc(
+  "bulletList",
+  1,
+  { type: "paragraph" },
+  RULE,
+);
+
+/** A rule under text in an ordered item sits at the marker's content column. */
+const RULE_AFTER_TEXT_IN_ORDERED_ITEM_DOC = ruleItemDoc(
+  "orderedList",
+  10,
+  ruleParagraph("a"),
+  RULE,
+);
+
+/** Empty first paragraphs three levels deep: no blank line anywhere. */
+const EMPTY_FIRST_PARAGRAPH_THREE_DEEP_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph" },
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    { type: "paragraph" },
+                    {
+                      type: "bulletList",
+                      content: [
+                        {
+                          type: "listItem",
+                          content: [
+                            {
+                              type: "paragraph",
+                              content: [{ type: "text", text: "x" }],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
               ],
             },
           ],
@@ -164,10 +449,10 @@ const NESTED_LIST_AS_FIRST_CHILD_DOC: JsonContent = {
 };
 
 /**
- * `-LV74`: fence blocks carry `listDepth * 2` of their own on EVERY line, and
- * the continuation indent goes on TOP of that - so a top-level bullet's
- * continuation fence goes out at four columns, not two. Paragraphs get no
- * depth indent inside an item, so this is fence-specific.
+ * `-LV74`: a continuation fence goes out at the item's content column - two
+ * columns under a top-level bullet - on every line. The serializer renders a
+ * fence child at depth zero and indents it by the item, so a parse and
+ * re-serialize leaves it where it was.
  */
 const FENCE_AS_CONTINUATION_DOC: JsonContent = {
   type: "doc",
@@ -191,7 +476,7 @@ const FENCE_AS_CONTINUATION_DOC: JsonContent = {
   ],
 };
 
-/** Depth compounds: a fence one level in carries four of its own. */
+/** One level in, the inner item's content column is four. */
 const FENCE_IN_NESTED_ITEM_DOC: JsonContent = {
   type: "doc",
   content: [
@@ -228,7 +513,7 @@ const FENCE_IN_NESTED_ITEM_DOC: JsonContent = {
   ],
 };
 
-/** ...and as the FIRST child the marker precedes a fence already indented. */
+/** ...and as the FIRST child it starts on the line after an empty marker line. */
 const FENCE_AS_FIRST_CHILD_DOC: JsonContent = {
   type: "doc",
   content: [
@@ -242,6 +527,106 @@ const FENCE_AS_FIRST_CHILD_DOC: JsonContent = {
               type: "codeBlock",
               attrs: { language: "sh" },
               content: [{ type: "text", text: "echo hi" }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** A sub-list under an ordered marker starts at the marker's content column. */
+const ORDERED_PARENT_SUBLIST_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "step" }] },
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "detail" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** A later paragraph of an item sits behind a blank line. */
+const TWO_PARAGRAPH_ORDERED_ITEM_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "First item" }],
+            },
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Second paragraph" }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** An item with no children still writes its marker line, space included. */
+const EMPTY_ORDERED_ITEM_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "a" }] },
+          ],
+        },
+        { type: "listItem" },
+      ],
+    },
+  ],
+};
+
+/** Under `10. ` the content column is four, and a fence body follows it. */
+const FENCE_UNDER_TWO_DIGIT_MARKER_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      attrs: { start: 10 },
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "run" }] },
+            {
+              type: "codeBlock",
+              attrs: { language: "ts" },
+              content: [{ type: "text", text: "a();\nb();" }],
             },
           ],
         },
@@ -464,6 +849,30 @@ describe("content recovery classification", () => {
     });
 
     expect(report.get("unknown")).toBe(1);
+  });
+
+  it("classifies a task list as unknown, as it was before it was named", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "taskList",
+          content: [
+            {
+              type: "taskItem",
+              attrs: { checked: false },
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "t" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    // One for the list, one for the item.
+    expect(report.get("unknown")).toBe(2);
+    expect(report.size).toBe(1);
   });
 
   it("counts a loss nested inside another lossy node", () => {
@@ -1459,7 +1868,7 @@ describe("content recovery classification", () => {
     });
 
     // Numbering restarts per level, and the child sits under its parent.
-    expect(text).toBe("1. parent\n  1. child");
+    expect(text).toBe("1. parent\n   1. child");
   });
 
   // R12 `-BQcf`: an item whose nested list is followed by a continuation
@@ -1504,7 +1913,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toBe("1. step\n  - detail\n   after");
+    expect(text).toBe("1. step\n   - detail\n\n   after");
   });
 
   // The parity claim, checked against the REAL serializer rather than against
@@ -1520,11 +1929,29 @@ describe("content recovery classification", () => {
       NESTED_ORDERED_DOC,
       NESTED_MIXED_WITH_CONTINUATION_DOC,
       HARD_BREAK_IN_FIRST_PARAGRAPH_DOC,
+      HARD_BREAK_IN_TWO_DIGIT_ORDERED_ITEM_DOC,
+      EMPTY_FIRST_PARAGRAPH_BULLET_DOC,
+      EMPTY_FIRST_PARAGRAPH_ORDERED_DOC,
+      NESTED_EMPTY_BULLET_DOC,
+      NESTED_EMPTY_FIRST_PARAGRAPH_DOC,
+      LIST_FIRST_CHILD_TWO_ITEMS_DOC,
+      LIST_FIRST_CHILD_THREE_DEEP_DOC,
+      LIST_FIRST_CHILD_UNDER_TEN_DOC,
+      NESTED_ORDERED_TEN_UNDER_TEXT_DOC,
+      EMPTY_FIRST_PARAGRAPH_THREE_DEEP_DOC,
+      RULE_BETWEEN_PARAGRAPHS_DOC,
+      RULE_AFTER_TEXT_IN_ITEM_DOC,
+      RULE_AFTER_EMPTY_PARAGRAPH_IN_ITEM_DOC,
+      RULE_AFTER_TEXT_IN_ORDERED_ITEM_DOC,
       HARD_BREAK_IN_CONTINUATION_DOC,
       NESTED_LIST_AS_FIRST_CHILD_DOC,
       FENCE_AS_CONTINUATION_DOC,
       FENCE_IN_NESTED_ITEM_DOC,
       FENCE_AS_FIRST_CHILD_DOC,
+      ORDERED_PARENT_SUBLIST_DOC,
+      FENCE_UNDER_TWO_DIGIT_MARKER_DOC,
+      EMPTY_ORDERED_ITEM_DOC,
+      TWO_PARAGRAPH_ORDERED_ITEM_DOC,
       TABLE_WITH_HARD_BREAK_CELL_DOC,
       TABLE_WITH_MULTI_BLOCK_CELL_DOC,
       HEADING_LEVELS_DOC,
@@ -1534,6 +1961,72 @@ describe("content recovery classification", () => {
         jsonContentToMarkdown(doc, SERIALIZER_DEFAULTS),
       );
     }
+  });
+
+  it("indents the line after a hard break in an item's first paragraph at the item's content column", () => {
+    expect(recoveryTextFromContent(HARD_BREAK_IN_FIRST_PARAGRAPH_DOC)).toBe(
+      "- foo\n  bar",
+    );
+    expect(
+      recoveryTextFromContent(HARD_BREAK_IN_TWO_DIGIT_ORDERED_ITEM_DOC),
+    ).toBe("10. foo\n    bar");
+  });
+
+  it("puts no blank line between the marker line of an item with an empty first paragraph and the next paragraph", () => {
+    expect(recoveryTextFromContent(EMPTY_FIRST_PARAGRAPH_BULLET_DOC)).toBe(
+      "-\n  b",
+    );
+    expect(recoveryTextFromContent(EMPTY_FIRST_PARAGRAPH_ORDERED_DOC)).toBe(
+      "10. \n    b",
+    );
+  });
+
+  it("puts a blank line before a nested bullet list that opens with an empty item", () => {
+    expect(recoveryTextFromContent(NESTED_EMPTY_BULLET_DOC)).toBe("- a\n\n  -");
+    expect(recoveryTextFromContent(NESTED_EMPTY_FIRST_PARAGRAPH_DOC)).toBe(
+      "- a\n\n  -\n    b",
+    );
+  });
+
+  it("writes a horizontal rule as the serializer does and reports no loss", () => {
+    expect(recoveryTextFromContent(RULE_BETWEEN_PARAGRAPHS_DOC)).toBe(
+      "a\n\n---\n\nb",
+    );
+    expect(recoveryTextFromContent(RULE_AFTER_TEXT_IN_ITEM_DOC)).toBe(
+      "- a\n\n  ---",
+    );
+    expect(
+      recoveryTextFromContent(RULE_AFTER_EMPTY_PARAGRAPH_IN_ITEM_DOC),
+    ).toBe("-\n  ---");
+    expect(recoveryTextFromContent(RULE_AFTER_TEXT_IN_ORDERED_ITEM_DOC)).toBe(
+      "10. a\n\n    ---",
+    );
+    for (const doc of [
+      RULE_BETWEEN_PARAGRAPHS_DOC,
+      RULE_AFTER_TEXT_IN_ITEM_DOC,
+      RULE_AFTER_EMPTY_PARAGRAPH_IN_ITEM_DOC,
+      RULE_AFTER_TEXT_IN_ORDERED_ITEM_DOC,
+    ]) {
+      expect(classifyContentRecovery(doc).size).toBe(0);
+    }
+  });
+
+  it("writes three levels of empty first paragraphs without a blank line", () => {
+    expect(recoveryTextFromContent(EMPTY_FIRST_PARAGRAPH_THREE_DEEP_DOC)).toBe(
+      "-\n  -\n    - x",
+    );
+  });
+
+  it("puts a blank line before a nested ordered list that starts above 1", () => {
+    expect(recoveryTextFromContent(NESTED_ORDERED_TEN_UNDER_TEXT_DOC)).toBe(
+      "- t\n\n  10. a",
+    );
+  });
+
+  it("opens an item whose first child is a list with a bare marker line", () => {
+    expect(recoveryTextFromContent(LIST_FIRST_CHILD_TWO_ITEMS_DOC)).toBe(
+      "-\n  - x\n  - y",
+    );
   });
 
   // `-Jy8u`: the serializer sends `- item`, so a recovery copy without the

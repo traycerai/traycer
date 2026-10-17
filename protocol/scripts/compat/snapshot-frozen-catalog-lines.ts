@@ -24,6 +24,7 @@ import {
   listAgentsResponseSchemaV90,
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
+  listAgentsResponseSchemaV100,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -137,12 +138,15 @@ const FIXTURES = {
   // 9.1 froze when 9.2 opened to put `archived` on the row. It is RELEASED
   // (`host-v1.4.2` registers `agent.list@9.1`), so it names its own frozen
   // schema and must not regenerate. 9.2 froze when 10.0 opened for the first
-  // harness id after 1.5.0; its dump did not change by the freeze. 10.0 is the
+  // harness id after 1.5.0; its dump did not change by the freeze. 10.0 froze
+  // when 10.1 opened to put the run tuple on the row; it is RELEASED
+  // (`host-v1.5.1` registers it), so its dump must not regenerate. 10.1 is the
   // head line and dumps LIVE, so the next attempt to grow the row goes red on
   // that line.
   "agent.list@9.1": dump(listAgentsResponseSchemaV91),
   "agent.list@9.2": dump(listAgentsResponseSchemaV92),
-  "agent.list@10.0": dump(listAgentsResponseSchema),
+  "agent.list@10.0": dump(listAgentsResponseSchemaV100),
+  "agent.list@10.1": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this

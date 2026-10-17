@@ -95,6 +95,7 @@ import {
   agentListUpgradeV90ToV91,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
+  agentListUpgradeV100ToV101,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -107,6 +108,7 @@ import {
   agentListV91,
   agentListV92,
   agentListV100,
+  agentListV101,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -12168,12 +12170,23 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
     // Major 10 carries agents on the harness ids added since `1.5.0` shipped
     // major 9, whose three minors are frozen at the set that release
     // negotiated.
+    //
+    // @10.1 adds the run tuple (`profile` / `permissionMode`) to the row, the
+    // two halves `agent.configure` requires a caller to restate. Two plain
+    // added keys: a @10.0 peer's schema strips them, an older host is
+    // upgraded to `null` ("never asked", not "ambient" or `full_access`), and
+    // the nine bridges move their origin to 10.1 for the same LATEST-minor
+    // reason major 9's did.
     10: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentListV100,
           upgradeFromPreviousVersion: agentListUpgradeV92ToV100,
+        },
+        1: {
+          contract: agentListV101,
+          upgradeFromPreviousVersion: agentListUpgradeV100ToV101,
         },
       },
       downgradePathsFromLatest: {

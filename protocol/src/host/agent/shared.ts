@@ -1042,16 +1042,47 @@ export const agentSummarySchemaV92 = lazySchema(() =>
 );
 export type AgentSummaryV92 = z.infer<typeof agentSummarySchemaV92>;
 
+// ── `agent.list@10.1`: which profile and mode does this agent run on? ─────
+//
+// `agent.configure` takes the whole run tuple - `traycer agent configure`
+// requires `--profile`, and an omitted `--permission-mode` becomes
+// `full_access` - yet nothing a script could read named either half, so
+// restating an agent's tuple to change one part of it meant guessing the
+// rest. The host already reads both for the A2A `traycer_list_agents`
+// listing; the wire row had no key for them, so `traycer agent list --json`
+// lost them.
+//
+// Two plain added keys on a non-strict row, so a 10.0 caller's schema strips
+// them, and the nine major-10 downgrade bridges keep working unchanged - each
+// reparses through a frozen summary that drops the pair on the way out.
+
+/**
+ * The `agent.list@10.0` row, frozen when `@10.1` put the run tuple on the
+ * head. RELEASED (`host-v1.5.1` registers `@10.0`), so it never grows a key
+ * again. Hand-frozen off the released base, not `.omit()`ted off the live
+ * head, so a key added to the head cannot reach it; the harness id stays the
+ * live enum both minors share, as a minor may not grow it.
+ */
+export const agentSummarySchemaV100 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    runConfig: agentRunConfigSchema.nullable().default(null),
+    sessionState: agentSessionStateSchema.nullable(),
+    lastExit: agentSessionLastExitSchema.nullable(),
+    archived: z.boolean().nullable(),
+  }),
+);
+export type AgentSummaryV100 = z.infer<typeof agentSummarySchemaV100>;
+
 // THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
 // `head-names-canonical-alias.test.ts` enforces: writing the new row under a
 // suffix would leave `agentSummarySchema` exported, structurally plausible and
 // backing nothing, while every import site still read like the live line.
 //
 // Built off the live base rather than `agentSummarySchemaV90`, which pins the
-// harness id major 9 shipped: this row is the head (major 10) and is the only
-// one that tracks the live enum. It carries every key the frozen major-9
-// minors carry (`runConfig`, the session facet, `archived`), so a 10.0 answer
-// downgrades to 9.2 by dropping rows alone.
+// harness id major 9 shipped: this row is the head (major 10) and tracks the
+// live enum. It carries every key the frozen major-9 minors carry
+// (`runConfig`, the session facet, `archived`), so a 10.1 answer downgrades to
+// 9.2 by dropping rows and the run tuple alone.
 export const agentSummarySchema = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     runConfig: agentRunConfigSchema.nullable().default(null),
@@ -1076,6 +1107,23 @@ export const agentSummarySchema = lazySchema(() =>
      * `false` reports an archived agent on an older host as live.
      */
     archived: z.boolean().nullable(),
+    /**
+     * The provider profile the agent's next turn runs on, in the form
+     * `agent.configure` takes back: `"ambient"` for the provider's own login,
+     * else the managed profile id.
+     *
+     * `null` when this answer cannot say, never "ambient": a terminal agent
+     * (its record names no profile), a chat with no run settings, a chat on
+     * another host, a row owned by another user, or an answering host that
+     * predates the field.
+     */
+    profile: z.string().nullable(),
+    /**
+     * The permission mode the agent's next turn runs in, as `agent.configure`
+     * takes it back. `null` on exactly the rows `profile` is `null` on, and
+     * never a stand-in for `full_access`.
+     */
+    permissionMode: permissionModeSchema.nullable(),
   }),
 );
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
@@ -1300,6 +1348,19 @@ export const listAgentsResponseSchemaV92 = lazySchema(() =>
   }),
 );
 export type ListAgentsResponseV92 = z.infer<typeof listAgentsResponseSchemaV92>;
+
+/**
+ * The `agent.list@10.0` response, frozen when `@10.1` put the run tuple on the
+ * row. See {@link agentSummarySchemaV100}.
+ */
+export const listAgentsResponseSchemaV100 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV100),
+  }),
+);
+export type ListAgentsResponseV100 = z.infer<
+  typeof listAgentsResponseSchemaV100
+>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

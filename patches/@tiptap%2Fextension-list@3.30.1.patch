@@ -1,0 +1,1274 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 4c729511471466d470d01dae4ae2ab7393eb6e2d..9eccc05e525757f4648ba5c7297f569de8123961 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -487,7 +487,10 @@ var ListItem = import_core3.Node.create({
+       if (hasParagraphTokens) {
+         content = parseBlockChildren(token.tokens);
+       } else {
+-        const firstToken = token.tokens[0];
++        let leadingSpaces = 0;
++        while (leadingSpaces < token.tokens.length && token.tokens[leadingSpaces].type === "space") leadingSpaces += 1;
++        const itemTokens = token.tokens.slice(leadingSpaces);
++        const firstToken = itemTokens[0];
+         if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+           const inlineContent = helpers.parseInline(firstToken.tokens);
+           content = [
+@@ -496,8 +499,8 @@ var ListItem = import_core3.Node.create({
+               content: inlineContent
+             }
+           ];
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1);
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1);
+             const additionalContent = parseBlockChildren(remainingTokens);
+             content.push(...additionalContent);
+           }
+@@ -506,12 +509,13 @@ var ListItem = import_core3.Node.create({
+         }
+       }
+     }
+-    if (content.length === 0) {
++    if (content.length === 0 || content[0].type !== "paragraph") {
+       content = [
+         {
+           type: "paragraph",
+           content: []
+-        }
++        },
++        ...content
+       ];
+     }
+     return {
+@@ -930,6 +934,62 @@ function splitItemContent(contentLines) {
+     blockLines
+   };
+ }
++function leadingIndentColumns(line) {
++  let column = 0;
++  for (const char of line) {
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++  }
++  return column;
++}
++function stripIndentColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") {
++      column += 1;
++    } else if (char === "\t") {
++      const next = column + 4 - column % 4;
++      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
++      column = next;
++    } else {
++      break;
++    }
++    index += 1;
++  }
++  return line.slice(index);
++}
++// The run of a fence a line opens, without its indent, as marked's lexer
++// reads one: three or more backticks with no backtick after them, or three or
++// more tildes.
++function fenceRun(text) {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
++  return fence === null ? void 0 : fence[1];
++}
++// Whether a line, without its indent, closes the fence `run` opened, as
++// marked's lexer reads it: that run, then only backticks or tildes, then
++// spaces.
++function closesFence(text, run) {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
++}
++// The content column of a container whose marker, `markerWidth` wide (a
++// bullet, an ordered marker with its separator, or `>`), starts `text` at
++// `column`: past one optional space after `>`, and past the 1 to 4 columns of
++// space after a list marker, or one column when more follow or none.
++function containerContentColumn(text, column, markerWidth) {
++  const markerEnd = column + markerWidth;
++  let end = markerEnd;
++  for (const char of text.slice(markerWidth)) {
++    if (char === " ") end += 1;
++    else if (char === "\t") end += 4 - end % 4;
++    else break;
++  }
++  const spaces = end - markerEnd;
++  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1);
++}
+ function collectOrderedListItems(lines) {
+   const listItems = [];
+   let currentLineIndex = 0;
+@@ -949,10 +1009,20 @@ function collectOrderedListItems(lines) {
+     let nextLineIndex = currentLineIndex + 1;
+     const itemLines = [line];
+     let sawBlankLine = false;
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1;
++    const innerBlocks = [];
++    let openFence;
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex];
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-      if (nextMatch) {
++      const nextColumn = leadingIndentColumns(nextLine);
++      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))) {
++        openFence = void 0;
++      }
++      if (openFence === void 0 && nextLine.trim() !== "" && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
++        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
++      }
++      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
+         break;
+       }
+       if (nextLine.trim() === "") {
+@@ -961,11 +1031,24 @@ function collectOrderedListItems(lines) {
+         sawBlankLine = true;
+         nextLineIndex += 1;
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
+-        const contentIndent = indentLevel + marker.length + 1;
+         itemLines.push(nextLine);
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
+         nextLineIndex += 1;
++        const text = nextLine.trimStart();
++        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
++        if (openFence !== void 0) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
++          if (run !== void 0) {
++            openFence = { run, column: blockColumn };
++          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
++            });
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break;
+@@ -1101,6 +1184,9 @@ function parseListItems(items, helpers) {
+         }
+       });
+     }
++    if (content.length === 0 || content[0].type !== "paragraph") {
++      content.unshift({ type: "paragraph", content: [] });
++    }
+     return {
+       type: "listItem",
+       content
+diff --git a/dist/index.js b/dist/index.js
+index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..8c169c9d893f2e8ca7a3d2d4114011b79fc7ff97 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -447,7 +447,10 @@ var ListItem = Node2.create({
+       if (hasParagraphTokens) {
+         content = parseBlockChildren(token.tokens);
+       } else {
+-        const firstToken = token.tokens[0];
++        let leadingSpaces = 0;
++        while (leadingSpaces < token.tokens.length && token.tokens[leadingSpaces].type === "space") leadingSpaces += 1;
++        const itemTokens = token.tokens.slice(leadingSpaces);
++        const firstToken = itemTokens[0];
+         if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+           const inlineContent = helpers.parseInline(firstToken.tokens);
+           content = [
+@@ -456,8 +459,8 @@ var ListItem = Node2.create({
+               content: inlineContent
+             }
+           ];
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1);
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1);
+             const additionalContent = parseBlockChildren(remainingTokens);
+             content.push(...additionalContent);
+           }
+@@ -466,12 +469,13 @@ var ListItem = Node2.create({
+         }
+       }
+     }
+-    if (content.length === 0) {
++    if (content.length === 0 || content[0].type !== "paragraph") {
+       content = [
+         {
+           type: "paragraph",
+           content: []
+-        }
++        },
++        ...content
+       ];
+     }
+     return {
+@@ -890,6 +894,62 @@ function splitItemContent(contentLines) {
+     blockLines
+   };
+ }
++function leadingIndentColumns(line) {
++  let column = 0;
++  for (const char of line) {
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++  }
++  return column;
++}
++function stripIndentColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") {
++      column += 1;
++    } else if (char === "\t") {
++      const next = column + 4 - column % 4;
++      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
++      column = next;
++    } else {
++      break;
++    }
++    index += 1;
++  }
++  return line.slice(index);
++}
++// The run of a fence a line opens, without its indent, as marked's lexer
++// reads one: three or more backticks with no backtick after them, or three or
++// more tildes.
++function fenceRun(text) {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
++  return fence === null ? void 0 : fence[1];
++}
++// Whether a line, without its indent, closes the fence `run` opened, as
++// marked's lexer reads it: that run, then only backticks or tildes, then
++// spaces.
++function closesFence(text, run) {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
++}
++// The content column of a container whose marker, `markerWidth` wide (a
++// bullet, an ordered marker with its separator, or `>`), starts `text` at
++// `column`: past one optional space after `>`, and past the 1 to 4 columns of
++// space after a list marker, or one column when more follow or none.
++function containerContentColumn(text, column, markerWidth) {
++  const markerEnd = column + markerWidth;
++  let end = markerEnd;
++  for (const char of text.slice(markerWidth)) {
++    if (char === " ") end += 1;
++    else if (char === "\t") end += 4 - end % 4;
++    else break;
++  }
++  const spaces = end - markerEnd;
++  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1);
++}
+ function collectOrderedListItems(lines) {
+   const listItems = [];
+   let currentLineIndex = 0;
+@@ -909,10 +969,20 @@ function collectOrderedListItems(lines) {
+     let nextLineIndex = currentLineIndex + 1;
+     const itemLines = [line];
+     let sawBlankLine = false;
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1;
++    const innerBlocks = [];
++    let openFence;
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex];
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-      if (nextMatch) {
++      const nextColumn = leadingIndentColumns(nextLine);
++      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))) {
++        openFence = void 0;
++      }
++      if (openFence === void 0 && nextLine.trim() !== "" && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
++        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
++      }
++      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
+         break;
+       }
+       if (nextLine.trim() === "") {
+@@ -921,11 +991,24 @@ function collectOrderedListItems(lines) {
+         sawBlankLine = true;
+         nextLineIndex += 1;
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
+-        const contentIndent = indentLevel + marker.length + 1;
+         itemLines.push(nextLine);
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
+         nextLineIndex += 1;
++        const text = nextLine.trimStart();
++        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
++        if (openFence !== void 0) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
++          if (run !== void 0) {
++            openFence = { run, column: blockColumn };
++          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
++            });
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break;
+@@ -1061,6 +1144,9 @@ function parseListItems(items, helpers) {
+         }
+       });
+     }
++    if (content.length === 0 || content[0].type !== "paragraph") {
++      content.unshift({ type: "paragraph", content: [] });
++    }
+     return {
+       type: "listItem",
+       content
+diff --git a/dist/item/index.cjs b/dist/item/index.cjs
+index 2ebaf87e5350f25a1aed1458527ae01925b8e64c..374990b33e2767d80a599473eb6c70aafcdc8af4 100644
+--- a/dist/item/index.cjs
++++ b/dist/item/index.cjs
+@@ -262,7 +262,10 @@ var ListItem = import_core2.Node.create({
+       if (hasParagraphTokens) {
+         content = parseBlockChildren(token.tokens);
+       } else {
+-        const firstToken = token.tokens[0];
++        let leadingSpaces = 0;
++        while (leadingSpaces < token.tokens.length && token.tokens[leadingSpaces].type === "space") leadingSpaces += 1;
++        const itemTokens = token.tokens.slice(leadingSpaces);
++        const firstToken = itemTokens[0];
+         if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+           const inlineContent = helpers.parseInline(firstToken.tokens);
+           content = [
+@@ -271,8 +274,8 @@ var ListItem = import_core2.Node.create({
+               content: inlineContent
+             }
+           ];
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1);
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1);
+             const additionalContent = parseBlockChildren(remainingTokens);
+             content.push(...additionalContent);
+           }
+@@ -281,12 +284,13 @@ var ListItem = import_core2.Node.create({
+         }
+       }
+     }
+-    if (content.length === 0) {
++    if (content.length === 0 || content[0].type !== "paragraph") {
+       content = [
+         {
+           type: "paragraph",
+           content: []
+-        }
++        },
++        ...content
+       ];
+     }
+     return {
+diff --git a/dist/item/index.js b/dist/item/index.js
+index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..a0883fe1b0ce47466b4beaf187f2b2874ab327bb 100644
+--- a/dist/item/index.js
++++ b/dist/item/index.js
+@@ -236,7 +236,10 @@ var ListItem = Node.create({
+       if (hasParagraphTokens) {
+         content = parseBlockChildren(token.tokens);
+       } else {
+-        const firstToken = token.tokens[0];
++        let leadingSpaces = 0;
++        while (leadingSpaces < token.tokens.length && token.tokens[leadingSpaces].type === "space") leadingSpaces += 1;
++        const itemTokens = token.tokens.slice(leadingSpaces);
++        const firstToken = itemTokens[0];
+         if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+           const inlineContent = helpers.parseInline(firstToken.tokens);
+           content = [
+@@ -245,8 +248,8 @@ var ListItem = Node.create({
+               content: inlineContent
+             }
+           ];
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1);
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1);
+             const additionalContent = parseBlockChildren(remainingTokens);
+             content.push(...additionalContent);
+           }
+@@ -255,12 +258,13 @@ var ListItem = Node.create({
+         }
+       }
+     }
+-    if (content.length === 0) {
++    if (content.length === 0 || content[0].type !== "paragraph") {
+       content = [
+         {
+           type: "paragraph",
+           content: []
+-        }
++        },
++        ...content
+       ];
+     }
+     return {
+diff --git a/dist/kit/index.cjs b/dist/kit/index.cjs
+index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..56b8fb5295d8d4eaaa3fb27a9e562040fd038ef0 100644
+--- a/dist/kit/index.cjs
++++ b/dist/kit/index.cjs
+@@ -468,7 +468,10 @@ var ListItem = import_core3.Node.create({
+       if (hasParagraphTokens) {
+         content = parseBlockChildren(token.tokens);
+       } else {
+-        const firstToken = token.tokens[0];
++        let leadingSpaces = 0;
++        while (leadingSpaces < token.tokens.length && token.tokens[leadingSpaces].type === "space") leadingSpaces += 1;
++        const itemTokens = token.tokens.slice(leadingSpaces);
++        const firstToken = itemTokens[0];
+         if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+           const inlineContent = helpers.parseInline(firstToken.tokens);
+           content = [
+@@ -477,8 +480,8 @@ var ListItem = import_core3.Node.create({
+               content: inlineContent
+             }
+           ];
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1);
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1);
+             const additionalContent = parseBlockChildren(remainingTokens);
+             content.push(...additionalContent);
+           }
+@@ -487,12 +490,13 @@ var ListItem = import_core3.Node.create({
+         }
+       }
+     }
+-    if (content.length === 0) {
++    if (content.length === 0 || content[0].type !== "paragraph") {
+       content = [
+         {
+           type: "paragraph",
+           content: []
+-        }
++        },
++        ...content
+       ];
+     }
+     return {
+@@ -908,6 +912,62 @@ function splitItemContent(contentLines) {
+     blockLines
+   };
+ }
++function leadingIndentColumns(line) {
++  let column = 0;
++  for (const char of line) {
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++  }
++  return column;
++}
++function stripIndentColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") {
++      column += 1;
++    } else if (char === "\t") {
++      const next = column + 4 - column % 4;
++      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
++      column = next;
++    } else {
++      break;
++    }
++    index += 1;
++  }
++  return line.slice(index);
++}
++// The run of a fence a line opens, without its indent, as marked's lexer
++// reads one: three or more backticks with no backtick after them, or three or
++// more tildes.
++function fenceRun(text) {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
++  return fence === null ? void 0 : fence[1];
++}
++// Whether a line, without its indent, closes the fence `run` opened, as
++// marked's lexer reads it: that run, then only backticks or tildes, then
++// spaces.
++function closesFence(text, run) {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
++}
++// The content column of a container whose marker, `markerWidth` wide (a
++// bullet, an ordered marker with its separator, or `>`), starts `text` at
++// `column`: past one optional space after `>`, and past the 1 to 4 columns of
++// space after a list marker, or one column when more follow or none.
++function containerContentColumn(text, column, markerWidth) {
++  const markerEnd = column + markerWidth;
++  let end = markerEnd;
++  for (const char of text.slice(markerWidth)) {
++    if (char === " ") end += 1;
++    else if (char === "\t") end += 4 - end % 4;
++    else break;
++  }
++  const spaces = end - markerEnd;
++  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1);
++}
+ function collectOrderedListItems(lines) {
+   const listItems = [];
+   let currentLineIndex = 0;
+@@ -927,10 +987,20 @@ function collectOrderedListItems(lines) {
+     let nextLineIndex = currentLineIndex + 1;
+     const itemLines = [line];
+     let sawBlankLine = false;
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1;
++    const innerBlocks = [];
++    let openFence;
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex];
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-      if (nextMatch) {
++      const nextColumn = leadingIndentColumns(nextLine);
++      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))) {
++        openFence = void 0;
++      }
++      if (openFence === void 0 && nextLine.trim() !== "" && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
++        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
++      }
++      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
+         break;
+       }
+       if (nextLine.trim() === "") {
+@@ -939,11 +1009,24 @@ function collectOrderedListItems(lines) {
+         sawBlankLine = true;
+         nextLineIndex += 1;
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
+-        const contentIndent = indentLevel + marker.length + 1;
+         itemLines.push(nextLine);
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
+         nextLineIndex += 1;
++        const text = nextLine.trimStart();
++        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
++        if (openFence !== void 0) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
++          if (run !== void 0) {
++            openFence = { run, column: blockColumn };
++          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
++            });
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break;
+@@ -1079,6 +1162,9 @@ function parseListItems(items, helpers) {
+         }
+       });
+     }
++    if (content.length === 0 || content[0].type !== "paragraph") {
++      content.unshift({ type: "paragraph", content: [] });
++    }
+     return {
+       type: "listItem",
+       content
+diff --git a/dist/kit/index.js b/dist/kit/index.js
+index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..3af0b8617e5783a648e9b129b147d13126908ded 100644
+--- a/dist/kit/index.js
++++ b/dist/kit/index.js
+@@ -450,7 +450,10 @@ var ListItem = Node2.create({
+       if (hasParagraphTokens) {
+         content = parseBlockChildren(token.tokens);
+       } else {
+-        const firstToken = token.tokens[0];
++        let leadingSpaces = 0;
++        while (leadingSpaces < token.tokens.length && token.tokens[leadingSpaces].type === "space") leadingSpaces += 1;
++        const itemTokens = token.tokens.slice(leadingSpaces);
++        const firstToken = itemTokens[0];
+         if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+           const inlineContent = helpers.parseInline(firstToken.tokens);
+           content = [
+@@ -459,8 +462,8 @@ var ListItem = Node2.create({
+               content: inlineContent
+             }
+           ];
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1);
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1);
+             const additionalContent = parseBlockChildren(remainingTokens);
+             content.push(...additionalContent);
+           }
+@@ -469,12 +472,13 @@ var ListItem = Node2.create({
+         }
+       }
+     }
+-    if (content.length === 0) {
++    if (content.length === 0 || content[0].type !== "paragraph") {
+       content = [
+         {
+           type: "paragraph",
+           content: []
+-        }
++        },
++        ...content
+       ];
+     }
+     return {
+@@ -890,6 +894,62 @@ function splitItemContent(contentLines) {
+     blockLines
+   };
+ }
++function leadingIndentColumns(line) {
++  let column = 0;
++  for (const char of line) {
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++  }
++  return column;
++}
++function stripIndentColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") {
++      column += 1;
++    } else if (char === "\t") {
++      const next = column + 4 - column % 4;
++      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
++      column = next;
++    } else {
++      break;
++    }
++    index += 1;
++  }
++  return line.slice(index);
++}
++// The run of a fence a line opens, without its indent, as marked's lexer
++// reads one: three or more backticks with no backtick after them, or three or
++// more tildes.
++function fenceRun(text) {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
++  return fence === null ? void 0 : fence[1];
++}
++// Whether a line, without its indent, closes the fence `run` opened, as
++// marked's lexer reads it: that run, then only backticks or tildes, then
++// spaces.
++function closesFence(text, run) {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
++}
++// The content column of a container whose marker, `markerWidth` wide (a
++// bullet, an ordered marker with its separator, or `>`), starts `text` at
++// `column`: past one optional space after `>`, and past the 1 to 4 columns of
++// space after a list marker, or one column when more follow or none.
++function containerContentColumn(text, column, markerWidth) {
++  const markerEnd = column + markerWidth;
++  let end = markerEnd;
++  for (const char of text.slice(markerWidth)) {
++    if (char === " ") end += 1;
++    else if (char === "\t") end += 4 - end % 4;
++    else break;
++  }
++  const spaces = end - markerEnd;
++  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1);
++}
+ function collectOrderedListItems(lines) {
+   const listItems = [];
+   let currentLineIndex = 0;
+@@ -909,10 +969,20 @@ function collectOrderedListItems(lines) {
+     let nextLineIndex = currentLineIndex + 1;
+     const itemLines = [line];
+     let sawBlankLine = false;
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1;
++    const innerBlocks = [];
++    let openFence;
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex];
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-      if (nextMatch) {
++      const nextColumn = leadingIndentColumns(nextLine);
++      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))) {
++        openFence = void 0;
++      }
++      if (openFence === void 0 && nextLine.trim() !== "" && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
++        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
++      }
++      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
+         break;
+       }
+       if (nextLine.trim() === "") {
+@@ -921,11 +991,24 @@ function collectOrderedListItems(lines) {
+         sawBlankLine = true;
+         nextLineIndex += 1;
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
+-        const contentIndent = indentLevel + marker.length + 1;
+         itemLines.push(nextLine);
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
+         nextLineIndex += 1;
++        const text = nextLine.trimStart();
++        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
++        if (openFence !== void 0) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
++          if (run !== void 0) {
++            openFence = { run, column: blockColumn };
++          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
++            });
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break;
+@@ -1061,6 +1144,9 @@ function parseListItems(items, helpers) {
+         }
+       });
+     }
++    if (content.length === 0 || content[0].type !== "paragraph") {
++      content.unshift({ type: "paragraph", content: [] });
++    }
+     return {
+       type: "listItem",
+       content
+diff --git a/dist/ordered-list/index.cjs b/dist/ordered-list/index.cjs
+index 07719ef761bdc543488fcf637043115f5bb032fe..61b0f130689f5675214545010cda47fb5690370d 100644
+--- a/dist/ordered-list/index.cjs
++++ b/dist/ordered-list/index.cjs
+@@ -278,6 +278,62 @@ function splitItemContent(contentLines) {
+     blockLines
+   };
+ }
++function leadingIndentColumns(line) {
++  let column = 0;
++  for (const char of line) {
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++  }
++  return column;
++}
++function stripIndentColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") {
++      column += 1;
++    } else if (char === "\t") {
++      const next = column + 4 - column % 4;
++      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
++      column = next;
++    } else {
++      break;
++    }
++    index += 1;
++  }
++  return line.slice(index);
++}
++// The run of a fence a line opens, without its indent, as marked's lexer
++// reads one: three or more backticks with no backtick after them, or three or
++// more tildes.
++function fenceRun(text) {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
++  return fence === null ? void 0 : fence[1];
++}
++// Whether a line, without its indent, closes the fence `run` opened, as
++// marked's lexer reads it: that run, then only backticks or tildes, then
++// spaces.
++function closesFence(text, run) {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
++}
++// The content column of a container whose marker, `markerWidth` wide (a
++// bullet, an ordered marker with its separator, or `>`), starts `text` at
++// `column`: past one optional space after `>`, and past the 1 to 4 columns of
++// space after a list marker, or one column when more follow or none.
++function containerContentColumn(text, column, markerWidth) {
++  const markerEnd = column + markerWidth;
++  let end = markerEnd;
++  for (const char of text.slice(markerWidth)) {
++    if (char === " ") end += 1;
++    else if (char === "\t") end += 4 - end % 4;
++    else break;
++  }
++  const spaces = end - markerEnd;
++  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1);
++}
+ function collectOrderedListItems(lines) {
+   const listItems = [];
+   let currentLineIndex = 0;
+@@ -297,10 +353,20 @@ function collectOrderedListItems(lines) {
+     let nextLineIndex = currentLineIndex + 1;
+     const itemLines = [line];
+     let sawBlankLine = false;
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1;
++    const innerBlocks = [];
++    let openFence;
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex];
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-      if (nextMatch) {
++      const nextColumn = leadingIndentColumns(nextLine);
++      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))) {
++        openFence = void 0;
++      }
++      if (openFence === void 0 && nextLine.trim() !== "" && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
++        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
++      }
++      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
+         break;
+       }
+       if (nextLine.trim() === "") {
+@@ -309,11 +375,24 @@ function collectOrderedListItems(lines) {
+         sawBlankLine = true;
+         nextLineIndex += 1;
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
+-        const contentIndent = indentLevel + marker.length + 1;
+         itemLines.push(nextLine);
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
+         nextLineIndex += 1;
++        const text = nextLine.trimStart();
++        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
++        if (openFence !== void 0) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
++          if (run !== void 0) {
++            openFence = { run, column: blockColumn };
++          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
++            });
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break;
+@@ -449,6 +528,9 @@ function parseListItems(items, helpers) {
+         }
+       });
+     }
++    if (content.length === 0 || content[0].type !== "paragraph") {
++      content.unshift({ type: "paragraph", content: [] });
++    }
+     return {
+       type: "listItem",
+       content
+diff --git a/dist/ordered-list/index.js b/dist/ordered-list/index.js
+index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..a29604997669d3699103dc63ea7497231cca68d2 100644
+--- a/dist/ordered-list/index.js
++++ b/dist/ordered-list/index.js
+@@ -241,6 +241,62 @@ function splitItemContent(contentLines) {
+     blockLines
+   };
+ }
++function leadingIndentColumns(line) {
++  let column = 0;
++  for (const char of line) {
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++  }
++  return column;
++}
++function stripIndentColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") {
++      column += 1;
++    } else if (char === "\t") {
++      const next = column + 4 - column % 4;
++      if (next > columns) return " ".repeat(next - columns) + line.slice(index + 1);
++      column = next;
++    } else {
++      break;
++    }
++    index += 1;
++  }
++  return line.slice(index);
++}
++// The run of a fence a line opens, without its indent, as marked's lexer
++// reads one: three or more backticks with no backtick after them, or three or
++// more tildes.
++function fenceRun(text) {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text);
++  return fence === null ? void 0 : fence[1];
++}
++// Whether a line, without its indent, closes the fence `run` opened, as
++// marked's lexer reads it: that run, then only backticks or tildes, then
++// spaces.
++function closesFence(text, run) {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length));
++}
++// The content column of a container whose marker, `markerWidth` wide (a
++// bullet, an ordered marker with its separator, or `>`), starts `text` at
++// `column`: past one optional space after `>`, and past the 1 to 4 columns of
++// space after a list marker, or one column when more follow or none.
++function containerContentColumn(text, column, markerWidth) {
++  const markerEnd = column + markerWidth;
++  let end = markerEnd;
++  for (const char of text.slice(markerWidth)) {
++    if (char === " ") end += 1;
++    else if (char === "\t") end += 4 - end % 4;
++    else break;
++  }
++  const spaces = end - markerEnd;
++  if (text.startsWith(">")) return markerEnd + (spaces > 0 ? 1 : 0);
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1);
++}
+ function collectOrderedListItems(lines) {
+   const listItems = [];
+   let currentLineIndex = 0;
+@@ -260,10 +316,20 @@ function collectOrderedListItems(lines) {
+     let nextLineIndex = currentLineIndex + 1;
+     const itemLines = [line];
+     let sawBlankLine = false;
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1;
++    const innerBlocks = [];
++    let openFence;
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex];
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX);
+-      if (nextMatch) {
++      const nextColumn = leadingIndentColumns(nextLine);
++      if (openFence !== void 0 && nextColumn < openFence.column && (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))) {
++        openFence = void 0;
++      }
++      if (openFence === void 0 && nextLine.trim() !== "" && (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)) {
++        while (innerBlocks.length > 0 && innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn) innerBlocks.pop();
++      }
++      if (nextMatch && (nextColumn < itemContentColumn || openFence === void 0 && innerBlocks.length === 0)) {
+         break;
+       }
+       if (nextLine.trim() === "") {
+@@ -272,11 +338,24 @@ function collectOrderedListItems(lines) {
+         sawBlankLine = true;
+         nextLineIndex += 1;
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length;
+-        const contentIndent = indentLevel + marker.length + 1;
+         itemLines.push(nextLine);
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)));
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn));
+         nextLineIndex += 1;
++        const text = nextLine.trimStart();
++        const blockColumn = innerBlocks.length > 0 ? innerBlocks[innerBlocks.length - 1].contentColumn : itemContentColumn;
++        if (openFence !== void 0) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) openFence = void 0;
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : void 0;
++          if (run !== void 0) {
++            openFence = { run, column: blockColumn };
++          } else if (nextColumn >= itemContentColumn && (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(text, nextColumn, nextMatch ? nextMatch[2].length + 1 : 1)
++            });
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break;
+@@ -412,6 +491,9 @@ function parseListItems(items, helpers) {
+         }
+       });
+     }
++    if (content.length === 0 || content[0].type !== "paragraph") {
++      content.unshift({ type: "paragraph", content: [] });
++    }
+     return {
+       type: "listItem",
+       content
+diff --git a/src/item/list-item.ts b/src/item/list-item.ts
+index e1227a05262b8e337a1406e7f63685d4f4f00fea..42df91215ab6f5e651a6b9ab6e853a33a021f69f 100644
+--- a/src/item/list-item.ts
++++ b/src/item/list-item.ts
+@@ -115,8 +115,19 @@ export const ListItem = Node.create<ListItemOptions>({
+         // If we have paragraph tokens, parse them as block elements
+         content = parseBlockChildren(token.tokens)
+       } else {
++        // An empty first line arrives as leading `space` tokens; skip them so
++        // the first text token still becomes the item's paragraph.
++        let leadingSpaces = 0
++        while (
++          leadingSpaces < token.tokens.length &&
++          token.tokens[leadingSpaces].type === 'space'
++        ) {
++          leadingSpaces += 1
++        }
++        const itemTokens = token.tokens.slice(leadingSpaces)
++
+         // Check if the first token is a text token with nested inline tokens
+-        const firstToken = token.tokens[0]
++        const firstToken = itemTokens[0]
+
+         if (
+           firstToken &&
+@@ -137,8 +148,8 @@ export const ListItem = Node.create<ListItemOptions>({
+
+           // If there are additional tokens after the first text token (like nested lists),
+           // parse them as block elements and add them
+-          if (token.tokens.length > 1) {
+-            const remainingTokens = token.tokens.slice(1)
++          if (itemTokens.length > 1) {
++            const remainingTokens = itemTokens.slice(1)
+             const additionalContent = parseBlockChildren(remainingTokens)
+             content.push(...additionalContent)
+           }
+@@ -149,13 +160,16 @@ export const ListItem = Node.create<ListItemOptions>({
+       }
+     }
+
+-    // Ensure we always have at least an empty paragraph
+-    if (content.length === 0) {
++    // Ensure the item starts with a paragraph, as the schema requires: an
++    // empty first line followed by a list (`-\n  - s`) parses to the list
++    // alone, and the item would otherwise be dropped when loaded.
++    if (content.length === 0 || content[0].type !== 'paragraph') {
+       content = [
+         {
+           type: 'paragraph',
+           content: [],
+         },
++        ...content,
+       ]
+     }
+
+diff --git a/src/ordered-list/utils.ts b/src/ordered-list/utils.ts
+index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..4ec87c69df8df5d92b76b1dea0e8399c2b0d73e7 100644
+--- a/src/ordered-list/utils.ts
++++ b/src/ordered-list/utils.ts
+@@ -116,6 +116,93 @@ function splitItemContent(contentLines: string[]): {
+   }
+ }
+
++/**
++ * The column a line's text starts at, a tab advancing to the next stop of 4.
++ */
++function leadingIndentColumns(line: string): number {
++  let column = 0
++  for (const char of line) {
++    if (char === ' ') {
++      column += 1
++    } else if (char === '\t') {
++      column += 4 - (column % 4)
++    } else {
++      break
++    }
++  }
++  return column
++}
++
++/**
++ * A line without its first `columns` columns of indentation, a tab advancing to
++ * the next stop of 4. A tab that reaches past `columns` leaves the rest of its
++ * width as spaces, and a line indented less keeps its first non-blank character.
++ */
++function stripIndentColumns(line: string, columns: number): string {
++  let column = 0
++  let index = 0
++  while (index < line.length && column < columns) {
++    const char = line[index]
++    if (char === ' ') {
++      column += 1
++    } else if (char === '\t') {
++      const next = column + 4 - (column % 4)
++      if (next > columns) {
++        return ' '.repeat(next - columns) + line.slice(index + 1)
++      }
++      column = next
++    } else {
++      break
++    }
++    index += 1
++  }
++  return line.slice(index)
++}
++
++/**
++ * The run of a fence a line opens, without its indent, as marked's lexer reads
++ * one: three or more backticks with no backtick after them, or three or more
++ * tildes.
++ */
++function fenceRun(text: string): string | undefined {
++  const fence = /^(`{3,}(?=[^`]*$)|~{3,})/.exec(text)
++  return fence === null ? undefined : fence[1]
++}
++
++/**
++ * Whether a line, without its indent, closes the fence `run` opened, as
++ * marked's lexer reads it: that run, then only backticks or tildes, then
++ * spaces.
++ */
++function closesFence(text: string, run: string): boolean {
++  return text.startsWith(run) && /^[`~]* *$/.test(text.slice(run.length))
++}
++
++/**
++ * The content column of a container whose marker, `markerWidth` wide (a
++ * bullet, an ordered marker with its separator, or `>`), starts `text` at
++ * `column`: past one optional space after `>`, and past the 1 to 4 columns of
++ * space after a list marker, or one column when more follow or none.
++ */
++function containerContentColumn(text: string, column: number, markerWidth: number): number {
++  const markerEnd = column + markerWidth
++  let end = markerEnd
++  for (const char of text.slice(markerWidth)) {
++    if (char === ' ') {
++      end += 1
++    } else if (char === '\t') {
++      end += 4 - (end % 4)
++    } else {
++      break
++    }
++  }
++  const spaces = end - markerEnd
++  if (text.startsWith('>')) {
++    return markerEnd + (spaces > 0 ? 1 : 0)
++  }
++  return markerEnd + (spaces >= 1 && spaces <= 4 && text.trim().length > markerWidth ? spaces : 1)
++}
++
+ /**
+  * Collects all ordered list items from lines, parsing them into a flat array
+  * with indentation information. Stops collecting continuation content when
+@@ -148,14 +235,54 @@ export function collectOrderedListItems(lines: string[]): [OrderedListItem[], nu
+     let nextLineIndex = currentLineIndex + 1
+     const itemLines = [line]
+     let sawBlankLine = false
++    const itemContentColumn = leadingIndentColumns(indent) + marker.length + _separator.length + 1
++    // The containers (bullet items, blockquotes, nested ordered items) open
++    // inside this item's content, outermost first, with their marker and
++    // content columns; and an open fence, with the run that opened it and the
++    // content column of the container it opened in.
++    const innerBlocks: Array<{ markerColumn: number; contentColumn: number }> = []
++    let openFence: { run: string; column: number } | undefined
+
+     // Collect continuation lines for this item (but NOT nested list items)
+     while (nextLineIndex < lines.length) {
+       const nextLine = lines[nextLineIndex]
+       const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX)
++      const nextColumn = leadingIndentColumns(nextLine)
++
++      // A list marker left of the content column of a fence's container ends
++      // that container, and the fence with it.
++      if (
++        openFence !== undefined &&
++        nextColumn < openFence.column &&
++        (nextMatch || /^[-+*](?:\s|$)/.test(nextLine.trimStart()))
++      ) {
++        openFence = undefined
++      }
+
+-      // If it's another list item (nested or not), stop collecting
+-      if (nextMatch) {
++      // An indented line, or an ordered marker, closes every container whose
++      // marker sits at or right of its column, so it lands in the innermost one
++      // it is past.
++      if (
++        openFence === undefined &&
++        nextLine.trim() !== '' &&
++        (nextLine.match(INDENTED_LINE_REGEX) || nextMatch)
++      ) {
++        while (
++          innerBlocks.length > 0 &&
++          innerBlocks[innerBlocks.length - 1].markerColumn >= nextColumn
++        ) {
++          innerBlocks.pop()
++        }
++      }
++
++      // If it's another list item (nested or not), stop collecting - unless it
++      // sits inside a container opened in this item, or a fence is open: then
++      // it belongs to that block and stays with this item's content. A marker
++      // left of this item's content column always ends the item.
++      if (
++        nextMatch &&
++        (nextColumn < itemContentColumn || (openFence === undefined && innerBlocks.length === 0))
++      ) {
+         break
+       }
+
+@@ -169,12 +296,41 @@ export function collectOrderedListItems(lines: string[]): [OrderedListItem[], nu
+       } else if (nextLine.match(INDENTED_LINE_REGEX)) {
+         // Indented content - part of this item (but not a list item).
+         // Strip the indentation only up to the whitespace that is actually present,
+-        // so an under-indented line (e.g. a single leading space) keeps its first character.
+-        const leadingWhitespace = nextLine.length - nextLine.trimStart().length
+-        const contentIndent = indentLevel + marker.length + 1
++        // so an under-indented line (e.g. a single leading space) keeps its first character,
++        // and count it in columns, so a tab is not a single column.
+         itemLines.push(nextLine)
+-        itemContentLines.push(nextLine.slice(Math.min(leadingWhitespace, contentIndent)))
++        itemContentLines.push(stripIndentColumns(nextLine, itemContentColumn))
+         nextLineIndex += 1
++
++        // A fence opens or closes at most 3 columns past the content column
++        // of its container; further in, the line is code.
++        const text = nextLine.trimStart()
++        const blockColumn =
++          innerBlocks.length > 0
++            ? innerBlocks[innerBlocks.length - 1].contentColumn
++            : itemContentColumn
++        if (openFence !== undefined) {
++          if (nextColumn - openFence.column <= 3 && closesFence(text, openFence.run)) {
++            openFence = undefined
++          }
++        } else {
++          const run = nextColumn - blockColumn <= 3 ? fenceRun(text) : undefined
++          if (run !== undefined) {
++            openFence = { run, column: blockColumn }
++          } else if (
++            nextColumn >= itemContentColumn &&
++            (nextMatch || /^(?:[-+*](?:\s|$)|>)/.test(text))
++          ) {
++            innerBlocks.push({
++              markerColumn: nextColumn,
++              contentColumn: containerContentColumn(
++                text,
++                nextColumn,
++                nextMatch ? nextMatch[2].length + 1 : 1,
++              ),
++            })
++          }
++        }
+       } else {
+         if (sawBlankLine || interruptsLazyContinuation(nextLine)) {
+           break
+@@ -391,6 +547,13 @@ export function parseListItems(
+       })
+     }
+
++    // The schema requires an item to start with a paragraph; an item whose
++    // first line is empty and whose content starts with a block gets an empty
++    // one, so it is not dropped when loaded.
++    if (content.length === 0 || content[0].type !== 'paragraph') {
++      content.unshift({ type: 'paragraph', content: [] })
++    }
++
+     return {
+       type: 'listItem',
+       content,
