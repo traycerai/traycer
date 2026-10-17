@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -77,6 +78,12 @@ export function CreateBotForm(props: {
     },
   );
   const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
+  const reasoning = useStore(toolbarStore, (s) => s.reasoning);
+  // Bot creation persists no service tier; the trunk starts with Fast off.
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, ""),
+    [reasoning],
+  );
   const create = useBotCreateMutation(client);
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
@@ -181,7 +188,7 @@ export function CreateBotForm(props: {
         <div className="flex min-w-0">
           <HarnessModelPicker
             labelDisplay="responsive"
-            maxModeContext={{ kind: "none" }}
+            maxModeContext={maxModeContext}
             store={toolbarStore}
             withServiceTier={false}
             withReasoning

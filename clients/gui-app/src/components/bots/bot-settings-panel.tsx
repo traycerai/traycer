@@ -10,6 +10,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -144,6 +145,11 @@ function BotRunSettingsForm(props: {
   const selection = useStore(toolbarStore, (s) => s.selection);
   const reasoning = useStore(toolbarStore, (s) => s.reasoning);
   const effort = reasoning.length === 0 ? null : reasoning;
+  // Bot run settings persist no service tier; the next chat turn uses Fast off.
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, ""),
+    [reasoning],
+  );
   const unchanged =
     selection.harnessId === bot.harness &&
     selection.modelSlug === bot.model &&
@@ -169,7 +175,7 @@ function BotRunSettingsForm(props: {
       <div className="flex flex-wrap items-center gap-2">
         <HarnessModelPicker
           labelDisplay="responsive"
-          maxModeContext={{ kind: "none" }}
+          maxModeContext={maxModeContext}
           store={toolbarStore}
           withServiceTier={false}
           withReasoning
