@@ -1128,7 +1128,15 @@ function serializeSourcedQuote(node: JsonContent): string {
   return `<quoted_artifact artifact_type="${escapedArtifactType}" artifact_id="${escapedArtifactId}" epic_id="${escapedEpicId}">${escapedContent}</quoted_artifact>`;
 }
 
+/**
+ * A thematic break. Under a line of text it would be a setext heading
+ * underline, so a list item writes a blank line before it; at the top level
+ * blocks are already a blank line apart.
+ */
+const THEMATIC_BREAK = "---";
+
 function extractTextFromNode(node: JsonContent): string {
+  if (node.type === "horizontalRule") return THEMATIC_BREAK;
   let text = "";
   if (node.type === "text" && node.text) {
     text += node.text;
@@ -1234,6 +1242,20 @@ const LIST_BLOCK_TYPES: ReadonlySet<string> = new Set([
 
 const BARE_BULLET_LINE = /^[ \t]*-[ \t]*$/;
 
+/** The number an ordered list item's line starts with, if it is one. */
+const ORDERED_MARKER_LINE = /^[ \t]*(\d{1,9})[.)]/;
+
+/**
+ * Whether a nested list's first line, directly under a line of text, would
+ * read back as that text: a bare `-` is a setext heading underline, and an
+ * ordered marker other than 1 cannot interrupt a paragraph.
+ */
+function readsAsTextUnderText(firstLine: string): boolean {
+  if (BARE_BULLET_LINE.test(firstLine)) return true;
+  const ordered = ORDERED_MARKER_LINE.exec(firstLine);
+  return ordered !== null && Number(ordered[1]) !== 1;
+}
+
 const SELF_INDENTING_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "codeBlock",
   "mermaidBlock",
@@ -1277,6 +1299,7 @@ function serializeListItemWithMarker(
       // push it one level deeper.
       const fenced = SELF_INDENTING_BLOCK_TYPES.has(child.type ?? "");
       const isList = LIST_BLOCK_TYPES.has(child.type ?? "");
+      const rule = child.type === "horizontalRule";
       const serialized = serializeNode(
         child,
         fenced
@@ -1288,7 +1311,7 @@ function serializeListItemWithMarker(
       const childLines = serialized.split("\n");
 
       if (firstLine) {
-        if (fenced || isList) {
+        if (fenced || isList || rule) {
           // A fence or a list as the item's FIRST child starts on the line
           // after an empty marker line: the ordered and task item parsers read
           // an item's first line as a paragraph, so a fence opened on the
@@ -1296,7 +1319,8 @@ function serializeListItemWithMarker(
           // text, a code block or a list split in two. The empty marker line
           // is also exactly what an item whose first paragraph is empty
           // writes, so both shapes read back the same. A nested list already
-          // carries the content column.
+          // carries the content column. A rule behind the marker would read as
+          // one rule (`- ---`), not an item holding one.
           lines.push(markerLine);
           for (const line of childLines) {
             lines.push(isList ? line : `${continuationIndent}${line}`);
@@ -1323,14 +1347,20 @@ function serializeListItemWithMarker(
         // instead (an item opens with at most one blank line), so there the
         // paragraph follows directly and reads back as the item's own.
         if (child.type === "paragraph" && !markerOnly) lines.push("");
+        const underMarkerOnly = markerOnly;
         markerOnly = false;
         // A nested list that opens with an empty bullet item starts with a
         // bare `-` line, and directly under a line of text that reads as a
         // setext heading underline: the item's paragraph would come back as
-        // a heading. A blank line before the list keeps it a list.
+        // a heading. One that starts at a number other than 1 reads as more
+        // of that text, since only a 1 interrupts a paragraph. A blank line
+        // before the list keeps it a list. Under a marker line with nothing on
+        // it there is no text, and a blank line there would end the item.
+        // A rule under a line of text would be that text's setext underline,
+        // so it takes a blank line too.
         if (
-          isList &&
-          BARE_BULLET_LINE.test(childLines[0] ?? "") &&
+          (rule || (isList && readsAsTextUnderText(childLines[0] ?? ""))) &&
+          !underMarkerOnly &&
           lines.length > 0 &&
           lines[lines.length - 1] !== ""
         ) {
@@ -1509,6 +1539,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeMermaidBlock(node, ctx);
     case "uiPreviewBlock":
       return serializeUIPreviewBlock(node, ctx);
+    case "horizontalRule":
+      return THEMATIC_BREAK;
     case "blockquote":
       return ctx.escapeText
         ? serializeArtifactBlockquote(node, ctx)

@@ -1,8 +1,8 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d828422b45e463c229bd937d39ea416278055dde..077db61b2f9b7c45acc7fae19aa84005b6ab3254 100644
+index d828422b45e463c229bd937d39ea416278055dde..4b7f0e2d8bbb7ce87303f90a41186d089b53a70b 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -4788,6 +4788,49 @@ function createInlineMarkdownSpec(options) {
+@@ -4788,6 +4788,87 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
@@ -16,50 +16,88 @@ index d828422b45e463c229bd937d39ea416278055dde..077db61b2f9b7c45acc7fae19aa84005
 +  }
 +  return column;
 +}
-+// The tag names of CommonMark's HTML block type 6.
-+var HTML_BLOCK_TAG_NAMES = new Set(["address","article","aside","base","basefont","blockquote","body","caption","center","col","colgroup","dd","details","dialog","dir","div","dl","dt","fieldset","figcaption","figure","footer","form","frame","frameset","h1","h2","h3","h4","h5","h6","head","header","hr","html","iframe","legend","li","link","main","menu","menuitem","nav","noframes","ol","optgroup","option","p","param","search","section","summary","table","tbody","td","tfoot","th","thead","title","tr","track","ul"]);
-+// Whether a line, without its indent, starts a CommonMark HTML block: types 1
-+// to 6 always, and type 7 (one complete tag of any other name, alone on the
-+// line) only while no paragraph is open, since it cannot interrupt one. An
-+// autolink or an inline tag inside text starts none.
-+function startsHtmlBlock(text, paragraphEmpty) {
-+  if (/^<(?:script|pre|style|textarea)(?:\s|>|$)/i.test(text) || /^<!--/.test(text) || /^<\?/.test(text) || /^<![A-Za-z]/.test(text) || /^<!\[CDATA\[/.test(text)) return true;
-+  const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?:\s|\/?>|$)/.exec(text);
-+  if (tag && HTML_BLOCK_TAG_NAMES.has(tag[1].toLowerCase())) return true;
-+  return paragraphEmpty && /^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/.test(text);
++// A line without its first `columns` columns of indent, a tab advancing to
++// the next stop of 4. A tab that reaches past `columns` keeps the rest of its
++// width as spaces, and a line indented less loses all of its indent.
++function stripColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++    index += 1;
++  }
++  return " ".repeat(Math.max(column - columns, 0)) + line.slice(index);
 +}
-+// Whether a line is a GFM table delimiter row, such as `| --- | :-: |`.
-+function isTableDelimiterRow(line) {
-+  const text = line.trim();
-+  return text.includes("-") && text.includes("|") && /^[|:\- \t]+$/.test(text);
++// A paragraph continuation line as text: without the item's content column
++// of indent, keeping up to 3 more spaces, and without all of its indent when
++// 4 or more remain.
++function continuationText(line, contentColumn) {
++  const text = stripColumns(line, contentColumn);
++  return leadingColumns(text) >= 4 ? text.replace(/^[ \t]+/, "") : text;
 +}
-+// Whether this line cannot continue the item's first paragraph, measured from
-+// the item's content column as the nested parser sees it. While that
++// Whether a block token is a setext heading: text underlined by `===` or `---`.
++function isSetextHeading(token) {
++  return token.type === "heading" && !/^ {0,3}#/.test(token.raw);
++}
++// Whether marked's block lexer reads `line` as more of the paragraph whose
++// last line is `paragraphLine`. It does when its first block covers both
++// lines as a paragraph or as a setext heading. When `line` is that heading's
++// underline, the item's paragraph keeps it as text only if the underline
++// alone is a paragraph (`===`), not a thematic break (`---`). Undefined when
++// `paragraphLine` alone opens some other block.
++function continuesParagraph(paragraphLine, line, nextLine, lexer) {
++  const probe = nextLine === void 0 ? [paragraphLine, line] : [paragraphLine, line, nextLine];
++  const [first] = lexer.blockTokens(probe.join("\n"));
++  if (first === void 0 || first.type !== "paragraph" && !isSetextHeading(first)) return void 0;
++  const coveredLines = first.raw.replace(/\n+$/, "").split("\n").length;
++  if (coveredLines < 2) return false;
++  if (coveredLines === 2 && isSetextHeading(first)) {
++    const [alone] = lexer.blockTokens(line);
++    return alone !== void 0 && alone.type === "paragraph";
++  }
++  return true;
++}
++// Whether this line cannot continue the item's first paragraph. While that
 +// paragraph is empty, a line at or left of the item's own indent has no
-+// paragraph to continue, so the item ends, and a line 4+ columns past the
-+// content column is indented code. Once the paragraph has text, indented code
-+// cannot interrupt it. Closer in, the line opens a block when, without its
-+// indent, it starts a list item, a fence, a blockquote, an ATX heading, a
-+// thematic break, an HTML block or a table (a header line whose next line
-+// is a delimiter row).
-+function opensItemBlock(line, nextLine, indentLevel, contentColumn, paragraphEmpty) {
-+  const column = leadingColumns(line);
-+  if (paragraphEmpty && column <= indentLevel) return true;
-+  if (column - contentColumn >= 4) return paragraphEmpty;
-+  const text = line.replace(/^[ \t]+/, "");
-+  return /^([-+*]|\d{1,9}[.)])(\s|$)/.test(text) || /^(```|~~~)/.test(text) || /^>/.test(text) || /^#{1,6}(\s|$)/.test(text) || /^([*_-])(\s*\1){2,}\s*$/.test(text) || startsHtmlBlock(text, paragraphEmpty) || nextLine !== void 0 && text.includes("|") && isTableDelimiterRow(nextLine);
++// paragraph to continue, so the item ends. Otherwise the decision is
++// marked's, the lexer the nested content is parsed with: the line and the one
++// after it, without the item's content column of indent, are lexed after the
++// paragraph's last line, or alone while the paragraph is empty, and the line
++// continues the paragraph only if the lexer reads it as paragraph text. So
++// indented code, a list, a fence, a blockquote, a heading, a thematic break,
++// an HTML block or a table opens here exactly when marked would open it.
++function opensItemBlock(line, nextLine, indentLevel, contentColumn, paragraph, lexer) {
++  var _a;
++  if (paragraph === "" && leadingColumns(line) <= indentLevel) return true;
++  // marked lexes a list item's content in its non-top mode, where a list or an
++  // HTML tag interrupts text, and every `blockTokens` call leaves the lexer in
++  // top mode. The item's nested content is lexed after these probes, so in top
++  // mode: start every probe there too, so it reads the line as that parse will.
++  lexer.blockTokens("");
++  const text = stripColumns(line, contentColumn);
++  const next = nextLine === void 0 ? void 0 : stripColumns(nextLine, contentColumn);
++  if (paragraph === "") {
++    const [first] = lexer.blockTokens(next === void 0 ? text : `${text}\n${next}`);
++    return first === void 0 || first.type !== "paragraph" && !isSetextHeading(first);
++  }
++  const lastLine = paragraph.slice(paragraph.lastIndexOf("\n") + 1);
++  const continues = (_a = continuesParagraph(lastLine, text, next, lexer)) != null ? _a : continuesParagraph("a", text, next, lexer);
++  return continues !== true;
 +}
  function parseIndentedBlocks(src, config, lexer) {
    var _a, _b, _c, _d;
    const lines = src.split("\n");
-@@ -4816,6 +4859,13 @@ function parseIndentedBlocks(src, config, lexer) {
+@@ -4816,6 +4897,13 @@ function parseIndentedBlocks(src, config, lexer) {
  `;
      const itemContent = [mainContent];
      i += 1;
 +    while (i < lines.length) {
 +      const nextLine = lines[i];
-+      if (nextLine.trim() === "" || config.itemPattern.test(nextLine) || opensItemBlock(nextLine, lines[i + 1], indentLevel, indentLevel + baseIndentSize, itemData.mainContent === "")) break;
-+      itemData.mainContent = itemData.mainContent === "" ? nextLine.replace(/^[ \t]+/, "") : `${itemData.mainContent}\n${nextLine.replace(/^[ \t]+/, "")}`;
++      if (nextLine.trim() === "" || config.itemPattern.test(nextLine) || opensItemBlock(nextLine, lines[i + 1], indentLevel, indentLevel + baseIndentSize, itemData.mainContent, lexer)) break;
++      itemData.mainContent = itemData.mainContent === "" ? nextLine.replace(/^[ \t]+/, "") : `${itemData.mainContent}\n${continuationText(nextLine, indentLevel + baseIndentSize)}`;
 +      totalRaw = `${totalRaw}${nextLine}\n`;
 +      i += 1;
 +    }
@@ -67,10 +105,10 @@ index d828422b45e463c229bd937d39ea416278055dde..077db61b2f9b7c45acc7fae19aa84005
        const nextLine = lines[i];
        if (nextLine.trim() === "") {
 diff --git a/dist/index.js b/dist/index.js
-index a0f6db230e5c24f99066beda95637818680b3fd2..38264a485ce7d2101940409f5ad308034e25ef6f 100644
+index a0f6db230e5c24f99066beda95637818680b3fd2..0a59a77345ce98eec8edb8ba3b6212f816a88482 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -4626,6 +4626,49 @@ function createInlineMarkdownSpec(options) {
+@@ -4626,6 +4626,87 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
@@ -84,50 +122,88 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..38264a485ce7d2101940409f5ad30803
 +  }
 +  return column;
 +}
-+// The tag names of CommonMark's HTML block type 6.
-+var HTML_BLOCK_TAG_NAMES = new Set(["address","article","aside","base","basefont","blockquote","body","caption","center","col","colgroup","dd","details","dialog","dir","div","dl","dt","fieldset","figcaption","figure","footer","form","frame","frameset","h1","h2","h3","h4","h5","h6","head","header","hr","html","iframe","legend","li","link","main","menu","menuitem","nav","noframes","ol","optgroup","option","p","param","search","section","summary","table","tbody","td","tfoot","th","thead","title","tr","track","ul"]);
-+// Whether a line, without its indent, starts a CommonMark HTML block: types 1
-+// to 6 always, and type 7 (one complete tag of any other name, alone on the
-+// line) only while no paragraph is open, since it cannot interrupt one. An
-+// autolink or an inline tag inside text starts none.
-+function startsHtmlBlock(text, paragraphEmpty) {
-+  if (/^<(?:script|pre|style|textarea)(?:\s|>|$)/i.test(text) || /^<!--/.test(text) || /^<\?/.test(text) || /^<![A-Za-z]/.test(text) || /^<!\[CDATA\[/.test(text)) return true;
-+  const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?:\s|\/?>|$)/.exec(text);
-+  if (tag && HTML_BLOCK_TAG_NAMES.has(tag[1].toLowerCase())) return true;
-+  return paragraphEmpty && /^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/.test(text);
++// A line without its first `columns` columns of indent, a tab advancing to
++// the next stop of 4. A tab that reaches past `columns` keeps the rest of its
++// width as spaces, and a line indented less loses all of its indent.
++function stripColumns(line, columns) {
++  let column = 0;
++  let index = 0;
++  while (index < line.length && column < columns) {
++    const char = line[index];
++    if (char === " ") column += 1;
++    else if (char === "\t") column += 4 - column % 4;
++    else break;
++    index += 1;
++  }
++  return " ".repeat(Math.max(column - columns, 0)) + line.slice(index);
 +}
-+// Whether a line is a GFM table delimiter row, such as `| --- | :-: |`.
-+function isTableDelimiterRow(line) {
-+  const text = line.trim();
-+  return text.includes("-") && text.includes("|") && /^[|:\- \t]+$/.test(text);
++// A paragraph continuation line as text: without the item's content column
++// of indent, keeping up to 3 more spaces, and without all of its indent when
++// 4 or more remain.
++function continuationText(line, contentColumn) {
++  const text = stripColumns(line, contentColumn);
++  return leadingColumns(text) >= 4 ? text.replace(/^[ \t]+/, "") : text;
 +}
-+// Whether this line cannot continue the item's first paragraph, measured from
-+// the item's content column as the nested parser sees it. While that
++// Whether a block token is a setext heading: text underlined by `===` or `---`.
++function isSetextHeading(token) {
++  return token.type === "heading" && !/^ {0,3}#/.test(token.raw);
++}
++// Whether marked's block lexer reads `line` as more of the paragraph whose
++// last line is `paragraphLine`. It does when its first block covers both
++// lines as a paragraph or as a setext heading. When `line` is that heading's
++// underline, the item's paragraph keeps it as text only if the underline
++// alone is a paragraph (`===`), not a thematic break (`---`). Undefined when
++// `paragraphLine` alone opens some other block.
++function continuesParagraph(paragraphLine, line, nextLine, lexer) {
++  const probe = nextLine === void 0 ? [paragraphLine, line] : [paragraphLine, line, nextLine];
++  const [first] = lexer.blockTokens(probe.join("\n"));
++  if (first === void 0 || first.type !== "paragraph" && !isSetextHeading(first)) return void 0;
++  const coveredLines = first.raw.replace(/\n+$/, "").split("\n").length;
++  if (coveredLines < 2) return false;
++  if (coveredLines === 2 && isSetextHeading(first)) {
++    const [alone] = lexer.blockTokens(line);
++    return alone !== void 0 && alone.type === "paragraph";
++  }
++  return true;
++}
++// Whether this line cannot continue the item's first paragraph. While that
 +// paragraph is empty, a line at or left of the item's own indent has no
-+// paragraph to continue, so the item ends, and a line 4+ columns past the
-+// content column is indented code. Once the paragraph has text, indented code
-+// cannot interrupt it. Closer in, the line opens a block when, without its
-+// indent, it starts a list item, a fence, a blockquote, an ATX heading, a
-+// thematic break, an HTML block or a table (a header line whose next line
-+// is a delimiter row).
-+function opensItemBlock(line, nextLine, indentLevel, contentColumn, paragraphEmpty) {
-+  const column = leadingColumns(line);
-+  if (paragraphEmpty && column <= indentLevel) return true;
-+  if (column - contentColumn >= 4) return paragraphEmpty;
-+  const text = line.replace(/^[ \t]+/, "");
-+  return /^([-+*]|\d{1,9}[.)])(\s|$)/.test(text) || /^(```|~~~)/.test(text) || /^>/.test(text) || /^#{1,6}(\s|$)/.test(text) || /^([*_-])(\s*\1){2,}\s*$/.test(text) || startsHtmlBlock(text, paragraphEmpty) || nextLine !== void 0 && text.includes("|") && isTableDelimiterRow(nextLine);
++// paragraph to continue, so the item ends. Otherwise the decision is
++// marked's, the lexer the nested content is parsed with: the line and the one
++// after it, without the item's content column of indent, are lexed after the
++// paragraph's last line, or alone while the paragraph is empty, and the line
++// continues the paragraph only if the lexer reads it as paragraph text. So
++// indented code, a list, a fence, a blockquote, a heading, a thematic break,
++// an HTML block or a table opens here exactly when marked would open it.
++function opensItemBlock(line, nextLine, indentLevel, contentColumn, paragraph, lexer) {
++  var _a;
++  if (paragraph === "" && leadingColumns(line) <= indentLevel) return true;
++  // marked lexes a list item's content in its non-top mode, where a list or an
++  // HTML tag interrupts text, and every `blockTokens` call leaves the lexer in
++  // top mode. The item's nested content is lexed after these probes, so in top
++  // mode: start every probe there too, so it reads the line as that parse will.
++  lexer.blockTokens("");
++  const text = stripColumns(line, contentColumn);
++  const next = nextLine === void 0 ? void 0 : stripColumns(nextLine, contentColumn);
++  if (paragraph === "") {
++    const [first] = lexer.blockTokens(next === void 0 ? text : `${text}\n${next}`);
++    return first === void 0 || first.type !== "paragraph" && !isSetextHeading(first);
++  }
++  const lastLine = paragraph.slice(paragraph.lastIndexOf("\n") + 1);
++  const continues = (_a = continuesParagraph(lastLine, text, next, lexer)) != null ? _a : continuesParagraph("a", text, next, lexer);
++  return continues !== true;
 +}
  function parseIndentedBlocks(src, config, lexer) {
    var _a, _b, _c, _d;
    const lines = src.split("\n");
-@@ -4654,6 +4697,13 @@ function parseIndentedBlocks(src, config, lexer) {
+@@ -4654,6 +4735,13 @@ function parseIndentedBlocks(src, config, lexer) {
  `;
      const itemContent = [mainContent];
      i += 1;
 +    while (i < lines.length) {
 +      const nextLine = lines[i];
-+      if (nextLine.trim() === "" || config.itemPattern.test(nextLine) || opensItemBlock(nextLine, lines[i + 1], indentLevel, indentLevel + baseIndentSize, itemData.mainContent === "")) break;
-+      itemData.mainContent = itemData.mainContent === "" ? nextLine.replace(/^[ \t]+/, "") : `${itemData.mainContent}\n${nextLine.replace(/^[ \t]+/, "")}`;
++      if (nextLine.trim() === "" || config.itemPattern.test(nextLine) || opensItemBlock(nextLine, lines[i + 1], indentLevel, indentLevel + baseIndentSize, itemData.mainContent, lexer)) break;
++      itemData.mainContent = itemData.mainContent === "" ? nextLine.replace(/^[ \t]+/, "") : `${itemData.mainContent}\n${continuationText(nextLine, indentLevel + baseIndentSize)}`;
 +      totalRaw = `${totalRaw}${nextLine}\n`;
 +      i += 1;
 +    }
@@ -135,10 +211,10 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..38264a485ce7d2101940409f5ad30803
        const nextLine = lines[i];
        if (nextLine.trim() === "") {
 diff --git a/src/utilities/markdown/parseIndentedBlocks.ts b/src/utilities/markdown/parseIndentedBlocks.ts
-index ae4956bd21ffe5489a64d08486cf323e82859c06..1f29228480b6eaa5c4932a4d6b87aade2c9b9d65 100644
+index ae4956bd21ffe5489a64d08486cf323e82859c06..f755686bdc6033d97b7fe8515a7f65482f02e7aa 100644
 --- a/src/utilities/markdown/parseIndentedBlocks.ts
 +++ b/src/utilities/markdown/parseIndentedBlocks.ts
-@@ -37,6 +37,101 @@ export interface BlockParserConfig {
+@@ -37,6 +37,135 @@ export interface BlockParserConfig {
    customNestedParser?: (dedentedContent: string) => any[] | undefined
  }
 
@@ -160,93 +236,130 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..1f29228480b6eaa5c4932a4d6b87aade
 +}
 +
 +/**
-+ * The tag names of CommonMark's HTML block type 6.
++ * A line without its first `columns` columns of indent, a tab advancing to the
++ * next stop of 4. A tab that reaches past `columns` keeps the rest of its width
++ * as spaces, and a line indented less loses all of its indent.
 + */
-+const HTML_BLOCK_TAG_NAMES = new Set(["address","article","aside","base","basefont","blockquote","body","caption","center","col","colgroup","dd","details","dialog","dir","div","dl","dt","fieldset","figcaption","figure","footer","form","frame","frameset","h1","h2","h3","h4","h5","h6","head","header","hr","html","iframe","legend","li","link","main","menu","menuitem","nav","noframes","ol","optgroup","option","p","param","search","section","summary","table","tbody","td","tfoot","th","thead","title","tr","track","ul"])
-+
-+/**
-+ * Whether a line, without its indent, starts a CommonMark HTML block: types 1
-+ * to 6 always, and type 7 (one complete tag of any other name, alone on the
-+ * line) only while no paragraph is open, since it cannot interrupt one. An
-+ * autolink or an inline tag inside text starts none.
-+ */
-+function startsHtmlBlock(text: string, paragraphEmpty: boolean): boolean {
-+  if (
-+    /^<(?:script|pre|style|textarea)(?:\s|>|$)/i.test(text) ||
-+    /^<!--/.test(text) ||
-+    /^<\?/.test(text) ||
-+    /^<![A-Za-z]/.test(text) ||
-+    /^<!\[CDATA\[/.test(text)
-+  ) {
-+    return true
++function stripColumns(line: string, columns: number): string {
++  let column = 0
++  let index = 0
++  while (index < line.length && column < columns) {
++    const char = line[index]
++    if (char === ' ') {
++      column += 1
++    } else if (char === '\t') {
++      column += 4 - (column % 4)
++    } else {
++      break
++    }
++    index += 1
 +  }
-+  const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?:\s|\/?>|$)/.exec(text)
-+  if (tag && HTML_BLOCK_TAG_NAMES.has(tag[1].toLowerCase())) {
-+    return true
-+  }
-+  return (
-+    paragraphEmpty &&
-+    /^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/.test(text)
-+  )
++  return ' '.repeat(Math.max(column - columns, 0)) + line.slice(index)
 +}
 +
 +/**
-+ * Whether a line is a GFM table delimiter row, such as `| --- | :-: |`.
++ * A paragraph continuation line as text: without the item's content column of
++ * indent, keeping up to 3 more spaces, and without all of its indent when 4 or
++ * more remain.
 + */
-+function isTableDelimiterRow(line: string): boolean {
-+  const text = line.trim()
-+  return text.includes('-') && text.includes('|') && /^[|:\- \t]+$/.test(text)
++function continuationText(line: string, contentColumn: number): string {
++  const text = stripColumns(line, contentColumn)
++  return leadingColumns(text) >= 4 ? text.replace(/^[ \t]+/, '') : text
++}
++
++type BlockLexer = { blockTokens: (src: string) => any[] }
++
++/**
++ * Whether a block token is a setext heading: text underlined by `===` or `---`.
++ */
++function isSetextHeading(token: any): boolean {
++  return token.type === 'heading' && !/^ {0,3}#/.test(token.raw)
 +}
 +
 +/**
-+ * Whether this line cannot continue the item's first paragraph, measured from
-+ * the item's content column as the nested parser sees it. While that paragraph
-+ * is empty, a line at or left of the item's own indent has no paragraph to
-+ * continue, so the item ends, and a line 4+ columns past the content column is
-+ * indented code. Once the paragraph has text, indented code cannot interrupt
-+ * it. Closer in, the line opens a block when, without its indent, it starts a
-+ * list item, a fence, a blockquote, an ATX heading, a thematic break, an HTML
-+ * block (see `startsHtmlBlock`) or a table (a header line whose next line is a
-+ * delimiter row).
++ * Whether marked's block lexer reads `line` as more of the paragraph whose last
++ * line is `paragraphLine`. It does when its first block covers both lines as a
++ * paragraph or as a setext heading. When `line` is that heading's underline,
++ * the item's paragraph keeps it as text only if the underline alone is a
++ * paragraph (`===`), not a thematic break (`---`). Undefined when
++ * `paragraphLine` alone opens some other block.
++ */
++function continuesParagraph(
++  paragraphLine: string,
++  line: string,
++  nextLine: string | undefined,
++  lexer: BlockLexer,
++): boolean | undefined {
++  const probe = nextLine === undefined ? [paragraphLine, line] : [paragraphLine, line, nextLine]
++  const [first] = lexer.blockTokens(probe.join('\n'))
++  if (first === undefined || (first.type !== 'paragraph' && !isSetextHeading(first))) {
++    return undefined
++  }
++  const coveredLines = first.raw.replace(/\n+$/, '').split('\n').length
++  if (coveredLines < 2) {
++    return false
++  }
++  if (coveredLines === 2 && isSetextHeading(first)) {
++    const [alone] = lexer.blockTokens(line)
++    return alone !== undefined && alone.type === 'paragraph'
++  }
++  return true
++}
++
++/**
++ * Whether this line cannot continue the item's first paragraph. While that
++ * paragraph is empty, a line at or left of the item's own indent has no
++ * paragraph to continue, so the item ends. Otherwise the decision is marked's,
++ * the lexer the nested content is parsed with: the line and the one after it,
++ * without the item's content column of indent, are lexed after the
++ * paragraph's last line, or alone while the paragraph is empty, and the line
++ * continues the paragraph only if the lexer reads it as paragraph text. So
++ * indented code, a list, a fence, a blockquote, a heading, a thematic break,
++ * an HTML block or a table opens here exactly when marked would open it.
 + */
 +function opensItemBlock(
 +  line: string,
 +  nextLine: string | undefined,
 +  indentLevel: number,
 +  contentColumn: number,
-+  paragraphEmpty: boolean,
++  paragraph: string,
++  lexer: BlockLexer,
 +): boolean {
-+  const column = leadingColumns(line)
-+  if (paragraphEmpty && column <= indentLevel) {
++  if (paragraph === '' && leadingColumns(line) <= indentLevel) {
 +    return true
 +  }
-+  if (column - contentColumn >= 4) {
-+    return paragraphEmpty
++  // marked lexes a list item's content in its non-top mode, where a list or an
++  // HTML tag interrupts text, and every `blockTokens` call leaves the lexer in
++  // top mode. The item's nested content is lexed after these probes, so in top
++  // mode: start every probe there too, so it reads the line as that parse will.
++  lexer.blockTokens('')
++  const text = stripColumns(line, contentColumn)
++  const next = nextLine === undefined ? undefined : stripColumns(nextLine, contentColumn)
++  if (paragraph === '') {
++    const [first] = lexer.blockTokens(next === undefined ? text : `${text}\n${next}`)
++    return first === undefined || (first.type !== 'paragraph' && !isSetextHeading(first))
 +  }
-+  // Markdown indents with spaces and tabs only; any other leading whitespace
-+  // (a non-breaking space) is the line's text.
-+  const text = line.replace(/^[ \t]+/, '')
-+  return (
-+    /^([-+*]|\d{1,9}[.)])(\s|$)/.test(text) ||
-+    /^(```|~~~)/.test(text) ||
-+    /^>/.test(text) ||
-+    /^#{1,6}(\s|$)/.test(text) ||
-+    /^([*_-])(\s*\1){2,}\s*$/.test(text) ||
-+    startsHtmlBlock(text, paragraphEmpty) ||
-+    (nextLine !== undefined && text.includes('|') && isTableDelimiterRow(nextLine))
-+  )
++  // A paragraph line that opens a block on its own (the item's text can be
++  // `# x`) is still paragraph text here, so a plain line stands in for it.
++  const lastLine = paragraph.slice(paragraph.lastIndexOf('\n') + 1)
++  const continues =
++    continuesParagraph(lastLine, text, next, lexer) ?? continuesParagraph('a', text, next, lexer)
++  return continues !== true
 +}
 +
  /**
   * Parses markdown text into hierarchical indented blocks with proper nesting.
   *
-@@ -118,6 +213,32 @@ export function parseIndentedBlocks(
+@@ -118,6 +247,36 @@ export function parseIndentedBlocks(
      const itemContent = [mainContent] // Start with the main text
      i += 1
 
 +    // A paragraph continuation of the item's first line (indented, or lazy at
 +    // column 0) joins it, so a hard break stays inside the item's paragraph.
 +    // An item with an empty first line takes the continuation as its text.
++    // A continuation line loses the item's content column of indent and keeps
++    // up to 3 spaces past it as text, as in a bullet item; 4 or more are the
++    // indent of a code line that cannot interrupt the paragraph, and go.
 +    while (i < lines.length) {
 +      const nextLine = lines[i]
 +      if (
@@ -257,7 +370,8 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..1f29228480b6eaa5c4932a4d6b87aade
 +          lines[i + 1],
 +          indentLevel,
 +          indentLevel + baseIndentSize,
-+          itemData.mainContent === '',
++          itemData.mainContent,
++          lexer,
 +        )
 +      ) {
 +        break
@@ -265,7 +379,7 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..1f29228480b6eaa5c4932a4d6b87aade
 +      itemData.mainContent =
 +        itemData.mainContent === ''
 +          ? nextLine.replace(/^[ \t]+/, '')
-+          : `${itemData.mainContent}\n${nextLine.replace(/^[ \t]+/, '')}`
++          : `${itemData.mainContent}\n${continuationText(nextLine, indentLevel + baseIndentSize)}`
 +      totalRaw = `${totalRaw}${nextLine}\n`
 +      i += 1
 +    }

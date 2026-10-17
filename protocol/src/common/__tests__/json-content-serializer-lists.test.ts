@@ -629,7 +629,195 @@ describe("jsonContentToMarkdown ordered lists", () => {
       ),
     ).toBe("-\n  1. x");
   });
+
+  it("puts a blank line before a nested ordered list that starts above 1 under a line of text", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          bulletList([
+            listItem([
+              textParagraph("t"),
+              orderedBlock([listItem([textParagraph("a")])], 10),
+            ]),
+          ]),
+        ),
+      ),
+    ).toBe("- t\n\n  10. a");
+  });
+
+  it("keeps a nested ordered list that starts at 1 directly under the text", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          bulletList([
+            listItem([
+              textParagraph("t"),
+              orderedBlock([listItem([textParagraph("a")])], 1),
+            ]),
+          ]),
+        ),
+      ),
+    ).toBe("- t\n  1. a");
+  });
+
+  it("writes a three-deep chain of empty-first-paragraph items without a blank line", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          bulletList([
+            listItem([
+              { type: "paragraph" },
+              bulletList([
+                listItem([
+                  { type: "paragraph" },
+                  bulletList([listItem([textParagraph("x")])]),
+                ]),
+              ]),
+            ]),
+          ]),
+        ),
+      ),
+    ).toBe("-\n  -\n    - x");
+  });
+
+  it("writes an ordered list starting above 1 directly under an empty first paragraph", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          bulletList([
+            listItem([
+              { type: "paragraph" },
+              orderedBlock([listItem([textParagraph("a")])], 10),
+            ]),
+          ]),
+        ),
+      ),
+    ).toBe("-\n  10. a");
+  });
 });
+
+describe("jsonContentToMarkdown horizontal rules", () => {
+  const empty: JsonContent = { type: "paragraph" };
+  const a = textParagraph("a");
+  const b = textParagraph("b");
+
+  it("writes a top-level rule between blocks a blank line apart", () => {
+    expect(toMarkdown(docOf(a, rule(), b))).toBe("a\n\n---\n\nb");
+  });
+
+  it("writes a top-level rule alone, first and last", () => {
+    expect(toMarkdown(docOf(rule()))).toBe("---");
+    expect(toMarkdown(docOf(rule(), a))).toBe("---\n\na");
+    expect(toMarkdown(docOf(a, rule()))).toBe("a\n\n---");
+  });
+
+  it("writes a rule next to a heading and a second rule", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          {
+            type: "heading",
+            attrs: { level: 2 },
+            content: [{ type: "text", text: "H" }],
+          },
+          rule(),
+        ),
+      ),
+    ).toBe("## H\n\n---");
+    expect(toMarkdown(docOf(a, rule(), rule(), b))).toBe(
+      "a\n\n---\n\n---\n\nb",
+    );
+  });
+
+  it("gives a rule inside a quote as a line of its own", () => {
+    expect(
+      toMarkdown(docOf({ type: "blockquote", content: [a, rule(), b] })),
+    ).toBe("<user_quoted_section>a\n---\nb</user_quoted_section>");
+  });
+
+  it("writes a rule after a bullet item's text behind a blank line", () => {
+    expect(toMarkdown(docOf(bulletList([listItem([a, rule()])])))).toBe(
+      "- a\n\n  ---",
+    );
+  });
+
+  it("writes a rule as a bullet item's first block under the marker", () => {
+    expect(toMarkdown(docOf(bulletList([listItem([empty, rule()])])))).toBe(
+      "-\n  ---",
+    );
+  });
+
+  it("writes a bullet item holding only a rule as an empty marker and the rule", () => {
+    expect(toMarkdown(docOf(bulletList([listItem([rule()])])))).toBe(
+      "-\n  ---",
+    );
+  });
+
+  it("writes a rule after a nested list behind a blank line", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          bulletList([
+            listItem([a, bulletList([listItem([textParagraph("x")])]), rule()]),
+          ]),
+        ),
+      ),
+    ).toBe("- a\n  - x\n\n  ---");
+  });
+
+  it("writes two rules and a paragraph in a bullet item", () => {
+    expect(toMarkdown(docOf(bulletList([listItem([a, rule(), rule()])])))).toBe(
+      "- a\n\n  ---\n\n  ---",
+    );
+    expect(toMarkdown(docOf(bulletList([listItem([a, rule(), b])])))).toBe(
+      "- a\n\n  ---\n\n  b",
+    );
+  });
+
+  it("writes a rule in a nested bullet item at that item's content column", () => {
+    expect(
+      toMarkdown(
+        docOf(bulletList([listItem([a, bulletList([listItem([b, rule()])])])])),
+      ),
+    ).toBe("- a\n  - b\n\n    ---");
+  });
+
+  it("writes a rule in an ordered item at the marker's content column", () => {
+    expect(toMarkdown(docOf(orderedBlock([listItem([a, rule()])], 1)))).toBe(
+      "1. a\n\n   ---",
+    );
+    expect(toMarkdown(docOf(orderedBlock([listItem([a, rule()])], 10)))).toBe(
+      "10. a\n\n    ---",
+    );
+    expect(
+      toMarkdown(docOf(orderedBlock([listItem([empty, rule()])], 100))),
+    ).toBe("100. \n     ---");
+  });
+
+  it("keeps the next ordered item after a rule that follows a nested list", () => {
+    expect(
+      toMarkdown(
+        docOf(
+          orderedBlock(
+            [
+              listItem([
+                a,
+                bulletList([listItem([textParagraph("x")])]),
+                rule(),
+              ]),
+              listItem([b]),
+            ],
+            1,
+          ),
+        ),
+      ),
+    ).toBe("1. a\n   - x\n\n   ---\n2. b");
+  });
+});
+
+function rule(): JsonContent {
+  return { type: "horizontalRule" };
+}
 
 function orderedList(
   items: ReadonlyArray<string>,
