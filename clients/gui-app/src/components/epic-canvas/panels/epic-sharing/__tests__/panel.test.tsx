@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
@@ -64,7 +65,7 @@ interface TestState {
 
 const testState = vi.hoisted<TestState>(() => ({
   role: "owner",
-  collaborators: { directUsers: [], teams: [], flatRows: [] },
+  collaborators: { directUsers: [], ownerTeam: null, teams: [], flatRows: [] },
   shareableTeams: [],
   grantAccess: { mutate: vi.fn(), isPending: false, variables: undefined },
   batchUpdateRoles: { mutate: vi.fn(), isPending: false, variables: undefined },
@@ -242,10 +243,45 @@ const SHARED_TEAM: EpicTeamCollaboratorView = {
   ],
 };
 
+// The team whose environment owns the task: its members are owners through it.
+const OWNER_TEAM: EpicTeamCollaboratorView = {
+  key: "team-team-owner",
+  teamId: "team-owner",
+  teamName: "Acme Bots",
+  role: "owner",
+  members: [
+    {
+      accessSource: "team",
+      displayName: "Bot Maker",
+      email: "maker@example.com",
+      handle: "maker",
+      avatarUrl: null,
+      key: "team-team-owner-user-3",
+      teamId: "team-owner",
+      teamName: "Acme Bots",
+      role: "owner",
+      userId: "user-3",
+    },
+    {
+      accessSource: "team",
+      displayName: "Bot Tester",
+      email: "tester@example.com",
+      handle: "tester",
+      avatarUrl: null,
+      key: "team-team-owner-user-4",
+      teamId: "team-owner",
+      teamName: "Acme Bots",
+      role: "owner",
+      userId: "user-4",
+    },
+  ],
+};
+
 function resetTestState(): void {
   testState.role = "owner";
   testState.collaborators = {
     directUsers: [],
+    ownerTeam: null,
     teams: [],
     flatRows: [],
   };
@@ -408,6 +444,7 @@ describe("<SharingPanel />", () => {
   it("renders direct people separately from shared and unshared teams", () => {
     testState.collaborators = {
       directUsers: [DIRECT_USER],
+      ownerTeam: null,
       teams: [SHARED_TEAM],
       flatRows: [DIRECT_USER, ...SHARED_TEAM.members],
     };
@@ -435,6 +472,7 @@ describe("<SharingPanel />", () => {
     testState.role = "viewer";
     testState.collaborators = {
       directUsers: [DIRECT_USER],
+      ownerTeam: null,
       teams: [SHARED_TEAM],
       flatRows: [DIRECT_USER, ...SHARED_TEAM.members],
     };
@@ -479,6 +517,86 @@ describe("<SharingPanel />", () => {
     expect(screen.getByTestId("invite-card")).toBeTruthy();
     expect(screen.queryByText("platform")).toBeNull();
     expect(screen.queryByTestId("team-share-button")).toBeNull();
+  });
+
+  it.each(["owner", "viewer"] as const)(
+    "shows a team-owned task's owning team as a control-free Owner row for the %s role",
+    (role) => {
+      testState.role = role;
+      testState.collaborators = {
+        directUsers: [],
+        ownerTeam: OWNER_TEAM,
+        teams: [],
+        flatRows: [...OWNER_TEAM.members],
+      };
+
+      renderSharingPanel();
+
+      const row = screen.getByTestId("epic-sharing-owner-team-row");
+      expect(row.getAttribute("data-team-id")).toBe("team-owner");
+      expect(row.textContent).toContain("Acme Bots");
+      expect(row.textContent).toContain("Owner · 2 active members");
+      expect(
+        screen.getByTestId("epic-sharing-owner-team-role").textContent,
+      ).toBe("Team");
+      // Nobody is demoted or removed on a task the team owns.
+      expect(within(row).queryAllByRole("button")).toEqual([]);
+      expect(within(row).queryAllByRole("combobox")).toEqual([]);
+      expect(screen.queryByText("No direct collaborators yet.")).toBeNull();
+    },
+  );
+
+  it("keeps the owning team out of the Teams section even though it is shareable", () => {
+    testState.collaborators = {
+      directUsers: [],
+      ownerTeam: OWNER_TEAM,
+      teams: [],
+      flatRows: [...OWNER_TEAM.members],
+    };
+    testState.shareableTeams = [
+      { teamId: "team-owner", slug: "acme-bots", avatarUrl: null },
+      { teamId: "team-2", slug: "platform", avatarUrl: null },
+    ];
+
+    renderSharingPanel();
+
+    const teamsList = screen.getByTestId("epic-sharing-teams-list");
+    expect(teamsList.textContent).toContain("platform");
+    expect(teamsList.textContent).not.toContain("acme-bots");
+    expect(screen.getAllByTestId("team-share-button")).toHaveLength(1);
+  });
+
+  it("hides the Teams section when the owning team is the only shareable one", () => {
+    testState.collaborators = {
+      directUsers: [],
+      ownerTeam: OWNER_TEAM,
+      teams: [],
+      flatRows: [...OWNER_TEAM.members],
+    };
+    testState.shareableTeams = [
+      { teamId: "team-owner", slug: "acme-bots", avatarUrl: null },
+    ];
+
+    renderSharingPanel();
+
+    expect(screen.queryByTestId("team-share-button")).toBeNull();
+    expect(screen.queryByText("Teams")).toBeNull();
+  });
+
+  it("renders no owner-team row for a person-owned task", () => {
+    testState.collaborators = {
+      directUsers: [DIRECT_USER],
+      ownerTeam: null,
+      teams: [],
+      flatRows: [DIRECT_USER],
+    };
+
+    renderSharingPanel();
+
+    expect(screen.queryByTestId("epic-sharing-owner-team-row")).toBeNull();
+    expect(
+      screen.getByTestId("epic-sharing-people-list").textContent,
+    ).toContain("Anurag Sharma");
   });
 
   it("shows an agent spinner while sharing a team", () => {
@@ -544,6 +662,7 @@ describe("<SharingPanel />", () => {
   it("keeps role triggers visible for teams and direct collaborators", () => {
     testState.collaborators = {
       directUsers: [DIRECT_USER, DIRECT_EDITOR],
+      ownerTeam: null,
       teams: [SHARED_TEAM],
       flatRows: [DIRECT_USER, DIRECT_EDITOR, ...SHARED_TEAM.members],
     };
@@ -561,6 +680,7 @@ describe("<SharingPanel />", () => {
     resetTestState();
     testState.collaborators = {
       directUsers: [DIRECT_USER, DIRECT_EDITOR],
+      ownerTeam: null,
       teams: [],
       flatRows: [DIRECT_USER, DIRECT_EDITOR],
     };
@@ -580,6 +700,7 @@ describe("<SharingPanel />", () => {
     useAuthStore.setState({ status: "unverified" });
     testState.collaborators = {
       directUsers: [DIRECT_USER],
+      ownerTeam: null,
       teams: [SHARED_TEAM],
       flatRows: [DIRECT_USER, ...SHARED_TEAM.members],
     };
@@ -634,6 +755,7 @@ describe("<SharingPanel />", () => {
     // dialog.
     testState.collaborators = {
       directUsers: [DIRECT_USER, DIRECT_EDITOR],
+      ownerTeam: null,
       teams: [],
       flatRows: [DIRECT_USER, DIRECT_EDITOR],
     };

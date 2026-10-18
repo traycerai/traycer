@@ -11,15 +11,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
-const mocks = vi.hoisted(() => ({
-  state: {
-    effectiveHostId: "host-effective" as string | null,
-    snapshot: null as BotSubscriptionSnapshot | null,
+interface MockState {
+  effectiveHostId: string | null;
+  snapshot: BotSubscriptionSnapshot | null;
+  working: boolean;
+}
+
+const mocks = vi.hoisted(() => {
+  const state: MockState = {
+    effectiveHostId: "host-effective",
+    snapshot: null,
     working: false,
-  },
-  navigate: vi.fn(),
-  navigateToTabIntent: vi.fn(),
-}));
+  };
+  return { state, navigate: vi.fn(), navigateToTabIntent: vi.fn() };
+});
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,

@@ -94,6 +94,7 @@ function makeCollaboratorResponse(
             handle: email,
           },
         },
+        environmentId: null,
         team: null,
       },
     ],
@@ -110,6 +111,7 @@ function makeTeamCollaboratorResponse(): ListEpicCollaboratorsResponse {
         grantedBy: "user-owner",
         role: "editor",
         user: null,
+        environmentId: null,
         team: {
           teamId: "team-1",
           teamName: "Acme Team",
@@ -128,6 +130,36 @@ function makeTeamCollaboratorResponse(): ListEpicCollaboratorsResponse {
       },
     ],
     collaboratorsAvailable: true,
+  };
+}
+
+function makeTeamEntry(input: {
+  readonly teamId: string;
+  readonly environmentId: string | null;
+  readonly memberId: string;
+}): ListEpicCollaboratorsResponse["collaborators"][number] {
+  return {
+    accessType: "organization",
+    grantedAt: 1,
+    grantedBy: "user-owner",
+    role: "owner",
+    user: null,
+    environmentId: input.environmentId,
+    team: {
+      teamId: input.teamId,
+      teamName: `Team ${input.teamId}`,
+      teamMembers: [
+        {
+          userId: input.memberId,
+          profile: {
+            avatarUrl: "",
+            displayName: `Member ${input.memberId}`,
+            email: `${input.memberId}@example.com`,
+            handle: input.memberId,
+          },
+        },
+      ],
+    },
   };
 }
 
@@ -245,6 +277,105 @@ describe("useEpicCollaboratorsQuery", () => {
         }),
       ],
     });
+  });
+
+  it("projects the team entry carrying an environment id as the owner team, not a shared team", () => {
+    mockQueryResult.current = {
+      data: {
+        collaborators: [
+          makeTeamEntry({
+            teamId: "team-owner",
+            environmentId: "env-1",
+            memberId: "user-in-owner-team",
+          }),
+        ],
+        collaboratorsAvailable: true,
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.ownerTeam).toMatchObject({
+      teamId: "team-owner",
+      teamName: "Team team-owner",
+    });
+    expect(hook.result.current.data?.teams).toEqual([]);
+    // The owning team's members are still owners through it, so they stay in
+    // the flat list the mention picker and sender labels read.
+    expect(hook.result.current.data?.flatRows.map((row) => row.userId)).toEqual(
+      ["user-in-owner-team"],
+    );
+  });
+
+  it("keeps a team entry with no environment id a shared team beside the owner team", () => {
+    mockQueryResult.current = {
+      data: {
+        collaborators: [
+          makeTeamEntry({
+            teamId: "team-owner",
+            environmentId: "env-1",
+            memberId: "user-in-owner-team",
+          }),
+          makeTeamEntry({
+            teamId: "team-shared",
+            environmentId: null,
+            memberId: "user-in-shared-team",
+          }),
+        ],
+        collaboratorsAvailable: true,
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.ownerTeam?.teamId).toBe("team-owner");
+    expect(hook.result.current.data?.teams.map((team) => team.teamId)).toEqual([
+      "team-shared",
+    ]);
+  });
+
+  it("leaves the owner team empty when no team entry carries an environment id", () => {
+    mockQueryResult.current = {
+      data: makeTeamCollaboratorResponse(),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.ownerTeam).toBeNull();
+    expect(hook.result.current.data?.teams).toHaveLength(1);
   });
 
   it("withholds the retained list once the caller's verdict gate closes", () => {

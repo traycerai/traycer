@@ -899,7 +899,35 @@ export const teamCollaboratorSchema = lazySchema(() =>
 );
 export type TeamCollaborator = z.infer<typeof teamCollaboratorSchema>;
 
+/**
+ * One "People with access" row as `epic.listCollaborators@1.1` and the three
+ * collaborator mutations' 1.1 responses carry it. `environmentId` names the
+ * environment whose principal OWNS the task (Tracy Bots): set only on the
+ * owner row of a task a bot spun, which arrives as the owning team's
+ * `organization` grant; `null` on every other row. It is what tells that
+ * Owner row from a plain team share - a client never infers it from names
+ * or roles.
+ */
 export const collaboratorEntrySchema = lazySchema(() =>
+  z.object({
+    role: LatestPermissionRoleSchema,
+    accessType: accessTypeSchema,
+    environmentId: z.string().nullable(),
+    grantedAt: z.number(),
+    grantedBy: z.string(),
+    user: userCollaboratorSchema.nullable().optional(),
+    team: teamCollaboratorSchema.nullable().optional(),
+  }),
+);
+export type CollaboratorEntry = z.infer<typeof collaboratorEntrySchema>;
+
+/**
+ * The collaborator row as released at 1.0 - a hand-frozen copy, never derived
+ * from {@link collaboratorEntrySchema}, so a later field cannot reach the
+ * released shape. `epic.listCollaborators@1.0` and the 1.0 responses of
+ * `epic.grantAccess`, `epic.batchUpdateRoles` and `epic.revokeCollaborator`.
+ */
+export const collaboratorEntrySchemaPre11 = lazySchema(() =>
   z.object({
     role: LatestPermissionRoleSchema,
     accessType: accessTypeSchema,
@@ -909,7 +937,9 @@ export const collaboratorEntrySchema = lazySchema(() =>
     team: teamCollaboratorSchema.nullable().optional(),
   }),
 );
-export type CollaboratorEntry = z.infer<typeof collaboratorEntrySchema>;
+export type CollaboratorEntryPre11 = z.infer<
+  typeof collaboratorEntrySchemaPre11
+>;
 
 export const listEpicCollaboratorsRequestSchema = lazySchema(() =>
   z.object({
@@ -928,6 +958,17 @@ export const listEpicCollaboratorsResponseSchema = lazySchema(() =>
 );
 export type ListEpicCollaboratorsResponse = z.infer<
   typeof listEpicCollaboratorsResponseSchema
+>;
+
+/** The 1.0 collaborator list, hand-frozen with {@link collaboratorEntrySchemaPre11}. */
+export const listEpicCollaboratorsResponseSchemaPre11 = lazySchema(() =>
+  z.object({
+    collaborators: z.array(collaboratorEntrySchemaPre11),
+    collaboratorsAvailable: z.boolean(),
+  }),
+);
+export type ListEpicCollaboratorsResponsePre11 = z.infer<
+  typeof listEpicCollaboratorsResponseSchemaPre11
 >;
 
 // ─── Task list (versioned epic.listTasks wire shapes) ───────────────────────

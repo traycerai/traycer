@@ -13,6 +13,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { UNRESOLVED_BOT_MEMBER_NAMES } from "@/lib/bots/bot-member-names";
 import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
 
 const MESSAGE_MAX = 100_000;
@@ -118,6 +119,7 @@ export function BotConversationView(props: {
           title={botTitle}
           instanceId={`bot-conversation:${botId}`}
           linkRequests
+          resolveMemberName={UNRESOLVED_BOT_MEMBER_NAMES}
         />
       )}
       <BotConversationComposer
