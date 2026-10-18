@@ -636,12 +636,16 @@ function PickTileContent(
     picker.toolbar.store,
     (toolbar) => toolbar.reasoning,
   );
+  // The store resolves the selected model's effective effort (stored when
+  // offered, else lowest) even when `autoJudge.set` hides the footer. A Max
+  // label follows it only when `autoJudge.get` says the host runs it.
   const maxModeContext = useMemo<MaxModeContext>(
     () => ({
       kind: "judge",
-      reasoningEffort: drawsEffortFooter ? reasoning : null,
+      reasoningEffort:
+        props.hostRunsEffort && reasoning.length > 0 ? reasoning : null,
     }),
-    [drawsEffortFooter, reasoning],
+    [props.hostRunsEffort, reasoning],
   );
   return (
     <>
