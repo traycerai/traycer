@@ -645,12 +645,71 @@ function findTaskItem(parsed: JsonContent): JsonContent {
   return ((taskList ?? first).content ?? [])[0];
 }
 
+function bulletChildren(
+  lines: ReadonlyArray<string>,
+  first: string,
+): JsonContent[] {
+  const markdown = [`- ${first}`, ...lines.map((line) => `  ${line}`)].join(
+    "\n",
+  );
+  const list = (parseMarkdown(markdown).content ?? [])[0];
+  return (list.content ?? [])[0].content ?? [];
+}
+
+function blockTitle(block: BlockLine, first: string): string {
+  if (first === "") return block.name;
+  if (block.name === "a thematic break") {
+    return "a thematic break underlines it as a level-2 heading, as marked reads it";
+  }
+  if (block.name === "a setext underline") {
+    return "a setext underline makes it a level-1 heading, as marked reads it";
+  }
+  if (block.name === "a lone open tag") {
+    return "a lone open tag ends the paragraph and opens an HTML block, as marked reads it";
+  }
+  return block.name;
+}
+
+/**
+ * The rows where marked ends a task item's non-empty first line with a block
+ * of its own, as in a bullet item: a lone open tag opens an HTML block, which
+ * the editor keeps as an empty paragraph, and `---` or `===` makes the first
+ * line a setext heading. Returns whether the row was one of them.
+ */
+function expectMarkedBlockAfterFirstLine(
+  block: BlockLine,
+  first: string,
+  item: JsonContent,
+): boolean {
+  if (first === "") return false;
+  const children = item.content ?? [];
+  if (block.kind === "openTagAlone") {
+    expect(childTypes(item)).toEqual(["paragraph", "paragraph"]);
+    expect(paragraphText(children[0])).toBe("first");
+  } else if (
+    block.name === "a thematic break" ||
+    block.name === "a setext underline"
+  ) {
+    const level = block.name === "a thematic break" ? 2 : 1;
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect(paragraphText(children[0])).toBe("");
+    expect(children[1].attrs?.level).toBe(level);
+    expect(paragraphText(children[1])).toBe(first);
+  } else {
+    return false;
+  }
+  expect(skeleton({ content: children })).toBe(
+    skeleton({ content: bulletChildren(block.lines, first) }),
+  );
+  return true;
+}
+
 describe("a task item's continuation joins its paragraph only where no block opens", () => {
   for (const context of TASK_CONTEXTS) {
     for (const first of ["", "first"]) {
       for (const block of BLOCK_LINES) {
         const label = first === "" ? "empty" : "non-empty";
-        it(`${label} first paragraph, ${block.name}, under ${context.name}`, () => {
+        it(`${label} first paragraph, ${blockTitle(block, first)}, under ${context.name}`, () => {
           const markdown = [
             ...context.parentLines,
             `${context.taskIndent}- [ ] ${first}`,
@@ -671,11 +730,7 @@ describe("a task item's continuation joins its paragraph only where no block ope
             return;
           }
 
-          if (block.kind === "openTagAlone" && first !== "") {
-            expect(childTypes(item)).toEqual(["paragraph"]);
-            expect(paragraphText(children[0]).startsWith("first\n")).toBe(true);
-            return;
-          }
+          if (expectMarkedBlockAfterFirstLine(block, first, item)) return;
 
           if (
             block.kind === "plain" ||
@@ -705,32 +760,59 @@ describe("a task item's continuation joins its paragraph only where no block ope
   }
 });
 
+describe("a task item's setext heading text", () => {
+  it("never holds the checkbox, unlike marked's own heading text", () => {
+    for (const underline of ["---", "==="]) {
+      const item = onlyListItem(`- [ ] first\n  ${underline}`, "taskList");
+      expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+      expect(paragraphText((item.content ?? [])[1])).toBe("first");
+    }
+  });
+});
+
 describe("a task item's lazy continuation line", () => {
-  const LAZY_CASES: ReadonlyArray<readonly [string, string, string]> = [
-    ["empty", "", "plain"],
-    ["empty", " ", "plain"],
-    ["non-empty", "", "first\nplain"],
-    ["non-empty", " ", "first\nplain"],
+  const LAZY_CASES: ReadonlyArray<readonly [string, string, string, string]> = [
+    [
+      "empty",
+      "",
+      "plain",
+      "plain line at column 0 is a lazy continuation of the task item, as marked reads it",
+    ],
+    [
+      "empty",
+      " ",
+      " plain",
+      "plain line at column 1 is a lazy continuation that keeps its space, as marked reads it",
+    ],
+    [
+      "non-empty",
+      "",
+      "first\nplain",
+      "plain line at column 0 is a lazy continuation, as marked reads it",
+    ],
+    [
+      "non-empty",
+      " ",
+      "first\n plain",
+      "plain line at column 1 is a lazy continuation that keeps its space, as marked reads it",
+    ],
   ];
 
-  for (const [state, lead, expectedText] of LAZY_CASES) {
-    it(`${state} first paragraph, plain line at column ${String(lead.length)}`, () => {
+  for (const [state, lead, expectedText, title] of LAZY_CASES) {
+    it(`${state} first paragraph, ${title}`, () => {
       const first = state === "empty" ? "" : "first";
       const parsed = parseMarkdown(`- [ ] ${first}\n${lead}plain`);
       const top = parsed.content ?? [];
-
-      if (state === "empty" && lead === "") {
-        // The empty item ends at the blank-looking line: the text is top level.
-        expect(top.map((node) => node.type)).toEqual(["taskList", "paragraph"]);
-        expect(paragraphText(top[1])).toBe("plain");
-        expect(childTypes((top[0].content ?? [])[0])).toEqual(["paragraph"]);
-        return;
-      }
-
       expect(top.map((node) => node.type)).toEqual(["taskList"]);
       const item = (top[0].content ?? [])[0];
       expect(childTypes(item)).toEqual(["paragraph"]);
       expect(paragraphText((item.content ?? [])[0])).toBe(expectedText);
+      if (state === "non-empty") {
+        const bullet = (parseMarkdown(`- first\n${lead}plain`).content ??
+          [])[0];
+        const bulletItem = (bullet.content ?? [])[0];
+        expect(paragraphText((bulletItem.content ?? [])[0])).toBe(expectedText);
+      }
     });
   }
 });
@@ -1202,28 +1284,30 @@ describe("an HTML block opener with any attribute grammar keeps its body literal
 
 describe("an HTML block opener after a non-empty task paragraph", () => {
   for (const [name, opener] of HTML_OPENERS) {
-    it(`joins the paragraph and nests the list: ${name}`, () => {
-      const item = onlyListItem(`- [ ] first\n  ${opener}\n  - x`, "taskList");
-      // An inline HTML tag in paragraph text is dropped by the editor, so the
-      // opener's own text is not asserted.
-      expect(childTypes(item)).toEqual(["paragraph", "bulletList"]);
-      expect(paragraphText((item.content ?? [])[0]).startsWith("first")).toBe(
-        true,
-      );
-      const nested = (item.content ?? [])[1];
-      expect(skeleton(nested)).toBe(
-        skeleton(listWith("bulletList", [itemOf(textPara("x"))], 1)),
+    it(`ends the paragraph and keeps the list line in the HTML block, as a bullet item does: ${name}`, () => {
+      const task = onlyListItem(`- [ ] first\n  ${opener}\n  - x`, "taskList");
+      const bullet = onlyListItem(`- first\n  ${opener}\n  - x`, "bulletList");
+      expect(childTypes(task)).toEqual(["paragraph", "paragraph"]);
+      expect(paragraphText((task.content ?? [])[0])).toBe("first");
+      expect(paragraphText((task.content ?? [])[1])).toContain("- x");
+      expect(hasNodeType(task, "bulletList")).toBe(false);
+      expect(skeleton(task)).toBe(
+        skeleton(bullet).replace("listItem", "taskItem"),
       );
     });
   }
 });
 
 describe("a continuation line follows marked's block rules under a task item", () => {
-  it("joins `2. x` as text, because only `1.` interrupts a paragraph", () => {
+  it("opens an ordered list at `2. x`, as marked reads a bullet item", () => {
     const item = onlyListItem("- [ ] first\n  2. x", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph"]);
-    expect(paragraphText((item.content ?? [])[0])).toBe("first\n2. x");
-    expect(hasNodeType(item, "orderedList")).toBe(false);
+    const bullet = onlyListItem("- first\n  2. x", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("first");
+    expect((item.content ?? [])[1].attrs?.start).toBe(2);
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 
   it("opens an ordered list at `1. x`", () => {
@@ -1231,10 +1315,15 @@ describe("a continuation line follows marked's block rules under a task item", (
     expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
   });
 
-  it("joins a lazy `===` at column zero as text", () => {
+  it("reads a lazy `===` at column zero as a level-1 setext underline, as marked does", () => {
     const item = onlyListItem("- [ ] first\n===", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph"]);
-    expect(paragraphText((item.content ?? [])[0])).toBe("first\n===");
+    const bullet = onlyListItem("- first\n===", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect((item.content ?? [])[1].attrs?.level).toBe(1);
+    expect(paragraphText((item.content ?? [])[1])).toBe("first");
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 
   it("ends the item at a lazy `---` at column zero", () => {
@@ -1245,15 +1334,25 @@ describe("a continuation line follows marked's block rules under a task item", (
     ]);
   });
 
-  it("joins an indented `===` as text", () => {
+  it("reads an indented `===` as a level-1 setext underline, as marked does", () => {
     const item = onlyListItem("- [ ] first\n  ===", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph"]);
-    expect(paragraphText((item.content ?? [])[0])).toBe("first\n===");
+    const bullet = onlyListItem("- first\n  ===", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect((item.content ?? [])[1].attrs?.level).toBe(1);
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 
-  it("makes an indented `---` a horizontal rule inside the item", () => {
+  it("reads an indented `---` as a level-2 setext underline, as marked does", () => {
     const item = onlyListItem("- [ ] first\n  ---", "taskList");
-    expect(childTypes(item)).toEqual(["paragraph", "horizontalRule"]);
+    const bullet = onlyListItem("- first\n  ---", "bulletList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect((item.content ?? [])[1].attrs?.level).toBe(2);
+    expect(paragraphText((item.content ?? [])[1])).toBe("first");
+    expect(skeleton(item)).toBe(
+      skeleton(bullet).replace("listItem", "taskItem"),
+    );
   });
 });
 
@@ -1330,12 +1429,12 @@ function firstThenParagraph(children: ReadonlyArray<JsonContent>): void {
 
 const CONTINUATION_ROWS: ReadonlyArray<ContinuationRow> = [
   {
-    name: "a quoted-attribute tag then a list line",
+    name: "a quoted-attribute tag ends the paragraph and keeps the list line in its HTML block",
     markdown: '- [ ] First\n  <span title=">">\n  - x',
     check: (children) => {
-      expect(children.map((c) => c.type)).toEqual(["paragraph", "bulletList"]);
-      expect(textOfNode(children[0]).startsWith("First")).toBe(true);
-      expect(textOfNode(children[1])).toBe("x");
+      expect(children.map((c) => c.type)).toEqual(["paragraph", "paragraph"]);
+      expect(textOfNode(children[0])).toBe("First");
+      expect(textOfNode(children[1])).toContain("- x");
     },
   },
   {
@@ -1361,9 +1460,9 @@ const CONTINUATION_ROWS: ReadonlyArray<ContinuationRow> = [
     check: firstThenParagraph,
   },
   {
-    name: "`2. x`",
+    name: "`2. x` opens an ordered list starting at 2, as marked reads a bullet item",
     markdown: "- [ ] First\n  2. x",
-    check: onlyParagraph("First\n2. x"),
+    check: paragraphThen("orderedList", "x"),
   },
   {
     name: "`1. x`",
@@ -1794,5 +1893,774 @@ describe("a horizontal rule survives the serializer in every position", () => {
     );
     expect(skeleton(throughSchema(parsed))).toBe(skeleton(parsed));
     expect(jsonContentToMarkdown(parsed, SERIALIZER_OPTIONS)).toBe(md);
+  });
+});
+
+// ---- G. a continuation probe must not register what it looked at
+
+function linkHrefs(node: JsonContent): string[] {
+  const own = (node.marks ?? [])
+    .filter((mark) => mark.type === "link")
+    .map((mark) => {
+      const href = mark.attrs?.href;
+      return typeof href === "string" ? href : "";
+    });
+  return [...own, ...(node.content ?? []).flatMap(linkHrefs)];
+}
+
+function lastTopParagraph(parsed: JsonContent): JsonContent {
+  const top = parsed.content ?? [];
+  const last = top[top.length - 1];
+  expect(last).toBeDefined();
+  expect(last.type).toBe("paragraph");
+  return last;
+}
+
+describe("a continuation probe leaves no reference definition behind", () => {
+  it("keeps a later [x] plain after a task item whose first line looks like a definition", () => {
+    const parsed = parseMarkdown("- [ ] [x]: /wrong\n  continuation\n\n[x]");
+    const item = findTaskItem(parsed);
+    expect(childTypes(item)).toEqual(["paragraph"]);
+    const text = paragraphText((item.content ?? [])[0]);
+    expect(text).toContain("[x]: /wrong");
+    expect(text).toContain("continuation");
+    const last = lastTopParagraph(parsed);
+    expect(paragraphText(last)).toBe("[x]");
+    expect(linkHrefs(last)).toEqual([]);
+  });
+
+  it("keeps a [x] in a following task item plain", () => {
+    const parsed = parseMarkdown(
+      "- [ ] [x]: /wrong\n  continuation\n- [ ] [x]",
+    );
+    const list = (parsed.content ?? [])[0];
+    expect(list.type).toBe("taskList");
+    const items = list.content ?? [];
+    expect(items).toHaveLength(2);
+    expect(paragraphText((items[1].content ?? [])[0])).toBe("[x]");
+    expect(linkHrefs(items[1])).toEqual([]);
+    expect(linkHrefs(parsed)).toEqual([]);
+  });
+
+  it("still reads a definition at the start of a bullet item's content as a definition", () => {
+    const parsed = parseMarkdown("- [x]: /wrong\n  continuation\n\n[x]");
+    expect(linkHrefs(lastTopParagraph(parsed))).toEqual(["/wrong"]);
+    const item = onlyListItem("- [x]: /wrong\n  continuation", "bulletList");
+    expect(collectText(item).join("")).toContain("continuation");
+  });
+
+  it("reads a definition at the start of an ordered item's content as a definition, as a bullet item does", () => {
+    const parsed = parseMarkdown("1. [x]: /wrong\n   continuation\n\n[x]");
+    const top = parsed.content ?? [];
+    expect(top.map((node) => node.type)).toEqual(["orderedList", "paragraph"]);
+    expect(linkHrefs(lastTopParagraph(parsed))).toEqual(["/wrong"]);
+    const bullet = parseMarkdown("- [x]: /wrong\n  continuation\n\n[x]");
+    expect(linkHrefs(bullet)).toEqual(linkHrefs(parsed));
+    const orderedItem = (top[0].content ?? [])[0];
+    expect(childTypes(orderedItem)).toEqual(["paragraph"]);
+    expect(paragraphText((orderedItem.content ?? [])[0])).toBe("continuation");
+  });
+
+  it("still defines a top-level definition for a later [x]", () => {
+    const parsed = parseMarkdown("[x]: /right\n\n- [ ] a\n  b\n\n[x]");
+    expect(linkHrefs(lastTopParagraph(parsed))).toEqual(["/right"]);
+  });
+
+  it("still defines a definition nested in a task item for a later [x]", () => {
+    const parsed = parseMarkdown("- [ ] a\n\n  [x]: /right\n\n[x]");
+    expect(linkHrefs(lastTopParagraph(parsed))).toEqual(["/right"]);
+  });
+
+  it("reads a definition under an empty task paragraph as a real definition", () => {
+    const parsed = parseMarkdown("- [ ] \n  [x]: /def\n\n[x]");
+    expect(linkHrefs(lastTopParagraph(parsed))).toEqual(["/def"]);
+  });
+});
+
+// ---- H. the ordered content column is measured from one to four spaces
+
+describe("an ordered item's content column follows the spaces after its marker", () => {
+  it("keeps a fence indented from a three-space gap inside the item", () => {
+    const parsed = parseMarkdown(
+      "1.   a\n        ```\n        2. x\n        ```\n2. b",
+    );
+    const top = parsed.content ?? [];
+    expect(top.map((node) => node.type)).toEqual(["orderedList"]);
+    const items = top[0].content ?? [];
+    expect(items).toHaveLength(2);
+    expect(childTypes(items[0])).toEqual(["paragraph", "codeBlock"]);
+    expect(paragraphText((items[0].content ?? [])[0])).toBe("a");
+    expect(collectText((items[0].content ?? [])[1]).join("")).toBe("2. x");
+    expect(childTypes(items[1])).toEqual(["paragraph"]);
+    expect(paragraphText((items[1].content ?? [])[0])).toBe("b");
+  });
+
+  it("joins a continuation indented to a two-space gap", () => {
+    const item = onlyListItem("1.  a\n    b", "orderedList");
+    expect(childTypes(item)).toEqual(["paragraph"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("a\nb");
+  });
+});
+
+// ---- H2. a fence indented up to three spaces keeps its code
+//
+// CommonMark lets a fence sit up to three spaces in, and marked reads it so;
+// the code block parser used to drop any fence that did not start at column
+// zero, so the code vanished.
+
+describe("a fence indented up to three spaces keeps its code", () => {
+  const ROWS: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> =
+    [
+      ["at the top level", "   ```\n   code\n   ```", ["codeBlock"]],
+      ["one space in", " ```\n code\n ```", ["codeBlock"]],
+      [
+        "under a bullet item",
+        "- a\n\n     ```\n     code\n     ```",
+        ["bulletList"],
+      ],
+      [
+        "under a task item",
+        "- [ ] a\n\n     ```\n     code\n     ```",
+        ["taskList"],
+      ],
+      [
+        "under an ordered item",
+        "1. a\n\n      ```\n      code\n      ```",
+        ["orderedList"],
+      ],
+    ];
+  for (const [name, markdown, topTypes] of ROWS) {
+    it(`keeps the code ${name}`, () => {
+      const parsed = parseMarkdown(markdown);
+      expect(childTypes(parsed)).toEqual(topTypes);
+      expect(hasNodeType(parsed, "codeBlock")).toBe(true);
+      expect(collectText(parsed).join("")).toContain("code");
+      expect(collectText(parsed).join("")).not.toContain("```");
+    });
+  }
+
+  it("keeps an ordered list's tab-indented task list and its nested list", () => {
+    const parsed = parseMarkdown("1. outer\n\t- [ ] t\n\t\t1. x");
+    expect(collectText(parsed).join("|")).toBe("outer|t|x");
+  });
+});
+
+// ---- I. a table cell's blocks stay in the table
+
+describe("a table cell holding a task list comes back as one table", () => {
+  it("parses the cell's <br>-joined lines into a two-row, one-cell table", () => {
+    const source: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableHeader",
+                  content: [textPara("h")],
+                },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [
+                    {
+                      type: "taskList",
+                      content: [
+                        {
+                          type: "taskItem",
+                          attrs: { checked: false },
+                          content: [textPara("a")],
+                        },
+                        {
+                          type: "taskItem",
+                          attrs: { checked: true },
+                          content: [textPara("b")],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonContentToMarkdown(source, SERIALIZER_OPTIONS);
+    expect(md.split("\n")).toHaveLength(3);
+    const parsed = parseMarkdown(md);
+    const top = parsed.content ?? [];
+    expect(top.map((node) => node.type)).toEqual(["table"]);
+    const rows = top[0].content ?? [];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.content ?? []).toHaveLength(1);
+    }
+    expect(hasNodeType(parsed, "taskList")).toBe(false);
+  });
+});
+
+// ---- J. a marker that is only text stays text
+
+// Only the list serializer's own empty marker lines keep their space. Text
+// that looks like a marker is trimmed like any other line; reading it back as
+// a paragraph needs the artifact serializer's line-start escaping (#2584),
+// since `1.` alone is an empty ordered item to marked.
+describe("a paragraph that reads like an empty marker keeps no marker space", () => {
+  it("trims '1. ' to '1.'", () => {
+    const md = jsonContentToMarkdown(
+      { type: "doc", content: [textPara("1. ")] },
+      SERIALIZER_OPTIONS,
+    );
+    expect(md).toBe("1.");
+  });
+});
+
+// ---- K. an empty nested item keeps its list under every bullet marker
+
+describe("an empty nested bullet item under text comes back as a nested list", () => {
+  for (const bulletMarker of ["-", "*", "+"] as const) {
+    it(`keeps the nested list written with ${bulletMarker}`, () => {
+      const source = listDoc(
+        listWith(
+          "bulletList",
+          [
+            itemOf(
+              textPara("parent"),
+              listWith("bulletList", [itemOf({ type: "paragraph" })], 1),
+            ),
+          ],
+          1,
+        ),
+      );
+      const md = jsonContentToMarkdown(source, {
+        ...SERIALIZER_OPTIONS,
+        bulletMarker,
+      });
+      expect(md).toBe(`${bulletMarker} parent\n\n  ${bulletMarker}`);
+      const parsed = parseMarkdown(md);
+      expect(skeleton(parsed)).toBe(skeleton(source));
+    });
+  }
+});
+
+// ---- L. the serializer's own markers never read as the user's text
+
+describe("a U+FDD0 the user typed comes back byte-identical", () => {
+  const FDD0 = "\uFDD0";
+
+  it("keeps the character in a paragraph, a bullet item and a table cell beside an empty item", () => {
+    const source: JsonContent = {
+      type: "doc",
+      content: [
+        textPara(`x${FDD0}y`),
+        listWith("bulletList", [itemOf(textPara(FDD0))], 1),
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [{ type: "tableHeader", content: [textPara("h")] }],
+            },
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableCell", content: [textPara(`a${FDD0}b`)] },
+              ],
+            },
+          ],
+        },
+        listWith("orderedList", [itemOf({ type: "paragraph" })], 1),
+      ],
+    };
+    const md = jsonContentToMarkdown(source, SERIALIZER_OPTIONS);
+    expect(md.split(FDD0)).toHaveLength(4);
+    expect(md.endsWith("\n1. ")).toBe(true);
+    const texts = collectText(parseMarkdown(md));
+    expect(texts).toContain(`x${FDD0}y`);
+    expect(texts).toContain(FDD0);
+    expect(texts).toContain(`a${FDD0}b`);
+  });
+
+  it("keeps a paragraph that is exactly '1.' and the character", () => {
+    const md = jsonContentToMarkdown(
+      { type: "doc", content: [textPara(`1.${FDD0}`)] },
+      SERIALIZER_OPTIONS,
+    );
+    expect(md).toBe(`1.${FDD0}`);
+    expect(collectText(parseMarkdown(md)).join("")).toBe(`1.${FDD0}`);
+  });
+});
+
+describe("a <br> typed in a table cell comes back as that text", () => {
+  for (const typed of ["a<br>b", "a<BR/>b"]) {
+    it(`keeps ${typed} as literal text with no hard break`, () => {
+      const source: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "table",
+            content: [
+              {
+                type: "tableRow",
+                content: [{ type: "tableHeader", content: [textPara("h")] }],
+              },
+              {
+                type: "tableRow",
+                content: [{ type: "tableCell", content: [textPara(typed)] }],
+              },
+            ],
+          },
+        ],
+      };
+      const md = jsonContentToMarkdown(source, SERIALIZER_OPTIONS);
+      const parsed = parseMarkdown(md);
+      expect(hasNodeType(parsed, "hardBreak")).toBe(false);
+      expect(collectText(parsed).join("")).toContain(typed);
+    });
+  }
+});
+
+// ---- M. an ordered item that opens with a block lexes it as marked does
+
+function itemsOf(markdown: string, listType: string): JsonContent[] {
+  const top = parseMarkdown(markdown).content ?? [];
+  expect(top.map((node) => node.type)).toContain(listType);
+  const list = top.find((node) => node.type === listType);
+  expect(list).toBeDefined();
+  return (list ?? top[0]).content ?? [];
+}
+
+function firstItemOf(markdown: string, listType: string): JsonContent {
+  return itemsOf(markdown, listType)[0];
+}
+
+function firstListOf(markdown: string): JsonContent {
+  return (parseMarkdown(markdown).content ?? [])[0];
+}
+
+// `lines` hold the item's first line (after the marker's one-space gap) and
+// its continuation lines relative to the content column.
+function orderedSource(marker: string, lines: ReadonlyArray<string>): string {
+  const pad = " ".repeat(marker.length + 1);
+  return lines
+    .map((line, index) => (index === 0 ? `${marker} ${line}` : `${pad}${line}`))
+    .join("\n");
+}
+
+function bulletSource(lines: ReadonlyArray<string>): string {
+  return lines
+    .map((line, index) => (index === 0 ? `- ${line}` : `  ${line}`))
+    .join("\n");
+}
+
+const OPENING_BLOCKS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> =
+  [
+    ["a heading", ["# h"]],
+    ["a quote", ["> q"]],
+    ["a fenced code block", ["```js", "code", "```"]],
+    ["indented code", ["     a"]],
+    ["an HTML block", ["<div>", " x", " </div>"]],
+    ["a nested bullet list", ["- x"]],
+  ];
+
+describe("an ordered item that opens with a block lexes it as marked does", () => {
+  for (const [name, lines] of OPENING_BLOCKS) {
+    for (const [marker, start] of [
+      ["1.", 1],
+      ["10.", 10],
+      ["100.", 100],
+    ] as const) {
+      it(`reads ${name} at ${marker} like a bullet item`, () => {
+        const ordered = firstListOf(orderedSource(marker, lines));
+        expect(ordered.type).toBe("orderedList");
+        expect(ordered.attrs?.start ?? 1).toBe(start);
+        const bullet = firstListOf(bulletSource(lines));
+        expect(bullet.type).toBe("bulletList");
+        expect(JSON.stringify((ordered.content ?? [])[0].content)).toBe(
+          JSON.stringify((bullet.content ?? [])[0].content),
+        );
+      });
+    }
+  }
+
+  for (const [marker, start] of [
+    ["1.", 1],
+    ["10.", 10],
+    ["100.", 100],
+  ] as const) {
+    it(`reads a thematic break at ${marker} as an empty paragraph and a rule`, () => {
+      const list = firstListOf(orderedSource(marker, ["---"]));
+      expect(list.type).toBe("orderedList");
+      expect(list.attrs?.start ?? 1).toBe(start);
+      const item = (list.content ?? [])[0];
+      expect(childTypes(item)).toEqual(["paragraph", "horizontalRule"]);
+      expect(paragraphText((item.content ?? [])[0])).toBe("");
+    });
+  }
+
+  it("reads `1. # h` as an empty paragraph and a heading", () => {
+    const item = firstItemOf("1. # h", "orderedList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("");
+    expect(collectText((item.content ?? [])[1]).join("")).toBe("h");
+  });
+
+  it("reads six spaces after the marker as indented code", () => {
+    const item = firstItemOf("1.      a", "orderedList");
+    expect(childTypes(item)).toEqual(["paragraph", "codeBlock"]);
+    expect(collectText((item.content ?? [])[1]).join("")).toBe(" a");
+  });
+
+  it("reads `1. 2. x` as a nested ordered list starting at 2", () => {
+    const item = firstItemOf("1. 2. x", "orderedList");
+    expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
+    const nested = (item.content ?? [])[1];
+    expect(nested.attrs?.start).toBe(2);
+    expect(childTypes((nested.content ?? [])[0])).toEqual(["paragraph"]);
+    expect(collectText(nested).join("")).toBe("x");
+  });
+});
+
+describe("marked decides where an ordered item's paragraph ends", () => {
+  function bulletForm(lines: ReadonlyArray<string>): string {
+    return lines
+      .map((line, index) =>
+        index === 0 ? `- ${line.slice(3)}` : `  ${line.slice(3)}`,
+      )
+      .join("\n");
+  }
+
+  function expectParity(lines: ReadonlyArray<string>): JsonContent {
+    const ordered = firstItemOf(lines.join("\n"), "orderedList");
+    const bullet = firstItemOf(bulletForm(lines), "bulletList");
+    expect(JSON.stringify(ordered.content)).toBe(
+      JSON.stringify(bullet.content),
+    );
+    return ordered;
+  }
+
+  it("keeps a deeply indented fence line as paragraph text before a sibling sub-list", () => {
+    const item = expectParity(["1. a", "       ```", "   2. b"]);
+    expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("a\n```");
+    expect((item.content ?? [])[1].attrs?.start).toBe(2);
+    expect(hasNodeType(item, "codeBlock")).toBe(false);
+  });
+
+  it("keeps a deeply indented fence and the line after it as paragraph text", () => {
+    const item = expectParity(["1. a", "       ```", "       x", "   2. b"]);
+    expect(childTypes(item)).toEqual(["paragraph", "orderedList"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("a\n```\nx");
+    expect((item.content ?? [])[1].attrs?.start).toBe(2);
+  });
+
+  it("reads a rule under text as a setext heading", () => {
+    const item = expectParity(["1. a", "   ---"]);
+    expect(childTypes(item)).toEqual(["paragraph", "heading"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("");
+    expect(collectText((item.content ?? [])[1]).join("")).toBe("a");
+  });
+
+  it("ends the paragraph after a heading opener", () => {
+    const item = firstItemOf("1. # h\n   text", "orderedList");
+    expect(childTypes(item)).toEqual(["paragraph", "heading", "paragraph"]);
+    expect(collectText((item.content ?? [])[1]).join("")).toBe("h");
+    expect(paragraphText((item.content ?? [])[2])).toBe("text");
+  });
+
+  it("keeps a list-looking line inside a fence opened on the first line", () => {
+    const item = expectParity(["1. ```", "   2. x", "   ```"]);
+    expect(hasNodeType(item, "orderedList")).toBe(false);
+    expect(hasNodeType(item, "codeBlock")).toBe(true);
+    expect(collectText(item).join("")).toBe("2. x");
+  });
+});
+
+describe("a continuation probe leaves no prototype-named definition behind", () => {
+  const LABELS = ["constructor", "__proto__", "toString", "hasOwnProperty"];
+
+  for (const label of LABELS) {
+    it(`keeps a later [${label}] plain after a task item`, () => {
+      const parsed = parseMarkdown(
+        `- [ ] [${label}]: /wrong\n  continuation\n\n[${label}]`,
+      );
+      expect(linkHrefs(parsed)).toEqual([]);
+      const item = findTaskItem(parsed);
+      expect(childTypes(item)).toEqual(["paragraph"]);
+    });
+
+    for (const [name, build] of [
+      ["bullet", (l: string) => `- [${l}]: /wrong\n  continuation\n\n[${l}]`],
+      [
+        "ordered",
+        (l: string) => `1. [${l}]: /wrong\n   continuation\n\n[${l}]`,
+      ],
+    ] as const) {
+      it(`reads a [${label}] definition in a ${name} item as it reads [x]`, () => {
+        const withLabel = parseMarkdown(build(label));
+        const withX = parseMarkdown(build("x"));
+        expect(childTypes(withLabel)).toEqual(childTypes(withX));
+        expect(linkHrefs(withLabel)).toEqual(linkHrefs(withX));
+        expect(linkHrefs(withLabel)).toEqual(["/wrong"]);
+      });
+    }
+
+    it(`keeps the real [${label}] definition ahead of a probed one`, () => {
+      const parsed = parseMarkdown(
+        `[${label}]: /right\n\n- [ ] [${label}]: /wrong\n  continuation\n\n[${label}]`,
+      );
+      expect(linkHrefs(lastTopParagraph(parsed))).toEqual(["/right"]);
+    });
+  }
+});
+
+// ---- N. the kept-marker placeholder never reads as the user's text
+
+describe("a doc with runs of U+FDD0 survives alongside empty list items", () => {
+  const FDD0 = "\uFDD0";
+
+  function runsDoc(): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        textPara(`x${FDD0.repeat(3)}y`),
+        listWith("bulletList", [itemOf(textPara(`p${FDD0}q`))], 1),
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [{ type: "tableHeader", content: [textPara("h")] }],
+            },
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableCell", content: [textPara(`a${FDD0}b`)] },
+              ],
+            },
+          ],
+        },
+        listWith("orderedList", [itemOf({ type: "paragraph" })], 1),
+        {
+          type: "taskList",
+          content: [
+            {
+              type: "taskItem",
+              attrs: { checked: false },
+              content: [{ type: "paragraph" }],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("keeps the user's runs as typed and the empty items' trailing space", () => {
+    const md = jsonContentToMarkdown(runsDoc(), SERIALIZER_OPTIONS);
+    expect(md.split(FDD0)).toHaveLength(6);
+    expect(md).toContain(`x${FDD0.repeat(3)}y`);
+    expect(md).toContain(`- p${FDD0}q`);
+    expect(md).toContain(`| a${FDD0}b |`);
+    expect(md.split("\n")).toContain("1. ");
+    expect(md.endsWith("\n- [ ] ")).toBe(true);
+  });
+
+  it("returns the same JSON after a markdown round trip", () => {
+    expectStructureBack(runsDoc());
+    const md = jsonContentToMarkdown(runsDoc(), SERIALIZER_OPTIONS);
+    const texts = collectText(parseMarkdown(md));
+    expect(texts).toContain(`x${FDD0.repeat(3)}y`);
+    expect(texts).toContain(`p${FDD0}q`);
+    expect(texts).toContain(`a${FDD0}b`);
+  });
+});
+
+// ---- O. Unicode whitespace is text, as in a bullet item
+
+describe("Unicode whitespace in a list item is text, as in a bullet item", () => {
+  const NBSP = "\u00a0";
+  const MARKER_ROWS = [
+    ["1.", 1],
+    ["10.", 10],
+    ["100.", 100],
+  ] as const;
+  const SPACES: ReadonlyArray<readonly [string, string]> = [
+    ["a non-breaking space", NBSP],
+    ["an em space", "\u2003"],
+    ["an ideographic space", "\u3000"],
+    ["five spaces", "     "],
+    ["a tab", "\t"],
+  ];
+
+  function itemContent(markdown: string, listType: string): string {
+    return JSON.stringify(firstItemOf(markdown, listType).content);
+  }
+
+  for (const [marker] of MARKER_ROWS) {
+    for (const [name, lead] of SPACES) {
+      it(`reads ${name} before a continuation line under ${marker} as a bullet item does`, () => {
+        const lines = ["a", `${lead}b`];
+        expect(itemContent(orderedSource(marker, lines), "orderedList")).toBe(
+          itemContent(bulletSource(lines), "bulletList"),
+        );
+      });
+    }
+  }
+
+  it("reads a tab before a continuation line as a joined line in both forms", () => {
+    for (const markdown of [
+      orderedSource("1.", ["a", "\tb"]),
+      bulletSource(["a", "\tb"]),
+    ]) {
+      const listType = markdown.startsWith("-") ? "bulletList" : "orderedList";
+      const item = firstItemOf(markdown, listType);
+      expect(paragraphText((item.content ?? [])[0])).toBe("a\nb");
+    }
+  });
+
+  for (const [name, lead] of SPACES.slice(0, 3)) {
+    it(`reads ${name} before a continuation line of a task item as a bullet item does`, () => {
+      const task = firstItemOf(`- [ ] a\n  ${lead}b`, "taskList");
+      const bullet = firstItemOf(`- a\n  ${lead}b`, "bulletList");
+      expect(childTypes(task)).toEqual(["paragraph"]);
+      expect(paragraphText((task.content ?? [])[0])).toBe(
+        paragraphText((bullet.content ?? [])[0]),
+      );
+    });
+  }
+
+  it("keeps a non-breaking space after the marker's separator", () => {
+    const item = firstItemOf(`1. ${NBSP}a`, "orderedList");
+    expect(paragraphText((item.content ?? [])[0])).toBe(`${NBSP}a`);
+  });
+
+  it("keeps a leading space on a lazy continuation line", () => {
+    const item = firstItemOf(`1. a\n${NBSP}b`, "orderedList");
+    expect(paragraphText((item.content ?? [])[0])).toBe(`a\n${NBSP}b`);
+  });
+
+  it("keeps a trailing non-breaking space on a continuation line", () => {
+    const item = firstItemOf(`1. a\n   b${NBSP}`, "orderedList");
+    expect(paragraphText((item.content ?? [])[0])).toBe(`a\nb${NBSP}`);
+  });
+
+  it("reads a non-breaking-space marker separator as paragraph text, not a list", () => {
+    for (const text of [`1.${NBSP}x`, `${NBSP}${NBSP}1. x`]) {
+      const top = parseMarkdown(text).content ?? [];
+      expect(top.map((node) => node.type)).toEqual(["paragraph"]);
+      expect(paragraphText(top[0])).toBe(text);
+    }
+  });
+
+  it("keeps a non-breaking space after a task marker", () => {
+    const item = firstItemOf(`- [ ] ${NBSP}a`, "taskList");
+    expect(paragraphText((item.content ?? [])[0])).toBe(`${NBSP}a`);
+  });
+
+  it("does not read a non-breaking-space-only line as blank", () => {
+    const lines = ["a", NBSP, "b"];
+    expect(itemContent(orderedSource("1.", lines), "orderedList")).toBe(
+      itemContent(bulletSource(lines), "bulletList"),
+    );
+  });
+});
+
+// ---- P. a continuation line keeps the indent marked keeps
+
+describe("a continuation line keeps the indent marked keeps", () => {
+  function textOfFirstItem(markdown: string, listType: string): string {
+    const item = firstItemOf(markdown, listType);
+    return JSON.stringify(item.content);
+  }
+
+  for (let extra = 1; extra <= 9; extra++) {
+    it(`reads ${extra} extra spaces under an ordered item as under a bullet item`, () => {
+      expect(
+        textOfFirstItem(`1. a\n${" ".repeat(3 + extra)}b`, "orderedList"),
+      ).toBe(textOfFirstItem(`- a\n${" ".repeat(2 + extra)}b`, "bulletList"));
+    });
+  }
+
+  for (let extra = 1; extra <= 6; extra++) {
+    it(`reads ${extra} extra spaces under a task item as under a bullet item`, () => {
+      const task = firstItemOf(
+        `- [ ] a\n${" ".repeat(2 + extra)}b`,
+        "taskList",
+      );
+      const bullet = firstItemOf(
+        `- a\n${" ".repeat(2 + extra)}b`,
+        "bulletList",
+      );
+      expect(childTypes(task)).toEqual(childTypes(bullet));
+      expect(paragraphText((task.content ?? [])[0])).toBe(
+        paragraphText((bullet.content ?? [])[0]),
+      );
+    });
+  }
+
+  it("keeps two spaces of an empty task item's continuation line", () => {
+    const item = firstItemOf("- [ ] \n    more", "taskList");
+    expect(childTypes(item)).toEqual(["paragraph"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe("  more");
+  });
+
+  it("keeps one space of an empty task item's continuation line", () => {
+    const item = firstItemOf("- [ ] \n   more", "taskList");
+    expect(childTypes(item)).toEqual(["paragraph"]);
+    expect(paragraphText((item.content ?? [])[0])).toBe(" more");
+  });
+
+  function brokenParagraph(): JsonContent {
+    return {
+      type: "paragraph",
+      content: [
+        { type: "text", text: "a" },
+        { type: "hardBreak" },
+        { type: "text", text: "  b" },
+      ],
+    };
+  }
+
+  function expectIndentedBreakBack(source: JsonContent): void {
+    const md1 = jsonContentToMarkdown(source, SERIALIZER_OPTIONS);
+    const parsed = parseMarkdown(md1);
+    expect(collectText(parsed).join("")).toBe("a\n  b");
+    const md2 = jsonContentToMarkdown(parsed, SERIALIZER_OPTIONS);
+    const md3 = jsonContentToMarkdown(parseMarkdown(md2), SERIALIZER_OPTIONS);
+    expect(md2).toBe(md1);
+    expect(md3).toBe(md1);
+  }
+
+  it("round-trips a hard break before indented text in an ordered item", () => {
+    expectIndentedBreakBack(orderedAt(1, brokenParagraph()));
+  });
+
+  it("round-trips a hard break before indented text in a bullet item", () => {
+    expectIndentedBreakBack(
+      listDoc(listWith("bulletList", [itemOf(brokenParagraph())], 1)),
+    );
+  });
+
+  it("round-trips a hard break before indented text in a task item", () => {
+    expectIndentedBreakBack(
+      listDoc({
+        type: "taskList",
+        content: [
+          {
+            type: "taskItem",
+            attrs: { checked: false },
+            content: [brokenParagraph()],
+          },
+        ],
+      }),
+    );
   });
 });

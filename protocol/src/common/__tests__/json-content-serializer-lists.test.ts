@@ -815,6 +815,275 @@ describe("jsonContentToMarkdown horizontal rules", () => {
   });
 });
 
+describe("jsonContentToMarkdown bare bullet markers under text", () => {
+  const MARKER_ROWS = [
+    ["-", "- parent\n\n  -"],
+    ["*", "* parent\n\n  *"],
+    ["+", "+ parent\n\n  +"],
+  ] as const;
+
+  for (const [bulletMarker, bytes] of MARKER_ROWS) {
+    it(`puts a blank line before an empty nested ${bulletMarker} item under text`, () => {
+      expect(
+        jsonContentToMarkdown(
+          docOf(
+            bulletList([
+              listItem([
+                textParagraph("parent"),
+                bulletList([listItem([{ type: "paragraph" }])]),
+              ]),
+            ]),
+          ),
+          { mentionFormat: "llm", platform: "POSIX", bulletMarker },
+        ),
+      ).toBe(bytes);
+    });
+  }
+});
+
+describe("jsonContentToMarkdown keeps the marker space only on a real empty item", () => {
+  const KEPT_SPACE = "\uFDD0";
+  const empty: JsonContent = { type: "paragraph" };
+
+  function check(content: JsonContent, bytes: string): void {
+    const out = toMarkdown(content);
+    expect(out).toBe(bytes);
+    expect(out).not.toContain(KEPT_SPACE);
+  }
+
+  it("trims a paragraph whose text is an ordered marker and a space", () => {
+    check(docOf(textParagraph("1. ")), "1.");
+  });
+
+  it("trims a paragraph whose text is an empty task marker and a space", () => {
+    check(docOf(textParagraph("- [ ] ")), "- [ ]");
+  });
+
+  it("keeps the space of an empty ordered item that ends the document", () => {
+    check(docOf(orderedBlock([listItem([empty])], 1)), "1. ");
+  });
+
+  it("keeps the space of an empty ordered item before a paragraph", () => {
+    check(
+      docOf(orderedBlock([listItem([empty])], 1), textParagraph("x")),
+      "1. \n\nx",
+    );
+  });
+
+  it("keeps the space of an empty task item that ends the document", () => {
+    check(docOf(taskBlock([taskEntry([empty])])), "- [ ] ");
+  });
+});
+
+describe("jsonContentToMarkdown placeholder never collides with the user's text", () => {
+  const FDD0 = "\uFDD0";
+
+  function collisionDoc(): JsonContent {
+    return docOf(
+      textParagraph(`x${FDD0}y`),
+      bulletList([listItem([textParagraph(FDD0)])]),
+      {
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: [
+              {
+                type: "tableHeader",
+                content: [textParagraph("h")],
+              },
+            ],
+          },
+          {
+            type: "tableRow",
+            content: [
+              {
+                type: "tableCell",
+                content: [textParagraph(`a${FDD0}b`)],
+              },
+            ],
+          },
+        ],
+      },
+      orderedBlock([listItem([{ type: "paragraph" }])], 1),
+    );
+  }
+
+  it("keeps the user's U+FDD0 where it was typed and still writes an empty item's space", () => {
+    const out = toMarkdown(collisionDoc());
+    expect(out.split(FDD0)).toHaveLength(4);
+    expect(out).toContain(`x${FDD0}y`);
+    expect(out).toContain(`- ${FDD0}`);
+    expect(out).toContain(`| a${FDD0}b |`);
+    expect(out.endsWith("\n1. ")).toBe(true);
+  });
+
+  it("writes a paragraph whose text is exactly '1.' and U+FDD0 as it was typed", () => {
+    expect(toMarkdown(docOf(textParagraph(`1.${FDD0}`)))).toBe(`1.${FDD0}`);
+  });
+});
+
+describe("jsonContentToMarkdown placeholder yields to runs of U+FDD0 in the text", () => {
+  const FDD0 = "\uFDD0";
+
+  it("leaves the user's runs unchanged and ends empty items with their space", () => {
+    const out = toMarkdown(
+      docOf(
+        textParagraph(`x${FDD0.repeat(3)}y`),
+        bulletList([listItem([textParagraph(`p${FDD0}q`)])]),
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [{ type: "tableHeader", content: [textParagraph("h")] }],
+            },
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableCell", content: [textParagraph(`a${FDD0}b`)] },
+              ],
+            },
+          ],
+        },
+        orderedBlock([listItem([{ type: "paragraph" }])], 1),
+        taskBlock([taskEntry([{ type: "paragraph" }])]),
+      ),
+    );
+    expect(out.split(FDD0)).toHaveLength(6);
+    expect(out).toContain(`x${FDD0.repeat(3)}y`);
+    expect(out).toContain(`- p${FDD0}q`);
+    expect(out).toContain(`| a${FDD0}b |`);
+    expect(out.split("\n")).toContain("1. ");
+    expect(out.endsWith("\n- [ ] ")).toBe(true);
+  });
+
+  it("serializes text holding every noncharacter and private-use code point", () => {
+    const ranges: ReadonlyArray<readonly [number, number]> = [
+      [0xfdd0, 0xfdef],
+      [0xe000, 0xf8ff],
+      [0xf0000, 0xffffd],
+    ];
+    let census = "";
+    for (const [first, last] of ranges) {
+      for (let codePoint = first; codePoint <= last; codePoint++) {
+        census += String.fromCodePoint(codePoint);
+      }
+    }
+    const out = toMarkdown(
+      docOf(
+        textParagraph(census),
+        orderedBlock([listItem([{ type: "paragraph" }])], 1),
+      ),
+    );
+    expect(out).toBe(`${census}\n\n1. `);
+  });
+});
+
+describe("jsonContentToMarkdown writes paragraph text as typed", () => {
+  const TEXTS = ["# h", "1. x", "- x"];
+
+  for (const typed of TEXTS) {
+    it(`writes "${typed}" as typed at the top level`, () => {
+      expect(toMarkdown(docOf(textParagraph(typed)))).toBe(typed);
+    });
+
+    it(`writes "${typed}" as typed in a bullet item`, () => {
+      expect(
+        toMarkdown(docOf(bulletList([listItem([textParagraph(typed)])]))),
+      ).toBe(`- ${typed}`);
+    });
+
+    it(`writes "${typed}" as typed in an ordered item`, () => {
+      expect(
+        toMarkdown(docOf(orderedBlock([listItem([textParagraph(typed)])], 1))),
+      ).toBe(`1. ${typed}`);
+    });
+  }
+});
+
+describe("jsonContentToMarkdown placeholder against adjacent and very long input", () => {
+  const FDD0 = "\uFDD0";
+  const emptyOrdered = (): JsonContent =>
+    orderedBlock([listItem([{ type: "paragraph" }])], 1);
+
+  function adjacentRuns(): JsonContent {
+    return {
+      type: "paragraph",
+      content: [
+        { type: "text", text: FDD0, marks: [{ type: "textStyle" }] },
+        { type: "text", text: FDD0 },
+      ],
+    };
+  }
+
+  it("keeps two adjacent U+FDD0 nodes whose marks differ and still writes an empty item's space", () => {
+    const out = toMarkdown(docOf(adjacentRuns(), emptyOrdered()));
+    expect(out).toContain(`${FDD0}${FDD0}`);
+    expect(out).toBe(`${FDD0}${FDD0}\n\n1. `);
+  });
+
+  it("keeps two adjacent U+FDD0 nodes in a table cell, where the placeholder becomes a space", () => {
+    const table: JsonContent = {
+      type: "table",
+      content: [
+        {
+          type: "tableRow",
+          content: [{ type: "tableHeader", content: [textParagraph("h")] }],
+        },
+        {
+          type: "tableRow",
+          content: [{ type: "tableCell", content: [adjacentRuns()] }],
+        },
+      ],
+    };
+    const out = toMarkdown(docOf(table, emptyOrdered()));
+    expect(out).toBe(`| h |\n| --- |\n| ${FDD0}${FDD0} |\n\n1. `);
+  });
+
+  it("keeps adjacent U+FDD0 nodes beside text holding every noncharacter and private-use code point", () => {
+    let census = "";
+    for (const [first, last] of [
+      [0xfdd0, 0xfdef],
+      [0xe000, 0xf8ff],
+      [0xf0000, 0xffffd],
+    ] as const) {
+      for (let codePoint = first; codePoint <= last; codePoint++) {
+        census += String.fromCodePoint(codePoint);
+      }
+    }
+    const out = toMarkdown(
+      docOf(textParagraph(census), adjacentRuns(), emptyOrdered()),
+    );
+    expect(out).toBe(`${census}\n\n${FDD0}${FDD0}\n\n1. `);
+  });
+
+  it("writes thousands of empty items after a very long run in linear size", () => {
+    const run = FDD0.repeat(100000);
+    const count = 6000;
+    const items: JsonContent[] = [];
+    const lines: string[] = [];
+    for (let index = 1; index <= count; index++) {
+      items.push(listItem([{ type: "paragraph" }]));
+      lines.push(`${index}. `);
+    }
+    const out = toMarkdown(docOf(textParagraph(run), orderedBlock(items, 1)));
+    const expected = `${run}\n\n${lines.join("\n")}`;
+    expect(out.length).toBe(expected.length);
+    expect(out === expected).toBe(true);
+  });
+
+  it("leaves non-breaking spaces at a document's edges alone", () => {
+    expect(toMarkdown(docOf(textParagraph("\u00a0a\u00a0")))).toBe(
+      "\u00a0a\u00a0",
+    );
+  });
+
+  it("trims plain spaces at a document's edges", () => {
+    expect(toMarkdown(docOf(textParagraph(" a ")))).toBe("a");
+  });
+});
+
 function rule(): JsonContent {
   return { type: "horizontalRule" };
 }

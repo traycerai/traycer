@@ -683,6 +683,43 @@ const TABLE_WITH_HARD_BREAK_CELL_DOC: JsonContent = {
   ],
 };
 
+/** A `<br>` the user typed in a cell is text, escaped by the serializer. */
+const TABLE_WITH_TYPED_BR_CELL_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "table",
+      content: [
+        {
+          type: "tableRow",
+          content: [
+            {
+              type: "tableHeader",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "h" }] },
+              ],
+            },
+          ],
+        },
+        {
+          type: "tableRow",
+          content: [
+            {
+              type: "tableCell",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "a<br>b" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
 /** Two block children in one cell - whatever the join is, the byte test says. */
 const TABLE_WITH_MULTI_BLOCK_CELL_DOC: JsonContent = {
   type: "doc",
@@ -1954,6 +1991,7 @@ describe("content recovery classification", () => {
       TWO_PARAGRAPH_ORDERED_ITEM_DOC,
       TABLE_WITH_HARD_BREAK_CELL_DOC,
       TABLE_WITH_MULTI_BLOCK_CELL_DOC,
+      TABLE_WITH_TYPED_BR_CELL_DOC,
       HEADING_LEVELS_DOC,
     ];
     for (const doc of shapes) {

@@ -682,7 +682,7 @@ function firstBlockLines(
   ];
 }
 
-const BARE_BULLET_LINE = /^[ \t]*-[ \t]*$/;
+const BARE_BULLET_LINE = /^[ \t]*[-*+][ \t]*$/;
 const THEMATIC_BREAK = "---";
 const ORDERED_MARKER_LINE = /^[ \t]*(\d{1,9})[.)]/;
 
@@ -749,7 +749,12 @@ function tableLines(table: JsonContent): ReadonlyArray<JsonContent> {
         // merge two cells - the serializer escapes in this order for the same
         // reason.
         .replace(/\\/g, "\\\\")
-        .replace(/\|/g, "\\|"),
+        .replace(/\|/g, "\\|")
+        // A typed `<br>` is text, as `escapeTableCellText` writes it...
+        .replace(/<(?=br\b)/gi, "\\<")
+        // ...and a line break would end the row: `tableCellLine` writes it
+        // `<br>`.
+        .replace(/\n/g, "<br>"),
     );
     const isHeader = (row.content ?? []).some(
       (cell) => cell.type === "tableHeader",
