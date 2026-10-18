@@ -37,6 +37,7 @@ import {
   chatSubscribeV128,
   chatSubscribeV129,
   chatSubscribeV130,
+  chatSubscribeV131,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2297,7 +2298,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 30 as chatSubscribeV130", () => {
+  it("registers chat.subscribe major 1 latestMinor 31 as chatSubscribeV131", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2369,8 +2370,10 @@ describe("chat.subscribe registry membership", () => {
     // tool-call `artifact` stamp: the manifest an inline
     // `traycer_render_inline` artifact showed, projected away for every
     // `<=1.28` peer. `30` grows the browser annotation record with the canvas
-    // arm, projected away for every `<=1.29` peer.
-    expect(entry[1].latestMinor).toBe(30);
+    // arm, projected away for every `<=1.29` peer. `31` widens the
+    // accumulated-change `artifact` tag to all seven artifact kinds, blanked
+    // to `null` for every `<=1.30` peer.
+    expect(entry[1].latestMinor).toBe(31);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2396,6 +2399,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[28].contract).toBe(chatSubscribeV128);
     expect(entry[1].versions[29].contract).toBe(chatSubscribeV129);
     expect(entry[1].versions[30].contract).toBe(chatSubscribeV130);
+    expect(entry[1].versions[31].contract).toBe(chatSubscribeV131);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });

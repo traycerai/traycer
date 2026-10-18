@@ -1560,3 +1560,6 @@ export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 28;
 
 /** Older peers receive the tool row without its inline artifact stamp. */
 export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 29;
+
+/** Older peers receive accumulated changes without new-kind artifact tags. */
+export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 31;
