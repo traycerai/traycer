@@ -37,7 +37,10 @@ import {
   HostRecoveryDeferredError,
   respawnIfDown,
 } from "../../startup/host-health-respawn";
-import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
+import {
+  __setAsyncProcessLivenessReaderForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
+} from "../process-identity";
 import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   SERVICE_TASK_NOT_OWNED_MESSAGE,
@@ -117,6 +120,40 @@ function fakeHost(overrides: Partial<IpcHostLifecycle>): IpcHostLifecycle {
   } as IpcHostLifecycle;
 }
 
+const PUBLISHED_IDENTITY = "linux:boot-pub 1";
+
+/**
+ * Routes the monitor's published-host read through its real pid.json reader
+ * (stubbed at the file read) with a start identity. The structural
+ * `readMetadata` seam carries none, and a host that publishes none is told it
+ * is not responding but never offered a force restart, so every row that
+ * expects an offer reads through here.
+ */
+function publishThroughPidJson(
+  read: () => DesktopPublishedHostSnapshot | null,
+  identity: string | null,
+): void {
+  // The identity check reads the process table; under fake timers a real read
+  // would not settle on the tick's schedule. The process is there and is the
+  // one that published `identity`, so a host that answers is available and one
+  // that does not is busy.
+  __setAsyncProcessLivenessReaderForTest(async () => "alive");
+  __setAsyncProcessStartIdentityReaderForTest(async () => identity);
+  vi.spyOn(hostLifecycle, "readPidMetadataState").mockImplementation(
+    async () => {
+      const snapshot = read();
+      return snapshot === null
+        ? { kind: "absent" }
+        : {
+            kind: "parsed",
+            snapshot,
+            startedAt: null,
+            startIdentity: identity,
+          };
+    },
+  );
+}
+
 function deferred<T>(): {
   readonly promise: Promise<T>;
   resolve: (value: T) => void;
@@ -134,6 +171,9 @@ describe("startHostHealthMonitor", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    __setAsyncProcessLivenessReaderForTest(null);
+    __setAsyncProcessStartIdentityReaderForTest(null);
   });
 
   async function ticks(count: number): Promise<void> {
@@ -695,7 +735,7 @@ describe("startHostHealthMonitor", () => {
       host: fakeHost({ reloadSnapshotFromDisk: reload }),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
-      readMetadata: vi.fn(async () => SNAPSHOT),
+      readMetadata: undefined,
       respawn,
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -706,6 +746,7 @@ describe("startHostHealthMonitor", () => {
       readLiveSupervisorPid: () => Promise.resolve(null),
       onHostUnresponsive,
     };
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor(deps);
 
     // Inside the window: an epic-open stall, nothing offered.
@@ -734,11 +775,12 @@ describe("startHostHealthMonitor", () => {
     let reachable = false;
     const probe = vi.fn(async () => reachable);
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({}),
       intervalMs: INTERVAL_MS,
       probe,
-      readMetadata: vi.fn(async () => SNAPSHOT),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -774,11 +816,12 @@ describe("startHostHealthMonitor", () => {
 
   it("never reports a host that was healthy throughout, not even a null", async () => {
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({}),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => true),
-      readMetadata: vi.fn(async () => SNAPSHOT),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -801,11 +844,12 @@ describe("startHostHealthMonitor", () => {
     // has to go, and only once.
     let current: DesktopPublishedHostSnapshot | null = SNAPSHOT;
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({ getSnapshot: () => current }),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
-      readMetadata: vi.fn(async () => SNAPSHOT),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -839,11 +883,12 @@ describe("startHostHealthMonitor", () => {
     };
     let current: DesktopPublishedHostSnapshot = SNAPSHOT;
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => current, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({ getSnapshot: () => current }),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
-      readMetadata: vi.fn(async () => current),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -886,11 +931,12 @@ describe("startHostHealthMonitor", () => {
 
   it("offers an unchanged host once per stall, and does not repeat the offer (traycer#1563 D3a)", async () => {
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({}),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
-      readMetadata: vi.fn(async () => SNAPSHOT),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -915,11 +961,12 @@ describe("startHostHealthMonitor", () => {
     // latch must not carry over.
     let current: DesktopPublishedHostSnapshot | null = SNAPSHOT;
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({ getSnapshot: () => current }),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
-      readMetadata: vi.fn(async () => SNAPSHOT),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -968,11 +1015,12 @@ describe("startHostHealthMonitor", () => {
     };
     let current: DesktopPublishedHostSnapshot = SNAPSHOT;
     const onHostUnresponsive = vi.fn();
+    publishThroughPidJson(() => current, PUBLISHED_IDENTITY);
     const monitor = startHostHealthMonitor({
       host: fakeHost({ getSnapshot: () => current }),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
-      readMetadata: vi.fn(async () => current),
+      readMetadata: undefined,
       respawn: vi.fn(async () => {}),
       automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
@@ -1226,7 +1274,7 @@ describe("startHostHealthMonitor", () => {
     function offerOut(told: Told): LocalHostUnresponsiveOffer {
       for (let i = told.length - 1; i >= 0; i -= 1) {
         const state = told[i];
-        if (state !== null && state !== undefined) {
+        if (state !== null && state !== undefined && state.offerId !== null) {
           return { pid: state.pid, offerId: state.offerId };
         }
       }
@@ -1238,11 +1286,12 @@ describe("startHostHealthMonitor", () => {
       probe: () => Promise<boolean>,
       told: Told,
     ): HostHealthMonitor {
+      publishThroughPidJson(() => state.published, PUBLISHED_IDENTITY);
       return startHostHealthMonitor({
         host: fakeHost({ getSnapshot: () => state.snapshot }),
         intervalMs: INTERVAL_MS,
         probe,
-        readMetadata: vi.fn(async () => state.published),
+        readMetadata: undefined,
         respawn: vi.fn(async () => {}),
         automaticRecoverySuspended: () => false,
         governor: createHostRecoveryGovernor({
@@ -1446,6 +1495,126 @@ describe("startHostHealthMonitor", () => {
       await expect(monitor.stillUnresponsive(first)).resolves.toBe(false);
       await expect(monitor.stillUnresponsive(second)).resolves.toBe(true);
       monitor.dispose();
+    });
+
+    describe("a host that publishes no start identity", () => {
+      // Without an identity a replacement that reuses the pid and endpoint
+      // cannot be told apart from the host the person was asked about, so the
+      // person is told the host is not responding and offered nothing.
+      function startWithoutIdentity(
+        state: { snapshot: DesktopPublishedHostSnapshot },
+        told: Told,
+        respawn: () => Promise<void>,
+      ): HostHealthMonitor {
+        publishThroughPidJson(() => state.snapshot, null);
+        return startHostHealthMonitor({
+          host: fakeHost({ getSnapshot: () => state.snapshot }),
+          intervalMs: INTERVAL_MS,
+          probe: vi.fn(async () => false),
+          readMetadata: undefined,
+          respawn,
+          automaticRecoverySuspended: () => false,
+          governor: createHostRecoveryGovernor({
+            readLiveness: ALIVE,
+            now: undefined,
+          }),
+          readLiveness: ALIVE,
+          readLiveSupervisorPid: () => Promise.resolve(null),
+          onHostUnresponsive: (next) => {
+            told.push(next);
+          },
+        });
+      }
+
+      it("is told about, with no offer, and a force restart for any offer id is declined with nothing killed", async () => {
+        const told: Told = [];
+        const respawn = vi.fn(async () => {});
+        const monitor = startWithoutIdentity(
+          { snapshot: SNAPSHOT },
+          told,
+          respawn,
+        );
+        await ticks(700);
+
+        expect(told).toHaveLength(1);
+        expect(told[0]).toEqual({
+          pid: SNAPSHOT.pid,
+          offerId: null,
+          unreachableForMs: expect.any(Number),
+        });
+        for (const offerId of [0, 1, 2, 7]) {
+          await expect(
+            monitor.stillUnresponsive({ pid: SNAPSHOT.pid, offerId }),
+          ).resolves.toBe(false);
+        }
+        expect(respawn).not.toHaveBeenCalled();
+        monitor.dispose();
+      });
+
+      it("declines every offer id after the published host is replaced by one with the same pid and endpoint and no identity either", async () => {
+        const told: Told = [];
+        const respawn = vi.fn(async () => {});
+        const state = { snapshot: SNAPSHOT };
+        const monitor = startWithoutIdentity(state, told, respawn);
+        await ticks(700);
+        expect(told.at(-1)?.offerId).toBeNull();
+
+        // Another process, same pid and endpoint, still no identity.
+        state.snapshot = { ...SNAPSHOT };
+        await ticks(5);
+        for (const offerId of [0, 1, 2, 7]) {
+          await expect(
+            monitor.stillUnresponsive({ pid: SNAPSHOT.pid, offerId }),
+          ).resolves.toBe(false);
+        }
+        expect(respawn).not.toHaveBeenCalled();
+        monitor.dispose();
+      });
+
+      it("declines an offer made for an identified host once the published record no longer carries an identity", async () => {
+        // The guard itself: an offer exists only for a host with an identity,
+        // but the record can lose it before the click, and a record with none
+        // matches no offer.
+        const told: Told = [];
+        const identity: { current: string | null } = {
+          current: PUBLISHED_IDENTITY,
+        };
+        __setAsyncProcessLivenessReaderForTest(async () => "dead");
+        vi.spyOn(hostLifecycle, "readPidMetadataState").mockImplementation(
+          async () => ({
+            kind: "parsed",
+            snapshot: SNAPSHOT,
+            startedAt: null,
+            startIdentity: identity.current,
+          }),
+        );
+        const respawn = vi.fn(async () => {});
+        const monitor = startHostHealthMonitor({
+          host: fakeHost({ getSnapshot: () => SNAPSHOT }),
+          intervalMs: INTERVAL_MS,
+          probe: vi.fn(async () => false),
+          readMetadata: undefined,
+          respawn,
+          automaticRecoverySuspended: () => false,
+          governor: createHostRecoveryGovernor({
+            readLiveness: ALIVE,
+            now: undefined,
+          }),
+          readLiveness: ALIVE,
+          readLiveSupervisorPid: () => Promise.resolve(null),
+          onHostUnresponsive: (next) => {
+            told.push(next);
+          },
+        });
+        await ticks(700);
+        const offer = offerOut(told);
+        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+
+        identity.current = null;
+        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+        expect(respawn).not.toHaveBeenCalled();
+        monitor.dispose();
+      });
     });
 
     describe("with the start identity pid.json publishes", () => {

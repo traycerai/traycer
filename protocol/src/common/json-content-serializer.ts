@@ -1150,7 +1150,15 @@ function serializeHeading(node: JsonContent, ctx: SerializerContext): string {
   const level = readNumberAttr(node.attrs, "level", 1);
   const prefix = "#".repeat(level);
   const content = serializeChildren(node.content, { ...ctx, inHeading: true });
-  return `${prefix} ${content}`;
+  return `${prefix} ${ctx.escapeText ? withoutClosingSequence(content) : content}`;
+}
+
+// A run of `#` at the end of an ATX heading, after a space or tab or as its
+// whole content, is the optional closing sequence (CommonMark 4.2), which the
+// parser drops - so heading text `Title #` written as is reads back `Title`.
+// Escaping the run's first `#` leaves no unescaped run behind a space.
+function withoutClosingSequence(content: string): string {
+  return content.replace(/(^|[ \t])(#+[ \t]*)$/, "$1\\$2");
 }
 
 /** An image's alt text and source, as an artifact reader reads it back. */

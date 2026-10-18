@@ -893,6 +893,54 @@ describe("artifact heading hard breaks", () => {
   });
 });
 
+describe("artifact heading closing sequence", () => {
+  const heading = (level: number, value: string): JsonContent => ({
+    type: "heading",
+    attrs: { level },
+    content: [plain(value)],
+  });
+
+  // A run of `#` at the end of an ATX heading, set off by a space or standing
+  // alone, is the closing sequence the parser drops: `## Title #` reads back
+  // as `Title`. The run's first `#` is escaped so it stays text.
+  it.each([
+    ["a hash after a space", "Title #", "## Title \\#"],
+    ["two hashes after a space", "Title ##", "## Title \\##"],
+    ["a lone hash", "#", "## \\#"],
+    ["two lone hashes", "##", "## \\##"],
+    ["a hash after a tab", "Title\t#", "## Title\t\\#"],
+    ["a hash after a space, with trailing spaces", "Title #  ", "## Title \\#"],
+  ])("escapes the closing run: %s", (_name, value, expected) => {
+    expect(artifact(doc([heading(2, value)]))).toBe(expected);
+  });
+
+  it.each([
+    ["a hash inside a word", "a#", "## a#"],
+    ["a hash with text after it", "Title # x", "## Title # x"],
+    ["a hash after a backslash", "Title \\#", "## Title \\\\#"],
+  ])(
+    "leaves a run that is not a closing sequence: %s",
+    (_name, value, expected) => {
+      expect(artifact(doc([heading(2, value)]))).toBe(expected);
+    },
+  );
+
+  it("keeps the closing run escaped when a block follows", () => {
+    expect(
+      artifact(doc([heading(2, "Title #"), paragraph([plain("after")])])),
+    ).toBe("## Title \\#\n\nafter");
+  });
+
+  it("escapes only the run at the end of the heading", () => {
+    expect(artifact(doc([heading(2, "# a #")]))).toBe("## # a \\#");
+  });
+
+  it("leaves the prompt serializer's heading text raw", () => {
+    expect(prompt(doc([heading(2, "Title #")]))).toBe("## Title #");
+    expect(prompt(doc([heading(2, "#")]))).toBe("## #");
+  });
+});
+
 // The artifact path needs no reader at runtime: a fallback is raw when it
 // decodes as the producer's exact text AND the container keeps the image the
 // readers read it back as (`imageKept`). What the real readers do with each

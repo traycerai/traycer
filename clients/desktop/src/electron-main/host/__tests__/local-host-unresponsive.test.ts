@@ -62,6 +62,23 @@ describe("confirmLocalHostStillUnresponsive", () => {
     expect(check).not.toHaveBeenCalled();
   });
 
+  it("returns false for every offer id while the verdict carries no offer, without asking", async () => {
+    const check = vi.fn(async () => true);
+    setLocalHostStillUnresponsiveCheck(check);
+    publishLocalHostUnresponsive({
+      pid: 4242,
+      offerId: null,
+      unreachableForMs: 600_000,
+    });
+
+    for (const offerId of [1, 7, 2 ** 31]) {
+      await expect(
+        confirmLocalHostStillUnresponsive({ pid: 4242, offerId }),
+      ).resolves.toBe(false);
+    }
+    expect(check).not.toHaveBeenCalled();
+  });
+
   it("returns false for an old offer once a later one for the same pid is published", async () => {
     const check = vi.fn(async () => true);
     setLocalHostStillUnresponsiveCheck(check);

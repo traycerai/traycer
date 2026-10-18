@@ -10,13 +10,14 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 
 const HOST_UNRESPONSIVE_TOAST_ID = "host-unresponsive";
 const HOST_UNRESPONSIVE_TITLE = "Host is not responding. Force restart?";
+const HOST_UNRESPONSIVE_NOTICE_TITLE = "Host is not responding.";
 
 // The shell reports the outage once, when it passes the busy window, and the
 // offer stays up for as long as the outage lasts - so the duration it carries
 // is a lower bound, not a running count.
-function hostUnresponsiveDescription(state: LocalHostUnresponsive): string {
+function unansweredFor(state: LocalHostUnresponsive): string {
   const minutes = Math.floor(state.unreachableForMs / 60_000);
-  return `It has not answered for at least ${minutes} min. A force restart ends any work in progress on it.`;
+  return `It has not answered for at least ${minutes} min.`;
 }
 
 /**
@@ -47,15 +48,27 @@ export function HostUnresponsivePrompt() {
         toast.dismiss(HOST_UNRESPONSIVE_TOAST_ID);
         return;
       }
+      // No offer: the shell could not hold a restart to this host (it
+      // published no start identity), so the person is told and offered
+      // nothing.
+      const { offerId } = state;
+      if (offerId === null) {
+        toast(HOST_UNRESPONSIVE_NOTICE_TITLE, {
+          id: HOST_UNRESPONSIVE_TOAST_ID,
+          description: unansweredFor(state),
+          duration: Infinity,
+        });
+        return;
+      }
       toast(
         <ActionToastContent
           toastId={HOST_UNRESPONSIVE_TOAST_ID}
           eyebrow={null}
           title={HOST_UNRESPONSIVE_TITLE}
-          description={hostUnresponsiveDescription(state)}
+          description={`${unansweredFor(state)} A force restart ends any work in progress on it.`}
           actionLabel="Force restart"
           onAction={() => {
-            forceRestart({ pid: state.pid, offerId: state.offerId });
+            forceRestart({ pid: state.pid, offerId });
           }}
           onLater={null}
         />,

@@ -19,6 +19,7 @@ vi.mock("next-themes", () => ({
 }));
 
 const TITLE = "Host is not responding. Force restart?";
+const NOTICE_TITLE = "Host is not responding.";
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -81,6 +82,119 @@ describe("<HostUnresponsivePrompt />", () => {
     expect(
       screen.getByRole("button", { name: "Force restart" }),
     ).not.toBeNull();
+  });
+
+  it("says a force restart ends work in progress when it offers one", async () => {
+    const host = createRunnerHost();
+    renderPrompt(host);
+
+    act(() => {
+      host.setLocalHostUnresponsive({
+        pid: 4242,
+        offerId: 7,
+        unreachableForMs: 12 * 60_000,
+      });
+    });
+
+    expect(await screen.findByText(TITLE)).not.toBeNull();
+    expect(
+      screen.getByText(
+        "It has not answered for at least 12 min. A force restart ends any work in progress on it.",
+      ),
+    ).not.toBeNull();
+  });
+
+  describe("when the shell makes no offer (offerId null)", () => {
+    it("tells the person the host is not responding, for how long, and offers no Force restart", async () => {
+      const host = createRunnerHost();
+      const forceRestart = vi
+        .spyOn(host, "forceRestartUnresponsiveHost")
+        .mockResolvedValue({ kind: "restarted" });
+      renderPrompt(host);
+
+      act(() => {
+        host.setLocalHostUnresponsive({
+          pid: 4242,
+          offerId: null,
+          unreachableForMs: 12 * 60_000,
+        });
+      });
+
+      expect(await screen.findByText(NOTICE_TITLE)).not.toBeNull();
+      expect(
+        screen.getByText("It has not answered for at least 12 min."),
+      ).not.toBeNull();
+      expect(screen.queryByText(TITLE)).toBeNull();
+      expect(screen.queryByText(/A force restart ends any work/)).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Force restart" }),
+      ).toBeNull();
+      expect(forceRestart).not.toHaveBeenCalled();
+    });
+
+    it("withdraws the notice when the shell reports the host answering again", async () => {
+      const host = createRunnerHost();
+      renderPrompt(host);
+      act(() => {
+        host.setLocalHostUnresponsive({
+          pid: 4242,
+          offerId: null,
+          unreachableForMs: 12 * 60_000,
+        });
+      });
+      expect(await screen.findByText(NOTICE_TITLE)).not.toBeNull();
+
+      act(() => {
+        host.setLocalHostUnresponsive(null);
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText(NOTICE_TITLE)).toBeNull();
+      });
+    });
+
+    it("gives way to the offer when a later verdict carries an offer id, and back to the notice when one does not", async () => {
+      const host = createRunnerHost();
+      renderPrompt(host);
+      act(() => {
+        host.setLocalHostUnresponsive({
+          pid: 4242,
+          offerId: null,
+          unreachableForMs: 12 * 60_000,
+        });
+      });
+      expect(await screen.findByText(NOTICE_TITLE)).not.toBeNull();
+
+      act(() => {
+        host.setLocalHostUnresponsive({
+          pid: 4242,
+          offerId: 9,
+          unreachableForMs: 13 * 60_000,
+        });
+      });
+      expect(await screen.findByText(TITLE)).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Force restart" }),
+      ).not.toBeNull();
+      await waitFor(() => {
+        expect(screen.queryByText(NOTICE_TITLE)).toBeNull();
+      });
+
+      act(() => {
+        host.setLocalHostUnresponsive({
+          pid: 4242,
+          offerId: null,
+          unreachableForMs: 14 * 60_000,
+        });
+      });
+      expect(await screen.findByText(NOTICE_TITLE)).not.toBeNull();
+      await waitFor(() => {
+        expect(screen.queryByText(TITLE)).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Force restart" }),
+        ).toBeNull();
+      });
+    });
   });
 
   it("force-restarts the offered host by its pid and offer id, not by a bare respawn request", async () => {

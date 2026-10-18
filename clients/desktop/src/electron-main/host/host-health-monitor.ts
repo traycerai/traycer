@@ -248,7 +248,9 @@ interface OfferedHost {
   readonly offerId: number;
   readonly pid: number;
   readonly websocketUrl: string;
-  readonly startIdentity: ProcessStartIdentity | null;
+  // Never null: a host that published no start identity gets no offer, since
+  // a replacement reusing its pid and endpoint would be indistinguishable.
+  readonly startIdentity: ProcessStartIdentity;
 }
 
 // Process-wide, so an offer id never repeats even across monitors (the
@@ -502,18 +504,24 @@ export function startHostHealthMonitor(
       );
       // The hold stays; what changes is that the person is told, and offered
       // the force restart that only they may choose. The offer records the
-      // host it is about, so its action can reach only that host.
-      lastOfferId += 1;
-      offeredHost = {
-        offerId: lastOfferId,
-        pid: snapshot.pid,
-        websocketUrl: snapshot.websocketUrl,
-        startIdentity,
-      };
+      // host it is about, so its action can reach only that host - which
+      // takes a start identity. Without one the person is told, and offered
+      // nothing.
+      let offerId: number | null = null;
+      if (startIdentity !== null) {
+        lastOfferId += 1;
+        offerId = lastOfferId;
+        offeredHost = {
+          offerId,
+          pid: snapshot.pid,
+          websocketUrl: snapshot.websocketUrl,
+          startIdentity,
+        };
+      }
       unresponsiveReported = true;
       deps.onHostUnresponsive({
         pid: snapshot.pid,
-        offerId: lastOfferId,
+        offerId,
         unreachableForMs,
       });
     }
@@ -807,6 +815,9 @@ export function startHostHealthMonitor(
           offeredHost === offered &&
           published !== null &&
           isCurrentPublishedSnapshot(snapshot, published.snapshot) &&
+          // A published host with no identity matches no offer: it could be
+          // a replacement on the offered pid and endpoint.
+          published.startIdentity !== null &&
           published.startIdentity === offered.startIdentity
         );
       };

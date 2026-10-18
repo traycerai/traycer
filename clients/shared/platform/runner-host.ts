@@ -1947,7 +1947,14 @@ export interface LocalHostUnresponsiveOffer {
  * A local host whose process is alive but whose endpoint has gone unanswered
  * past the shell's busy window. See `IRunnerHost.onLocalHostUnresponsive`.
  */
-export interface LocalHostUnresponsive extends LocalHostUnresponsiveOffer {
+export interface LocalHostUnresponsive {
+  readonly pid: number;
+  /**
+   * The force-restart offer, or null when the shell makes none: the host
+   * published no start identity, so a restart could not be held to this host
+   * rather than one that reused its pid and endpoint.
+   */
+  readonly offerId: number | null;
   /** How long the endpoint had gone unanswered when the verdict was reached. */
   readonly unreachableForMs: number;
 }

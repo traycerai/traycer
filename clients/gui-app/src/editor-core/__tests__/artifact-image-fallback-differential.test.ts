@@ -1417,3 +1417,81 @@ describe("a block holding only <br> is a paragraph of that text, as the host sto
     expect(guiReader.stored("<div>x</div>")).toEqual(doc(P("x")));
   });
 });
+
+// ---------------------------------------------------------------------------
+// 11. An ATX heading that ends in a run of hashes
+// ---------------------------------------------------------------------------
+
+describe("a level-2 heading ending in # keeps its text through two writes and two ingests", () => {
+  const heading2 = (value: string): JsonContent => ({
+    type: "heading",
+    attrs: { level: 2 },
+    content: [{ type: "text", text: value }],
+  });
+
+  const headingsOf = (
+    stored: JsonContent,
+  ): Array<{ level: unknown; texts: string[] }> =>
+    nodesOfType(stored, "heading").map((node) => ({
+      level: node.attrs?.level,
+      texts: textsOf(node),
+    }));
+
+  // [name, text, the markdown written, the text a reader stores back]. The
+  // last row's trailing spaces end the heading line, which no heading keeps.
+  const rows: ReadonlyArray<readonly [string, string, string, string]> = [
+    ["a hash after a space", "Title #", "## Title " + BS + "#", "Title #"],
+    [
+      "two hashes after a space",
+      "Title ##",
+      "## Title " + BS + "##",
+      "Title ##",
+    ],
+    ["a lone hash", "#", "## " + BS + "#", "#"],
+    ["two lone hashes", "##", "## " + BS + "##", "##"],
+    ["a hash inside a word", "a#", "## a#", "a#"],
+    ["a hash with text after it", "Title # x", "## Title # x", "Title # x"],
+    [
+      "a typed backslash before the hash",
+      "Title " + BS + "#",
+      "## Title " + BS + BS + "#",
+      "Title " + BS + "#",
+    ],
+    ["a hash after a tab", "Title\t#", "## Title\t" + BS + "#", "Title\t#"],
+    [
+      "a hash after a space, then spaces",
+      "Title #  ",
+      "## Title " + BS + "#",
+      "Title #",
+    ],
+  ];
+
+  it.each(
+    rows.flatMap(([name, value, expectedMd, expectedText]) =>
+      READERS.map((reader) => ({
+        name,
+        readerName: reader.name,
+        value,
+        expectedMd,
+        expectedText,
+        reader,
+      })),
+    ),
+  )(
+    "$name through $readerName",
+    ({ value, expectedMd, expectedText, reader }) => {
+      const expectedHeadings = [{ level: 2, texts: [expectedText] }];
+      const md1 = serialize(doc(heading2(value)));
+      expect(md1).toBe(expectedMd);
+
+      const stored1 = reader.stored(md1);
+      expect(headingsOf(stored1)).toEqual(expectedHeadings);
+
+      const md2 = serialize(stored1);
+      expect(md2).toBe(md1);
+      const stored2 = reader.stored(md2);
+      expect(headingsOf(stored2)).toEqual(expectedHeadings);
+      expect(serialize(stored2)).toBe(md2);
+    },
+  );
+});
