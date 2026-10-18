@@ -56,7 +56,7 @@ jobs:
     name: Resolve release coordinates
     # Skip non-CLI release events (host-v*/desktop-v* also fire `released`).
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'cli-v') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -151,7 +151,7 @@ jobs:
     name: Publish @traycerai/cli to npm
     needs: resolve
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_npm != true }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
       contents: read
@@ -223,7 +223,7 @@ jobs:
   publish-homebrew-formula:
     name: Open Homebrew formula PR
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
       contents: read
