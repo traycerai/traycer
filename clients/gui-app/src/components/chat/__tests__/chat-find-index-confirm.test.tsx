@@ -2237,7 +2237,6 @@ const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
           backgroundOutput: null,
           backgroundTask: false,
           imageResults: [],
-          page: null,
           artifact: null,
           mcpApp: null,
           durationMs: null,

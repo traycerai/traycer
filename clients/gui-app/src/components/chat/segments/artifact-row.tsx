@@ -9,16 +9,23 @@ import {
   type SandboxSource,
 } from "@/components/sandbox/sandbox-frame";
 import { useEpicStore } from "@/hooks/use-epic-store";
-import {
-  artifactSourcePathsFor,
-} from "@/lib/artifacts/artifact-object-paths";
+import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { Button } from "@/components/ui/button";
-import type { ArtifactProjection, ArtifactsSlice } from "@/stores/epics/open-epic/types";
-import type { ArtifactManifest, ArtifactReadSpan } from "@/lib/sandbox/artifact-serving";
+import type {
+  ArtifactProjection,
+  ArtifactsSlice,
+} from "@/stores/epics/open-epic/types";
+import type {
+  ArtifactManifest,
+  ArtifactReadSpan,
+} from "@/lib/sandbox/artifact-serving";
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import type { SandboxSize, SandboxStatus } from "@/lib/sandbox/bridge-host";
-import { artifactManifestsEqual, selectArtifactRowState } from "./artifact-row-state";
+import {
+  artifactManifestsEqual,
+  selectArtifactRowState,
+} from "./artifact-row-state";
 
 const NO_PERMISSIONS = [] as const;
 const MIN_PAGE_HEIGHT_PX = 80;
@@ -32,10 +39,18 @@ export function ArtifactRow(props: {
 }): ReactNode {
   const scope = useChatAttachmentScope();
   if (scope === null) return props.fallback;
-  return <ShownArtifact key={props.artifact.artifactId} stamp={props.artifact} scope={scope} />;
+  return (
+    <ShownArtifact
+      key={props.artifact.artifactId}
+      stamp={props.artifact}
+      scope={scope}
+    />
+  );
 }
 
-function useStableManifest(manifest: ArtifactManifest | null): ArtifactManifest | null {
+function useStableManifest(
+  manifest: ArtifactManifest | null,
+): ArtifactManifest | null {
   const [stable, setStable] = useState(manifest);
   if (!artifactManifestsEqual(stable, manifest)) {
     setStable(manifest);
@@ -54,14 +69,19 @@ function useArtifactLocation(
   artifact: ArtifactProjection | null,
   artifacts: ArtifactsSlice,
 ): ArtifactLocation | null {
-  const paths = artifact === null ? null : artifactSourcePathsFor(artifact, artifacts);
+  const paths =
+    artifact === null ? null : artifactSourcePathsFor(artifact, artifacts);
   const [location, setLocation] = useState<ArtifactLocation | null>(null);
   // The record lane can reconnect independently of the transcript. Keep the
   // mounted document's location until a new record or a tombstone arrives.
   let resolved = location;
-  if (artifact !== null && paths !== null && (
-    location?.artifact !== artifact || location.treePath !== paths.treePath || location.entryPath !== paths.entryPath
-  )) {
+  if (
+    artifact !== null &&
+    paths !== null &&
+    (location?.artifact !== artifact ||
+      location.treePath !== paths.treePath ||
+      location.entryPath !== paths.entryPath)
+  ) {
     resolved = { artifact, ...paths };
     setLocation(resolved);
   }
@@ -82,17 +102,23 @@ function ShownArtifact(props: {
   );
   const resolved = useArtifactLocation(artifact, artifacts);
   const stampedManifest = useStableManifest(stamp.manifest);
-  const [missingManifest, setMissingManifest] = useState<ArtifactManifest | null>(null);
+  const [missingManifest, setMissingManifest] =
+    useState<ArtifactManifest | null>(null);
   const [height, setHeight] = useState(MIN_PAGE_HEIGHT_PX);
-  const [crashedSource, setCrashedSource] = useState<SandboxSource | null>(null);
+  const [crashedSource, setCrashedSource] = useState<SandboxSource | null>(
+    null,
+  );
   const [generation, setGeneration] = useState(0);
   const state = selectArtifactRowState(
     stamp,
     resolved?.artifact ?? null,
-    missingManifest !== null && artifactManifestsEqual(missingManifest, stampedManifest),
+    missingManifest !== null &&
+      artifactManifestsEqual(missingManifest, stampedManifest),
     confirmedDeleted,
   );
-  const manifest = useStableManifest("manifest" in state ? state.manifest : null);
+  const manifest = useStableManifest(
+    "manifest" in state ? state.manifest : null,
+  );
   const readSpan = useMemo<ArtifactReadSpan>(() => {
     const read = createHostObjectReader({
       epicId: scope.epicId,
@@ -123,7 +149,8 @@ function ShownArtifact(props: {
   const treePath = resolved?.treePath;
   const entryPath = resolved?.entryPath;
   const source = useMemo<SandboxSource | null>(() => {
-    if (manifest === null || treePath === undefined || entryPath === undefined) return null;
+    if (manifest === null || treePath === undefined || entryPath === undefined)
+      return null;
     return {
       kind: "artifact",
       artifactId: stamp.artifactId,
@@ -133,13 +160,25 @@ function ShownArtifact(props: {
       readSpan,
       resolveOutsideReference,
     };
-  }, [treePath, entryPath, stamp.artifactId, manifest, readSpan, resolveOutsideReference]);
-  const handleStatus = useCallback((status: SandboxStatus): void => {
-    if (status === "crashed") setCrashedSource(source);
-  }, [source]);
+  }, [
+    treePath,
+    entryPath,
+    stamp.artifactId,
+    manifest,
+    readSpan,
+    resolveOutsideReference,
+  ]);
+  const handleStatus = useCallback(
+    (status: SandboxStatus): void => {
+      if (status === "crashed") setCrashedSource(source);
+    },
+    [source],
+  );
   const handleSize = useCallback((size: SandboxSize): void => {
     if (size.height === null) return;
-    setHeight(Math.min(MAX_PAGE_HEIGHT_PX, Math.max(MIN_PAGE_HEIGHT_PX, size.height)));
+    setHeight(
+      Math.min(MAX_PAGE_HEIGHT_PX, Math.max(MIN_PAGE_HEIGHT_PX, size.height)),
+    );
   }, []);
 
   let content: ReactNode;
@@ -150,16 +189,26 @@ function ShownArtifact(props: {
       </div>
     );
   } else if (state.kind === "pending" || scope.client === null) {
-    content = <div className="p-4 text-ui-sm text-muted-foreground">Loading artifact</div>;
+    content = (
+      <div className="p-4 text-ui-sm text-muted-foreground">
+        Loading artifact
+      </div>
+    );
   } else if (source !== null && crashedSource === source) {
     content = (
       <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
         <span>This artifact stopped responding.</span>
-        <Button variant="outline" size="sm" onClick={() => {
-          setCrashedSource(null);
-          setHeight(MIN_PAGE_HEIGHT_PX);
-          setGeneration((value) => value + 1);
-        }}>Reload</Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setCrashedSource(null);
+            setHeight(MIN_PAGE_HEIGHT_PX);
+            setGeneration((value) => value + 1);
+          }}
+        >
+          Reload
+        </Button>
       </div>
     );
   } else if (source === null) {

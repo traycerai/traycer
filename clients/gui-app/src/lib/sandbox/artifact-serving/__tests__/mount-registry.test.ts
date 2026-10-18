@@ -49,7 +49,13 @@ function serverFor(path: string, text: string): ArtifactServer {
     treePath: "",
     manifest: manifestOf(path, bytes.length),
     readSpan,
-    document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+    document: {
+      policySource: "traycer-sandbox:",
+      csp: null,
+      theme: THEME,
+      nonce: "n",
+      shortcuts: [],
+    },
   });
 }
 
@@ -301,7 +307,13 @@ describe("mountArtifact", () => {
       treePath: "",
       manifest: manifestOf("a.txt", 5),
       readSpan,
-      document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+      document: {
+        policySource: "traycer-sandbox:",
+        csp: null,
+        theme: THEME,
+        nonce: "n",
+        shortcuts: [],
+      },
     });
     const serveSpy = vi.spyOn(server, "serve");
     const bridge = createFakeBridge();
@@ -340,7 +352,13 @@ describe("mountArtifact", () => {
         treePath: "",
         manifest: manifestOf(path, 5),
         readSpan,
-        document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+        document: {
+          policySource: "traycer-sandbox:",
+          csp: null,
+          theme: THEME,
+          nonce: "n",
+          shortcuts: [],
+        },
       });
     }
     const bridge = createFakeBridge();
@@ -488,7 +506,13 @@ describe("request cancellation (onCancel)", () => {
       treePath: "",
       manifest: manifestOf("a.txt", 5),
       readSpan,
-      document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+      document: {
+        policySource: "traycer-sandbox:",
+        csp: null,
+        theme: THEME,
+        nonce: "n",
+        shortcuts: [],
+      },
     });
     const serveSpy = vi.spyOn(server, "serve");
     const bridge = createFakeBridge();

@@ -5,11 +5,14 @@ import {
   type ArtifactManifestEntry,
 } from "../artifact-manifest";
 
-function entry(overrides: Partial<ArtifactManifestEntry>): ArtifactManifestEntry {
+function entry(
+  overrides: Partial<ArtifactManifestEntry>,
+): ArtifactManifestEntry {
   return {
     sha256: "sha-1",
     byteLength: 10,
     mediaType: "text/plain",
+    status: "published",
     ...overrides,
   };
 }
@@ -31,7 +34,13 @@ describe("resolveManifestPath", () => {
     expect(resolveManifestPath(manifest, "index.html")).toBeNull();
   });
 
-  it.each(["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"])(
+  it.each([
+    "toString",
+    "constructor",
+    "valueOf",
+    "hasOwnProperty",
+    "__proto__",
+  ])(
     "misses %s when it is only inherited from Object.prototype, never an own key",
     (name) => {
       const manifest: ArtifactManifest = { files: { "index.html": entry({}) } };

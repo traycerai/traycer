@@ -19,7 +19,10 @@
     <!-- The app frames the sandbox loader or dedicated artifact URLs.
          main.tsx restricts this app-origin allowance to the loader's path.
          Native guards independently protect the app and Capacitor routes. -->
-    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' traycer-artifact: https://*.traycer-artifact.invalid" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="frame-src 'self' traycer-artifact: https://*.traycer-artifact.invalid"
+    />
     <title>Traycer</title>
   </head>
   <body>

@@ -18,7 +18,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
  *
  * A seam rather than `useHostQuery` so tests can hand in a fake through
  * {@link McpAppRpcContext}. Production calls go to the host the tab is bound
- * to, resolved the way `lib/files/epic-file-rpc.ts` resolves it. A host
+ * to. A host
  * without the methods answers `E_HOST_UNSUPPORTED` itself, and the row shows
  * the app read-only from its stored result.
  */

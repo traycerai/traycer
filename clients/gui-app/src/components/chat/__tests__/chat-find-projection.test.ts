@@ -454,7 +454,6 @@ describe("chat find projection", () => {
         backgroundOutput: null,
         backgroundTask: false,
         imageResults: [],
-        page: null,
         artifact: null,
         mcpApp: null,
         durationMs: null,
@@ -494,59 +493,8 @@ describe("chat find projection", () => {
     expect(rowSearchText(row)).not.toContain("No diff available");
   });
 
-  it("indexes nothing for a stamped page whatever its tool is called", () => {
-    // The page row renders off the stamp, not the name, so find must skip it
-    // on the same test or it indexes a header that never paints.
-    const page: MessageSegment = {
-      id: "page-1",
-      kind: "tool",
-      toolName: "some_other_page_tool",
-      inputSummary: "quarterly-report",
-      inputDetail: null,
-      taskTodoItems: null,
-      error: null,
-      agentMessageSend: null,
-      managedCommand: null,
-      agentMessageReceipt: null,
-      isStreaming: false,
-      endState: null,
-      stopped: false,
-      progress: null,
-      backgroundOutput: null,
-      backgroundTask: false,
-      imageResults: [],
-      page: {
-        path: "files/pages/report.html",
-        sha256: "a".repeat(64),
-        title: "Report",
-        height: 400,
-        heights: [],
-        derivedFrom: null,
-        originChatId: "chat-1",
-      },
-      artifact: null,
-      mcpApp: null,
-      durationMs: null,
-      startedAt: 0,
-      parentId: null,
-    };
-    const assistant: ChatMessageModel = {
-      ...makeMessage(3, "assistant"),
-      segments: [page],
-    };
-
-    const rows = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
-      hideReasoning: false,
-      queuePauseReasonProtocolSupported: null,
-    });
-
-    const joined = rows.map((row) => rowSearchText(row)).join("\n");
-    expect(joined).not.toContain("some_other_page_tool");
-    expect(joined).not.toContain("quarterly-report");
-  });
-
   it("indexes nothing for a stamped inline artifact whatever its tool is called", () => {
-    // The artifact row renders off the stamp, like the page row, and carries
+    // The artifact row renders off the stamp and carries
     // no distinguished tool-name spelling to key a classifier on.
     const artifact: MessageSegment = {
       id: "artifact-1",
@@ -566,7 +514,6 @@ describe("chat find projection", () => {
       backgroundOutput: null,
       backgroundTask: false,
       imageResults: [],
-      page: null,
       artifact: {
         artifactId: "art-1",
         title: "Quarterly Report",
@@ -702,7 +649,6 @@ describe("chat find projection", () => {
           // No durable marker - promotion is visible ONLY through the live set.
           backgroundTask: false,
           imageResults: [],
-          page: null,
           artifact: null,
           mcpApp: null,
           durationMs: null,
@@ -2189,7 +2135,6 @@ describe("buildSubagentChatFindRows", () => {
       backgroundOutput: null,
       backgroundTask: false,
       imageResults: [],
-      page: null,
       artifact: null,
       mcpApp: null,
       startedAt: 0,

@@ -4,7 +4,7 @@
  * faked here - this suite is about the polling/error contract, not transport.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/files";
+import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createHostObjectReader,
@@ -66,7 +66,11 @@ describe("createHostObjectReader", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(
       "epic.readArtifactObject",
-      { epicId: EPIC_ID, sha256: SHA, want: { kind: "range", offset: 0, length: 5 } },
+      {
+        epicId: EPIC_ID,
+        sha256: SHA,
+        want: { kind: "range", offset: 0, length: 5 },
+      },
       expect.any(AbortSignal),
     );
   });
@@ -115,7 +119,9 @@ describe("createHostObjectReader", () => {
   );
 
   it("treats E_HOST_UNSUPPORTED as the object being unavailable, without retrying", async () => {
-    const request = vi.fn<ArtifactObjectRequest>().mockRejectedValue(unsupportedError());
+    const request = vi
+      .fn<ArtifactObjectRequest>()
+      .mockRejectedValue(unsupportedError());
     const reader = createHostObjectReader({ request, epicId: EPIC_ID });
 
     await expect(
@@ -135,9 +141,9 @@ describe("createHostObjectReader", () => {
     const request = vi.fn<ArtifactObjectRequest>().mockRejectedValue(error);
     const reader = createHostObjectReader({ request, epicId: EPIC_ID });
 
-    await expect(
-      reader(SHA, 0, 5, new AbortController().signal),
-    ).rejects.toBe(error);
+    await expect(reader(SHA, 0, 5, new AbortController().signal)).rejects.toBe(
+      error,
+    );
   });
 
   it("propagates a plain transport failure unchanged", async () => {
@@ -145,15 +151,17 @@ describe("createHostObjectReader", () => {
     const request = vi.fn<ArtifactObjectRequest>().mockRejectedValue(boom);
     const reader = createHostObjectReader({ request, epicId: EPIC_ID });
 
-    await expect(
-      reader(SHA, 0, 5, new AbortController().signal),
-    ).rejects.toBe(boom);
+    await expect(reader(SHA, 0, 5, new AbortController().signal)).rejects.toBe(
+      boom,
+    );
   });
 
   it("rejects on an unrecognized response shape instead of hanging", async () => {
-    const request = vi
-      .fn<ArtifactObjectRequest>()
-      .mockResolvedValue({ kind: "url", url: "https://example.invalid/x", expiresAt: 0 });
+    const request = vi.fn<ArtifactObjectRequest>().mockResolvedValue({
+      kind: "url",
+      url: "https://example.invalid/x",
+      expiresAt: 0,
+    });
     const reader = createHostObjectReader({ request, epicId: EPIC_ID });
 
     await expect(
@@ -185,7 +193,9 @@ describe("createHostObjectReader", () => {
     expect(request).toHaveBeenCalledTimes(3);
 
     await expect(pending).resolves.toEqual({
-      bytes: Uint8Array.from("0123456789", (character) => character.charCodeAt(0)),
+      bytes: Uint8Array.from("0123456789", (character) =>
+        character.charCodeAt(0),
+      ),
       totalBytes: 10,
       mediaType: "text/plain",
     });
@@ -240,9 +250,7 @@ describe("createHostObjectReader", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(
-      reader(SHA, 0, 10, controller.signal),
-    ).rejects.toBeTruthy();
+    await expect(reader(SHA, 0, 10, controller.signal)).rejects.toBeTruthy();
     expect(request).not.toHaveBeenCalled();
   });
 

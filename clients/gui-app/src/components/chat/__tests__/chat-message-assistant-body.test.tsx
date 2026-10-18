@@ -996,7 +996,6 @@ const SHARED_TOOL: ToolSegment = {
   durationMs: null,
   parentId: null,
   imageResults: [],
-  page: null,
   artifact: null,
   mcpApp: null,
 };

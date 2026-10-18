@@ -4375,80 +4375,6 @@ export const epicSchemaSurfaceBaseline = {
                                     ]
                                   }
                                 },
-                                "page": {
-                                  "default": null,
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "path": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "sha256": {
-                                          "type": "string",
-                                          "pattern": "^[0-9a-f]{64}$"
-                                        },
-                                        "title": {
-                                          "type": "string"
-                                        },
-                                        "height": {
-                                          "type": "integer",
-                                          "minimum": 80,
-                                          "maximum": 2000
-                                        },
-                                        "heights": {
-                                          "type": "array",
-                                          "items": {
-                                            "type": "object",
-                                            "properties": {
-                                              "width": {
-                                                "type": "integer",
-                                                "exclusiveMinimum": 0,
-                                                "maximum": 9007199254740991
-                                              },
-                                              "height": {
-                                                "type": "integer",
-                                                "minimum": 0,
-                                                "maximum": 9007199254740991
-                                              }
-                                            },
-                                            "required": [
-                                              "width",
-                                              "height"
-                                            ]
-                                          }
-                                        },
-                                        "derivedFrom": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "originChatId": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        }
-                                      },
-                                      "required": [
-                                        "path",
-                                        "sha256",
-                                        "title",
-                                        "height",
-                                        "heights",
-                                        "derivedFrom",
-                                        "originChatId"
-                                      ]
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "mcpApp": {
                                   "default": null,
                                   "anyOf": [
@@ -7820,6 +7746,10 @@ export const epicSchemaSurfaceBaseline = {
                 "relativePath": {
                   "type": "string",
                   "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "default": "",
+                  "type": "string"
                 },
                 "head": {
                   "type": "object",
@@ -14381,82 +14311,6 @@ export const epicSchemaSurfaceBaseline = {
                                     "additionalProperties": false
                                   }
                                 },
-                                "page": {
-                                  "default": null,
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "path": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "sha256": {
-                                          "type": "string",
-                                          "pattern": "^[0-9a-f]{64}$"
-                                        },
-                                        "title": {
-                                          "type": "string"
-                                        },
-                                        "height": {
-                                          "type": "integer",
-                                          "minimum": 80,
-                                          "maximum": 2000
-                                        },
-                                        "heights": {
-                                          "type": "array",
-                                          "items": {
-                                            "type": "object",
-                                            "properties": {
-                                              "width": {
-                                                "type": "integer",
-                                                "exclusiveMinimum": 0,
-                                                "maximum": 9007199254740991
-                                              },
-                                              "height": {
-                                                "type": "integer",
-                                                "minimum": 0,
-                                                "maximum": 9007199254740991
-                                              }
-                                            },
-                                            "required": [
-                                              "width",
-                                              "height"
-                                            ],
-                                            "additionalProperties": false
-                                          }
-                                        },
-                                        "derivedFrom": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "originChatId": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        }
-                                      },
-                                      "required": [
-                                        "path",
-                                        "sha256",
-                                        "title",
-                                        "height",
-                                        "heights",
-                                        "derivedFrom",
-                                        "originChatId"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "mcpApp": {
                                   "default": null,
                                   "anyOf": [
@@ -14670,7 +14524,6 @@ export const epicSchemaSurfaceBaseline = {
                                 "backgroundTask",
                                 "stopped",
                                 "imageResults",
-                                "page",
                                 "mcpApp"
                               ],
                               "additionalProperties": false
@@ -17927,6 +17780,10 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "string",
                   "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
                 },
+                "artifactRoomId": {
+                  "default": "",
+                  "type": "string"
+                },
                 "head": {
                   "type": "object",
                   "properties": {
@@ -17994,6 +17851,7 @@ export const epicSchemaSurfaceBaseline = {
                 "createdManually",
                 "parentId",
                 "layout",
+                "artifactRoomId",
                 "head"
               ],
               "additionalProperties": false

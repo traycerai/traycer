@@ -132,8 +132,8 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // The Claude-parity surfaces took @1.20. The Command Code harness id took
     // @1.21 (the released minors froze the row context without it). The
     // open-harness-id line, which reopens every heard-from harness leaf to a
-    // string, took @1.22. A tool call's `page` / `mcpApp` stamps (agent pages
-    // and MCP Apps) took @1.23. The html / canvas / file artifact operation
+    // string, took @1.22. A tool call's `mcpApp` stamp (an MCP App a tool
+    // rendered) took @1.23. The html / canvas / file artifact operation
     // kinds took @1.28. A tool call's `artifact` stamp (an inline
     // `traycer_render_inline` artifact's manifest) took @1.29.
     //

@@ -877,7 +877,9 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     ),
   );
   const statusValue = useEpicArtifactStatus(nodeId);
-  const isFileLayout = useEpicStore(state => state.artifacts.byId[nodeId]?.layout === "file");
+  const isFileLayout = useEpicStore(
+    (state) => state.artifacts.byId[nodeId]?.layout === "file",
+  );
 
   useEffect(() => {
     const pendingProjectedOpenCancel = pendingProjectedOpenCancelRef;
@@ -1939,7 +1941,9 @@ function useArtifactRowMenuEntries(
   props: ArtifactRowMenuEntriesProps,
 ): ReadonlyArray<SidebarRowMenuEntry> {
   const exportArtifacts = useEpicExportArtifacts();
-  const markdown = useEpicStore(state => isMarkdownArtifactKind(state.artifacts.byId[props.nodeId]?.kind));
+  const markdown = useEpicStore((state) =>
+    isMarkdownArtifactKind(state.artifacts.byId[props.nodeId]?.kind),
+  );
   const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
   const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const exportPending = exportArtifacts.isPending;
@@ -2030,7 +2034,14 @@ function useArtifactRowMenuEntries(
       },
     ];
     // Markdown/PDF exports require a Markdown body.
-    return markdown ? entries : entries.filter(entry => !["export-markdown", "export-pdf", "after-export"].includes(entry.id));
+    return markdown
+      ? entries
+      : entries.filter(
+          (entry) =>
+            !["export-markdown", "export-pdf", "after-export"].includes(
+              entry.id,
+            ),
+        );
   }, [
     markdown,
     canMutate,

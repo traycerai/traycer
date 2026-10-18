@@ -5,7 +5,10 @@ import type { SandboxTheme } from "../theme-map";
 // Every intersecting policy must name the scheme: WebKit's wildcard does
 // not admit custom-scheme subresources from an opaque sandbox document.
 export function artifactBasePolicy(policySource: string | null): string {
-  if (policySource !== null && !/^[A-Za-z][A-Za-z0-9+.-]*:$/.test(policySource)) {
+  if (
+    policySource !== null &&
+    !/^[A-Za-z][A-Za-z0-9+.-]*:$/.test(policySource)
+  ) {
     throw new Error("Invalid artifact policy source");
   }
   return `default-src *${policySource === null ? "" : ` ${policySource}`} data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'`;

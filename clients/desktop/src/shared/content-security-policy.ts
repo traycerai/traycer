@@ -93,9 +93,7 @@ export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
     // sandbox scheme (`electron-main/app/sandbox-protocol.ts`). This is also
     // what stops such a frame navigating itself anywhere else.
     "frame-src traycer-sandbox:",
-    // Epic-file video: a Blob URL of bytes read over RPC, or a signed https
-    // URL once the file is published.
-    "media-src 'self' blob: https:",
+    "media-src 'self' https:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

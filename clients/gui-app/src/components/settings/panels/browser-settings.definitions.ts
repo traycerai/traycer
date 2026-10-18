@@ -86,11 +86,11 @@ export const BROWSER = defineSettingsSection("browser", {
     kind: "row",
     group: "agents",
     search: { contributesTo: "page" },
-    label: "Let agents show pages in chat",
+    label: "Let agents show artifacts in chat",
     description:
-      "Agents can build a page - a chart, a table, a mockup - and show it in the reply. Applies to agents started after you change it.",
+      "Show charts, tables and mockups in the reply. Applies to agents started after you change it.",
     availableWhen: alwaysAvailable,
-    keywords: ["agent", "page", "chart", "visualization", "html"],
+    keywords: ["agent", "artifact", "chart", "visualization", "html"],
   },
   // Beside agent access, not beside "Open browser tabs": the answer is whether
   // the tile appears at all, not where it lands, and next to the placement row

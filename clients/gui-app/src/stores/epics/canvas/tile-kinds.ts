@@ -37,12 +37,6 @@ export const TILE_KIND_DELETED_ARTIFACTS = "deleted-artifacts";
 export const TILE_KIND_PUBLISHED_CHAT = "published-chat";
 export const TILE_KIND_PR_DETAIL = "pr-detail";
 export const TILE_KIND_PR_DIFF = "pr-diff";
-/**
- * One file of the epic's files plane (`files/...`), at one sha: an agent page
- * opened from its row, or any file opened from the Files panel. Viewed by the
- * viewer the file's kind picks (`lib/files/viewer-registry.ts`).
- */
-export const TILE_KIND_EPIC_FILE = "epic-file";
 // A "blank" tab: a real strip tab whose body renders the inline opener until
 // content is picked (which replaces it in place).
 export const TILE_KIND_BLANK = "blank";
@@ -53,7 +47,9 @@ export type TileKindId =
   | typeof TILE_KIND_SPEC
   | typeof TILE_KIND_TICKET
   | typeof TILE_KIND_STORY
-  | "html" | "canvas" | "file"
+  | "html"
+  | "canvas"
+  | "file"
   | typeof TILE_KIND_REVIEW
   | typeof TILE_KIND_TERMINAL
   | typeof TILE_KIND_BROWSER_SESSION
@@ -66,7 +62,6 @@ export type TileKindId =
   | typeof TILE_KIND_PUBLISHED_CHAT
   | typeof TILE_KIND_PR_DETAIL
   | typeof TILE_KIND_PR_DIFF
-  | typeof TILE_KIND_EPIC_FILE
   | typeof TILE_KIND_BLANK;
 
 export const isTileKind = makeLiteralGuard<TileKindId>({
@@ -76,7 +71,9 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_TICKET]: true,
   [TILE_KIND_STORY]: true,
   [TILE_KIND_REVIEW]: true,
-  html: true, canvas: true, file: true,
+  html: true,
+  canvas: true,
+  file: true,
   [TILE_KIND_TERMINAL]: true,
   [TILE_KIND_BROWSER_SESSION]: true,
   [TILE_KIND_WORKSPACE_FILE]: true,
@@ -88,6 +85,5 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_PUBLISHED_CHAT]: true,
   [TILE_KIND_PR_DETAIL]: true,
   [TILE_KIND_PR_DIFF]: true,
-  [TILE_KIND_EPIC_FILE]: true,
   [TILE_KIND_BLANK]: true,
 });

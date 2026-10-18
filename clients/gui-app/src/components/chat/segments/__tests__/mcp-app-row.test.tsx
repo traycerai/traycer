@@ -25,8 +25,7 @@ import {
 import type {
   EpicReadArtifactObjectRequest,
   EpicReadArtifactObjectResponse,
-  EpicReadFileResponse,
-} from "@traycer/protocol/host/epic/files";
+} from "@traycer/protocol/host/epic/artifact-objects";
 import type {
   ChatMcpAppCallToolRequest,
   ChatMcpAppCallToolResponse,
@@ -48,10 +47,6 @@ import { AppMessageDraftPill } from "@/components/chat/composer/app-message-draf
 import { McpAppRow } from "@/components/chat/segments/mcp-app-row";
 import { blockingLayerClaimed } from "@/components/layout/shell/blocking-layer-claim";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
-import {
-  EpicFileRpcContext,
-  type EpicFileRpc,
-} from "@/lib/files/epic-file-rpc";
 import {
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
@@ -235,13 +230,6 @@ const STAMP: ToolCallMcpAppStamp = {
 
 const TOOL_RESULT = { content: [{ type: "text", text: "42" }] };
 
-const HTML_RESPONSE: EpicReadFileResponse = {
-  kind: "text",
-  text: APP_HTML,
-  mediaType: "text/html",
-  networkPolicy: "https-only",
-};
-
 const ARTIFACT_HOST_ENTRY: HostDirectoryEntry = {
   hostId: HOST_ID,
   label: "Test host",
@@ -251,7 +239,7 @@ const ARTIFACT_HOST_ENTRY: HostDirectoryEntry = {
   transportDialability: "dialable",
 };
 
-/** Older captures may predate the artifact stamp ledger: no object to find. */
+/** The stamped object is unavailable. */
 const ARTIFACT_OBJECT_UNAVAILABLE: EpicReadArtifactObjectResponse = {
   kind: "unavailable",
   reason: "missing",
@@ -286,8 +274,7 @@ function makeArtifactObjectRpc(handler: ArtifactObjectHandler): {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
-    findHostById: (hostId) =>
-      hostId === HOST_ID ? ARTIFACT_HOST_ENTRY : null,
+    findHostById: (hostId) => (hostId === HOST_ID ? ARTIFACT_HOST_ENTRY : null),
     messenger,
   });
   spine.setRequestContext(
@@ -295,26 +282,6 @@ function makeArtifactObjectRpc(handler: ArtifactObjectHandler): {
   );
   mocks.artifactObject.requester = spine.createRequester(ARTIFACT_HOST_ENTRY);
   return { messenger };
-}
-
-interface FakeFileRpc extends EpicFileRpc {
-  readonly readFile: Mock<EpicFileRpc["readFile"]>;
-}
-
-function makeFileRpc(
-  read: EpicReadFileResponse | Promise<EpicReadFileResponse>,
-): FakeFileRpc {
-  return {
-    readFile: vi
-      .fn<EpicFileRpc["readFile"]>()
-      .mockImplementation(() => Promise.resolve(read)),
-    fetchFile: vi
-      .fn<EpicFileRpc["fetchFile"]>()
-      .mockResolvedValue({ kind: "downloading" }),
-    cancelFetchFile: vi
-      .fn<EpicFileRpc["cancelFetchFile"]>()
-      .mockResolvedValue({ cancelled: true }),
-  };
 }
 
 interface FakeMcpRpc extends McpAppRpc {
@@ -356,7 +323,6 @@ const THEME: ResolvedThemeContextValue = {
 
 /** Returns the row's own `QueryClient` so a test can drive it directly. */
 function renderRow(
-  fileRpc: EpicFileRpc,
   mcpRpc: McpAppRpc,
   scope: ChatAttachmentScopeValue | null,
   app: ToolCallMcpAppStamp,
@@ -368,11 +334,9 @@ function renderRow(
     <QueryClientProvider client={client}>
       <ResolvedThemeContext.Provider value={THEME}>
         <ChatAttachmentScopeContext.Provider value={scope}>
-          <EpicFileRpcContext.Provider value={fileRpc}>
-            <McpAppRpcContext.Provider value={mcpRpc}>
-              {children}
-            </McpAppRpcContext.Provider>
-          </EpicFileRpcContext.Provider>
+          <McpAppRpcContext.Provider value={mcpRpc}>
+            {children}
+          </McpAppRpcContext.Provider>
         </ChatAttachmentScopeContext.Provider>
       </ResolvedThemeContext.Provider>
     </QueryClientProvider>
@@ -402,11 +366,9 @@ function askAsApp(method: string, params: unknown): Promise<unknown> {
 async function renderRunningApp(
   mcpRpc: McpAppRpc,
   app: ToolCallMcpAppStamp,
-): Promise<FakeFileRpc> {
-  const fileRpc = makeFileRpc(HTML_RESPONSE);
-  renderRow(fileRpc, mcpRpc, SCOPE, app);
+): Promise<void> {
+  renderRow(mcpRpc, SCOPE, app);
   await screen.findByTestId("sandbox-frame");
-  return fileRpc;
 }
 
 function paragraph(text: string): JsonContent {
@@ -427,10 +389,7 @@ beforeEach(() => {
   mocks.frame.props = null;
   mocks.frame.mounts = 0;
   mocks.openLink.mockResolvedValue(undefined);
-  // The default every existing test exercises: no stamped object (an older
-  // capture), so the row falls back to the legacy files-plane read. Tests
-  // covering the sha-hit path call `makeArtifactObjectRpc` again themselves.
-  makeArtifactObjectRpc(() => ARTIFACT_OBJECT_UNAVAILABLE);
+  makeArtifactObjectRpc(() => ARTIFACT_OBJECT_HTML_RESPONSE);
   useComposerDraftStore.setState({ drafts: {} });
 });
 
@@ -447,7 +406,7 @@ afterEach(() => {
 
 describe("<McpAppRow /> running the app", () => {
   it("reads the stamped snapshot for this block and runs it in an app frame", async () => {
-    const fileRpc = await renderRunningApp(makeMcpRpc(), STAMP);
+    await renderRunningApp(makeMcpRpc(), STAMP);
 
     const frame = screen.getByTestId("sandbox-frame");
     expect(frame.getAttribute("data-kind")).toBe("app");
@@ -456,16 +415,6 @@ describe("<McpAppRow /> running the app", () => {
       networkPolicy: "https-only",
       appCsp: CSP,
     });
-    expect(fileRpc.readFile).toHaveBeenCalledWith(
-      {
-        epicId: EPIC_ID,
-        path: STAMP.snapshot.path,
-        sha256: STAMP.snapshot.sha256,
-        via: { chatId: CHAT_ID, blockId: BLOCK_ID },
-        want: { kind: "text" },
-      },
-      expect.any(AbortSignal),
-    );
     const row = screen.getByTestId("mcp-app-row");
     expect(row.textContent).toContain(SERVER);
     expect(row.textContent).toContain("open_budget");
@@ -637,7 +586,7 @@ describe("<McpAppRow /> full screen from the keyboard", () => {
 
 describe("<McpAppRow /> when the app cannot run here", () => {
   it("shows the ordinary tool row to a reader with no chat scope", () => {
-    renderRow(makeFileRpc(HTML_RESPONSE), makeMcpRpc(), null, STAMP);
+    renderRow(makeMcpRpc(), null, STAMP);
 
     expect(screen.getByTestId("ordinary-tool-row")).toBeTruthy();
     expect(screen.queryByTestId("mcp-app-row")).toBeNull();
@@ -646,7 +595,7 @@ describe("<McpAppRow /> when the app cannot run here", () => {
   it.each([
     [
       "the snapshot is not on this host",
-      { kind: "unavailable", reason: "upload-pending" } as const,
+      { kind: "unavailable", reason: "missing" } as const,
     ],
     [
       "the snapshot is not text",
@@ -659,28 +608,29 @@ describe("<McpAppRow /> when the app cannot run here", () => {
       } as const,
     ],
   ])("shows the ordinary tool row when %s", async (_name, response) => {
-    renderRow(makeFileRpc(response), makeMcpRpc(), SCOPE, STAMP);
+    makeArtifactObjectRpc(() => response);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame")).toBeNull();
   });
 
   it("shows the ordinary tool row when reading the snapshot fails", async () => {
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    fileRpc.readFile.mockRejectedValue(new Error("host went away"));
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    makeArtifactObjectRpc(() => {
+      throw new Error("host went away");
+    });
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
   });
 });
 
 describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
-  it("renders straight from the artifact-object store on a sha hit, with no legacy files-plane read at all", async () => {
+  it("renders from the artifact-object store on a sha hit", async () => {
     const { messenger } = makeArtifactObjectRpc(
       () => ARTIFACT_OBJECT_HTML_RESPONSE,
     );
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     const frame = await screen.findByTestId("sandbox-frame");
     expect(frame.textContent).toBe(APP_HTML);
@@ -693,10 +643,9 @@ describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
         want: { kind: "text" },
       },
     });
-    expect(fileRpc.readFile).not.toHaveBeenCalled();
   });
 
-  it("shows the loading placeholder while the object is downloading, then the app once it lands - the legacy read never runs", async () => {
+  it("shows the loading placeholder while the object is downloading, then the app once it lands", async () => {
     vi.useFakeTimers();
     focusManager.setFocused(true);
     let call = 0;
@@ -706,8 +655,7 @@ describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
         ? { kind: "downloading", receivedBytes: 10, totalBytes: 100 }
         : ARTIFACT_OBJECT_HTML_RESPONSE;
     });
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -716,7 +664,7 @@ describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
     expect(screen.queryByTestId("sandbox-frame")).toBeNull();
     expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
 
-    // The downloading lane's own cadence, not the legacy RPC's.
+    // The downloading lane's own cadence.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
@@ -729,35 +677,11 @@ describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
     });
     expect(call).toBe(2);
     expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
-    expect(fileRpc.readFile).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy files-plane read once the sha is confirmed unavailable, and serves what it returns", async () => {
-    const { messenger } = makeArtifactObjectRpc(
-      () => ARTIFACT_OBJECT_UNAVAILABLE,
-    );
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
-
-    const frame = await screen.findByTestId("sandbox-frame");
-    expect(frame.textContent).toBe(APP_HTML);
-    expect(messenger.calls).toHaveLength(1);
-    expect(fileRpc.readFile).toHaveBeenCalledWith(
-      {
-        epicId: EPIC_ID,
-        path: STAMP.snapshot.path,
-        sha256: STAMP.snapshot.sha256,
-        via: { chatId: CHAT_ID, blockId: BLOCK_ID },
-        want: { kind: "text" },
-      },
-      expect.any(AbortSignal),
-    );
-  });
-
-  it("shows the ordinary tool row when both the sha object and the legacy path are unavailable", async () => {
+  it("shows the ordinary tool row when the sha object is unavailable", async () => {
     makeArtifactObjectRpc(() => ARTIFACT_OBJECT_UNAVAILABLE);
-    const fileRpc = makeFileRpc({ kind: "unavailable", reason: "upload-pending" });
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame")).toBeNull();
@@ -765,7 +689,7 @@ describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
 });
 
 describe("<McpAppRow /> cached-state precedence under a later host RPC error", () => {
-  it("falls to the ordinary tool row when a downloading answer's own poll rejects, never touching the legacy read", async () => {
+  it("falls to the ordinary tool row when a downloading answer's own poll rejects", async () => {
     vi.useFakeTimers();
     focusManager.setFocused(true);
     let call = 0;
@@ -776,8 +700,7 @@ describe("<McpAppRow /> cached-state precedence under a later host RPC error", (
       }
       throw new Error("host went away mid-download");
     });
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -800,10 +723,6 @@ describe("<McpAppRow /> cached-state precedence under a later host RPC error", (
     expect(call).toBe(2);
     expect(screen.getByTestId("ordinary-tool-row")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame")).toBeNull();
-    // The cached data is `{kind: "downloading"}`, never `"unavailable"` -
-    // the fallback has to come from the new error precedence, not from the
-    // legacy-snapshot gate tripping on a kind it never actually saw.
-    expect(fileRpc.readFile).not.toHaveBeenCalled();
   });
 
   it("keeps showing the served text through a background sweep refetch that errors, rather than resetting to pending or the fallback", async () => {
@@ -815,8 +734,7 @@ describe("<McpAppRow /> cached-state precedence under a later host RPC error", (
       if (call === 1) return ARTIFACT_OBJECT_HTML_RESPONSE;
       throw new Error("host went away mid-sweep");
     });
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    const queryClient = renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    const queryClient = renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -857,7 +775,6 @@ describe("<McpAppRow /> cached-state precedence under a later host RPC error", (
     expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
     expect(mocks.frame.mounts).toBe(1);
     expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
-    expect(fileRpc.readFile).not.toHaveBeenCalled();
   });
 });
 
@@ -1294,7 +1211,7 @@ describe("<McpAppRow /> when the agent session cannot be reached", () => {
       readResource: () => unsupported("chat.mcpApp.readResource"),
       updateModelContext: () => unsupported("chat.mcpApp.updateModelContext"),
     };
-    renderRow(makeFileRpc(HTML_RESPONSE), unserved, SCOPE, STAMP);
+    renderRow(unserved, SCOPE, STAMP);
     await screen.findByTestId("sandbox-frame");
 
     await act(async () => {

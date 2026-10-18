@@ -1334,7 +1334,12 @@ export function buildCurrentEpicArtifactMentionEntries(
     const artifact = artifacts.byId[id];
     const label = displayTitle(artifact.title, artifact.kind);
     if (!matchesMentionQuery(label, normalizedQuery)) return [];
-    const entry = localArtifactSuggestion(artifact, currentEpicId, epicTitle, label);
+    const entry = localArtifactSuggestion(
+      artifact,
+      currentEpicId,
+      epicTitle,
+      label,
+    );
     return entry === null ? [] : [entry];
   });
   return entries.length === 0 ? EMPTY_ARTIFACT_ENTRIES : entries;

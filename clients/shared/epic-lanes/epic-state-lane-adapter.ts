@@ -72,14 +72,9 @@ import {
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import {
-  decodeEpicStateFilesArm,
-  type EpicStateFilesProjection,
-} from "@traycer/protocol/host/epic/files";
-import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   COMMENT_THREAD_REMOVE_REASON,
   EPIC_META_ROW_ID,
-  FILES_ROW_ID,
   ROLE_CLAIMS_ROW_ID,
   artifactRowId,
   artifactTombstoneRowId,
@@ -153,18 +148,6 @@ export interface EpicStateLaneAdapter extends LaneAdapter<EpicStateLaneEvent> {
    */
   closeTransport(): void;
   openTransport(): void;
-}
-
-/**
- * The files arm of a frame, or `null` when the frame carries none: an `@1.1`
- * frame (a host older than `@1.2`) has no such key, and an `@1.2` delta that
- * did not touch files carries `null`. The stream decoder reads the arm
- * leniently, so the records are parsed (and the unreadable ones dropped) here.
- */
-export function filesProjectionOf(
-  frame: EpicStateSnapshotFrame | EpicStateDeltaFrame,
-): EpicStateFilesProjection | null {
-  return "files" in frame ? decodeEpicStateFilesArm(frame.files) : null;
 }
 
 export function createEpicStateLaneAdapter(
@@ -282,16 +265,6 @@ export function createEpicStateLaneAdapter(
       revision: frame.roleClaims.revision,
       row: { kind: "role-claims", claims: frame.roleClaims.claims },
     });
-    // Present only on an `@1.2` snapshot, which states the whole set: an epic
-    // with no files is a fact (an empty set), so the row is written even then.
-    const files = filesProjectionOf(frame);
-    if (files !== null) {
-      rows.push({
-        rowId: FILES_ROW_ID,
-        revision: files.revision,
-        row: { kind: "files", files: files.files },
-      });
-    }
     // WHOLE here, patch on a delta - see `EpicStateRow`. A snapshot restates
     // the metadata in full, so installing it wholesale is correct and merging
     // would retain a title the host has since forgotten.
@@ -362,17 +335,6 @@ export function createEpicStateLaneAdapter(
           rowId: ROLE_CLAIMS_ROW_ID,
           revision: roleClaims.revision,
           row: { kind: "role-claims", claims: roleClaims.claims },
-        },
-      });
-    }
-    const files = filesProjectionOf(frame);
-    if (files !== null) {
-      changes.push({
-        kind: "upsert",
-        row: {
-          rowId: FILES_ROW_ID,
-          revision: files.revision,
-          row: { kind: "files", files: files.files },
         },
       });
     }

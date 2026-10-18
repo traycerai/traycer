@@ -87,10 +87,17 @@ export function BrowserSettingsSection(props: {
   const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
   const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
   const agentAccessSupported = getSupported === true && setSupported === true;
-  const pagesGetSupported = useHostMethodSupport(hostId, AGENT_PAGES_GET);
-  const pagesSetSupported = useHostMethodSupport(hostId, AGENT_PAGES_SET);
-  const agentPagesSupported =
-    pagesGetSupported === true && pagesSetSupported === true;
+  const inlineArtifactsGetSupported = useHostMethodSupport(
+    hostId,
+    INLINE_ARTIFACTS_GET,
+  );
+  const inlineArtifactsSetSupported = useHostMethodSupport(
+    hostId,
+    INLINE_ARTIFACTS_SET,
+  );
+  const inlineArtifactsSupported =
+    inlineArtifactsGetSupported === true &&
+    inlineArtifactsSetSupported === true;
 
   return (
     <>
@@ -104,7 +111,9 @@ export function BrowserSettingsSection(props: {
         {agentAccessSupported ? (
           <AgentBrowserAccessRow hostId={hostId} />
         ) : null}
-        {agentPagesSupported ? <AgentPagesRow hostId={hostId} /> : null}
+        {inlineArtifactsSupported ? (
+          <InlineArtifactsRow hostId={hostId} />
+        ) : null}
         {props.agentOpenedTabsRow}
         {browserDevOrigins.length > 0 ? (
           <SettingsRow
@@ -197,16 +206,12 @@ function AgentBrowserAccessRow(props: {
   );
 }
 
-const AGENT_PAGES_GET = "config.visualization.get";
-const AGENT_PAGES_SET = "config.visualization.set";
+const INLINE_ARTIFACTS_GET = "config.visualization.get";
+const INLINE_ARTIFACTS_SET = "config.visualization.set";
 
-/**
- * The host-wide "let agents show pages in chat" switch (D04): whether agents
- * are launched with `traycer_show_page` and `traycer_preview_page`. Read at
- * agent launch, so a flip applies to agents started after it. Gated and
- * scoped like {@link AgentBrowserAccessRow}.
- */
-function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
+function InlineArtifactsRow(props: {
+  readonly hostId: string | null;
+}): ReactNode {
   const client = useHostClient();
   const hostName = hostNameOf(
     useHostDirectoryEntry(props.hostId),
@@ -215,15 +220,15 @@ function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
   const query = useHostQuery<HostRpcRegistry, "config.visualization.get">({
     cacheKeyIdentity: undefined,
     client,
-    method: AGENT_PAGES_GET,
+    method: INLINE_ARTIFACTS_GET,
     params: {},
     options: { enabled: true },
   });
-  const setPages = useHostScopedMutationForClient(client, {
-    method: AGENT_PAGES_SET,
+  const setInlineArtifacts = useHostScopedMutationForClient(client, {
+    method: INLINE_ARTIFACTS_SET,
     mutationKey: configMutationKeys.visualizationSet(),
-    errorMessage: "Couldn't update agent pages",
-    invalidateMethods: [AGENT_PAGES_GET],
+    errorMessage: "Couldn't update inline artifacts",
+    invalidateMethods: [INLINE_ARTIFACTS_GET],
   });
 
   return (
@@ -231,17 +236,19 @@ function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
       row={BROWSER.definitions.agentPages}
       status={
         query.isError
-          ? "Couldn't read this host's pages setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
+          ? "Couldn't read this host's inline artifact setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
           : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentPages.description}`
       }
       control={
         <Switch
           checked={query.data?.agentPages === true}
-          disabled={query.isPending || query.isError || setPages.isPending}
-          aria-label="Let agents show pages in chat"
+          disabled={
+            query.isPending || query.isError || setInlineArtifacts.isPending
+          }
+          aria-label="Let agents show artifacts in chat"
           onCheckedChange={(next) => {
             trackSettingChanged("browser", "agentPages");
-            setPages.mutate({ agentPages: next });
+            setInlineArtifacts.mutate({ agentPages: next });
           }}
         />
       }

@@ -112,16 +112,25 @@ const MARKDOWN_KINDS = ["spec", "ticket", "story", "review"];
 const NEW_KINDS = ["html", "canvas", "file"];
 
 describe("new artifact kinds parse from minimal entries", () => {
-  it("htmlArtifactSchema parses a minimal entry and carries no artifactRoomId", () => {
+  it("htmlArtifactSchema retains an explicitly allocated artifactRoomId", () => {
     const parsed = htmlArtifactSchema.safeParse({
       ...htmlEntry(),
       artifactRoomId: "artifact-room-0",
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      // Plain z.object strips unknown keys; html has no Yjs body room.
-      expect(parsed.data).not.toHaveProperty("artifactRoomId");
+      expect(parsed.data.artifactRoomId).toBe("artifact-room-0");
       expect(parsed.data.head.files["index.html"]?.status).toBe("published");
+    }
+  });
+
+  it("htmlArtifactSchema defaults a missing artifactRoomId to the empty string", () => {
+    // Older HTML entries have no room until the room heal pass allocates
+    // one - see htmlArtifactSchema's own docblock.
+    const parsed = htmlArtifactSchema.safeParse(htmlEntry());
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.artifactRoomId).toBe("");
     }
   });
 
@@ -447,6 +456,37 @@ describe("buildDeletedEpicArtifact", () => {
       parentId: null,
       createdAt: 1000,
       createdManually: false,
+      assignee: null,
+      status: null,
+    });
+    expect(deletedEpicArtifactSchema.safeParse(tombstone).success).toBe(true);
+  });
+
+  it.each<[string, string | undefined]>([
+    ["absent", undefined],
+    ["explicitly empty", ""],
+  ])(
+    "keeps an html tombstone's room null when the source room is %s",
+    (_label, artifactRoomId) => {
+      const entry =
+        artifactRoomId === undefined
+          ? htmlEntry()
+          : { ...htmlEntry(), artifactRoomId };
+      const html = htmlArtifactSchema.parse(entry);
+      const tombstone = buildDeletedEpicArtifact(html, DELETED_AT);
+      expect(tombstone.artifactRoomId).toBeNull();
+    },
+  );
+
+  it("carries the room id on an html tombstone once one is allocated", () => {
+    const html = htmlArtifactSchema.parse({
+      ...htmlEntry(),
+      artifactRoomId: "artifact-room-0",
+    });
+    const tombstone = buildDeletedEpicArtifact(html, DELETED_AT);
+    expect(tombstone).toMatchObject({
+      kind: "html",
+      artifactRoomId: "artifact-room-0",
       assignee: null,
       status: null,
     });

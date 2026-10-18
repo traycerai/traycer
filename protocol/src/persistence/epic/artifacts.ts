@@ -12,8 +12,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 /**
  * POSIX path within an artifact folder: no leading ./ or /, no empty segment,
  * no .. segment, and no dot-prefixed segment. Track C resolves
- * artifact-<id>/<path> against these manifest keys. Reject backslashes as
- * isEpicFilePath in files.ts does, and all Unicode control characters (C0,
+ * artifact-<id>/<path> against these manifest keys. Reject backslashes
+ * and all Unicode control characters (C0,
  * DEL and C1). Windows hosts would read a backslash as a separator; the manifest
  * must name the same file everywhere. Reject segments named __proto__: the
  * record parser cannot carry that key. artifactHeadSchema also checks the raw
@@ -113,7 +113,7 @@ const baseEpicArtifactFieldsPreHtml = {
   parentId: lazySchema(() => z.string().nullable()),
 } as const;
 
-// A room points at a Yjs document. HTML and file entries have no such body.
+// A room points at a Yjs document. Only file entries have no such body.
 const artifactRoomFields = {
   // Artifact room hosting this artifact's body fragment
   // (`artifact-body:{artifactId}`). Populated when the host assigns the
@@ -205,6 +205,8 @@ export const htmlArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("html"),
     ...baseEpicArtifactFields,
+    // Older HTML entries have no room until the room heal pass allocates one.
+    artifactRoomId: z.string().default(""),
     head: artifactHeadSchema,
   }),
 );

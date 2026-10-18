@@ -528,7 +528,6 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
         "chats",
         "artifacts",
         "terminals",
-        "files",
         "browsers",
         "git-diff",
         "pull-requests",
@@ -572,7 +571,6 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
       "chats",
       "artifacts",
       "terminals",
-      "files",
       "browsers",
       "git-diff",
       "pull-requests",
@@ -823,7 +821,6 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
       "chats",
       "artifacts",
       "git-diff",
-      "files",
       "pull-requests",
     ]);
     expect(railStacks(state.arrangement.rail)).toEqual([

@@ -195,7 +195,9 @@ describe("useEpicExportArtifacts", () => {
           archive: false,
           archiveTitle: null,
         }),
-      ).rejects.toThrow("Only Markdown artifacts can be exported as documents.");
+      ).rejects.toThrow(
+        "Only Markdown artifacts can be exported as documents.",
+      );
       expect(acquireResidentArtifactBodyLease).not.toHaveBeenCalled();
       expect(createArtifactExport).not.toHaveBeenCalled();
     },

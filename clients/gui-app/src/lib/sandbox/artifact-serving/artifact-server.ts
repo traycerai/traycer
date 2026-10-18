@@ -1,7 +1,7 @@
 import {
-  EPIC_READ_FILE_RANGE_MAX_BYTES,
-  EPIC_READ_FILE_TEXT_MAX_BYTES,
-} from "@traycer/protocol/host/epic/files";
+  EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
+  EPIC_READ_ARTIFACT_OBJECT_TEXT_MAX_BYTES,
+} from "@traycer/protocol/host/epic/artifact-objects";
 import { isArtifactPath } from "./artifact-address";
 import {
   buildArtifactDocument,
@@ -82,7 +82,7 @@ type ReadResult = CachedBytes | Unavailable;
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 // Empty and tiny objects still retain map entries, keys and byte-array objects.
 const CACHE_MAX_ENTRIES = 1024;
-const BLOCK_BYTES = EPIC_READ_FILE_RANGE_MAX_BYTES;
+const BLOCK_BYTES = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
 const NO_OUTSIDE_REFERENCE: ArtifactOutsideReferenceResolver = () => null;
 
 function unavailable(reason: string, status: 404 | 503): Unavailable {
@@ -171,7 +171,10 @@ export class ArtifactServer {
     }
     const length = Math.min(request.length, BLOCK_BYTES);
     if (resolved.compose) {
-      const document = await waitForRead(this.documentBytes(path, entry), signal);
+      const document = await waitForRead(
+        this.documentBytes(path, entry),
+        signal,
+      );
       if (document.kind === "unavailable") return document;
       if (document.sourceSize !== entry.byteLength) {
         return unavailable("invalid-span", 503);
@@ -251,7 +254,7 @@ export class ArtifactServer {
     path: string,
     entry: ArtifactManifestEntry,
   ): Promise<ReadResult> {
-    if (entry.byteLength > EPIC_READ_FILE_TEXT_MAX_BYTES) {
+    if (entry.byteLength > EPIC_READ_ARTIFACT_OBJECT_TEXT_MAX_BYTES) {
       return Promise.resolve(unavailable("document-too-large", 503));
     }
     const key = `document:${path}`;
@@ -293,7 +296,10 @@ export class ArtifactServer {
     });
   }
 
-  private block(entry: ArtifactManifestEntry, index: number): Promise<ReadResult> {
+  private block(
+    entry: ArtifactManifestEntry,
+    index: number,
+  ): Promise<ReadResult> {
     const key = `block:${entry.sha256}:${index}`;
     const cached = this.cached(key, entry);
     if (cached !== null) return Promise.resolve(cached);
@@ -362,7 +368,10 @@ export class ArtifactServer {
     return pending;
   }
 
-  private cached(key: string, entry: ArtifactManifestEntry): CachedBytes | null {
+  private cached(
+    key: string,
+    entry: ArtifactManifestEntry,
+  ): CachedBytes | null {
     const value = this.cache.get(key);
     if (
       value === undefined ||

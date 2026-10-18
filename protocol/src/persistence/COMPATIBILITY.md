@@ -92,6 +92,13 @@ treatment entirely — `permissionMode` is reopened to a checked string there
 reopening landed at chat-sync 1.5 and the readers in the field are on 1.3, so it
 covers the modes after `auto`, not `auto` itself.
 
+### Logged removal: the unreleased page stamp
+
+`tool_call.page` existed in the shared epic chats leaf between the files-plane
+change (#6233) and its removal here. No release carried it: host-v1.5.1 cut
+epic 3.0 before that change, and epic 4.0 is uncut. The generated fixture removes
+only that property and its required-key entry; no released record changes.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the
@@ -116,6 +123,10 @@ Never edit the generated fixture by hand. Commit its diff with the schema
 change so reviewers can see the complete persistence-contract change.
 
 ## Chat-sync contract
+
+Logged removal: `tool_call.page` existed on chat-sync 1.7 and 1.8 in the
+source tree and was removed before any release shipped it. The MCP App stamp
+remains; released records through 1.6 are unchanged.
 
 A published chat is two registered records: `chat-head`, the small mutable
 pointer stored as opaque JSON on the chat's cloud row, and `chat-shard`, one

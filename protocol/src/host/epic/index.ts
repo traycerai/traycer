@@ -1,6 +1,6 @@
 export * from "./unary-schemas";
 export * from "./chat-attachment";
-export * from "./files";
+export * from "./artifact-objects";
 export * from "./artifact-versions";
 export * from "./artifact-attachment";
 export * from "./chat-publication-identity";

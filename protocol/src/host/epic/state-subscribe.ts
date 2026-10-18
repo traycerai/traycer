@@ -168,7 +168,6 @@ import {
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
-import { epicStateFilesArmSchema } from "@traycer/protocol/host/epic/files";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -231,7 +230,9 @@ export const epicArtifactRecordSchema = lazySchema(() =>
     reviewArtifactSchema
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
-    htmlArtifactSchema.extend(epicLaneRowRevisionFields),
+    htmlArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
     canvasArtifactSchema
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
@@ -829,8 +830,6 @@ type EmptinessCheckedFrame =
       readonly commentThreadRemovals: readonly unknown[];
       readonly epicMeta: unknown;
       readonly roleClaims: unknown;
-      /** `@1.2` and later; absent on the older frames. */
-      readonly files?: unknown;
     }
   | { readonly kind: "snapshot" }
   | { readonly kind: "resumed" }
@@ -858,8 +857,7 @@ function refineDeltaCarriesChange(
     frame.commentThreadUpserts.length > 0 ||
     frame.commentThreadRemovals.length > 0 ||
     frame.epicMeta !== null ||
-    frame.roleClaims !== null ||
-    (frame.files !== undefined && frame.files !== null);
+    frame.roleClaims !== null;
   if (carriesChange) return;
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
@@ -966,41 +964,11 @@ export const epicStateSubscribeV11 = defineStreamRpcContract({
 });
 
 /**
- * `@1.2`: the `@1.1` frames plus the epic's FILES - the manifest of agent
- * pages, MCP App snapshots and drop-zone files, each with this host's
- * `localState` (whether its bytes are here, or downloading).
- *
- * Revisioned as a whole SET, like `roleClaims` (see
- * {@link epicStateFilesProjectionSchema}): the whole set on a snapshot, `null`
- * on a delta that did not touch files. A record or arm this reader cannot
- * parse is dropped, not fatal - see {@link epicStateFilesArmSchema}. The host gates the arm on the negotiated
- * minor, so an `@1.1` subscriber is never sent it; every other frame, the
- * open request and the client frames are `@1.1`'s by reference.
+ * 1.2 carried the files arm of the files plane, removed before any release
+ * shipped it. Keep this empty minor so 1.3 keeps its number across three branches.
  */
-const epicStateSubscribeSnapshotFrameSchemaV12 = lazySchema(() =>
-  epicStateSubscribeSnapshotFrameSchemaV11.extend({
-    files: epicStateFilesArmSchema,
-  }),
-);
-const epicStateSubscribeDeltaFrameSchemaV12 = lazySchema(() =>
-  epicStateSubscribeDeltaFrameSchemaV11.extend({
-    files: epicStateFilesArmSchema,
-  }),
-);
-export const epicStateSubscribeServerFrameSchemaV12 = lazySchema(() =>
-  z
-    .discriminatedUnion("kind", [
-      epicStateSubscribeSnapshotFrameSchemaV12,
-      epicStateSubscribeResumedFrameSchemaV10,
-      epicStateSubscribeDeltaFrameSchemaV12,
-      epicStateSubscribeTrustChangedFrameSchemaV10,
-      z.object({
-        kind: z.literal("pong"),
-        ...epicLaneTextFrameFields,
-      }),
-    ])
-    .superRefine(refineDeltaCarriesChange),
-);
+export const epicStateSubscribeServerFrameSchemaV12 =
+  epicStateSubscribeServerFrameSchemaV11;
 export type EpicStateSubscribeServerFrameV12 = z.infer<
   typeof epicStateSubscribeServerFrameSchemaV12
 >;
@@ -1015,13 +983,13 @@ export const epicStateSubscribeV12 = defineStreamRpcContract({
 
 /** 1.3 carries all seven artifact kinds; older frames keep their frozen unions. */
 const epicStateSubscribeSnapshotFrameSchemaV13 = lazySchema(() =>
-  epicStateSubscribeSnapshotFrameSchemaV12.extend({
+  epicStateSubscribeSnapshotFrameSchemaV11.extend({
     artifactRecords: z.array(epicArtifactRecordSchema),
     deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
   }),
 );
 const epicStateSubscribeDeltaFrameSchemaV13 = lazySchema(() =>
-  epicStateSubscribeDeltaFrameSchemaV12.extend({
+  epicStateSubscribeDeltaFrameSchemaV11.extend({
     artifactUpserts: z.array(epicArtifactRecordSchema),
     artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
   }),

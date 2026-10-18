@@ -51,7 +51,6 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { DeletedArtifactsOpenMenuItem } from "@/components/epic-canvas/deleted-artifacts/deleted-artifacts-open-menu-item";
-import { FilesPanelBody } from "@/components/epic-canvas/sidebar/files-panel";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -555,14 +554,6 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     },
     loading: emptyLoadingSlots(ArtifactsLoadingPanelBody),
   },
-  files: {
-    live: {
-      Body: FilesPanelBody,
-      Actions: null,
-      Subtitle: null,
-    },
-    loading: emptyLoadingSlots(GenericLoadingPanelBody),
-  },
   "git-diff": {
     live: {
       Body: GitDiffPanelBody,
@@ -696,7 +687,9 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact && isMarkdownArtifactKind(activeArtifact.kind);
+    activeArtifact !== null &&
+    "kind" in activeArtifact &&
+    isMarkdownArtifactKind(activeArtifact.kind);
   // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(

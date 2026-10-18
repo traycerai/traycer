@@ -30,14 +30,20 @@ describe("the built sandbox document", () => {
     // check follows the reference rather than assuming "FIGTREE_FONT_URL".
     const urls = html.match(/(?<!new )url\([^)]*\)/gi) ?? [];
     expect(urls).toHaveLength(1);
-    const reference = /^url\("\$\{([A-Za-z_$][\w$]*)\}"\)$/.exec(urls[0]);
+    const [firstUrl] = urls;
+    if (firstUrl === undefined) {
+      throw new Error("expected exactly one url(...) reference");
+    }
+    const reference = /^url\("\$\{([A-Za-z_$][\w$]*)\}"\)$/.exec(firstUrl);
     if (reference === null) {
-      throw new Error("expected a url(\"${...}\") reference in the built loader");
+      throw new Error('expected a url("${...}") reference in the built loader');
     }
     const fontVariable = reference[1].replace(/\$/g, "\\$");
     // esbuild's bundled output may declare the constant with const, let or var.
     expect(html).toMatch(
-      new RegExp(`(?:const|let|var) ${fontVariable} = "data:font/woff2;base64,`),
+      new RegExp(
+        `(?:const|let|var) ${fontVariable} = "data:font/woff2;base64,`,
+      ),
     );
   });
 

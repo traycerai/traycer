@@ -37,6 +37,10 @@ export function artifactManifestsEqual(
     if (!Object.hasOwn(right.files, path)) return false;
     const a = left.files[path];
     const b = right.files[path];
-    return a.sha256 === b.sha256 && a.byteLength === b.byteLength && a.mediaType === b.mediaType;
+    return (
+      a.sha256 === b.sha256 &&
+      a.byteLength === b.byteLength &&
+      a.mediaType === b.mediaType
+    );
   });
 }

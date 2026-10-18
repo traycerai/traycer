@@ -95,7 +95,7 @@ import {
   todoUpdatedEventSchema,
   toolCallCompletedEventSchema,
   toolCallCompletedEventSchemaPreArtifact,
-  toolCallCompletedEventSchemaPrePage,
+  toolCallCompletedEventSchemaPreMcpApp,
   toolCallErroredEventSchema,
   toolCallProgressEventSchema,
   toolCallStartedEventSchema,
@@ -375,15 +375,15 @@ export const openRuntimeEventSchema = lazySchema(() =>
 );
 export type OpenRuntimeEvent = z.infer<typeof openRuntimeEventSchema>;
 
-/** Frozen 1.22 runtime events, before page/app stamps. */
-export const openRuntimeEventSchemaPrePage = lazySchema(() =>
+/** Frozen 1.22 runtime events, before MCP App stamps. */
+export const openRuntimeEventSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("type", [
     textDeltaEventSchema,
     textCompletedEventSchema,
     reasoningDeltaEventSchema,
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
-    toolCallCompletedEventSchemaPrePage,
+    toolCallCompletedEventSchemaPreMcpApp,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
     approvalRequestedEventSchema,
@@ -425,4 +425,4 @@ export const openRuntimeEventSchemaPrePage = lazySchema(() =>
   ]),
 );
 
-export { openMessageSchemaPrePage } from "@traycer/protocol/host/agent/gui/open-harness-pre-page";
+export { openMessageSchemaPreMcpApp } from "@traycer/protocol/host/agent/gui/open-harness-pre-mcp-app";

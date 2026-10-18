@@ -6,7 +6,7 @@ import {
   runtimeEventSchemaPreBrowser,
   runtimeEventSchemaPreDisplayFacts,
   runtimeEventSchemaPreFallback,
-  runtimeEventSchemaPrePage,
+  runtimeEventSchemaPreMcpApp,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   chatSubscribeV118,
@@ -19,41 +19,30 @@ import {
   contentBlockSchema,
   contentBlockSchemaPreBrowser,
   contentBlockSchemaPreFallback,
-  contentBlockSchemaPrePage,
+  contentBlockSchemaPreMcpApp,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaPreShellHost,
   contentBlockSchemaV18,
   type ToolCallBlock,
   type ToolCallMcpAppStamp,
-  type ToolCallPageStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 /**
- * `chat.subscribe@1.23`: `page` and `mcpApp` on a `tool_call` block and on its
+ * `chat.subscribe@1.23`: `mcpApp` on a `tool_call` block and on its
  * `tool_call.completed` event.
  *
  * PROJECTION, not tolerance: every line below `1.23` binds a hand-frozen block
- * and event that do not declare the keys, so a frame carrying them parses there
- * with the keys gone and everything else intact - on each channel a body
+ * and event that do not declare the key, so a frame carrying it parses there
+ * with the key gone and everything else intact - on each channel a body
  * reaches a peer on (the tail, a `range` response, `blockDelta`). The live line
- * keeps them.
+ * keeps it.
  *
  * `1.22` is main's released open-harness-id line and is frozen byte for byte: it
- * keeps the open harness leaves and, like every line below it, no stamps.
+ * keeps the open harness leaves and, like every line below it, no stamp.
  */
 
 const SHA = "c".repeat(64);
-
-const PAGE: ToolCallPageStamp = {
-  path: "files/pages/report-1.html",
-  sha256: SHA,
-  title: "Report",
-  height: 320,
-  heights: [{ width: 600, height: 410 }],
-  derivedFrom: null,
-  originChatId: "chat-1",
-};
 
 const MCP_APP: ToolCallMcpAppStamp = {
   server: "charts",
@@ -74,14 +63,14 @@ const MCP_APP: ToolCallMcpAppStamp = {
   modelContext: null,
 };
 
-/** A tool call exactly as a 1.23 host persists it, both stamps present. */
+/** A tool call exactly as a 1.23 host persists it, the stamp present. */
 function stampedToolCall(): Record<string, unknown> {
   return {
     type: "tool_call",
     blockId: "block-1",
     status: "completed",
     timestamp: 5,
-    toolName: "traycer_show_page",
+    toolName: "traycer_build_mcp_app",
     inputSummary: null,
     inputDetail: null,
     taskTodoItems: null,
@@ -96,7 +85,6 @@ function stampedToolCall(): Record<string, unknown> {
     backgroundTask: false,
     stopped: false,
     imageResults: [],
-    page: PAGE,
     mcpApp: MCP_APP,
   };
 }
@@ -196,7 +184,7 @@ function completedEvent(
     type: "tool_call.completed",
     blockId: "block-1",
     timestamp: 5,
-    toolName: "traycer_show_page",
+    toolName: "traycer_build_mcp_app",
     ...stamps,
   };
 }
@@ -246,53 +234,50 @@ const FROZEN_LINES = [
 ] as const;
 
 describe.each(FROZEN_LINES)(
-  "chat.subscribe@$label never shows a peer a page or MCP App stamp",
+  "chat.subscribe@$label never shows a peer an MCP App stamp",
   ({ contract }) => {
     const frames = contract.serverFrameSchema;
 
-    it("drops both keys from a stamped block on the snapshot tail, keeping the call", () => {
+    it("drops the key from a stamped block on the snapshot tail, keeping the call", () => {
       const parsed = frames.parse(
         snapshotFrame(assistantRow([stampedToolCall()])),
       );
       const block = firstToolCall(tailMessage(parsed));
-      expect(has(block, "page")).toBe(false);
       expect(has(block, "mcpApp")).toBe(false);
       expect(block).toMatchObject({
         blockId: "block-1",
-        toolName: "traycer_show_page",
+        toolName: "traycer_build_mcp_app",
         status: "completed",
       });
     });
 
-    it("drops both keys from a stamped block on a range response", () => {
+    it("drops the key from a stamped block on a range response", () => {
       const parsed = frames.parse(
         rangeFrame(assistantRow([stampedToolCall()])),
       );
       const block = firstToolCall(rangeMessage(parsed));
-      expect(has(block, "page")).toBe(false);
       expect(has(block, "mcpApp")).toBe(false);
-      expect(block).toMatchObject({ toolName: "traycer_show_page" });
+      expect(block).toMatchObject({ toolName: "traycer_build_mcp_app" });
     });
 
-    it("drops both keys from a tool_call.completed on blockDelta, keeping the event", () => {
+    it("drops the key from a tool_call.completed on blockDelta, keeping the event", () => {
       const parsed = frames.parse(
-        blockDeltaFrame(completedEvent({ page: PAGE, mcpApp: MCP_APP })),
+        blockDeltaFrame(completedEvent({ mcpApp: MCP_APP })),
       );
       if (parsed.kind !== "blockDelta") throw new Error("wrong kind");
-      expect(has(parsed.event, "page")).toBe(false);
       expect(has(parsed.event, "mcpApp")).toBe(false);
       expect(parsed.event).toMatchObject({
         type: "tool_call.completed",
-        toolName: "traycer_show_page",
+        toolName: "traycer_build_mcp_app",
       });
     });
   },
 );
 
-describe("chat.subscribe@1.22 keeps its open harness ids while dropping the stamps", () => {
+describe("chat.subscribe@1.22 keeps its open harness ids while dropping the stamp", () => {
   const frames = chatSubscribeV122.serverFrameSchema;
 
-  it("accepts an unknown heard-from harness id and still strips the stamps", () => {
+  it("accepts an unknown heard-from harness id and still strips the stamp", () => {
     const row = assistantRow([stampedToolCall()]);
     const future = {
       ...row,
@@ -308,63 +293,52 @@ describe("chat.subscribe@1.22 keeps its open harness ids while dropping the stam
     const block = firstToolCall(
       tailMessage(frames.parse(snapshotFrame(future))),
     );
-    expect(has(block, "page")).toBe(false);
     expect(has(block, "mcpApp")).toBe(false);
   });
 });
 
-describe("chat.subscribe@1.23 carries the stamps", () => {
+describe("chat.subscribe@1.23 carries the stamp", () => {
   const frames = chatSubscribeV123.serverFrameSchema;
 
-  it("round-trips both stamps on the snapshot tail and on a range response", () => {
+  it("round-trips the stamp on the snapshot tail and on a range response", () => {
     const row = assistantRow([stampedToolCall()]);
     const tail = firstToolCall(tailMessage(frames.parse(snapshotFrame(row))));
-    expect(tail).toMatchObject({ page: PAGE, mcpApp: MCP_APP });
+    expect(tail).toMatchObject({ mcpApp: MCP_APP });
     const range = firstToolCall(rangeMessage(frames.parse(rangeFrame(row))));
-    expect(range).toMatchObject({ page: PAGE, mcpApp: MCP_APP });
+    expect(range).toMatchObject({ mcpApp: MCP_APP });
   });
 
-  it("round-trips both stamps on a tool_call.completed blockDelta", () => {
+  it("round-trips the stamp on a tool_call.completed blockDelta", () => {
     const parsed = frames.parse(
-      blockDeltaFrame(completedEvent({ page: PAGE, mcpApp: MCP_APP })),
+      blockDeltaFrame(completedEvent({ mcpApp: MCP_APP })),
     );
     if (parsed.kind !== "blockDelta") throw new Error("wrong kind");
-    expect(parsed.event).toMatchObject({ page: PAGE, mcpApp: MCP_APP });
+    expect(parsed.event).toMatchObject({ mcpApp: MCP_APP });
   });
 
-  it("reads a block persisted before the keys as 'no stamp' (null), not as absent", () => {
+  it("reads a block persisted before the key as 'no stamp' (null), not as absent", () => {
     const legacy = Object.fromEntries(
-      Object.entries(stampedToolCall()).filter(
-        ([key]) => key !== "page" && key !== "mcpApp",
-      ),
+      Object.entries(stampedToolCall()).filter(([key]) => key !== "mcpApp"),
     );
     const block = firstToolCall(
       tailMessage(frames.parse(snapshotFrame(assistantRow([legacy])))),
     );
-    expect(block).toMatchObject({ page: null, mcpApp: null });
+    expect(block).toMatchObject({ mcpApp: null });
   });
 
   it("refuses a stamp that is malformed rather than passing it to a renderer", () => {
-    const badSha = { ...PAGE, sha256: "not-a-sha" };
-    const shortHeight = { ...PAGE, height: 79 };
     const badScheme = { ...MCP_APP, resourceUri: "https://evil.example/app" };
-    for (const stamps of [
-      { page: badSha },
-      { page: shortHeight },
-      { mcpApp: badScheme },
-    ]) {
-      expect(
-        frames.safeParse(
-          snapshotFrame(
-            assistantRow([{ ...stampedToolCall(), page: null, ...stamps }]),
-          ),
-        ).success,
-      ).toBe(false);
-    }
+    expect(
+      frames.safeParse(
+        snapshotFrame(
+          assistantRow([{ ...stampedToolCall(), mcpApp: badScheme }]),
+        ),
+      ).success,
+    ).toBe(false);
   });
 });
 
-describe("every historical content-block union strips the stamps from a tool call", () => {
+describe("every historical content-block union strips the stamp from a tool call", () => {
   const unions = [
     ["PreReasonix", contentBlockSchemaPreReasonix],
     ["PreFallback", contentBlockSchemaPreFallback],
@@ -372,47 +346,42 @@ describe("every historical content-block union strips the stamps from a tool cal
     ["PreBrowser", contentBlockSchemaPreBrowser],
     ["PreReceipt", contentBlockSchemaPreReceipt],
     ["V18", contentBlockSchemaV18],
-    ["PrePage", contentBlockSchemaPrePage],
+    ["PreMcpApp", contentBlockSchemaPreMcpApp],
   ] as const;
 
   it.each(unions)(
-    "%s parses a stamped block with both keys gone",
+    "%s parses a stamped block with the key gone",
     (_label, union) => {
       const parsed = union.parse(stampedToolCall());
       expect(parsed).toMatchObject({
         type: "tool_call",
         blockId: "block-1",
-        toolName: "traycer_show_page",
+        toolName: "traycer_build_mcp_app",
       });
-      expect(has(parsed, "page")).toBe(false);
       expect(has(parsed, "mcpApp")).toBe(false);
     },
   );
 
-  it("the live union keeps them - the positive control for the strips above", () => {
+  it("the live union keeps it - the positive control for the strips above", () => {
     expect(contentBlockSchema.parse(stampedToolCall())).toMatchObject({
-      page: PAGE,
       mcpApp: MCP_APP,
     });
   });
 });
 
-describe("every historical runtime-event union strips the stamps from tool_call.completed", () => {
+describe("every historical runtime-event union strips the stamp from tool_call.completed", () => {
   const unions = [
-    ["PrePage", runtimeEventSchemaPrePage],
+    ["PreMcpApp", runtimeEventSchemaPreMcpApp],
     ["PreDisplayFacts", runtimeEventSchemaPreDisplayFacts],
     ["PreBrowser", runtimeEventSchemaPreBrowser],
     ["PreFallback", runtimeEventSchemaPreFallback],
   ] as const;
 
   it.each(unions)(
-    "%s parses a stamped event with both keys gone",
+    "%s parses a stamped event with the key gone",
     (_label, union) => {
-      const parsed = union.parse(
-        completedEvent({ page: PAGE, mcpApp: MCP_APP }),
-      );
+      const parsed = union.parse(completedEvent({ mcpApp: MCP_APP }));
       expect(parsed).toMatchObject({ type: "tool_call.completed" });
-      expect(has(parsed, "page")).toBe(false);
       expect(has(parsed, "mcpApp")).toBe(false);
     },
   );
@@ -420,12 +389,7 @@ describe("every historical runtime-event union strips the stamps from tool_call.
 
 describe("the live tool_call.completed event", () => {
   it("accepts a stamp, an explicit null and an omission", () => {
-    for (const stamps of [
-      { page: PAGE },
-      { mcpApp: MCP_APP },
-      { page: null, mcpApp: null },
-      {},
-    ]) {
+    for (const stamps of [{ mcpApp: MCP_APP }, { mcpApp: null }, {}]) {
       expect(runtimeEventSchema.safeParse(completedEvent(stamps)).success).toBe(
         true,
       );
@@ -434,18 +398,17 @@ describe("the live tool_call.completed event", () => {
 
   it("leaves an omitted key omitted, so 'nothing to say' stays distinguishable from a stamp", () => {
     const parsed = runtimeEventSchema.parse(completedEvent({}));
-    expect(has(parsed, "page")).toBe(false);
     expect(has(parsed, "mcpApp")).toBe(false);
   });
 });
 
-describe("accumulating a tool call's stamps", () => {
+describe("accumulating a tool call's MCP App stamp", () => {
   function started(): ToolCallBlock[] {
     const blocks = accumulateEvent([], {
       type: "tool_call.started",
       blockId: "block-1",
       timestamp: 1,
-      toolName: "traycer_show_page",
+      toolName: "traycer_build_mcp_app",
       agentMessageSend: null,
     });
     return blocks.filter((block) => block.type === "tool_call");
@@ -462,37 +425,33 @@ describe("accumulating a tool call's stamps", () => {
     return block;
   }
 
-  it("starts a call with no stamps", () => {
-    expect(started()[0]).toMatchObject({ page: null, mcpApp: null });
+  it("starts a call with no stamp", () => {
+    expect(started()[0]).toMatchObject({ mcpApp: null });
   });
 
   it("stamps the block on completion", () => {
-    const block = completed(started(), { page: PAGE, mcpApp: MCP_APP });
-    expect(block.page).toEqual(PAGE);
+    const block = completed(started(), { mcpApp: MCP_APP });
     expect(block.mcpApp).toEqual(MCP_APP);
   });
 
   it.each([
-    ["omits the keys", {}],
-    ["sends them as null", { page: null, mcpApp: null }],
-  ])("keeps the stamps through a re-completion that %s", (_label, stamps) => {
-    const first = completed(started(), { page: PAGE, mcpApp: MCP_APP });
+    ["omits the key", {}],
+    ["sends it as null", { mcpApp: null }],
+  ])("keeps the stamp through a re-completion that %s", (_label, stamps) => {
+    const first = completed(started(), { mcpApp: MCP_APP });
     const again = completed([first], stamps);
-    expect(again.page).toEqual(PAGE);
     expect(again.mcpApp).toEqual(MCP_APP);
   });
 
-  it("completes an unstamped call to null stamps, and a late re-completion can still stamp it", () => {
+  it("completes an unstamped call to a null stamp, and a late re-completion can still stamp it", () => {
     const plain = completed(started(), {});
-    expect(plain).toMatchObject({ page: null, mcpApp: null });
-    const stamped = completed([plain], { page: PAGE });
-    expect(stamped.page).toEqual(PAGE);
-    expect(stamped.mcpApp).toBeNull();
+    expect(plain).toMatchObject({ mcpApp: null });
+    const stamped = completed([plain], { mcpApp: MCP_APP });
+    expect(stamped.mcpApp).toEqual(MCP_APP);
   });
 
   it("stamps a completion that arrives with no started event", () => {
     const block = completed([], { mcpApp: MCP_APP });
     expect(block.mcpApp).toEqual(MCP_APP);
-    expect(block.page).toBeNull();
   });
 });

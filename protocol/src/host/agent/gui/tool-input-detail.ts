@@ -49,9 +49,8 @@ const BULK_INPUT_FIELDS = new Set([
   // `browser-tools.ts` (which identifies the REPL by tool NAME). The call
   // still reads from `title` and the header summary.
   "code",
-  // A whole page's source (`traycer_show_page` / `traycer_preview_page`), up to
-  // 512,000 characters. The shown page is its own epic file, stamped on the
-  // block, so the inline copy is never displayed.
+  // The preview tool's HTML source (`traycer_preview_page`), up to 512,000
+  // characters. The tool detail never displays this source.
   "html",
   "edits",
   "patch",

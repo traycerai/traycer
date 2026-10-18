@@ -6,7 +6,7 @@ import {
   runtimeEventSchemaPreBrowser,
   runtimeEventSchemaPreDisplayFacts,
   runtimeEventSchemaPreFallback,
-  runtimeEventSchemaPrePage,
+  runtimeEventSchemaPreMcpApp,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   chatSubscribeV118,
@@ -22,7 +22,7 @@ import {
   contentBlockSchemaPreBrowser,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreHtml,
-  contentBlockSchemaPrePage,
+  contentBlockSchemaPreMcpApp,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaPreShellHost,
@@ -34,7 +34,7 @@ import {
 /**
  * `chat.subscribe@1.29`: `artifact` on a `tool_call` block and on its
  * `tool_call.completed` event - the manifest an inline `traycer_render_inline`
- * artifact showed. A direct structural clone of `chat-subscribe-page-freeze.test.ts`
+ * artifact showed. A direct structural clone of `chat-subscribe-mcp-app-freeze.test.ts`
  * for this key, extended with the manifest's own size guards.
  *
  * PROJECTION, not tolerance: every line below `1.29` binds a hand-frozen block
@@ -85,7 +85,6 @@ function stampedToolCall(): Record<string, unknown> {
     stopped: false,
     imageResults: [],
     artifact: ARTIFACT,
-    page: null,
     mcpApp: null,
   };
 }
@@ -377,7 +376,7 @@ describe("every historical content-block union strips the artifact stamp from a 
     ["PreBrowser", contentBlockSchemaPreBrowser],
     ["PreReceipt", contentBlockSchemaPreReceipt],
     ["V18", contentBlockSchemaV18],
-    ["PrePage", contentBlockSchemaPrePage],
+    ["PreMcpApp", contentBlockSchemaPreMcpApp],
     ["PreHtml", contentBlockSchemaPreHtml],
   ] as const;
 
@@ -403,7 +402,7 @@ describe("every historical content-block union strips the artifact stamp from a 
 
 describe("every historical runtime-event union strips the artifact stamp from tool_call.completed", () => {
   const unions = [
-    ["PrePage", runtimeEventSchemaPrePage],
+    ["PreMcpApp", runtimeEventSchemaPreMcpApp],
     ["PreDisplayFacts", runtimeEventSchemaPreDisplayFacts],
     ["PreBrowser", runtimeEventSchemaPreBrowser],
     ["PreFallback", runtimeEventSchemaPreFallback],

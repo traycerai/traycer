@@ -182,7 +182,8 @@ function SwitcherRowActionsBody(
   const exportArtifacts = useEpicExportArtifacts();
   const artifact = useArtifactById(nodeId);
   // Document export requires a Markdown body.
-  const canExport = kind === "artifact" && isMarkdownArtifactKind(artifact?.kind);
+  const canExport =
+    kind === "artifact" && isMarkdownArtifactKind(artifact?.kind);
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(

@@ -15,7 +15,9 @@ import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 export const DESKTOP_SANDBOX_LOADER_URL = "traycer-sandbox://page/index.html";
 
 /** Artifact serving has its own native scheme on mobile; the loader does not. */
-export function sandboxArtifactPolicySource(runnerHost: IRunnerHost | null): string | null {
+export function sandboxArtifactPolicySource(
+  runnerHost: IRunnerHost | null,
+): string | null {
   return runnerHost?.sandboxArtifacts?.policySource ?? null;
 }
 

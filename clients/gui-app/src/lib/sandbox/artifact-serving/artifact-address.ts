@@ -29,7 +29,9 @@ export function parseArtifactAddress(url: string): ArtifactAddress | null {
   // URL() removes literal and encoded dot segments before callers can reject
   // them. Inspect the original path and authority instead.
   const match =
-    /^([A-Za-z][A-Za-z0-9+.-]*):\/\/artifact-([^/?#]+)(\/[^?#]*)?(?:[?#].*)?$/.exec(url);
+    /^([A-Za-z][A-Za-z0-9+.-]*):\/\/artifact-([^/?#]+)(\/[^?#]*)?(?:[?#].*)?$/.exec(
+      url,
+    );
   if (match === null) return null;
   const scheme = match[1];
   let authority = match[2];
@@ -69,10 +71,13 @@ export function buildArtifactAddress(address: ArtifactAddressParts): string {
   const { origin, artifactId, mountId, treePath, path } = address;
   const parsed = parseArtifactAddress(origin);
   const relativePath = path === "" ? "index.html" : path;
-  const fullPath = treePath === "" ? relativePath : `${treePath}/${relativePath}`;
+  const fullPath =
+    treePath === "" ? relativePath : `${treePath}/${relativePath}`;
   if (
     !/^[^:/?#]+:\/\/[^/?#]+$/.test(origin) ||
-    parsed === null || parsed.artifactId !== artifactId || parsed.mountId !== mountId ||
+    parsed === null ||
+    parsed.artifactId !== artifactId ||
+    parsed.mountId !== mountId ||
     !ARTIFACT_ID.test(artifactId) ||
     !MOUNT_ID.test(mountId) ||
     (treePath !== "" && !isArtifactPath(treePath)) ||

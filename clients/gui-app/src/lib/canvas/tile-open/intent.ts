@@ -183,7 +183,9 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   ticket: "content",
   story: "content",
   review: "content",
-  html: "content", canvas: "content", file: "content",
+  html: "content",
+  canvas: "content",
+  file: "content",
   "workspace-file": "content",
   "git-diff": "content",
   "snapshot-diff": "content",
@@ -193,7 +195,6 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   "pr-detail": "content",
   "pr-diff": "content",
   "deleted-artifacts": "content",
-  "epic-file": "content",
   blank: "content",
 };
 
