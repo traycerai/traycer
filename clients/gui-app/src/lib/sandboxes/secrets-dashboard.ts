@@ -37,7 +37,15 @@ export function personalReviewUrl(signInUrl: string): string {
   return `${resolvePlatformBaseUrl(signInUrl)}/environments/personal/review`;
 }
 
-/** The dashboard's settings pages, where a team's settings are changed. */
-export function settingsDashboardUrl(signInUrl: string): string {
-  return `${resolvePlatformBaseUrl(signInUrl)}/environments`;
+/**
+ * The team's environment in the dashboard, where its settings are changed:
+ * the first page of its Environment group, which a member can read.
+ * `teamName` is the team's handle, the one segment the dashboard's team
+ * routes are keyed by.
+ */
+export function settingsDashboardUrl(
+  signInUrl: string,
+  teamName: string,
+): string {
+  return `${resolvePlatformBaseUrl(signInUrl)}/team/${encodeURIComponent(teamName)}/environment/providers`;
 }

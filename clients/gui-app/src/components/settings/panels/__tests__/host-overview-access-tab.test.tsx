@@ -410,7 +410,7 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
 
   it("opens the dashboard from the team line", async () => {
     const host = hostWith(
-      { principal: { kind: "team", teamName: "Acme" } },
+      { principal: { kind: "team", teamName: "acme-labs" } },
       {},
     );
     renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
@@ -421,7 +421,25 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
 
     expect(openLinkMock).toHaveBeenCalledTimes(1);
     expect(openLinkMock.mock.calls[0]?.[0]).toBe(
-      `${DASHBOARD_ORIGIN}/environments`,
+      `${DASHBOARD_ORIGIN}/team/acme-labs/environment/providers`,
+    );
+    expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
+  });
+
+  it("encodes the team name as one path segment in the dashboard link", async () => {
+    const host = hostWith(
+      { principal: { kind: "team", teamName: "a/b?c#d" } },
+      {},
+    );
+    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open the dashboard" }),
+    );
+
+    expect(openLinkMock).toHaveBeenCalledTimes(1);
+    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
+      `${DASHBOARD_ORIGIN}/team/a%2Fb%3Fc%23d/environment/providers`,
     );
     expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
   });

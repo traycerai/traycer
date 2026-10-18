@@ -19,7 +19,7 @@ export function TeamOwnedLine(props: { readonly teamName: string }): ReactNode {
         {teamOwnedText(props.teamName)}
       </span>
       <DashboardLinkButton
-        page={settingsDashboardUrl}
+        page={(signInUrl) => settingsDashboardUrl(signInUrl, props.teamName)}
         label="Open the dashboard"
         testId="team-owned-dashboard-link"
       />
