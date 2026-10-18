@@ -37,6 +37,24 @@ import {
   useEpicArchiveChats,
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import {
+  deletedCloudEpicTasksPageEpicIdsForScope,
+  useCloudEpicTasksPagesStore,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useCloudChatDeletions } from "@/lib/chats/cloud-chat-deletions";
+import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   invalidateEpicChatRecords,
   useEpicSyncChatRecords,
@@ -56,7 +74,28 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    message: vi.fn(),
+    warning: vi.fn(),
+    dismiss: vi.fn(),
+    getToasts: vi.fn(() => []),
+  },
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => () => Promise.resolve(),
+  useRouterState: (options: {
+    readonly select: (state: {
+      readonly location: { readonly pathname: string };
+    }) => unknown;
+  }) => options.select({ location: { pathname: "/epics" } }),
+}));
+
+vi.mock("@/lib/host/use-worktree-delete-stream-transport", () => ({
+  useWorktreeDeleteStreamTransportFactory: () => () => null,
 }));
 
 import { toast } from "sonner";
@@ -64,7 +103,44 @@ import { toast } from "sonner";
 const LOCAL = mockLocalHostEntry;
 const REMOTE = mockRemoteHostEntry;
 const OTHER = mockInProcessHostEntry;
-const DIRECTORY: readonly HostDirectoryEntry[] = [LOCAL, REMOTE, OTHER];
+/** Where a stand-in's `requested` answer says the record has moved. */
+const MOVED: HostDirectoryEntry = {
+  ...mockRemoteHostEntry,
+  hostId: "mock-moved",
+  label: "Moved Host",
+};
+const DIRECTORY: readonly HostDirectoryEntry[] = [LOCAL, REMOTE, OTHER, MOVED];
+
+/**
+ * How OTHER answers a write it is sent as a stand-in: it enacts it on its own
+ * record (`applied`), files it for the owner it names (`requested`, naming
+ * MOVED), or enacts it and then fails before the answer arrives (`lost`).
+ */
+const standIn: {
+  answer: "applied" | "requested" | "lost";
+  readonly batchDeleteCalls: string[];
+  /** The terminal agents and Tasks OTHER holds: what a delete commits. */
+  readonly tuiAgents: Set<string>;
+  readonly tasks: Set<string>;
+  /** Holds OTHER's terminal-agent delete until it settles, when set. */
+  holdTuiDelete: Promise<void> | null;
+} = {
+  answer: "applied",
+  batchDeleteCalls: [],
+  tuiAgents: new Set(),
+  tasks: new Set(),
+  holdTuiDelete: null,
+};
+
+function lostAnswer(method: string): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message: "the answer was lost after the write",
+    requestId: "stand-in-lost",
+    method,
+    fatalDetails: null,
+  });
+}
 const EPIC_ID = "epic-routing-test";
 const VIEWER_ID = "viewer-routing";
 const REMOTE_CHAT_ID = "chat-remote";
@@ -112,6 +188,8 @@ interface RoutingFixture {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly localRecords: ChatRecordSummaryV11[];
   readonly remoteRecords: ChatRecordSummaryV11[];
+  /** The records OTHER holds; it enacts a write on these and only these. */
+  readonly otherRecords: ChatRecordSummaryV11[];
   readonly viewerForeign: ChatRecordSummaryV11[];
   readonly archiveCalls: MutationCall[];
   readonly deleteCalls: MutationCall[];
@@ -312,6 +390,7 @@ function createRoutingFixture(): RoutingFixture {
   });
   const localRecords: ChatRecordSummaryV11[] = [];
   const remoteRecords: ChatRecordSummaryV11[] = [];
+  const otherRecords: ChatRecordSummaryV11[] = [];
   const viewerForeign: ChatRecordSummaryV11[] = [];
   const archiveCalls: MutationCall[] = [];
   const deleteCalls: MutationCall[] = [];
@@ -372,7 +451,11 @@ function createRoutingFixture(): RoutingFixture {
             chats: remoteRecords.map((row) => ({ ...row })),
           };
         }
-        return { kind: "snapshot" as const, listStamp: null, chats: [] };
+        return {
+          kind: "snapshot" as const,
+          listStamp: null,
+          chats: otherRecords.map((row) => ({ ...row })),
+        };
       },
       "epic.setChatArchived": (request: SetChatArchivedRequest) => {
         const hostId = lastCallHost(messengerRef.current ?? messenger);
@@ -389,12 +472,29 @@ function createRoutingFixture(): RoutingFixture {
           }
           bumpArchived(remoteRecords, request.chatId, request.archived);
           if (mutable.holdRemoteArchive !== null) {
-            return mutable.holdRemoteArchive.then(() => ({ updated: true }));
+            return mutable.holdRemoteArchive.then(() => ({
+              updated: true,
+              outcome: "applied" as const,
+            }));
           }
-          return { updated: true };
+          return { updated: true, outcome: "applied" as const };
+        }
+        if (hostId === OTHER.hostId) {
+          if (standIn.answer === "requested") {
+            return {
+              updated: true,
+              outcome: "requested" as const,
+              ownerHostId: MOVED.hostId,
+            };
+          }
+          bumpArchived(otherRecords, request.chatId, request.archived);
+          if (standIn.answer === "lost") {
+            throw lostAnswer("epic.setChatArchived");
+          }
+          return { updated: true, outcome: "applied" as const };
         }
         bumpArchived(localRecords, request.chatId, request.archived);
-        return { updated: true };
+        return { updated: true, outcome: "applied" as const };
       },
       "epic.deleteChat": (request: DeleteChatRequest) => {
         const hostId = lastCallHost(messengerRef.current ?? messenger);
@@ -408,15 +508,84 @@ function createRoutingFixture(): RoutingFixture {
             return mutable.holdRemoteDelete.then(() => ({
               deleted: true,
               publicationChatId: null,
+              outcome: "applied" as const,
             }));
           }
-          return { deleted: true, publicationChatId: null };
+          return {
+            deleted: true,
+            publicationChatId: null,
+            outcome: "applied" as const,
+          };
+        }
+        if (hostId === OTHER.hostId) {
+          if (standIn.answer === "requested") {
+            return {
+              deleted: true,
+              publicationChatId: request.chatId,
+              outcome: "requested" as const,
+              ownerHostId: MOVED.hostId,
+            };
+          }
+          const index = otherRecords.findIndex(
+            (entry) => entry.chatId === request.chatId,
+          );
+          if (index >= 0) otherRecords.splice(index, 1);
+          if (standIn.answer === "lost") throw lostAnswer("epic.deleteChat");
+          return {
+            deleted: true,
+            publicationChatId: request.chatId,
+            outcome: "applied" as const,
+          };
         }
         const index = localRecords.findIndex(
           (entry) => entry.chatId === request.chatId,
         );
         if (index >= 0) localRecords.splice(index, 1);
-        return { deleted: true, publicationChatId: null };
+        return {
+          deleted: true,
+          publicationChatId: null,
+          outcome: "applied" as const,
+        };
+      },
+      "epic.deleteTuiAgent": (request: { readonly tuiAgentId: string }) => {
+        const hostId = lastCallHost(messengerRef.current ?? messenger);
+        if (hostId !== OTHER.hostId) {
+          return { deleted: true, outcome: "applied" as const };
+        }
+        const answer = () => {
+          if (standIn.answer === "requested") {
+            return {
+              deleted: true,
+              outcome: "requested" as const,
+              ownerHostId: MOVED.hostId,
+            };
+          }
+          // OTHER holds the agent: the delete commits, whatever happens to
+          // its answer.
+          standIn.tuiAgents.delete(request.tuiAgentId);
+          if (standIn.answer === "lost") {
+            throw lostAnswer("epic.deleteTuiAgent");
+          }
+          return { deleted: true, outcome: "applied" as const };
+        };
+        return standIn.holdTuiDelete === null
+          ? answer()
+          : standIn.holdTuiDelete.then(answer);
+      },
+      "epic.batchDelete": (request: { readonly ids: readonly string[] }) => {
+        const hostId = lastCallHost(messengerRef.current ?? messenger);
+        standIn.batchDeleteCalls.push(hostId);
+        // The purge commits, whatever happens to the answer.
+        for (const taskId of request.ids) standIn.tasks.delete(taskId);
+        if (standIn.answer === "lost") throw lostAnswer("epic.batchDelete");
+        // OTHER held its own local-homed copy of each Task.
+        return {
+          results: request.ids.map((taskId) => ({
+            taskId,
+            success: true,
+            home: "local" as const,
+          })),
+        };
       },
     },
   });
@@ -506,6 +675,7 @@ function createRoutingFixture(): RoutingFixture {
     messenger,
     localRecords,
     remoteRecords,
+    otherRecords,
     viewerForeign,
     archiveCalls,
     deleteCalls,
@@ -812,7 +982,7 @@ describe("remote archive and unarchive", () => {
         hostId: REMOTE.hostId,
         archived: true,
       }),
-    ).resolves.toEqual({ updated: true });
+    ).resolves.toEqual({ updated: true, outcome: "applied" });
 
     expect(fixture.archiveCalls).toEqual([
       {
@@ -1329,5 +1499,584 @@ describe("replaceMounted during a delayed ACK", () => {
       "Other-host same id",
     );
     expect(incoming.store.getState().chatRetractions).toEqual({});
+  });
+});
+
+// Codex threads on d74e2198 (4303240629, 4303240636, 4303240645,
+// 4303240648) and on 318466c2, and the round-7 cold review: one class - a
+// step after a write keyed to the row's host instead of the host that
+// enacted the write. Each write below is routed by a row naming REMOTE, which
+// is down; OTHER stands in. Every step's refreshes are observed on keys
+// seeded fresh before it, so no step is credited with another's.
+describe("a write enacted by a stand-in", () => {
+  const TUI_ID = "tui-moved";
+  const TASK_ID = "task-moved";
+  const SETTINGS: ChatRunSettings = {
+    harnessId: "codex",
+    model: "gpt-5-codex",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  };
+
+  beforeEach(() => {
+    standIn.answer = "applied";
+    standIn.batchDeleteCalls.length = 0;
+    standIn.tuiAgents.clear();
+    standIn.tuiAgents.add(TUI_ID);
+    standIn.tasks.clear();
+    standIn.tasks.add(TASK_ID);
+    standIn.holdTuiDelete = null;
+    vi.mocked(toast.success).mockClear();
+    useCloudChatDeletions.setState({
+      pending: new Map(),
+      confirmed: new Set(),
+    });
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      deletedEpicIdsByScope: {},
+    });
+    useComposerRunSettingsStore.getState().resetForTests();
+    // The owner the rows name is down, and so is the viewing session's
+    // host (the active host); OTHER is live and can write another host's
+    // record.
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL.hostId, status: "dead", dead: { reason: "offline" } },
+        { hostId: REMOTE.hostId, status: "dead", dead: { reason: "offline" } },
+        { hostId: OTHER.hostId, status: "ready", dead: null },
+      ],
+    });
+    recordNegotiatedHostManifest(OTHER.hostId, {
+      "epic.setChatArchived": { major: 1, minor: 1, supportedMajors: [1] },
+      "epic.deleteChat": { major: 1, minor: 2, supportedMajors: [1] },
+      "epic.deleteTuiAgent": { major: 1, minor: 1, supportedMajors: [1] },
+    });
+    fixture.otherRecords.push(
+      record({
+        chatId: REMOTE_CHAT_ID,
+        originHostId: OTHER.hostId,
+        title: "Moved to the stand-in",
+        origin: "own",
+      }),
+    );
+  });
+
+  afterEach(() => {
+    useSelectionAuthorityStore.getState().reset();
+    resetNegotiatedManifests();
+    useComposerRunSettingsStore.getState().resetForTests();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Seeds every list a write could refresh, per host, on a cleared cache, and
+   * returns a reader of the ones invalidated since.
+   */
+  function observeRefreshes(): () => string[] {
+    fixture.queryClient.clear();
+    const keys = new Map<string, readonly unknown[]>();
+    for (const { hostId } of DIRECTORY) {
+      keys.set(`${hostId} chats`, [
+        ...hostQueryKeys.methodScope(hostId, "epic.listChatRecords"),
+        { epicId: EPIC_ID },
+      ]);
+      keys.set(`${hostId} terminal agents`, [
+        ...hostQueryKeys.methodScope(hostId, "epic.listTuiAgents"),
+        { epicId: EPIC_ID },
+      ]);
+      keys.set(
+        `${hostId} cloud chats`,
+        cloudChatListQueryKey({
+          hostId,
+          viewerUserId: VIEWER_ID,
+          taskId: EPIC_ID,
+        }),
+      );
+      keys.set(`${hostId} host scope`, [
+        ...hostQueryKeys.scope(hostId),
+        "probe",
+      ]);
+    }
+    for (const key of keys.values()) {
+      fixture.queryClient.setQueryData(key, { seeded: true });
+    }
+    return () =>
+      [...keys].flatMap(([name, key]) =>
+        fixture.queryClient.getQueryState(key)?.isInvalidated === true
+          ? [name]
+          : [],
+      );
+  }
+
+  function confirmedDeletionOwners(): unknown[] {
+    return [...useCloudChatDeletions.getState().confirmed].map((key) => {
+      const parsed: unknown = JSON.parse(key);
+      return Array.isArray(parsed) ? String(parsed[2]) : null;
+    });
+  }
+
+  function successToasts(): unknown[] {
+    return vi.mocked(toast.success).mock.calls.map((call) => call[0]);
+  }
+
+  /**
+   * A list as OTHER serves it from what it holds, read into the cache before
+   * the write, and a re-read that refetches it only if the write refreshed
+   * it - so a refresh shows as the list after the commit.
+   */
+  async function readStandInList(
+    queryKey: readonly unknown[],
+    held: ReadonlySet<string>,
+  ): Promise<() => Promise<unknown>> {
+    await fixture.queryClient.fetchQuery({
+      queryKey,
+      queryFn: () => [...held],
+    });
+    return async () => {
+      if (fixture.queryClient.getQueryState(queryKey)?.isInvalidated) {
+        await fixture.queryClient.refetchQueries({ queryKey, exact: true });
+      }
+      return fixture.queryClient.getQueryData(queryKey);
+    };
+  }
+
+  const otherTuiAgentList = [
+    ...hostQueryKeys.methodScope(OTHER.hostId, "epic.listTuiAgents"),
+    { epicId: EPIC_ID },
+  ];
+  const otherTaskList = [...hostQueryKeys.scope(OTHER.hostId), "tasks"];
+
+  /** Each lifecycle mutation, mounted once and driven by the steps below. */
+  function mountWrites() {
+    const archive = renderHook(() => useEpicArchiveChat(), {
+      wrapper: fixture.wrapper,
+    });
+    const archiveMany = renderHook(() => useEpicArchiveChats(), {
+      wrapper: fixture.wrapper,
+    });
+    const deleteChat = renderHook(() => useEpicDeleteChat(), {
+      wrapper: fixture.wrapper,
+    });
+    const deleteTuiAgent = renderHook(() => useEpicDeleteTuiAgent(), {
+      wrapper: fixture.wrapper,
+    });
+    const deleteTasks = renderHook(() => useEpicBatchDelete(), {
+      wrapper: fixture.wrapper,
+    });
+    const settle = async (run: () => Promise<unknown>): Promise<void> => {
+      await act(async () => {
+        await run().catch(() => undefined);
+      });
+    };
+    return {
+      archive: (archived: boolean) =>
+        settle(() =>
+          archive.result.current.mutateAsync({
+            epicId: EPIC_ID,
+            chatId: REMOTE_CHAT_ID,
+            hostId: REMOTE.hostId,
+            archived,
+          }),
+        ),
+      archiveMany: () =>
+        settle(() =>
+          archiveMany.result.current.mutateAsync({
+            epicId: EPIC_ID,
+            archived: true,
+            chats: [
+              {
+                chatId: REMOTE_CHAT_ID,
+                hostId: REMOTE.hostId,
+                selectedRows: 1,
+                coveredRows: () => 1,
+              },
+            ],
+          }),
+        ),
+      deleteChat: () =>
+        settle(() =>
+          deleteChat.result.current.mutateAsync({
+            epicId: EPIC_ID,
+            chatId: REMOTE_CHAT_ID,
+            hostId: REMOTE.hostId,
+          }),
+        ),
+      deleteTuiAgent: () =>
+        settle(() =>
+          deleteTuiAgent.result.current.mutateAsync({
+            epicId: EPIC_ID,
+            tuiAgentId: TUI_ID,
+            hostId: REMOTE.hostId,
+          }),
+        ),
+      /**
+       * The terminal-agent delete held at OTHER while the visible session is
+       * replaced onto MOVED, whose list is read before the delete commits.
+       */
+      deleteTuiAgentAcrossReplacement: async (): Promise<void> => {
+        let release: () => void = () => {
+          throw new Error("the held delete has no release");
+        };
+        standIn.holdTuiDelete = new Promise((resolve) => {
+          release = resolve;
+        });
+        let pending: Promise<unknown> = Promise.resolve();
+        act(() => {
+          pending = deleteTuiAgent.result.current
+            .mutateAsync({
+              epicId: EPIC_ID,
+              tuiAgentId: TUI_ID,
+              hostId: REMOTE.hostId,
+            })
+            .catch(() => undefined);
+        });
+        fixture.replaceMountedOnto(MOVED.hostId);
+        release();
+        await act(async () => {
+          await pending;
+        });
+        standIn.holdTuiDelete = null;
+      },
+      deleteTasks: () =>
+        settle(() =>
+          deleteTasks.result.current.mutateAsync({
+            ids: [TASK_ID],
+            isLocalHomedNow: () => false,
+            boundUserId: fixture.localClient.getRequestContextUserId(),
+            worktreeCleanup: null,
+          }),
+        ),
+    };
+  }
+
+  function spyCleanup() {
+    const forceRelease = vi.spyOn(getChatSessionRegistry(), "forceRelease");
+    const accessLoss = vi.spyOn(tabCommandCoordinator, "handleEpicAccessLoss");
+    const closeTiles = vi.fn();
+    const original =
+      useEpicCanvasStore.getState().closeConfirmedDeletedAgentTiles;
+    useEpicCanvasStore.setState({
+      closeConfirmedDeletedAgentTiles: closeTiles,
+    });
+    return {
+      forceRelease,
+      accessLoss,
+      closeTiles,
+      restore: () => {
+        useEpicCanvasStore.setState({
+          closeConfirmedDeletedAgentTiles: original,
+        });
+      },
+    };
+  }
+
+  /** A stale list still carrying `hostId`'s copy of the deleted chat. */
+  async function deliverStaleCopyFrom(hostId: string): Promise<void> {
+    deliverStaleList(fixture.handle, [
+      record({
+        chatId: REMOTE_CHAT_ID,
+        originHostId: hostId,
+        origin: "foreign",
+      }),
+      record({
+        chatId: STALE_LIST_SENTINEL_ID,
+        originHostId: LOCAL.hostId,
+        origin: "foreign",
+      }),
+    ]);
+    await waitForStaleListApplied(fixture.handle);
+  }
+
+  it("`applied`: every step follows the stand-in that owned the record", async () => {
+    const writes = mountWrites();
+    const spies = spyCleanup();
+    try {
+      // Archive: read back from the stand-in and matched to its record (the
+      // viewer holds no row yet, so the read-back is what shows it).
+      let refreshed = observeRefreshes();
+      await writes.archive(true);
+      expect(fixture.archiveCalls.map((call) => call.hostId)).toEqual([
+        OTHER.hostId,
+      ]);
+      await waitFor(() => {
+        expect(
+          fixture.handle.store.getState().chats.byId[REMOTE_CHAT_ID]?.title,
+        ).toBe("Moved to the stand-in");
+      });
+      expect(
+        fixture.handle.store.getState().chats.byId[REMOTE_CHAT_ID]?.hostId,
+      ).toBe(OTHER.hostId);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${OTHER.hostId} chats`,
+          `${OTHER.hostId} terminal agents`,
+        ]),
+      );
+
+      refreshed = observeRefreshes();
+      await writes.archive(false);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${OTHER.hostId} chats`,
+          `${OTHER.hostId} terminal agents`,
+        ]),
+      );
+
+      refreshed = observeRefreshes();
+      await writes.archiveMany();
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${OTHER.hostId} chats`,
+          `${OTHER.hostId} terminal agents`,
+        ]),
+      );
+      expect(fixture.archiveCalls.map((call) => call.hostId)).toEqual([
+        OTHER.hostId,
+        OTHER.hostId,
+        OTHER.hostId,
+      ]);
+
+      // Chat delete: suppression, release, tile close and the confirmed
+      // removal are the stand-in's chat.
+      refreshed = observeRefreshes();
+      await writes.deleteChat();
+      expect(fixture.deleteCalls.map((call) => call.hostId)).toEqual([
+        OTHER.hostId,
+      ]);
+      expect(confirmedDeletionOwners()).toEqual([OTHER.hostId]);
+      expect(spies.forceRelease.mock.calls).toEqual([
+        [EPIC_ID, REMOTE_CHAT_ID, OTHER.hostId],
+      ]);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${OTHER.hostId} chats`,
+          `${OTHER.hostId} cloud chats`,
+        ]),
+      );
+      await deliverStaleCopyFrom(OTHER.hostId);
+      expect(
+        Object.hasOwn(
+          fixture.handle.store.getState().chats.byId,
+          REMOTE_CHAT_ID,
+        ),
+      ).toBe(false);
+
+      // Terminal-agent delete, held while the visible session is replaced
+      // onto MOVED, whose list was read before the delete committed.
+      refreshed = observeRefreshes();
+      await writes.deleteTuiAgentAcrossReplacement();
+      expect(standIn.tuiAgents.has(TUI_ID)).toBe(false);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${OTHER.hostId} terminal agents`,
+          `${MOVED.hostId} terminal agents`,
+        ]),
+      );
+      expect(spies.closeTiles.mock.calls).toEqual([
+        [EPIC_ID, REMOTE_CHAT_ID, OTHER.hostId, "chat"],
+        [EPIC_ID, TUI_ID, OTHER.hostId, "terminal-agent"],
+      ]);
+
+      // Task delete: OTHER deleted ITS local-homed copy. This window holds
+      // the Task on the active host, where it still exists: its tabs and
+      // that host's settings stay, and only OTHER's scope is tombstoned.
+      const runSettings = useComposerRunSettingsStore.getState();
+      runSettings.setEpicRunSettings(TASK_ID, LOCAL.hostId, SETTINGS, 1);
+      runSettings.setEpicRunSettings(TASK_ID, OTHER.hostId, SETTINGS, 1);
+      refreshed = observeRefreshes();
+      await writes.deleteTasks();
+      expect(standIn.batchDeleteCalls).toEqual([OTHER.hostId]);
+      const userId = fixture.localClient.getRequestContextUserId() ?? "";
+      expect([
+        ...deletedCloudEpicTasksPageEpicIdsForScope(OTHER.hostId, userId),
+      ]).toEqual([TASK_ID]);
+      expect([
+        ...deletedCloudEpicTasksPageEpicIdsForScope(LOCAL.hostId, userId),
+      ]).toEqual([]);
+      expect(spies.accessLoss).not.toHaveBeenCalledWith(
+        expect.arrayContaining([TASK_ID]),
+      );
+      expect(
+        useComposerRunSettingsStore
+          .getState()
+          .getEpicRunSettings(TASK_ID, LOCAL.hostId),
+      ).toEqual(SETTINGS);
+      expect(
+        useComposerRunSettingsStore
+          .getState()
+          .getEpicRunSettings(TASK_ID, OTHER.hostId),
+      ).toBeNull();
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([`${OTHER.hostId} host scope`]),
+      );
+    } finally {
+      spies.restore();
+    }
+  });
+
+  it("`requested`: every step follows the owner the stand-in names", async () => {
+    standIn.answer = "requested";
+    const writes = mountWrites();
+    const spies = spyCleanup();
+    try {
+      let refreshed = observeRefreshes();
+      await writes.archive(true);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${MOVED.hostId} chats`,
+          `${MOVED.hostId} terminal agents`,
+        ]),
+      );
+
+      refreshed = observeRefreshes();
+      await writes.archive(false);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${MOVED.hostId} chats`,
+          `${MOVED.hostId} terminal agents`,
+        ]),
+      );
+
+      refreshed = observeRefreshes();
+      await writes.archiveMany();
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${MOVED.hostId} chats`,
+          `${MOVED.hostId} terminal agents`,
+        ]),
+      );
+
+      refreshed = observeRefreshes();
+      await writes.deleteChat();
+      expect(confirmedDeletionOwners()).toEqual([MOVED.hostId]);
+      expect(spies.forceRelease.mock.calls).toEqual([
+        [EPIC_ID, REMOTE_CHAT_ID, MOVED.hostId],
+      ]);
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([
+          `${MOVED.hostId} chats`,
+          `${MOVED.hostId} cloud chats`,
+        ]),
+      );
+      // The confirmed removal is the named owner's chat.
+      await deliverStaleCopyFrom(MOVED.hostId);
+      expect(
+        Object.hasOwn(
+          fixture.handle.store.getState().chats.byId,
+          REMOTE_CHAT_ID,
+        ),
+      ).toBe(false);
+
+      refreshed = observeRefreshes();
+      await writes.deleteTuiAgent();
+      expect(refreshed()).toEqual(
+        expect.arrayContaining([`${MOVED.hostId} terminal agents`]),
+      );
+      expect(spies.closeTiles.mock.calls).toEqual([
+        [EPIC_ID, REMOTE_CHAT_ID, MOVED.hostId, "chat"],
+        [EPIC_ID, TUI_ID, MOVED.hostId, "terminal-agent"],
+      ]);
+      // The requested notices name the owner the stand-in reports.
+      expect(successToasts()).toEqual(
+        expect.arrayContaining([
+          "Archived. Moved Host will finish when it is back",
+          "Unarchived. Moved Host will finish when it is back",
+          "Removed. Files on Moved Host are untouched",
+          "Removed. The agent may keep running on Moved Host until that host reconnects. Its files are untouched",
+        ]),
+      );
+      expect(
+        successToasts().filter(
+          (message) =>
+            typeof message === "string" && message.includes("Mock Remote"),
+        ),
+      ).toEqual([]);
+    } finally {
+      spies.restore();
+    }
+  });
+
+  it("an answer lost after the write: each write refreshes every list it could have changed", async () => {
+    standIn.answer = "lost";
+    const writes = mountWrites();
+
+    let refreshed = observeRefreshes();
+    await writes.archive(true);
+    expect(refreshed()).toEqual(
+      expect.arrayContaining([
+        `${OTHER.hostId} chats`,
+        `${OTHER.hostId} terminal agents`,
+      ]),
+    );
+
+    refreshed = observeRefreshes();
+    await writes.archive(false);
+    expect(refreshed()).toEqual(
+      expect.arrayContaining([
+        `${OTHER.hostId} chats`,
+        `${OTHER.hostId} terminal agents`,
+      ]),
+    );
+
+    refreshed = observeRefreshes();
+    const notices = [toast.error, toast.message, toast.warning, toast.success];
+    for (const notice of notices) vi.mocked(notice).mockClear();
+    await writes.archiveMany();
+    expect(refreshed()).toEqual(
+      expect.arrayContaining([
+        `${OTHER.hostId} chats`,
+        `${OTHER.hostId} terminal agents`,
+      ]),
+    );
+    // The row's failure is reported once, by the batch, not by the row too.
+    expect(
+      notices.reduce(
+        (count, notice) => count + vi.mocked(notice).mock.calls.length,
+        0,
+      ),
+    ).toBe(1);
+
+    refreshed = observeRefreshes();
+    await writes.deleteChat();
+    expect(refreshed()).toEqual(
+      expect.arrayContaining([
+        `${OTHER.hostId} chats`,
+        `${OTHER.hostId} cloud chats`,
+      ]),
+    );
+    // The provisional hide is released.
+    expect(useCloudChatDeletions.getState().confirmed.size).toBe(0);
+    expect(useCloudChatDeletions.getState().pending.size).toBe(0);
+
+    // The terminal-agent delete commits on OTHER, then its answer is lost,
+    // while the visible session is replaced onto MOVED.
+    refreshed = observeRefreshes();
+    let reread = await readStandInList(otherTuiAgentList, standIn.tuiAgents);
+    await writes.deleteTuiAgentAcrossReplacement();
+    expect(refreshed()).toEqual(
+      expect.arrayContaining([
+        `${OTHER.hostId} terminal agents`,
+        `${MOVED.hostId} terminal agents`,
+      ]),
+    );
+    expect(await reread()).toEqual([]);
+
+    // The purge commits on OTHER, then its answer is lost.
+    refreshed = observeRefreshes();
+    reread = await readStandInList(otherTaskList, standIn.tasks);
+    await writes.deleteTasks();
+    expect(standIn.batchDeleteCalls).toEqual([OTHER.hostId]);
+    expect(refreshed()).toEqual(
+      expect.arrayContaining([
+        `${OTHER.hostId} host scope`,
+        `${LOCAL.hostId} host scope`,
+      ]),
+    );
+    expect(await reread()).toEqual([]);
   });
 });

@@ -28,14 +28,13 @@ import {
  *
  * `openRequestCount` is rendered as it arrives and read as a hint, as the
  * contract says: the conversation's user rows (`conversationRequest`) are
- * authoritative for what is open, and the host that ships today always sends
- * `0` here. A surface that needs the real number reads the conversation.
+ * authoritative for what is open. A surface that needs the real number
+ * reads the conversation.
  */
 export interface BotSubscriptionSnapshot {
   readonly bot: BotRecord;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
-  /** `null` is unknown: the host fixup (T9b) sends it when the bound host's
-   * view has not published yet; the pin shipping today always sends a number. */
+  /** `null` when the serving host does not know the count. */
   readonly openRequestCount: number | null;
   readonly boundHost: {
     /** `null` when no host runs the bot. */

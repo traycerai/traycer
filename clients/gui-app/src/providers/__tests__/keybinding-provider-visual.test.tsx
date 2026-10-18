@@ -220,7 +220,7 @@ function PickerBadgeProbe(props: {
     reasoning,
     reasoningActionable: props.reasoningActionable,
     // No Fast footer wired here - this probe is scoped to the rail/reasoning/
-    // profile dimensions, and `toggleServiceTier(null)` is already a no-op.
+    // profile dimensions, and `stepServiceTier(null)` is already a no-op.
     serviceTier: null,
     activeProviderId: "codex",
     activeProviderProfiles: props.profiles,

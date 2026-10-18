@@ -121,7 +121,7 @@ describe("deriveOwnerSettingsHeader", () => {
       harnessName: "Claude Code",
       modelLabel: "Claude Sonnet 4.5",
       reasoningLabel: "High",
-      fastMode: true,
+      serviceTierLabel: "fast",
       profileAccentDot: {
         profileId,
         accentColor: null,
@@ -243,7 +243,7 @@ describe("deriveOwnerSettingsHeader", () => {
   });
 
   it.each([{ serviceTier: null }, { serviceTier: "" }])(
-    "treats serviceTier %j as fast mode off",
+    "treats serviceTier %j as no tier requested",
     ({ serviceTier }) => {
       const view = deriveOwnerSettingsHeader(
         baseInput({
@@ -251,7 +251,7 @@ describe("deriveOwnerSettingsHeader", () => {
         }),
       );
 
-      expect(view?.fastMode).toBe(false);
+      expect(view?.serviceTierLabel).toBeNull();
     },
   );
 
@@ -283,7 +283,7 @@ describe("deriveOwnerSettingsHeader", () => {
       harnessName: "Claude Code",
       modelLabel: "Claude Sonnet 4.5",
       reasoningLabel: null,
-      fastMode: false,
+      serviceTierLabel: null,
       profileAccentDot: null,
       permissionMode: null,
     });
@@ -311,7 +311,7 @@ describe("deriveOwnerSettingsHeader", () => {
       harnessName: "Claude Code",
       modelLabel: "Claude Sonnet 4.5",
       reasoningLabel: "High",
-      fastMode: false,
+      serviceTierLabel: null,
       profileAccentDot: {
         profileId,
         accentColor: null,
@@ -341,7 +341,7 @@ describe("deriveOwnerSettingsHeader", () => {
 
     expect(view?.profileAccentDot).toBeNull();
     expect(view?.reasoningLabel).toBe("Medium");
-    expect(view?.fastMode).toBe(false);
+    expect(view?.serviceTierLabel).toBeNull();
   });
 
   it("degrades a tombstoned/unknown TUI profile to bare harness with no badge", () => {
@@ -365,7 +365,76 @@ describe("deriveOwnerSettingsHeader", () => {
     expect(view?.reasoningLabel).toBe("High");
   });
 
-  it("never enables fast mode for TUI agents (no serviceTier on the record)", () => {
+  describe("serviceTierLabel", () => {
+    function withTiers(
+      tiers: ReadonlyArray<{ id: string; label: string }>,
+    ): OwnerSettingsHeaderInput["harnesses"] {
+      const entry = claudeHarnessEntry();
+      return [
+        {
+          ...entry,
+          models: entry.models.map((m) => ({
+            ...m,
+            supportedServiceTiers: tiers.map((t) => ({
+              ...t,
+              description: null,
+            })),
+          })),
+        },
+      ];
+    }
+    const TIERS = [
+      { id: "priority", label: "Fast" },
+      { id: "ultrafast", label: "Ultrafast" },
+    ];
+
+    it("resolves the advertised name of the chosen tier", () => {
+      const view = deriveOwnerSettingsHeader(
+        baseInput({
+          chatSettings: { ...BASE_CHAT_SETTINGS, serviceTier: "ultrafast" },
+          harnesses: withTiers(TIERS),
+        }),
+      );
+
+      expect(view?.serviceTierLabel).toBe("Ultrafast");
+    });
+
+    it("resolves the advertised default tier label for a stored request", () => {
+      const entry = claudeHarnessEntry();
+      const view = deriveOwnerSettingsHeader(
+        baseInput({
+          chatSettings: { ...BASE_CHAT_SETTINGS, serviceTier: "priority" },
+          harnesses: [
+            {
+              ...entry,
+              models: entry.models.map((model) => ({
+                ...model,
+                defaultServiceTier: "priority",
+                supportedServiceTiers: [
+                  { id: "priority", label: "Flex", description: null },
+                ],
+              })),
+            },
+          ],
+        }),
+      );
+
+      expect(view?.serviceTierLabel).toBe("Flex");
+    });
+
+    it("falls back to the raw id when the catalog has no matching tier", () => {
+      const view = deriveOwnerSettingsHeader(
+        baseInput({
+          chatSettings: { ...BASE_CHAT_SETTINGS, serviceTier: "ultrafast" },
+          harnesses: withTiers([{ id: "priority", label: "Fast" }]),
+        }),
+      );
+
+      expect(view?.serviceTierLabel).toBe("ultrafast");
+    });
+  });
+
+  it("never shows a speed tier for TUI agents (no serviceTier on the record)", () => {
     const view = deriveOwnerSettingsHeader(
       baseInput({
         ownerKind: "terminal-agent",
@@ -381,7 +450,7 @@ describe("deriveOwnerSettingsHeader", () => {
       }),
     );
 
-    expect(view?.fastMode).toBe(false);
+    expect(view?.serviceTierLabel).toBeNull();
   });
 
   it("falls back to the raw slug for a TUI agent when the catalog is empty", () => {

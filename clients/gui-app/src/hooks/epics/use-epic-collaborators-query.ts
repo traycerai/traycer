@@ -40,7 +40,15 @@ export interface EpicTeamCollaboratorView {
 
 export interface EpicCollaboratorsView {
   readonly directUsers: ReadonlyArray<EpicCollaboratorView>;
+  /** Teams the task is SHARED with; the owning team is never one of them. */
   readonly teams: ReadonlyArray<EpicTeamCollaboratorView>;
+  /**
+   * The team whose environment principal owns the task (Tracy Bots: a task
+   * a team bot spun), from the row the host marks with `environmentId`;
+   * `null` when a person owns it. Its members are owners through it and are
+   * in `flatRows`; they are never removed from or demoted on the task.
+   */
+  readonly ownerTeam: EpicTeamCollaboratorView | null;
   readonly flatRows: ReadonlyArray<EpicCollaboratorView>;
 }
 
@@ -156,6 +164,7 @@ export function projectCollaborators(
 ): EpicCollaboratorsView {
   const directUsers: EpicCollaboratorView[] = [];
   const teams: EpicTeamCollaboratorView[] = [];
+  let ownerTeam: EpicTeamCollaboratorView | null = null;
   const flatRows: EpicCollaboratorView[] = [];
 
   entries.forEach((entry, i) => {
@@ -188,18 +197,22 @@ export function projectCollaborators(
           teamName: team.teamName,
         }),
       );
-      teams.push({
+      const view: EpicTeamCollaboratorView = {
         key: `team-${team.teamId}`,
         teamId: team.teamId,
         teamName: team.teamName,
         role: entry.role,
         members,
-      });
+      };
+      // The read says which row is the owning environment's; nothing here
+      // infers it from a name or a role.
+      if (entry.environmentId !== null) ownerTeam = view;
+      else teams.push(view);
       flatRows.push(...members);
     }
   });
 
-  return { directUsers, teams, flatRows };
+  return { directUsers, teams, ownerTeam, flatRows };
 }
 
 export function flattenCollaborators(

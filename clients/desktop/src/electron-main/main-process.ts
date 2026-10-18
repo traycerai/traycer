@@ -3,8 +3,12 @@
 // an uncaught exception (traycerai/traycer#2093), and the main process probes
 // the local host over exactly that kind of connection.
 import "@traycer-clients/shared/platform/install-socket-tos-guard";
-import { app } from "electron";
+import { app, dialog } from "electron";
 import { join } from "node:path";
+import {
+  currentDataRootResolution,
+  DataRootError,
+} from "@traycer/protocol/config/data-root";
 import { config, DESKTOP_APP_NAME } from "../config";
 import { initLogger, log } from "./app/logger";
 import { resolveDesktopRuntimeIdentity } from "./dev-desktop-runtime";
@@ -46,12 +50,41 @@ if (
 // no host/service registration at boot - the CLI owns the host lifecycle
 // and the renderer provisions it post-sign-in via the `host ensure` IPC.
 const gotLock = app.requestSingleInstanceLock();
+const dataRootFailure = gotLock ? unavailableDataRoot() : null;
 if (!gotLock) {
   initLogger();
   log.info("[desktop] single-instance lock unavailable - quitting");
   app.quit();
+} else if (dataRootFailure !== null) {
+  // A selected data folder that cannot be used stops the app before anything
+  // derives a Traycer path: no fallback to the default folder, which would
+  // start a second, empty installation beside the user's data.
+  initLogger();
+  log.error("[desktop] data root unavailable - quitting", {
+    code: dataRootFailure.code,
+  });
+  dialog.showErrorBox(
+    "Traycer cannot open its data folder",
+    `${dataRootFailure.message}\n\nRun \`traycer data status\` in a terminal for details.`,
+  );
+  app.exit(1);
 } else {
   void runDesktopStartup().catch((err) => {
     log.error("[desktop] fatal startup error", err);
   });
+}
+
+/**
+ * Resolves the Traycer data root once, up front, and returns the failure
+ * when the persisted location record cannot be used. Any other error is a
+ * defect and propagates.
+ */
+function unavailableDataRoot(): DataRootError | null {
+  try {
+    currentDataRootResolution();
+    return null;
+  } catch (error) {
+    if (error instanceof DataRootError) return error;
+    throw error;
+  }
 }

@@ -14,6 +14,19 @@ export type RevokeTarget =
       readonly team: EpicTeamCollaboratorView;
     };
 
+/**
+ * The team that owns the task through its environment principal (Tracy
+ * Bots), shown as the Owner row of "People with access": the team's name and
+ * avatar, "Team" as its role, its members counted, and no control - no
+ * member is removed from or demoted on a task the team owns.
+ */
+export interface OwnerTeamRow {
+  readonly teamId: string;
+  readonly name: string;
+  readonly avatarUrl: string | null;
+  readonly memberCount: number;
+}
+
 export type TeamRow =
   | {
       readonly kind: "shared";

@@ -23,6 +23,7 @@ import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import type { ServiceRegistrationWarning } from "../service/registration-owner";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
+import { refuseOlderHostWhileDataMoved } from "./moved-data-root-guard";
 import {
   commitInstallFromSource,
   currentInstallPlatform,
@@ -316,6 +317,17 @@ export async function applyHost(
       expectedStagedVersion: opts.expectedStagedVersion,
       actualStagedVersion: staged.version,
     };
+  }
+  // The one stage reconcile keeps that is not strictly newer is one it
+  // cannot order against the install (a registry build over `local-*`,
+  // staged by `host download`): not promoted while the data folder is moved.
+  if (staged.source.kind === "registry") {
+    refuseOlderHostWhileDataMoved({
+      command: "host apply",
+      environment: opts.environment,
+      installedVersion: installed.version,
+      targetVersion: staged.version,
+    });
   }
 
   const stagedDir = hostStagedDir(opts.environment);

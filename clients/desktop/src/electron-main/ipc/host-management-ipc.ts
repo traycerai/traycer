@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import { log } from "../app/logger";
 import {
   runBundledTraycerCliJson,
@@ -110,7 +110,7 @@ function activeLayout(): HostFsLayout {
 }
 
 function cliSlotRootForEnvironment(environment: Environment): string {
-  const cliRoot = join(homedir(), ".traycer", "cli");
+  const cliRoot = join(traycerDataRoot(), "cli");
   const devSlot = devDesktopSlotForEnvironment(environment, process.env);
   if (devSlot !== null) return join(cliRoot, "dev-runs", devSlot);
   return environmentSubdir(cliRoot, environment);
@@ -574,7 +574,7 @@ interface RegistryUpdateCacheFile {
 let registryRefreshQueue: Promise<void> = Promise.resolve();
 
 function desktopCacheDir(): string {
-  return join(homedir(), ".traycer", "desktop");
+  return join(traycerDataRoot(), "desktop");
 }
 
 /**
