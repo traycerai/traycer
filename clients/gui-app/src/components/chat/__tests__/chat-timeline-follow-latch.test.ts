@@ -885,6 +885,42 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
+  it("measures a touch from the tail it re-reached, not the original contact offset", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    // Contact at the end; streaming grows the tail past it under the finger.
+    fireTouch(node, "touchstart", 100);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    // The finger drags to the new end, then back to the original contact
+    // offset, which is now 200px above the tail.
+    shim.setGeometry(node, { scrollTop: 1200 });
+    fireNativeScroll(node);
+    // Still following: reaching the tail is not a transition.
+    expect(onFollowIntentChange).not.toHaveBeenCalled();
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    fireTouch(node, "touchend", 100);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("does not block follow for an upward wheel that cannot move from the top edge", () => {
     const node = shim.makeNode({
       scrollTop: 0,

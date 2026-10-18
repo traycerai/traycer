@@ -470,10 +470,20 @@ export function useChatTimelineFollowLatch(
   );
 
   const reconcileStrictBottom = useCallback(
-    (isNativeScrollReport: boolean): void => {
+    (isNativeScrollReport: boolean, scrollTop: number): void => {
       cancelActiveCorrection();
       readerEndCandidateRef.current = null;
       const armedDeparture = armedReaderDepartureRef.current;
+      if (armedDeparture?.source === "touch" && isNativeScrollReport) {
+        // The finger reached the tail mid-contact (streaming grew it past
+        // the contact offset): later movement is measured from here, or a
+        // drag back to the original offset would read as a tap and the lift
+        // would correct the reader to the tail.
+        armedReaderDepartureRef.current = {
+          source: "touch",
+          scrollTopAtContact: scrollTop,
+        };
+      }
       if (
         armedDeparture?.source === "gesture" &&
         (!armedDeparture.blocksAutomaticCorrection || isNativeScrollReport)
@@ -565,7 +575,7 @@ export function useChatTimelineFollowLatch(
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
     if (isChatTimelineAtStrictBottom(geometry)) {
-      reconcileStrictBottom(true);
+      reconcileStrictBottom(true, geometry.scrollTop);
       return;
     }
 
@@ -628,7 +638,7 @@ export function useChatTimelineFollowLatch(
       // leave a jump pill visible when there is no useful bottom to reach.
       // This performs no imperative navigation, preserving destructive-clamp
       // behavior while allowing subsequent streaming growth to stay latched.
-      reconcileStrictBottom(false);
+      reconcileStrictBottom(false, geometry.scrollTop);
       return;
     }
     if (!permissionRef.current) return;
