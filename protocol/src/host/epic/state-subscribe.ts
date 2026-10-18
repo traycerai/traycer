@@ -230,7 +230,9 @@ export const epicArtifactRecordSchema = lazySchema(() =>
     reviewArtifactSchema
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
-    htmlArtifactSchema.extend(epicLaneRowRevisionFields),
+    htmlArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
     canvasArtifactSchema
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),

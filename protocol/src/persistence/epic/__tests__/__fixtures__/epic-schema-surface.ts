@@ -7747,6 +7747,10 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "string",
                   "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
                 },
+                "artifactRoomId": {
+                  "default": "",
+                  "type": "string"
+                },
                 "head": {
                   "type": "object",
                   "properties": {
@@ -17776,6 +17780,10 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "string",
                   "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
                 },
+                "artifactRoomId": {
+                  "default": "",
+                  "type": "string"
+                },
                 "head": {
                   "type": "object",
                   "properties": {
@@ -17843,6 +17851,7 @@ export const epicSchemaSurfaceBaseline = {
                 "createdManually",
                 "parentId",
                 "layout",
+                "artifactRoomId",
                 "head"
               ],
               "additionalProperties": false

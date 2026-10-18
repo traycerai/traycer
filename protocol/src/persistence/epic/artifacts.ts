@@ -113,7 +113,7 @@ const baseEpicArtifactFieldsPreHtml = {
   parentId: lazySchema(() => z.string().nullable()),
 } as const;
 
-// A room points at a Yjs document. HTML and file entries have no such body.
+// A room points at a Yjs document. Only file entries have no such body.
 const artifactRoomFields = {
   // Artifact room hosting this artifact's body fragment
   // (`artifact-body:{artifactId}`). Populated when the host assigns the
@@ -205,6 +205,8 @@ export const htmlArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("html"),
     ...baseEpicArtifactFields,
+    // Older HTML entries have no room until the room heal pass allocates one.
+    artifactRoomId: z.string().default(""),
     head: artifactHeadSchema,
   }),
 );

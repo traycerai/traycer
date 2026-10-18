@@ -524,6 +524,29 @@ describe("epic.state.subscribe@1.0", () => {
     expect(parsed).not.toHaveProperty("artifactRoomId");
   });
 
+  it("strips a supplied artifactRoomId off an html lane record too, now that htmlArtifactSchema carries one", () => {
+    const htmlFixture = {
+      kind: "html" as const,
+      id: "html-1",
+      folderName: "page-1",
+      title: "A page",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      head: { files: {}, capturedAt: 1 },
+      revision: 0,
+    };
+    const parsed = epicArtifactRecordSchema.parse({
+      ...htmlFixture,
+      artifactRoomId: "room-1",
+    });
+    expect(parsed).not.toHaveProperty("artifactRoomId");
+    // Parses just as well with no room supplied at all - htmlArtifactSchema's
+    // own default never reaches the wire either way.
+    expect(epicArtifactRecordSchema.safeParse(htmlFixture).success).toBe(true);
+  });
+
   it("parses a deleted-artifact tombstone record", () => {
     expect(
       epicDeletedArtifactRecordSchema.safeParse(deletedSpecArtifactFixture)
