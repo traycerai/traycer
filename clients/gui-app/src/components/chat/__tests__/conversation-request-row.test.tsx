@@ -178,6 +178,7 @@ describe("useRenderedMessages conversation request", () => {
       modelLabel: null,
     }),
     resolveAgentReasoningLabel: () => null,
+    resolveAgentServiceTierLabel: () => null,
     contentBlocksPreview: () => "",
   };
 
