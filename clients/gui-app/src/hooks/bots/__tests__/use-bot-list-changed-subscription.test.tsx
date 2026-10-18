@@ -1,9 +1,9 @@
 /**
  * The `bot.listChanged` doorbell (Tracy Bots T24): while a bots surface is
  * mounted and the host advertises the method, a `changed` frame invalidates
- * every host's cached `bot.list`, a reconnect invalidates once more (it may
- * have missed a change), and ONE subscription serves a host however many
- * surfaces read it, on however many clients.
+ * every host's cached `bot.list`, a reconnect fetches nothing of its own
+ * (the host's reconciliation `changed` covers it), and ONE subscription serves
+ * a host however many surfaces read it, on however many clients.
  *
  * Real hook, real `useStreamMethodSupportFor`, real `QueryClient`. The only
  * fake is the stream transport: a `WsStreamClient` whose method support is a
@@ -196,31 +196,50 @@ describe("useBotListChangedSubscription frames", () => {
 });
 
 describe("useBotListChangedSubscription reconnect", () => {
-  it("invalidates nothing on the first open, and once on each reopen after", () => {
+  it("makes one fetch per reconnect: the host's reconciliation changed, nothing of its own on open", async () => {
     const harness = createHarness();
     const client = new SupportClient("supported");
     mountSurface(harness, surface(client));
     const session = sessionOf(client);
-
-    session.emitStatus("connecting", null);
     session.emitStatus("open", null);
+
+    let fetches = 0;
+    let aborted = 0;
+    const observer = new QueryObserver(harness.queryClient, {
+      queryKey: botListKey(HOST_A),
+      queryFn: async ({ signal }) => {
+        fetches += 1;
+        signal.addEventListener("abort", () => {
+          aborted += 1;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { bots: [] };
+      },
+    });
+    unsubscribers.push(observer.subscribe(() => undefined));
+    await vi.waitFor(() => {
+      expect(fetches).toBe(1);
+      expect(observer.getCurrentResult().isFetching).toBe(false);
+    });
+    fetches = 0;
+    aborted = 0;
+
+    // The transport redials; the host's new subscription reconciles once its
+    // rooms have opened.
     session.emitStatus("reconnecting", null);
-    expect(harness.invalidations).not.toHaveBeenCalled();
-    expect(isInvalidated(harness.queryClient, HOST_A)).toBe(false);
-
     session.emitStatus("open", null);
-    expect(harness.invalidations).toHaveBeenCalledTimes(1);
-    expect(isInvalidated(harness.queryClient, HOST_A)).toBe(true);
-    expect(isInvalidated(harness.queryClient, HOST_B)).toBe(true);
+    session.emitFrame(CHANGED);
+    await vi.waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(false);
+    });
 
-    session.emitStatus("reconnecting", null);
-    session.emitStatus("open", null);
-    expect(harness.invalidations).toHaveBeenCalledTimes(2);
+    expect(fetches).toBe(1);
+    expect(aborted).toBe(0);
   });
 });
 
 describe("useBotListChangedSubscription support", () => {
-  it("holds the session through the client's transient unknown, and refetches once when it reopens", () => {
+  it("holds the session through the client's transient unknown, and still delivers after it reopens", () => {
     const harness = createHarness();
     const client = new SupportClient("supported");
     mountSurface(harness, surface(client));
@@ -234,14 +253,13 @@ describe("useBotListChangedSubscription support", () => {
 
     session.emitStatus("reconnecting", null);
     session.emitStatus("open", null);
-    expect(harness.invalidations).toHaveBeenCalledTimes(1);
 
     act(() => client.setSupport("supported"));
     expect(client.subscribeCallCount).toBe(1);
     expect(close).not.toHaveBeenCalled();
 
     session.emitFrame(CHANGED);
-    expect(harness.invalidations).toHaveBeenCalledTimes(2);
+    expect(harness.invalidations).toHaveBeenCalledTimes(1);
   });
 
   it("closes the session when the host stops serving the method", () => {
@@ -378,6 +396,62 @@ describe("useBotListChangedSubscription shared session", () => {
     expect(isInvalidated(harness.queryClient, HOST_A)).toBe(false);
   });
 
+  it("hands the session to the remaining surface when the carrying client's owner closes it before this hook's cleanup", () => {
+    const harness = createHarness();
+    const homeClient = new SupportClient("supported");
+    const tabClient = new SupportClient("supported");
+    const home = mountSurface(harness, surface(homeClient));
+    mountSurface(harness, surface(tabClient));
+    expect(tabClient.subscribeCallCount).toBe(0);
+
+    // A released lease closes the client, and every session on it, at once.
+    homeClient.close("lease released");
+    sessionOf(homeClient).close();
+    home.unmount();
+
+    expect(tabClient.subscribeCallCount).toBe(1);
+    sessionOf(tabClient).emitFrame(CHANGED);
+    expect(isInvalidated(harness.queryClient, HOST_A)).toBe(true);
+  });
+
+  it("keeps a fixed-host tab served when the app's host changes and its old client closes first", () => {
+    const harness = createHarness();
+    const appClientA = new SupportClient("supported");
+    const tabClient = new SupportClient("supported");
+    const home = mountSurface(harness, surface(appClientA));
+    mountSurface(harness, surface(tabClient));
+
+    // The app moves to host B: its old client closes before Home re-renders.
+    appClientA.close("app host changed");
+    sessionOf(appClientA).close();
+    const appClientB = new SupportClient("supported");
+    home.rerender({ hostId: HOST_B, client: appClientB, enabled: true });
+
+    expect(tabClient.subscribeCallCount).toBe(1);
+    expect(appClientB.subscribeCallCount).toBe(1);
+    sessionOf(tabClient).emitFrame(CHANGED);
+    expect(isInvalidated(harness.queryClient, HOST_A)).toBe(true);
+  });
+
+  it("hands the session on at a terminal close while every surface stays mounted, and never back to a client that failed", () => {
+    const harness = createHarness();
+    const homeClient = new SupportClient("supported");
+    const tabClient = new SupportClient("supported");
+    mountSurface(harness, surface(homeClient));
+    mountSurface(harness, surface(tabClient));
+
+    sessionOf(homeClient).emitStatus("closed", fatalClose(false));
+
+    expect(tabClient.subscribeCallCount).toBe(1);
+    sessionOf(tabClient).emitFrame(CHANGED);
+    expect(isInvalidated(harness.queryClient, HOST_A)).toBe(true);
+
+    sessionOf(tabClient).emitStatus("closed", fatalClose(false));
+
+    expect(homeClient.subscribeCallCount).toBe(1);
+    expect(tabClient.subscribeCallCount).toBe(1);
+  });
+
   it("keeps the subscription when a surface that does not carry it leaves", () => {
     const harness = createHarness();
     const homeClient = new SupportClient("supported");
@@ -393,19 +467,6 @@ describe("useBotListChangedSubscription shared session", () => {
     expect(tabClient.subscribeCallCount).toBe(0);
     homeSession.emitFrame(CHANGED);
     expect(isInvalidated(harness.queryClient, HOST_A)).toBe(true);
-  });
-
-  it("does not treat the reopen of a closed session as a reconnect", () => {
-    const harness = createHarness();
-    const client = new SupportClient("supported");
-    const view = mountSurface(harness, surface(client));
-    const session = sessionOf(client);
-    session.emitStatus("open", null);
-    view.unmount();
-
-    session.emitStatus("open", null);
-
-    expect(harness.invalidations).not.toHaveBeenCalled();
   });
 });
 

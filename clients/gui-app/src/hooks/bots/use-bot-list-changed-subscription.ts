@@ -57,9 +57,13 @@ export function useBotListChangedSubscriptionForHost(
  * Admitted once the client reports the method `supported`, and kept through
  * a transient `unknown` - the client forgets support while it redials, and
  * closing then would leave nothing to bring the session back. Only
- * `unsupported`, `enabled` going false or unmount ends it. A reconnect may
- * have missed a change, so the list is refetched once whenever the session
- * comes back.
+ * `unsupported`, `enabled` going false or unmount ends it.
+ *
+ * A reconnect or a hand-off needs no refetch of its own: every open of the
+ * stream is a new subscription on the host, which sends one `changed` once
+ * the subscriber's rooms have opened (its reconciliation), and that covers a
+ * change made while the session was down. Refetching here as well would be a
+ * second fetch for the same gap, and would abort the first.
  */
 export function useBotListChangedSubscription(
   hostId: string | null,
@@ -93,8 +97,11 @@ type SharedSession = {
   readonly consumers: Map<symbol, StreamClient>;
   readonly queryClient: QueryClient;
   live: { readonly client: StreamClient; close(): void } | null;
-  /** Whether a session of this host has opened before: the next open is a reconnect. */
-  openedOnce: boolean;
+  /**
+   * Clients whose session closed for good. Never handed the session again,
+   * so two refusing clients cannot pass it back and forth.
+   */
+  readonly failedClients: WeakSet<StreamClient>;
 };
 
 const sessionsByHost = new Map<string, SharedSession>();
@@ -115,7 +122,7 @@ function joinSharedSession(
       consumers: new Map(),
       queryClient,
       live: null,
-      openedOnce: false,
+      failedClients: new WeakSet(),
     };
     sessionsByHost.set(hostId, shared);
   }
@@ -131,17 +138,26 @@ function joinSharedSession(
       if (sessionsByHost.get(hostId) === entry) sessionsByHost.delete(hostId);
       return;
     }
-    const live = entry.live;
-    const remaining = [...entry.consumers.values()];
-    if (live !== null && !remaining.includes(live.client)) {
-      // The client the session rode belongs to nobody now: move it.
-      live.close();
-      entry.live = null;
-      // Non-empty: the last consumer out returned above.
-      const [next] = remaining;
-      openOn(entry, next);
-    }
+    handOff(entry);
   };
+}
+
+/**
+ * Puts the session on a remaining consumer's client when it has none, or
+ * rides a client no remaining consumer holds. The session can be gone before
+ * its consumer's cleanup runs: a client's owner closes it (a released lease,
+ * the app's host changing) and that closes every session on it at once.
+ */
+function handOff(entry: SharedSession): void {
+  const live = entry.live;
+  const remaining = [...entry.consumers.values()];
+  if (live !== null && remaining.includes(live.client)) return;
+  live?.close();
+  entry.live = null;
+  const next = remaining.find(
+    (candidate) => !candidate.isClosed() && !entry.failedClients.has(candidate),
+  );
+  if (next !== undefined) openOn(entry, next);
 }
 
 function openOn(entry: SharedSession, client: StreamClient): void {
@@ -168,14 +184,14 @@ function openOn(entry: SharedSession, client: StreamClient): void {
       if (reason?.kind === "fatalError" && reason.details.retryable === true) {
         return;
       }
-      // Terminal: the next surface to join opens a fresh one; until then the
-      // list refreshes on focus.
+      // Terminal on this client: another consumer's client carries it on,
+      // or the next surface to join opens a fresh one; until then the list
+      // refreshes on focus.
       closed = true;
-      if (entry.live === live) entry.live = null;
-      return;
+      entry.failedClients.add(client);
+      if (entry.live !== live) return;
+      entry.live = null;
+      if (entry.consumers.size > 0) handOff(entry);
     }
-    if (status !== "open") return;
-    if (entry.openedOnce) invalidateBotLists(entry.queryClient);
-    entry.openedOnce = true;
   });
 }
