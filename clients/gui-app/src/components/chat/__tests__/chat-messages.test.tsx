@@ -6896,6 +6896,95 @@ describe("ChatMessages scroll policy", () => {
       expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
     });
 
+    it("regression: the undisturbed-list shortcut is not taken while a saved restore is still converging", async () => {
+      // The show handoff cancels an in-flight restore's settle loop before it
+      // decides whether to replay. That loop is the only thing that releases
+      // the persistence gate it armed, so skipping the replay for an intact
+      // box while the gate is still up would strand it: every later scroll
+      // capture no-ops until a publishing reader gesture, and the next hide
+      // republishes the stale position (CodeRabbit on OSS #2591).
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const key = `t-visibility-shortcut-pending-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(key);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+
+      // A collapse, then a show whose replay never lands: the restore keeps
+      // re-issuing (gate armed) while the box reads intact at scrollTop 0.
+      await hideWithCollapsedScrollBox(rerenderWith);
+      const scrollToOffsetSpy = vi
+        .spyOn(list, "scrollToOffset")
+        .mockImplementation(() => Promise.resolve());
+      try {
+        rerenderWith({ visible: true });
+        await act(async () => {
+          for (let frame = 0; frame < 3; frame += 1) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+          }
+        });
+        // The browser reports the (unchanged) position; the restore is still
+        // converging. A rapid hide/show now finds an intact box - and must
+        // still replay rather than shortcut, because the gate is up. Both
+        // rerenders land in one synchronous flush: a settle between them
+        // would let the bounded restore exhaust and release the gate itself,
+        // which is the other, already-covered outcome.
+        await fireScrollTopAndFlush(getScrollNode().scrollTop);
+        rerenderWith({ visible: false });
+        rerenderWith({ visible: true });
+        await act(async () => {
+          for (let frame = 0; frame < 40; frame += 1) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
+        });
+      } finally {
+        scrollToOffsetSpy.mockRestore();
+      }
+
+      // Same probe as the exhausted-replay regression: a bare scroll report,
+      // then a hide. Only a released gate lets the move be mirrored.
+      const movedIndex = 100;
+      const movedScrollTop =
+        movedIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX;
+      await fireScrollTopAndFlush(movedScrollTop);
+      await settleLegendList();
+      rerenderWith({ visible: false });
+      await settleLegendList();
+
+      const persisted = restoreChatTabState(
+        identity,
+        messages.map((message) => message.id),
+      );
+      expect(persisted.mode).toBe("free-scrolling");
+      expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
+    });
+
     it("a bottom-following reader returns to the newest true bottom after hidden growth", async () => {
       // Fixup (callback-synchronous-follow): the follow latch's permission
       // is updated by publishing wheel intent plus the resulting native

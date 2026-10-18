@@ -3757,9 +3757,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       listRowsRef.current.map((row) => row.key),
     );
     // An undisturbed list needs no replay (see `concealedScrollGeometryRef`).
+    // Unless a saved restore is still converging: the cleanup above just
+    // cancelled its settle loop, and that loop was the only thing that would
+    // release the persistence gate - returning here would leave the gate
+    // armed with no scroll capture allowed until the next publishing reader
+    // gesture. Let the replay below re-issue it and own the release instead.
     const concealed = concealedScrollGeometryRef.current;
     concealedScrollGeometryRef.current = null;
     if (
+      !restorePersistencePendingRef.current &&
       listUndisturbedSinceConcealment(
         concealed,
         chatTimelineRef.current?.getScrollableNode(),
