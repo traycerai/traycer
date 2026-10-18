@@ -3,7 +3,8 @@
  * environment lists, and that list is the same through every host. So the
  * bind's success refreshes `environment.host.list` on every host scope, not
  * only the host the bind was sent to: a list read through host A, held by
- * Settings or Home, follows a bind made through host B.
+ * Settings or Home, follows a bind made through host B. Only the environments
+ * the machine leaves and joins refresh; another team's list does not.
  *
  * Real hooks over two hosts' mock messengers sharing one query client.
  */
@@ -20,9 +21,13 @@ import {
   mockLocalHostEntry,
   mockRemoteHostEntry,
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
+  EnvironmentDescriptor,
   EnvironmentHostBinding,
   EnvironmentHostRecord,
 } from "@traycer/protocol/host/environment/contracts";
@@ -30,6 +35,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useEnvironmentHostBindMutation } from "@/hooks/bots/use-environment-host-bind-mutation";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
+import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
@@ -44,21 +50,46 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   },
 }));
 
-const TEAM_ID = "env-team";
+const BOUND_HOST_ID = mockRemoteHostEntry.hostId;
 
-const BINDING: EnvironmentHostBinding = {
-  hostId: mockRemoteHostEntry.hostId,
-  environment: {
-    environmentId: TEAM_ID,
+function team(environmentId: string): EnvironmentDescriptor {
+  return {
+    environmentId,
     ownerKind: "organization",
-    ownerId: "team-1",
-    roomId: "room-team",
-    label: "Acme",
-  },
-  explicit: true,
-  enrolledByUserId: "user-1",
-  canUnbind: true,
+    ownerId: `owner-${environmentId}`,
+    roomId: `room-${environmentId}`,
+    label: environmentId,
+  };
+}
+
+const OLD = team("env-old");
+const NEW = team("env-new");
+const UNRELATED = team("env-unrelated");
+const PERSONAL: EnvironmentDescriptor = {
+  environmentId: "env-personal",
+  ownerKind: "user",
+  ownerId: "user-1",
+  roomId: "room-personal",
+  label: "Personal",
 };
+const ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [
+  OLD,
+  NEW,
+  UNRELATED,
+  PERSONAL,
+];
+/** The team lists host A observes throughout. */
+const OBSERVED: ReadonlyArray<EnvironmentDescriptor> = [OLD, NEW, UNRELATED];
+
+function bindingTo(environment: EnvironmentDescriptor): EnvironmentHostBinding {
+  return {
+    hostId: BOUND_HOST_ID,
+    environment,
+    explicit: environment.ownerKind === "organization",
+    enrolledByUserId: "user-1",
+    canUnbind: true,
+  };
+}
 
 function machine(hostId: string): EnvironmentHostRecord {
   return {
@@ -71,33 +102,124 @@ function machine(hostId: string): EnvironmentHostRecord {
   };
 }
 
+interface BindScenario {
+  /** Host B is bound to {@link OLD} before the bind. */
+  readonly destination: EnvironmentDescriptor;
+  /** Whether B's `environment.host.read` answer is in the cache. */
+  readonly readCached: boolean;
+  /** Whether `previous`'s cached list names B. */
+  readonly listNamesHost: boolean;
+}
+
 /**
- * One host: its own messenger, answering `environment.host.list` with whatever
- * machines the shared cloud-backed state holds at that moment, and counting
- * the list reads it served.
+ * Two hosts over one cloud-backed state. Host A answers `environment.host.list`
+ * and counts the reads per environment; host B answers the read and the bind,
+ * and a bind moves its machine between the cloud's lists.
+ */
+async function mountBindScenario(scenario: BindScenario): Promise<{
+  readonly bind: () => Promise<void>;
+  readonly listReads: () => Readonly<Record<string, number>>;
+  readonly hostIdsListed: (environmentId: string) => ReadonlyArray<string>;
+}> {
+  const queryClient = new QueryClient();
+  const machines = new Map<string, ReadonlyArray<EnvironmentHostRecord>>([
+    [
+      OLD.environmentId,
+      scenario.listNamesHost
+        ? [machine("host-other-old"), machine(BOUND_HOST_ID)]
+        : [machine("host-other-old")],
+    ],
+    [NEW.environmentId, [machine("host-other-new")]],
+    [UNRELATED.environmentId, [machine("host-other-unrelated")]],
+  ]);
+  let boundTo = bindingTo(OLD);
+  const reads: Record<string, number> = {};
+
+  const hostA = hostOver(mockLocalHostEntry, queryClient, {
+    "environment.host.list": ({ environmentId }) => {
+      reads[environmentId] = (reads[environmentId] ?? 0) + 1;
+      return { hosts: [...(machines.get(environmentId) ?? [])] };
+    },
+  });
+  const hostB = hostOver(mockRemoteHostEntry, queryClient, {
+    "environment.host.read": () => boundTo,
+    "environment.host.bind": ({ environmentId }) => {
+      const destination = ENVIRONMENTS.find(
+        (environment) => environment.environmentId === environmentId,
+      );
+      if (destination === undefined) throw new Error("unknown environment");
+      for (const [id, hosts] of machines) {
+        machines.set(
+          id,
+          hosts.filter((host) => host.hostId !== BOUND_HOST_ID),
+        );
+      }
+      if (destination.ownerKind === "organization") {
+        machines.set(environmentId, [
+          ...(machines.get(environmentId) ?? []),
+          machine(BOUND_HOST_ID),
+        ]);
+      }
+      boundTo = bindingTo(destination);
+      return boundTo;
+    },
+  });
+  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+
+  const { result } = renderHook(
+    () => ({
+      lists: useEnvironmentHostLists(
+        hostA,
+        OBSERVED.map((environment) => environment.environmentId),
+        true,
+      ),
+      read: useEnvironmentHostReadQuery(hostB, scenario.readCached),
+      bind: useEnvironmentHostBindMutation(hostB, BOUND_HOST_ID),
+    }),
+    { wrapper },
+  );
+  await waitFor(() => {
+    expect(result.current.lists.size).toBe(OBSERVED.length);
+  });
+  if (scenario.readCached) {
+    await waitFor(() => {
+      expect(result.current.read.data).toEqual(boundTo);
+    });
+  }
+  return {
+    bind: async () => {
+      await act(async () => {
+        await result.current.bind.mutateAsync({
+          environmentId: scenario.destination.environmentId,
+        });
+      });
+    },
+    listReads: () => ({ ...reads }),
+    hostIdsListed: (environmentId) =>
+      (result.current.lists.get(environmentId) ?? []).map(
+        (record) => record.hostId,
+      ),
+  };
+}
+
+/**
+ * One host: its own messenger over the handlers it is given, sharing the query
+ * client with the other host.
  */
 function hostOver(
   entry: HostDirectoryEntry,
   queryClient: QueryClient,
-  cloudMachines: { current: ReadonlyArray<EnvironmentHostRecord> },
-): {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly listReads: () => number;
-} {
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): HostClient<HostRpcRegistry> {
   let seq = 0;
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `${entry.hostId}-${String(++seq)}`,
-    handlers: {
-      "environment.host.list": () => ({ hosts: [...cloudMachines.current] }),
-      "environment.host.bind": () => {
-        cloudMachines.current = [
-          ...cloudMachines.current,
-          machine(BINDING.hostId),
-        ];
-        return BINDING;
-      },
-    },
+    handlers,
   });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -108,53 +230,77 @@ function hostOver(
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return {
-    client: spine.createRequester(entry),
-    listReads: () =>
-      messenger.calls.filter((call) => call.method === "environment.host.list")
-        .length,
-  };
+  return spine.createRequester(entry);
 }
 
 describe("useEnvironmentHostBindMutation", () => {
-  it("refreshes an environment's machine list read through another host", async () => {
-    const queryClient = new QueryClient();
-    const cloudMachines: { current: ReadonlyArray<EnvironmentHostRecord> } = {
-      current: [machine("host-already-bound")],
-    };
-    const hostA = hostOver(mockLocalHostEntry, queryClient, cloudMachines);
-    const hostB = hostOver(mockRemoteHostEntry, queryClient, cloudMachines);
-    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+  it.each<{ readonly name: string; readonly scenario: BindScenario }>([
+    {
+      name: "moves a machine between teams: both lists refresh, another team's does not",
+      scenario: {
+        destination: NEW,
+        readCached: true,
+        listNamesHost: true,
+      },
+    },
+    {
+      name: "unbinds a machine to the personal environment: the team it left refreshes",
+      scenario: {
+        destination: PERSONAL,
+        readCached: true,
+        listNamesHost: true,
+      },
+    },
+    {
+      name: "finds the team a machine leaves from a cached list alone",
+      scenario: {
+        destination: NEW,
+        readCached: false,
+        listNamesHost: true,
+      },
+    },
+    {
+      name: "finds the team a machine leaves from its cached binding alone",
+      scenario: {
+        destination: NEW,
+        readCached: true,
+        listNamesHost: false,
+      },
+    },
+  ])("$name", async ({ scenario }) => {
+    const mounted = await mountBindScenario(scenario);
+    const unchanged = Object.fromEntries(
+      OBSERVED.map((environment) => [environment.environmentId, 1]),
     );
+    expect(mounted.listReads()).toEqual(unchanged);
 
-    const { result } = renderHook(
-      () => ({
-        lists: useEnvironmentHostLists(hostA.client, [TEAM_ID], true),
-        bind: useEnvironmentHostBindMutation(
-          hostB.client,
-          mockRemoteHostEntry.hostId,
+    await mounted.bind();
+
+    const refreshed = [OLD, scenario.destination].map(
+      (environment) => environment.environmentId,
+    );
+    await waitFor(() => {
+      expect(mounted.listReads()).toMatchObject(
+        Object.fromEntries(
+          refreshed.filter((id) => id in unchanged).map((id) => [id, 2]),
         ),
-      }),
-      { wrapper },
+      );
+    });
+    expect(mounted.listReads()).toEqual(
+      Object.fromEntries(
+        OBSERVED.map((environment) => [
+          environment.environmentId,
+          refreshed.includes(environment.environmentId) ? 2 : 1,
+        ]),
+      ),
     );
-    await waitFor(() => {
-      expect(result.current.lists.get(TEAM_ID)).toHaveLength(1);
-    });
-    expect(hostA.listReads()).toBe(1);
-
-    await act(async () => {
-      await result.current.bind.mutateAsync({ environmentId: TEAM_ID });
-    });
-
-    await waitFor(() => {
-      expect(result.current.lists.get(TEAM_ID)).toHaveLength(2);
-    });
-    expect(hostA.listReads()).toBe(2);
-    expect(
-      result.current.lists.get(TEAM_ID)?.map((record) => record.hostId),
-    ).toEqual(["host-already-bound", BINDING.hostId]);
+    expect(mounted.hostIdsListed(OLD.environmentId)).not.toContain(
+      BOUND_HOST_ID,
+    );
+    if (scenario.destination.ownerKind === "organization") {
+      expect(
+        mounted.hostIdsListed(scenario.destination.environmentId),
+      ).toContain(BOUND_HOST_ID);
+    }
   });
 });
