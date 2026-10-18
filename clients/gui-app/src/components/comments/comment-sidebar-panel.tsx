@@ -1,3 +1,4 @@
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useEpicLaneCommentThreads,
@@ -53,7 +54,8 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       ? artifactRecord.kind
       : null;
 
-  if (artifactRecord === null || artifactKind === null) {
+  // Comment anchors require a Markdown body.
+  if (artifactRecord === null || !isMarkdownArtifactKind(artifactKind)) {
     return null;
   }
 

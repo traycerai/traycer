@@ -31,6 +31,9 @@ export interface TileKindToRefMap {
   readonly ticket: EpicArtifactRef;
   readonly story: EpicArtifactRef;
   readonly review: EpicArtifactRef;
+  readonly html: EpicArtifactRef;
+  readonly canvas: EpicArtifactRef;
+  readonly file: EpicArtifactRef;
   readonly terminal: EpicTerminalRef;
   readonly "browser-session": BrowserSessionTileRef;
   readonly "workspace-file": WorkspaceFileRef;

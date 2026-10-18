@@ -15,11 +15,11 @@
 import { displayTitle } from "@/lib/display-title";
 import { buildArtifactPathIndex } from "@/lib/commands/sources/open/artifact-path-resolver";
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 
 export interface ArtifactPathEntry {
   readonly id: string;
-  readonly kind: MarkdownArtifactKind;
+  readonly kind: EpicArtifactKind;
   /** Display title of the leaf artifact (host-independent, user-renamed). */
   readonly title: string;
   /** Structured ancestor-to-leaf titles; separators inside titles stay data. */

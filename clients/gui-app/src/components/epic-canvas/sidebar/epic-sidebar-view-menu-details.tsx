@@ -20,7 +20,7 @@ import {
   ArrowUpNarrowWide,
   RotateCcw,
 } from "lucide-react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
   DropdownMenuCheckboxItem,
   DropdownMenuItem,
@@ -314,11 +314,11 @@ export function ChatDetailContent(props: {
 export function ArtifactDetailContent(props: {
   readonly detail: ArtifactViewDetail;
   readonly filterStatuses: readonly ArtifactStatusFilter[];
-  readonly filterKinds: readonly MarkdownArtifactKind[];
+  readonly filterKinds: readonly EpicArtifactKind[];
   readonly filterRead: ArtifactReadFilter;
   readonly sort: SortMode;
   readonly toggleStatus: (status: ArtifactStatusFilter) => void;
-  readonly toggleKind: (kind: MarkdownArtifactKind) => void;
+  readonly toggleKind: (kind: EpicArtifactKind) => void;
   readonly setRead: (read: ArtifactReadFilter) => void;
   readonly setSortField: (field: SortField) => void;
   readonly toggleSortDirection: () => void;
@@ -392,8 +392,8 @@ export function ArtifactDetailContent(props: {
  * are recognizably the same thing.
  */
 function ArtifactTypeDetail(props: {
-  readonly filterKinds: readonly MarkdownArtifactKind[];
-  readonly toggleKind: (kind: MarkdownArtifactKind) => void;
+  readonly filterKinds: readonly EpicArtifactKind[];
+  readonly toggleKind: (kind: EpicArtifactKind) => void;
 }) {
   const artifactIconColors = useSettingsStore(
     (state) => state.artifactIconColors,

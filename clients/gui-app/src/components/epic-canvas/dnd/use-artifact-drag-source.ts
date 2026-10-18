@@ -4,7 +4,7 @@ import {
   type DraggableSyntheticListeners,
 } from "@dnd-kit/core";
 import { useId, useMemo } from "react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
   CHAT_ARTIFACT_DND_TYPE,
   getChatArtifactDragId,
@@ -19,7 +19,7 @@ import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-sou
  */
 export interface ArtifactDragIdentity {
   readonly id: string;
-  readonly type: MarkdownArtifactKind;
+  readonly type: EpicArtifactKind;
   readonly name: string;
   readonly hostId: string;
 }

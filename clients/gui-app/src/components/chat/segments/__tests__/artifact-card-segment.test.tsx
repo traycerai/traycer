@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-segment";
+import { EPIC_NODE_SENTENCE_NOUNS } from "@/lib/artifacts/node-display";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
@@ -11,7 +12,7 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 type TestArtifactProjection = {
   readonly id: string;
-  readonly kind: MarkdownArtifactKind;
+  readonly kind: EpicArtifactKind;
   readonly title: string;
   readonly status: number | null;
 };
@@ -750,45 +751,70 @@ describe("<ArtifactCardSegment />", () => {
     expect(drag?.disabled).toBe(true);
   });
 
-  describe("kinds the chat has no card for", () => {
-    const hiddenKinds = ["html", "canvas", "file"] as const;
+  describe("kinds with a plain object card (html, canvas, file)", () => {
+    const objectKinds = ["html", "canvas", "file"] as const;
 
-    it.each(hiddenKinds)(
-      "renders nothing for a %s block, even when its artifact is projected",
-      (hiddenKind) => {
+    it.each(objectKinds)(
+      "renders the live title and sentence noun for a %s block",
+      (objectKind) => {
         projection.artifacts["h1"] = {
           id: "h1",
-          kind: "spec",
-          title: "Projected Under The Hidden Id",
+          kind: objectKind,
+          title: "My Page",
           status: null,
         };
-        const { container } = render(
+        render(
           <ArtifactCardSegment
             findUnitId={null}
             operation="create"
-            artifactKind={hiddenKind}
+            artifactKind={objectKind}
             artifactId="h1"
-            title="Hidden Title"
+            title="Fallback Title"
             change={{ beforeHash: "h0", afterHash: "h1" }}
           />,
         );
 
-        expect(container.childNodes).toHaveLength(0);
-        expect(screen.queryByText("Hidden Title")).toBeNull();
-        expect(screen.queryByText("Projected Under The Hidden Id")).toBeNull();
-        expect(screen.queryByText("Created")).toBeNull();
-        expect(screen.queryByRole("button")).toBeNull();
+        expect(screen.getByText("My Page")).toBeTruthy();
+        expect(
+          screen.getByText(EPIC_NODE_SENTENCE_NOUNS[objectKind]),
+        ).toBeTruthy();
+        expect(screen.getByRole("button")).toBeTruthy();
       },
     );
 
-    it.each(hiddenKinds)(
-      "calls no session, projection or drag hook for a %s block",
-      (hiddenKind) => {
+    it.each(objectKinds)(
+      "falls back to the block's own title and stays disabled for a %s artifact that is not yet projected",
+      (objectKind) => {
         render(
           <ArtifactCardSegment
             findUnitId={null}
             operation="update"
-            artifactKind={hiddenKind}
+            artifactKind={objectKind}
+            artifactId="unseen"
+            title="Fallback Title"
+            change={null}
+          />,
+        );
+
+        expect(screen.getByText("Fallback Title")).toBeTruthy();
+        expect(screen.getByRole("button")).toHaveProperty("disabled", true);
+      },
+    );
+
+    it.each(objectKinds)(
+      "reaches the session gate and the projection/host hooks for a %s block, never the drag hook",
+      (objectKind) => {
+        projection.artifacts["h1"] = {
+          id: "h1",
+          kind: objectKind,
+          title: "My Page",
+          status: null,
+        };
+        render(
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="update"
+            artifactKind={objectKind}
             artifactId="h1"
             title={null}
             change={null}
@@ -796,21 +822,61 @@ describe("<ArtifactCardSegment />", () => {
         );
 
         expect(hookCalls).toEqual({
-          openEpicHandle: 0,
-          artifactById: 0,
-          deletedArtifact: 0,
-          tabHostId: 0,
+          openEpicHandle: 1,
+          artifactById: 1,
+          deletedArtifact: 1,
+          tabHostId: 1,
         });
         expect(dnd.draggables).toHaveLength(0);
-        expect(tileNavigation.openTile).not.toHaveBeenCalled();
       },
     );
 
-    it("still renders the spec card beside hidden-kind blocks", () => {
+    it("opens the object artifact's tile on click, same as a markdown card's button", () => {
+      projection.artifacts["h1"] = {
+        id: "h1",
+        kind: "html",
+        title: "My Page",
+        status: null,
+      };
+      render(
+        <ArtifactCardSegment
+          findUnitId={null}
+          operation="create"
+          artifactKind="html"
+          artifactId="h1"
+          title={null}
+          change={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button"));
+
+      expect(tileNavigation.openTile).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders a card for every object kind beside a markdown card in the same transcript", () => {
       projection.artifacts["a1"] = {
         id: "a1",
         kind: "spec",
         title: "Auth Spec",
+        status: null,
+      };
+      projection.artifacts["h1"] = {
+        id: "h1",
+        kind: "html",
+        title: "Landing Page",
+        status: null,
+      };
+      projection.artifacts["c1"] = {
+        id: "c1",
+        kind: "canvas",
+        title: "Design Board",
+        status: null,
+      };
+      projection.artifacts["f1"] = {
+        id: "f1",
+        kind: "file",
+        title: "Report",
         status: null,
       };
       render(
@@ -820,7 +886,7 @@ describe("<ArtifactCardSegment />", () => {
             operation="create"
             artifactKind="html"
             artifactId="h1"
-            title="Hidden Html"
+            title={null}
             change={null}
           />
           <ArtifactCardSegment
@@ -836,7 +902,7 @@ describe("<ArtifactCardSegment />", () => {
             operation="create"
             artifactKind="canvas"
             artifactId="c1"
-            title="Hidden Canvas"
+            title={null}
             change={null}
           />
           <ArtifactCardSegment
@@ -844,22 +910,20 @@ describe("<ArtifactCardSegment />", () => {
             operation="create"
             artifactKind="file"
             artifactId="f1"
-            title="Hidden File"
+            title={null}
             change={null}
           />
         </>,
       );
 
       expect(screen.getByText("Auth Spec")).toBeTruthy();
-      expect(
-        screen.getByRole("button", { name: "Open Auth Spec" }),
-      ).toBeTruthy();
-      expect(screen.getAllByRole("button")).toHaveLength(1);
-      expect(screen.queryByText("Hidden Html")).toBeNull();
-      expect(screen.queryByText("Hidden Canvas")).toBeNull();
-      expect(screen.queryByText("Hidden File")).toBeNull();
-      // Only the spec card reached the session and drag hooks.
+      expect(screen.getByText("Landing Page")).toBeTruthy();
+      expect(screen.getByText("Design Board")).toBeTruthy();
+      expect(screen.getByText("Report")).toBeTruthy();
+      // Only the markdown card reaches the drag hook; the three object cards
+      // are plain buttons.
       expect(dnd.draggables).toHaveLength(1);
+      expect(screen.getAllByRole("button")).toHaveLength(4);
     });
   });
 });

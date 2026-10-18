@@ -3,6 +3,7 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 
+// HTML, canvas and file creation needs a source file; this menu authors Markdown only.
 export const ADDABLE_TYPES: ReadonlyArray<EpicNodeKind> = [
   "chat",
   "ticket",

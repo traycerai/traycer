@@ -11,10 +11,13 @@ import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon"
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
+import { tileIntent, modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
   EPIC_NODE_LABELS,
   isEpicArtifactKind,
+  isMarkdownArtifactKind,
+  EPIC_NODE_ICONS,
+  EPIC_NODE_SENTENCE_NOUNS,
 } from "@/lib/artifacts/node-display";
 import {
   useArtifactById,
@@ -488,8 +491,10 @@ function canOpenArtifactCard(input: {
  */
 export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
   const { artifactKind } = props;
-  // The presentation track adds cards for non-Markdown kinds.
   if (!isEpicArtifactKind(artifactKind)) return null;
+  if (!isMarkdownArtifactKind(artifactKind)) {
+    return <EpicSessionGate fallback={<ObjectArtifactCardLabel {...props} artifactKind={artifactKind} />}><ObjectArtifactCard {...props} artifactKind={artifactKind} /></EpicSessionGate>;
+  }
   // The card's projection, drag source and open action are the Epic's. A
   // transcript outside an Epic session (a bot's, Tracy Bots) gets the inert
   // form: the operation and the title the row recorded, nothing to act on.
@@ -504,6 +509,36 @@ export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
       />
     </EpicSessionGate>
   );
+}
+
+type ObjectArtifactCardProps = ArtifactCardSegmentProps & { readonly artifactKind: EpicArtifactKind };
+
+function ObjectArtifactCardLabel(props: ObjectArtifactCardProps) {
+  const Icon = EPIC_NODE_ICONS[props.artifactKind];
+  return <span className="flex min-w-0 items-center gap-2">
+    <Icon className="size-4 shrink-0" />
+    <span className="min-w-0 flex-1 truncate">{props.title || EPIC_NODE_LABELS[props.artifactKind]}</span>
+    <span className="text-muted-foreground">{EPIC_NODE_SENTENCE_NOUNS[props.artifactKind]}</span>
+  </span>;
+}
+
+function ObjectArtifactCard(props: ObjectArtifactCardProps) {
+  const live = useArtifactById(props.artifactId);
+  const tombstone = useEpicDeletedArtifact(props.artifactId);
+  const epicId = useOpenEpicId();
+  const hostId = useTabHostId();
+  const { openTile } = useEpicTileNavigation();
+  const disabled = live === null || tombstone !== null || props.operation === "delete";
+  const title = live?.title ?? tombstone?.title ?? props.title;
+  return <button type="button" disabled={disabled}
+    data-chat-find-unit={props.findUnitId ?? undefined}
+    className="w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm disabled:opacity-60"
+    onClick={event => {
+      if (live === null || disabled) return;
+      openTile({ ...tileIntent({ id: live.id, instanceId: uuidv4(), type: live.kind, name: live.title, hostId }, { epicId }, "single", "direct_ui"), modifiers: modifiersFromMouseEvent(event) });
+    }}>
+    <ObjectArtifactCardLabel {...props} title={title} />
+  </button>;
 }
 
 function ArtifactCardInert(props: MarkdownArtifactCardSegmentProps) {
@@ -549,7 +584,7 @@ function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   // live projection. Both null ⇒ pending/unavailable - render a graceful
   // placeholder; the subscription fills it in when the id syncs.
   const resolved = tombstone ?? live;
-  const displayKind: MarkdownArtifactKind = resolved?.kind ?? artifactKind;
+  const displayKind = isMarkdownArtifactKind(resolved?.kind) ? resolved.kind : artifactKind;
   const projectionTitle = resolved === null ? null : resolved.title;
   const title = resolveArtifactTitle(projectionTitle, props.title);
   const hasLiveArtifact = live !== null;

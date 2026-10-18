@@ -6,7 +6,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 const EPIC_SEARCH_ARTIFACTS_LIMIT = 50;
@@ -28,7 +28,7 @@ export interface UseEpicSearchArtifactsArgs {
   readonly epicId: string;
   readonly query: string;
   /** Composed from the sidebar's kind filter. `null` = no kind restriction. */
-  readonly kinds: ReadonlyArray<MarkdownArtifactKind> | null;
+  readonly kinds: ReadonlyArray<EpicArtifactKind> | null;
   /** Composed from the sidebar's status filter. `null` = no status restriction. */
   readonly statuses: ReadonlyArray<number> | null;
   /** POSIX subtree relative to the artifact root, or `null` for the whole Epic. */

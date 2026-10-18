@@ -114,6 +114,7 @@ async function enqueueAndWait(
  * Pending state is on the affordance; success is silent (the Y.Doc
  * stream delivers the new row); failure shows a toast.
  */
+// The create menu currently authors Markdown bodies only.
 export function useEpicCreateArtifact() {
   const client = useEpicSessionHostClient();
   return useHostMutation({

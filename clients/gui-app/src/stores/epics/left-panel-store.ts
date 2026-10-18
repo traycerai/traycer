@@ -6,7 +6,7 @@ import {
   persistKey,
   STORE_KEYS,
 } from "@/lib/persist";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { panelVisibilityOverridesFromValues } from "@/lib/layout/rail";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
 // Imported for its module-load side effect, and for that reason only: the
@@ -105,7 +105,7 @@ export interface ArtifactFilter {
   /** Allowed status codes (0=Todo, 1=In Progress, 2=Done). Empty = all. */
   readonly statuses: readonly ArtifactStatusFilter[];
   /** Allowed artifact kinds. Empty = all. */
-  readonly kinds: readonly MarkdownArtifactKind[];
+  readonly kinds: readonly EpicArtifactKind[];
   readonly read: ArtifactReadFilter;
 }
 
@@ -344,7 +344,7 @@ interface LeftPanelStore {
   ) => void;
   readonly toggleArtifactKind: (
     epicId: string,
-    kind: MarkdownArtifactKind,
+    kind: EpicArtifactKind,
   ) => void;
   readonly setArtifactRead: (epicId: string, read: ArtifactReadFilter) => void;
   readonly clearArtifactFilter: (epicId: string) => void;

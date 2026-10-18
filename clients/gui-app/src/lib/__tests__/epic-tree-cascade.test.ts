@@ -58,6 +58,9 @@ describe("computeDescendantCounts", () => {
       ticket: 0,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     });
@@ -76,6 +79,9 @@ describe("computeDescendantCounts", () => {
       ticket: 2,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 1,
       "terminal-agent": 0,
     });
@@ -94,6 +100,9 @@ describe("computeDescendantCounts", () => {
       ticket: 1,
       story: 1,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     });
@@ -112,6 +121,9 @@ describe("computeDescendantCounts", () => {
       ticket: 1,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     });
@@ -191,6 +203,9 @@ describe("computeDescendantCountsFromTree", () => {
       ticket: 1,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     });
@@ -204,6 +219,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     };
@@ -216,6 +234,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     };
@@ -228,6 +249,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 1,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     };
@@ -240,6 +264,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 1,
       "terminal-agent": 0,
     };
@@ -252,6 +279,9 @@ describe("formatCascadeSummary", () => {
       ticket: 2,
       story: 0,
       review: 1,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 3,
       "terminal-agent": 0,
     };
@@ -266,6 +296,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 1,
       "terminal-agent": 1,
     };
@@ -280,6 +313,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 0,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 1,
     };
@@ -292,6 +328,9 @@ describe("formatCascadeSummary", () => {
       ticket: 0,
       story: 2,
       review: 0,
+      html: 0,
+      canvas: 0,
+      file: 0,
       chat: 0,
       "terminal-agent": 0,
     };

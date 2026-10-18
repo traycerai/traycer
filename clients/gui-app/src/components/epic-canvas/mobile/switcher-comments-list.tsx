@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { CommentSidebarPanel } from "@/components/comments";
 import { SwitcherListEmpty } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 
 interface SwitcherCommentsListProps {
@@ -34,7 +34,7 @@ export function SwitcherCommentsList(props: SwitcherCommentsListProps) {
     [canvas],
   );
   const artifactId =
-    shownTile !== null && isEpicArtifactKind(shownTile.type)
+    shownTile !== null && isMarkdownArtifactKind(shownTile.type)
       ? shownTile.id
       : null;
 

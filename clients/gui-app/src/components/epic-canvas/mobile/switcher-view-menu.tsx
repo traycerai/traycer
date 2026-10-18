@@ -1,6 +1,6 @@
 import { ListFilter, RotateCcw } from "lucide-react";
 import type { ReactNode } from "react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -237,7 +237,7 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
     sort,
     toggleStatus: (status: ArtifactStatusFilter) =>
       toggleArtifactStatus(epicId, status),
-    toggleKind: (kind: MarkdownArtifactKind) =>
+    toggleKind: (kind: EpicArtifactKind) =>
       toggleArtifactKind(epicId, kind),
     setRead: (read: ArtifactReadFilter) => setArtifactRead(epicId, read),
     setSortField: (field: SortField) => setArtifactSortField(epicId, field),

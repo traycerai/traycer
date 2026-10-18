@@ -59,7 +59,6 @@
  * rebuild, so two lanes reporting one epoch change coalesce into a single
  * replacement instead of racing two.
  */
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
   EpicArtifactRecord,
@@ -67,7 +66,6 @@ import type {
   EpicMeta,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
-import { artifactRowId } from "@traycer-clients/shared/epic-lanes";
 import type {
   EpicStateLaneEvent,
   EpicStateRow,
@@ -363,8 +361,6 @@ function filesSliceEq(a: FilesSlice, b: FilesSlice): boolean {
 function projectTombstone(
   record: EpicDeletedArtifactRecord,
 ): DeletedArtifactProjection | null {
-  // The presentation track widens this gate when it supports more kinds.
-  if (!isEpicArtifactKind(record.kind)) return null;
   return {
     id: record.id,
     kind: record.kind,
@@ -380,13 +376,15 @@ function projectTombstone(
 function projectArtifact(
   record: EpicArtifactRecord,
 ): ArtifactProjection | null {
-  // The presentation track widens this gate when it supports more kinds.
-  if (!isEpicArtifactKind(record.kind)) return null;
   return {
     id: record.id,
     kind: record.kind,
     title: record.title,
     folderName: record.folderName,
+    layout: record.layout,
+    ...(record.relativePath === undefined ? {} : { relativePath: record.relativePath }),
+    ...(record.kind === "html" || record.kind === "canvas" ? { head: record.head } : {}),
+    ...(record.kind === "file" ? { sha256: record.sha256, byteLength: record.byteLength, mediaType: record.mediaType, objectStatus: record.status } : {}),
     parentId: record.parentId,
     // ALWAYS `null` on this head, and structurally so: the lane's
     // artifact row OMITS `artifactRoomId` (`epicArtifactRecordSchema`
@@ -522,23 +520,6 @@ export function laneRawProjectionSources(
     epicHeader: slices.epicHeader,
     roleClaims: slices.roleClaims,
   };
-}
-
-function nonMarkdownTombstoneRemovalIds(
-  changes: readonly RecordChange<EpicStateRow>[],
-): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const change of changes) {
-    if (change.kind !== "upsert") continue;
-    const row = change.row.row;
-    if (
-      row.kind === "artifact-tombstone" &&
-      !isEpicArtifactKind(row.record.kind)
-    ) {
-      ids.add(artifactRowId(row.record.id));
-    }
-  }
-  return ids;
 }
 
 export function createEpicLaneStateReplica(
@@ -694,13 +675,8 @@ export function createEpicLaneStateReplica(
     if (cursor !== null && event.cursor.position <= cursor.position) {
       return { kind: "ignored", reason: "duplicate" };
     }
-    // A tombstone's removal and metadata travel together; the presentation
-    // gate must also skip the removal, which otherwise publishes a retraction.
-    const skippedRemovals = nonMarkdownTombstoneRemovalIds(event.changes);
     let moved = false;
     for (const change of event.changes) {
-      if (change.kind === "remove" && skippedRemovals.has(change.rowId))
-        continue;
       if (applyChange(change)) moved = true;
     }
     // The cursor advances ONLY here, after every change in the envelope

@@ -10,6 +10,9 @@ import {
   Bot,
   ClipboardCheck,
   FileText,
+  File,
+  Globe,
+  PanelsTopLeft,
   MessageSquare,
   Terminal,
   Ticket,
@@ -20,13 +23,14 @@ import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
 import {
   markdownArtifactKindSchema,
   type MarkdownArtifactKind,
+  type EpicArtifactKind,
 } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 export type EpicNodeKind =
-  | MarkdownArtifactKind
+  | EpicArtifactKind
   | "chat"
   | "terminal-agent"
   | "terminal";
@@ -35,19 +39,25 @@ export const EPIC_NODE_KINDS: ReadonlyArray<EpicNodeKind> = [
   "chat",
   "terminal-agent",
   ...markdownArtifactKindSchema.options,
+  "html", "canvas", "file",
   "terminal",
 ];
 
 const EPIC_ARTIFACT_KIND_SET: ReadonlySet<string> = new Set(
-  markdownArtifactKindSchema.options,
+  [...markdownArtifactKindSchema.options, "html", "canvas", "file"],
 );
 
 export function isEpicArtifactKind(
   value: string | null | undefined,
-): value is MarkdownArtifactKind {
+): value is EpicArtifactKind {
   return (
     value !== null && value !== undefined && EPIC_ARTIFACT_KIND_SET.has(value)
   );
+}
+
+// Editing, comments and composer mentions still require a Markdown body.
+export function isMarkdownArtifactKind(value: string | null | undefined): value is MarkdownArtifactKind {
+  return value === "spec" || value === "ticket" || value === "story" || value === "review";
 }
 
 const EPIC_NODE_KIND_SET: ReadonlySet<string> = new Set(EPIC_NODE_KINDS);
@@ -83,6 +93,7 @@ export const EPIC_NODE_ICONS: Readonly<Record<EpicNodeKind, LucideIcon>> = {
   ticket: Ticket,
   story: BookOpen,
   review: ClipboardCheck,
+  html: Globe, canvas: PanelsTopLeft, file: File,
   terminal: Terminal,
 };
 
@@ -93,6 +104,7 @@ export const EPIC_NODE_LABELS: Readonly<Record<EpicNodeKind, string>> = {
   ticket: "Ticket",
   story: "Story",
   review: "Review",
+  html: "Page", canvas: "Canvas", file: "File",
   terminal: "Terminal",
 };
 
@@ -114,6 +126,7 @@ export const EPIC_NODE_SENTENCE_NOUNS: Readonly<Record<EpicNodeKind, string>> =
     ticket: "ticket",
     story: "story",
     review: "review",
+    html: "page", canvas: "canvas", file: "file",
     terminal: "terminal",
   };
 
@@ -126,6 +139,7 @@ export const DEFAULT_EPIC_NODE_ICON_COLORS: EpicNodeIconColors = {
   ticket: "#a78bfa",
   story: "#34d399",
   review: "#fb7185",
+  html: "#38bdf8", canvas: "#a78bfa", file: "#94a3b8",
   terminal: "#94a3b8",
 };
 function createEpicNodeIconColors(
@@ -138,6 +152,7 @@ function createEpicNodeIconColors(
     ticket: getColor("ticket"),
     story: getColor("story"),
     review: getColor("review"),
+    html: getColor("html"), canvas: getColor("canvas"), file: getColor("file"),
     terminal: getColor("terminal"),
   };
 }
@@ -181,6 +196,7 @@ export const DEFAULT_EPIC_NODE_NAMES: Readonly<Record<EpicNodeKind, string>> = {
   ticket: "New ticket",
   story: "New story",
   review: "New review",
+  html: "New page", canvas: "New canvas", file: "New file",
   terminal: "Terminal",
 };
 

@@ -70,7 +70,10 @@ type NonDurableTileType =
   | "deleted-artifacts"
   | "pr-detail"
   // A sandboxed document: its scroll lives inside the frame, out of reach.
-  | "epic-file";
+  | "epic-file"
+  | "html"
+  | "canvas"
+  | "file";
 
 /**
  * Compile-time proof that {@link durableContentParts}' `default` branch really

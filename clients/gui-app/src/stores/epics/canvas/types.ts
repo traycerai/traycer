@@ -38,7 +38,7 @@ import {
  */
 export type OpenableEpicNodeKind = Extract<
   EpicNodeKind,
-  "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review"
+  "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review" | "html" | "canvas" | "file"
 >;
 
 export const isOpenableEpicNodeKind = makeLiteralGuard<OpenableEpicNodeKind>({
@@ -48,6 +48,7 @@ export const isOpenableEpicNodeKind = makeLiteralGuard<OpenableEpicNodeKind>({
   ticket: true,
   story: true,
   review: true,
+    html: true, canvas: true, file: true,
 });
 
 /**
@@ -68,6 +69,7 @@ export const isRecordBackedEpicNodeKind =
     ticket: true,
     story: true,
     review: true,
+    html: true, canvas: true, file: true,
   });
 
 /**

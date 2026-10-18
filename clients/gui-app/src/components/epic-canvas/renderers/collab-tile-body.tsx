@@ -33,7 +33,7 @@ import { SyncingSweepBar } from "@/components/sync/syncing-sweep-bar";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import {
   EPIC_NODE_PLACEHOLDER_TEXT,
-  isEpicArtifactKind,
+  isMarkdownArtifactKind,
 } from "@/lib/artifacts/node-display";
 import { consumeArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { commentArtifactKindFor } from "@/lib/comments/artifact-comment-kind";
@@ -366,7 +366,7 @@ function bodyPlaceholderText(
   hasChildren: boolean,
 ): string {
   if (hasChildren) return "";
-  return isEpicArtifactKind(nodeType)
+  return isMarkdownArtifactKind(nodeType)
     ? EPIC_NODE_PLACEHOLDER_TEXT[nodeType]
     : "Start writing…";
 }
@@ -577,7 +577,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   useEffect(() => {
     if (editor === null) return;
     if (!isActive || !editable) return;
-    if (!isEpicArtifactKind(node.type)) return;
+    if (!isMarkdownArtifactKind(node.type)) return;
     if (!editor.isEmpty) return;
     if (!consumeArtifactEditorFocus(node.id, node.instanceId)) return;
     seedArtifactTitleHeading(editor);
@@ -777,7 +777,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
                 artifactImagePaste.paste,
               )}
             >
-              {editor !== null && isEpicArtifactKind(node.type) ? (
+              {editor !== null && isMarkdownArtifactKind(node.type) ? (
                 <ArtifactFindAdapterRegistration editor={editor} node={node} />
               ) : null}
               <ArtifactAttachmentScopeContext.Provider
@@ -797,7 +797,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               />
             ) : null}
           </div>
-          {isEpicArtifactKind(node.type) ? (
+          {isMarkdownArtifactKind(node.type) ? (
             <ArtifactChildIndex
               epicId={epicId}
               parentId={node.id}
@@ -927,7 +927,7 @@ function ArtifactHeadingMinimapMount(props: {
   const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||
-    !isEpicArtifactKind(props.node.type) ||
+    !isMarkdownArtifactKind(props.node.type) ||
     (!minimapShown && !isMobileViewport)
   ) {
     return null;

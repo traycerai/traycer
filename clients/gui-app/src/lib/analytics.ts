@@ -124,7 +124,7 @@ export type AnalyticsSettingsSection =
   | "usage"
   | "worktrees";
 
-export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
+export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket" | "html" | "canvas" | "file";
 
 /** Which usage surface ran the image export. Deliberately NOT
  * `AnalyticsSource`: that union names the UI gesture that reached a feature
@@ -616,6 +616,9 @@ export function analyticsTargetForCanvasTileType(
     case "ticket":
     case "story":
     case "review":
+    case "html":
+    case "canvas":
+    case "file":
       return "artifact";
     default:
       return null;
@@ -630,6 +633,9 @@ export function analyticsArtifactKindForCanvasTileType(
     case "spec":
     case "story":
     case "ticket":
+    case "html":
+    case "canvas":
+    case "file":
       return tileType;
     default:
       return null;

@@ -16,7 +16,7 @@
  * NOT reach into the Y.Doc directly except through
  * `OpenEpicState.getArtifactFragment(id)` - the editor escape hatch.
  */
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -32,11 +32,20 @@ import type { EpicStateFileRecord } from "@traycer/protocol/host/epic/files";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 
-export type EpicTreeNodeType = "chat" | "terminal-agent" | MarkdownArtifactKind;
+import type { ArtifactHead, ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
+
+export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
 export interface ArtifactProjection {
+  readonly layout?: "folder" | "file";
+  readonly relativePath?: string;
+  readonly head?: ArtifactHead;
+  readonly objectStatus?: ArtifactObjectRef["status"];
+  readonly sha256?: string;
+  readonly byteLength?: number;
+  readonly mediaType?: string;
   readonly id: string;
-  readonly kind: MarkdownArtifactKind;
+  readonly kind: EpicArtifactKind;
   readonly title: string;
   /**
    * On-disk folder name for this artifact's `index.md` (its own directory
@@ -76,7 +85,7 @@ export interface ArtifactsSlice {
  */
 export interface DeletedArtifactProjection {
   readonly id: string;
-  readonly kind: MarkdownArtifactKind;
+  readonly kind: EpicArtifactKind;
   readonly title: string;
   readonly deletedAt: string;
   /** Last known status (0=Todo, 1=InProgress, 2=Done). Null for spec/review. */

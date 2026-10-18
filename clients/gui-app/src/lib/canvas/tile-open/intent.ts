@@ -183,6 +183,7 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   ticket: "content",
   story: "content",
   review: "content",
+  html: "content", canvas: "content", file: "content",
   "workspace-file": "content",
   "git-diff": "content",
   "snapshot-diff": "content",

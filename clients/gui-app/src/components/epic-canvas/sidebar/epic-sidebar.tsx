@@ -194,7 +194,7 @@ import {
 import { useEpicDeleteTuiAgentInBatch } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
-  isEpicArtifactKind,
+  isMarkdownArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { useArtifactReadStateStore } from "@/stores/epics/artifact-read-state-store";
@@ -696,7 +696,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact;
+    activeArtifact !== null && "kind" in activeArtifact && isMarkdownArtifactKind(activeArtifact.kind);
   // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
@@ -2202,7 +2202,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const addRoot = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate) return;
-      if (type === "chat" || type === "terminal" || type === "terminal-agent") {
+      // This create menu authors Markdown bodies only.
+      if (!isMarkdownArtifactKind(type)) {
         return;
       }
       const pendingName = DEFAULT_EPIC_NODE_NAMES[type];
@@ -2636,7 +2637,8 @@ function SidebarBulkSelectionActions() {
   );
   const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
     const record = recordById.get(id);
-    if (record === undefined || !isEpicArtifactKind(record.type)) return [];
+    // Bulk document export requires Markdown bodies.
+    if (record === undefined || !isMarkdownArtifactKind(record.type)) return [];
     return [{ id: record.id, title: record.name }];
   });
   const canExportSelected = selectedArtifacts.length >= 2;

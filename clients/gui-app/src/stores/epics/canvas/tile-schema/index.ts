@@ -46,6 +46,9 @@ const TILE_SCHEMAS: TileSchemaRegistry = {
   ticket: recordBackedArtifactTileSchema,
   story: recordBackedArtifactTileSchema,
   review: recordBackedArtifactTileSchema,
+  html: recordBackedArtifactTileSchema,
+  canvas: recordBackedArtifactTileSchema,
+  file: recordBackedArtifactTileSchema,
   terminal: terminalTileSchema,
   "browser-session": browserSessionTileSchema,
   "workspace-file": workspaceFileTileSchema,
@@ -127,6 +130,7 @@ const EPIC_NODE_TILE_KINDS: { readonly [K in EpicNodeTileKindId]: true } = {
   ticket: true,
   story: true,
   review: true,
+  html: true, canvas: true, file: true,
   terminal: true,
   "workspace-file": true,
 };

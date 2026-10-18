@@ -21,15 +21,25 @@ const acquireResidentArtifactBodyLease = vi.hoisted(() => vi.fn());
 const getArtifactFragment = vi.hoisted(() => vi.fn());
 const createArtifactExport = vi.hoisted(() => vi.fn());
 const serializeArtifactMarkdown = vi.hoisted(() => vi.fn());
+// The export refusal gate reads this straight from the store, before any
+// lease is taken - an id absent here (the common case: export often runs
+// before this session has resolved the record) must not throw, only one
+// whose KIND is known and non-Markdown must.
+const artifactRecords = vi.hoisted(() => ({
+  current: {} as Record<string, { readonly kind: string }>,
+}));
 
 vi.mock("@/lib/artifacts/artifact-export", () => ({
   createArtifactExport,
   serializeArtifactMarkdown,
 }));
 
+const saveBlobToDisk = vi.hoisted(() => vi.fn());
+
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
-  saveBlobToDisk: vi.fn(),
+  saveBlobToDisk,
   openSavedFile: vi.fn(),
+  hasSeparateDownloadRoute: () => false,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -38,6 +48,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
       getState: () => ({
         acquireResidentArtifactBodyLease,
         getArtifactFragment,
+        artifacts: { byId: artifactRecords.current },
       }),
     },
   }),
@@ -55,6 +66,9 @@ function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
 
 describe("useEpicExportArtifacts", () => {
   beforeEach(() => {
+    artifactRecords.current = {};
+    saveBlobToDisk.mockReset();
+    saveBlobToDisk.mockResolvedValue(null);
     acquireResidentArtifactBodyLease.mockReset();
     getArtifactFragment.mockReset();
     createArtifactExport.mockReset();
@@ -164,5 +178,46 @@ describe("useEpicExportArtifacts", () => {
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
     expect(createArtifactExport).not.toHaveBeenCalled();
+  });
+
+  it.each(["html", "canvas", "file"] as const)(
+    "refuses a %s artifact before holding its body",
+    async (kind) => {
+      artifactRecords.current = { "artifact-a": { kind } };
+      const { result } = renderHook(() => useEpicExportArtifacts(), {
+        wrapper: makeWrapper(),
+      });
+
+      await expect(
+        result.current.mutateAsync({
+          artifacts: [{ id: "artifact-a", title: "Landing Page" }],
+          format: "markdown",
+          archive: false,
+          archiveTitle: null,
+        }),
+      ).rejects.toThrow("Only Markdown artifacts can be exported as documents.");
+      expect(acquireResidentArtifactBodyLease).not.toHaveBeenCalled();
+      expect(createArtifactExport).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still exports an artifact id the local store has not resolved yet", async () => {
+    artifactRecords.current = {};
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+
+    await result.current.mutateAsync({
+      artifacts: [{ id: "artifact-a", title: "Design" }],
+      format: "markdown",
+      archive: false,
+      archiveTitle: null,
+    });
+
+    expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith(
+      "artifact-a",
+      "immediate",
+    );
+    expect(createArtifactExport).toHaveBeenCalledTimes(1);
   });
 });

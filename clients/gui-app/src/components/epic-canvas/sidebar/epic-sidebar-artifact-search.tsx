@@ -34,7 +34,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Search, SearchX } from "lucide-react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type {
   SearchArtifactHit,
   SearchArtifactsResponse,
@@ -87,10 +86,6 @@ import { cn } from "@/lib/utils";
 
 /** The panel whose header this search takes over while it is active. */
 const ARTIFACTS_PANEL_ID = "artifacts";
-
-type MarkdownSearchArtifactHit = SearchArtifactHit & {
-  kind: MarkdownArtifactKind;
-};
 
 interface ArtifactPanelSearchShellProps {
   readonly epicId: string;
@@ -255,9 +250,8 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   } = useArtifactSearchResults({ epicId, debouncedQuery });
 
   const results = useMemo(
-    // The presentation track widens this gate when it supports more kinds.
     () =>
-      allResults.filter((hit): hit is MarkdownSearchArtifactHit =>
+      allResults.filter((hit): hit is SearchArtifactHit =>
         isEpicArtifactKind(hit.kind),
       ),
     [allResults],
@@ -269,7 +263,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   const [staleArtifactId, setStaleArtifactId] = useState<string | null>(null);
 
   const openHit = useCallback(
-    (hit: MarkdownSearchArtifactHit, gesture: TileOpenGesture) => {
+    (hit: SearchArtifactHit, gesture: TileOpenGesture) => {
       // Re-resolve the hit against the authoritative Y.Doc projection rather
       // than the disk mirror it was found in: a stale / deleted hit resolves to
       // `null` and is reported in place instead of opening anything.
@@ -453,10 +447,10 @@ interface ArtifactSearchResultsRegionProps {
   readonly isFetching: boolean;
   readonly onRetry: () => void;
   readonly response: SearchArtifactsResponse | null;
-  readonly results: ReadonlyArray<MarkdownSearchArtifactHit>;
+  readonly results: ReadonlyArray<SearchArtifactHit>;
   readonly activeIndex: number;
   readonly onActivate: (
-    hit: MarkdownSearchArtifactHit,
+    hit: SearchArtifactHit,
     gesture: TileOpenGesture,
   ) => void;
   readonly onHoverIndex: (index: number) => void;
@@ -580,11 +574,11 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
 
 interface ArtifactSearchResultRowProps {
   readonly optionId: string;
-  readonly hit: MarkdownSearchArtifactHit;
+  readonly hit: SearchArtifactHit;
   readonly active: boolean;
   readonly stale: boolean;
   readonly onActivate: (
-    hit: MarkdownSearchArtifactHit,
+    hit: SearchArtifactHit,
     gesture: TileOpenGesture,
   ) => void;
   readonly onHover: () => void;
@@ -662,7 +656,7 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
 });
 
 function ArtifactSnippetList(props: {
-  readonly hit: MarkdownSearchArtifactHit;
+  readonly hit: SearchArtifactHit;
 }) {
   if (props.hit.snippets.length === 0) return null;
   return (

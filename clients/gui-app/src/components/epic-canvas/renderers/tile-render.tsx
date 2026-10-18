@@ -19,6 +19,7 @@ import { TileErrorBoundary } from "./tile-error-boundary";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
+import { ObjectArtifactTile } from "./object-artifact-tile";
 import { ReviewTile } from "./review-tile";
 import { SpecTile } from "./spec-tile";
 import { StoryTile } from "./story-tile";
@@ -71,6 +72,9 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
+  html: ({ node, epicId }) => <ObjectArtifactTile node={node} epicId={epicId} />,
+  canvas: ({ node, epicId }) => <ObjectArtifactTile node={node} epicId={epicId} />,
+  file: ({ node, epicId }) => <ObjectArtifactTile node={node} epicId={epicId} />,
   spec: ({ node, viewTabId, tileId, isActive }) => (
     <SpecTile
       node={node}

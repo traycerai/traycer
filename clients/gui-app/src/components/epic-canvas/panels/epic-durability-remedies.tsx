@@ -7,7 +7,7 @@ import {
   useEpicDurabilityView,
   useEpicSnapshotMeta,
 } from "@/lib/epic-selectors";
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import type { EpicDurabilityPauseReasonV15 } from "@traycer/protocol/host/epic/subscribe";
 import { viewStatus } from "./epic-durability-plane";
 
@@ -39,8 +39,9 @@ function PausedRemedies() {
   const exportArtifacts = useEpicExportArtifacts();
   const records = useEpicArtifactRecords();
   const meta = useEpicSnapshotMeta();
+  // Recovery document archives require Markdown bodies.
   const artifacts = records.flatMap((record) =>
-    isEpicArtifactKind(record.type)
+    isMarkdownArtifactKind(record.type)
       ? [{ id: record.id, title: record.name }]
       : [],
   );

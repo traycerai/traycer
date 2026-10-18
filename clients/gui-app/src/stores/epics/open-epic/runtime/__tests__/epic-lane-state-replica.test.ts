@@ -969,18 +969,21 @@ describe("epic.state.subscribe read model - files", () => {
 
 /**
  * `epic.state.subscribe@1.3` carries html, canvas and file artifacts beside the
- * four markdown kinds. The GUI has no presentation for the new kinds yet, so the
- * lane replica must keep them out of every population it projects - a stray
- * entry would reach the artifact tree and the id sets as a row nothing can draw.
+ * four markdown kinds, and the GUI now has a presentation for all three (the
+ * object-artifact tile). The lane replica must project them exactly like the
+ * four markdown kinds - same populations, same tombstone handling, same
+ * change signal - because nothing downstream re-derives "renderable" from
+ * `kind` on its own.
  *
  * Frames go through the REAL `@1.3` schema, same standard as above: a wire
  * shape that drifts fails construction here instead of passing for the wrong
  * reason.
  */
-describe("epic.state.subscribe read model - artifact kinds without a presentation", () => {
+describe("epic.state.subscribe read model - html, canvas and file artifacts", () => {
   const SHA256 = "a".repeat(64);
   const MARKDOWN_IDS = ["spec-1", "ticket-1"];
   const NEW_KIND_IDS = ["html-1", "canvas-1", "file-1"];
+  const ALL_IDS = [...MARKDOWN_IDS, ...NEW_KIND_IDS];
 
   function parseSnapshotFrameV13(
     raw: unknown,
@@ -1040,7 +1043,7 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
     };
   }
 
-  /** The three kinds the replica must skip; none of them has an `artifactRoomId` on the lane. */
+  /** The three kinds that now share the markdown kinds' presentation; none of them has an `artifactRoomId` on the lane. */
   function newKindWires(revision: number) {
     return [
       { kind: "html", ...baseWire("html-1", revision), head: manifestHead },
@@ -1173,21 +1176,7 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
     };
   }
 
-  function expectNoEntryFor(
-    replica: EpicLaneStateReplica,
-    ids: readonly string[],
-  ): void {
-    const slices = replica.slices();
-    for (const id of ids) {
-      expect(slices.artifacts.allIds).not.toContain(id);
-      expect(slices.deletedArtifacts.allIds).not.toContain(id);
-      expect(Object.hasOwn(slices.artifacts.byId, id)).toBe(false);
-      expect(Object.hasOwn(slices.deletedArtifacts.byId, id)).toBe(false);
-      expect(Object.hasOwn(slices.commentThreads.byArtifactId, id)).toBe(false);
-    }
-  }
-
-  it("projects only the markdown rows of a snapshot that also carries html, canvas and file", () => {
+  it("projects the html, canvas and file rows of a snapshot beside the markdown ones", () => {
     const { replica } = newReplica();
     replica.apply(
       snapshotWith({
@@ -1203,17 +1192,59 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
     );
 
     expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
-      MARKDOWN_IDS,
+      ALL_IDS.slice().sort(),
     );
     expect(Object.keys(replica.slices().artifacts.byId).sort()).toEqual(
-      MARKDOWN_IDS,
+      ALL_IDS.slice().sort(),
     );
-    expect(replica.slices().artifacts.byId["spec-1"].kind).toBe("spec");
-    expect(replica.slices().artifacts.byId["ticket-1"].kind).toBe("ticket");
-    expectNoEntryFor(replica, NEW_KIND_IDS);
+    expect(replica.slices().artifacts.byId["html-1"]).toEqual({
+      id: "html-1",
+      kind: "html",
+      title: "Title html-1",
+      folderName: "html-1-folder",
+      layout: "folder",
+      head: manifestHead,
+      parentId: null,
+      artifactRoomId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      status: null,
+      createdManually: true,
+    });
+    expect(replica.slices().artifacts.byId["canvas-1"]).toEqual({
+      id: "canvas-1",
+      kind: "canvas",
+      title: "Title canvas-1",
+      folderName: "canvas-1-folder",
+      layout: "folder",
+      head: manifestHead,
+      parentId: null,
+      artifactRoomId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      status: null,
+      createdManually: true,
+    });
+    expect(replica.slices().artifacts.byId["file-1"]).toEqual({
+      id: "file-1",
+      kind: "file",
+      title: "Title file-1",
+      folderName: "file-1-folder",
+      layout: "file",
+      sha256: SHA256,
+      byteLength: 12,
+      mediaType: "application/pdf",
+      objectStatus: "published",
+      parentId: null,
+      artifactRoomId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      status: null,
+      createdManually: true,
+    });
   });
 
-  it("projects only the markdown rows of a delta that also upserts html, canvas and file", () => {
+  it("projects the html, canvas and file rows of a delta beside the markdown ones", () => {
     const { replica } = newReplica();
     replica.apply(
       snapshotWith({
@@ -1237,16 +1268,19 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
     );
 
     expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
-      MARKDOWN_IDS,
+      ALL_IDS.slice().sort(),
     );
-    // The markdown rows in the same envelope are not collateral of the skip.
     expect(replica.slices().artifacts.byId["spec-1"].title).toBe(
       "Renamed spec",
     );
-    expectNoEntryFor(replica, NEW_KIND_IDS);
+    expect(replica.slices().artifacts.byId["html-1"].kind).toBe("html");
+    expect(replica.slices().artifacts.byId["canvas-1"].head).toEqual(
+      manifestHead,
+    );
+    expect(replica.slices().artifacts.byId["file-1"].sha256).toBe(SHA256);
   });
 
-  it("does not project the tombstones of html, canvas and file from a snapshot, and still projects a markdown one", () => {
+  it("projects the tombstones of html, canvas and file from a snapshot beside a markdown one", () => {
     const { replica } = newReplica();
     replica.apply(
       snapshotWith({
@@ -1260,17 +1294,28 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
       }),
     );
 
-    expect(replica.slices().deletedArtifacts.allIds).toEqual(["spec-gone"]);
-    expect(Object.keys(replica.slices().deletedArtifacts.byId)).toEqual([
-      "spec-gone",
-    ]);
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual(
+      ["canvas-1", "file-1", "html-1", "spec-gone"],
+    );
+    expect(replica.slices().deletedArtifacts.byId["html-1"]).toEqual({
+      id: "html-1",
+      kind: "html",
+      title: "Deleted html-1",
+      deletedAt: "2026-01-01T00:00:00.000Z",
+      status: null,
+    });
+    expect(replica.slices().deletedArtifacts.byId["canvas-1"].kind).toBe(
+      "canvas",
+    );
+    expect(replica.slices().deletedArtifacts.byId["file-1"].kind).toBe(
+      "file",
+    );
     expect(replica.slices().deletedArtifacts.byId["spec-gone"].title).toBe(
       "Deleted spec-gone",
     );
-    expectNoEntryFor(replica, NEW_KIND_IDS);
   });
 
-  it("does not project the tombstones of html, canvas and file from a delta, and still projects a markdown one", () => {
+  it("projects the tombstones of html, canvas and file from a delta beside a markdown one", () => {
     const { replica } = newReplica();
     replica.apply(
       snapshotWith({
@@ -1292,16 +1337,14 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
       }),
     );
 
-    expect(replica.slices().deletedArtifacts.allIds).toEqual(["spec-1"]);
-    expect(Object.keys(replica.slices().deletedArtifacts.byId)).toEqual([
-      "spec-1",
-    ]);
-    // The neighbouring markdown tombstone did its other half as well.
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual(
+      ["canvas-1", "file-1", "html-1", "spec-1"],
+    );
+    // The markdown artifact's other half: its live entry is gone now too.
     expect(replica.slices().artifacts.allIds).toEqual([]);
-    expectNoEntryFor(replica, NEW_KIND_IDS);
   });
 
-  it("leaves the projection and the change signal alone for a delta that only upserts a new kind", () => {
+  it("changes the projection and signals a change for a delta that only upserts a new kind", () => {
     const { replica, changes } = newReplica();
     replica.apply(
       snapshotWith({
@@ -1322,17 +1365,18 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
       }),
     );
 
-    // Applied, not ignored: the cursor must move past work the replica did
-    // see, even when none of it is renderable.
     expect(outcome.kind).toBe("applied");
     expect(replica.appliedCursor()).toEqual(cursorAt(2, EPOCH));
-    // The same object, not an equal one: a rebuilt slice would re-render every
-    // subscriber for a commit nothing on screen can show.
-    expect(replica.slices()).toBe(slicesBefore);
-    expect(changes()).toBe(changesBefore);
+    // A rebuilt slice, not the same object: the new rows are renderable now,
+    // so every subscriber must see the update.
+    expect(replica.slices()).not.toBe(slicesBefore);
+    expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
+      NEW_KIND_IDS.concat("spec-1").slice().sort(),
+    );
+    expect(changes()).toBe(changesBefore + 1);
   });
 
-  it("leaves the projected artifact and deleted-artifact populations alone for a delta that only tombstones a new kind", () => {
+  it("changes the projected deleted-artifact population for a delta that only tombstones a new kind", () => {
     const { replica, changes } = newReplica();
     replica.apply(
       snapshotWith({
@@ -1355,11 +1399,12 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
 
     expect(outcome.kind).toBe("applied");
     expect(replica.appliedCursor()).toEqual(cursorAt(2, EPOCH));
-    expect(replica.slices().artifacts).toEqual(slicesBefore.artifacts);
-    expect(replica.slices().deletedArtifacts).toEqual(
-      slicesBefore.deletedArtifacts,
-    );
-    expect(replica.slices()).toBe(slicesBefore);
-    expect(changes()).toBe(changesBefore);
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual([
+      "canvas-1",
+      "file-1",
+      "html-1",
+    ]);
+    expect(replica.slices()).not.toBe(slicesBefore);
+    expect(changes()).toBe(changesBefore + 1);
   });
 });
