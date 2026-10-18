@@ -24,7 +24,8 @@ export interface EnvironmentHostLists {
     string,
     ReadonlyArray<EnvironmentHostRecord>
   >;
-  /** Environments whose list FAILED (refused, timed out); not in the map. */
+  /** Environments whose last read FAILED (refused, timed out), including a
+   * refetch of a list that had answered before; never in the map. */
   readonly failedEnvironmentIds: ReadonlySet<string>;
   /** Asks the failed environments again. A no-op when none failed. */
   readonly retryFailed: () => void;
@@ -71,11 +72,13 @@ export function useEnvironmentHostLists(
       // Positional: `useQueries` answers in request order.
       results.forEach((result, index) => {
         if (index >= ids.length) return;
-        if (result.data !== undefined) {
-          hostsByEnvironmentId.set(ids[index], result.data.hosts);
-        } else if (result.status === "error") {
+        // Error first: a refetch that fails keeps the last answer in `data`,
+        // and a list that could not be re-read is not a current answer.
+        if (result.status === "error") {
           failedEnvironmentIds.add(ids[index]);
           failedRefetches.push(result.refetch);
+        } else if (result.data !== undefined) {
+          hostsByEnvironmentId.set(ids[index], result.data.hosts);
         }
       });
       return {

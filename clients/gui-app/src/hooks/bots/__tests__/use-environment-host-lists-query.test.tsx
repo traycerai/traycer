@@ -19,6 +19,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { EnvironmentHostRecord } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   useEnvironmentHostLists,
@@ -52,16 +53,18 @@ function machine(hostId: string): EnvironmentHostRecord {
   };
 }
 
-function mountLists(): {
+function mountLists(flakyAnswersFromStart: boolean): {
   readonly lists: () => EnvironmentHostLists;
   readonly reads: () => Readonly<Record<string, number>>;
   readonly healFlaky: () => void;
+  readonly breakFlaky: () => void;
+  readonly refetchFlaky: () => Promise<void>;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const reads: Record<string, number> = {};
-  let flakyAnswers = false;
+  let flakyAnswers = flakyAnswersFromStart;
   let seq = 0;
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -102,12 +105,37 @@ function mountLists(): {
     healFlaky: () => {
       flakyAnswers = true;
     },
+    breakFlaky: () => {
+      flakyAnswers = false;
+    },
+    // An invalidation-driven refetch of FLAKY's list only: the query keeps
+    // its last answer in `data` while the refetch fails.
+    refetchFlaky: () =>
+      queryClient.invalidateQueries({
+        predicate: ({ queryKey }) => {
+          if (
+            !hostQueryKeys.matchesMethodOnAnyHost(
+              queryKey,
+              "environment.host.list",
+            )
+          ) {
+            return false;
+          }
+          const params = queryKey[3];
+          return (
+            typeof params === "object" &&
+            params !== null &&
+            "environmentId" in params &&
+            params.environmentId === FLAKY
+          );
+        },
+      }),
   };
 }
 
 describe("useEnvironmentHostLists", () => {
   it("names a refused environment failed and leaves it out of the answered map", async () => {
-    const mounted = mountLists();
+    const mounted = mountLists(false);
 
     await waitFor(() => {
       expect(mounted.lists().failedEnvironmentIds).toEqual(new Set([FLAKY]));
@@ -117,7 +145,7 @@ describe("useEnvironmentHostLists", () => {
   });
 
   it("retries only the failed environments, and an answer clears the failure", async () => {
-    const mounted = mountLists();
+    const mounted = mountLists(false);
     await waitFor(() => {
       expect(mounted.lists().failedEnvironmentIds.has(FLAKY)).toBe(true);
     });
@@ -138,5 +166,41 @@ describe("useEnvironmentHostLists", () => {
     });
     expect(mounted.lists().failedEnvironmentIds.size).toBe(0);
     expect(mounted.reads()).toEqual({ [FLAKY]: 2, [STEADY]: 1 });
+  });
+
+  it("treats a failed refetch of an answered list as failed, not as its stale answer", async () => {
+    const mounted = mountLists(true);
+    await waitFor(() => {
+      expect([...mounted.lists().hostsByEnvironmentId.keys()].sort()).toEqual([
+        FLAKY,
+        STEADY,
+      ]);
+    });
+    expect(mounted.lists().failedEnvironmentIds.size).toBe(0);
+    expect(mounted.reads()).toEqual({ [FLAKY]: 1, [STEADY]: 1 });
+
+    mounted.breakFlaky();
+    await act(async () => {
+      await mounted.refetchFlaky();
+    });
+
+    await waitFor(() => {
+      expect(mounted.lists().failedEnvironmentIds).toEqual(new Set([FLAKY]));
+    });
+    expect(mounted.lists().hostsByEnvironmentId.has(FLAKY)).toBe(false);
+    expect(mounted.lists().hostsByEnvironmentId.has(STEADY)).toBe(true);
+    expect(mounted.reads()).toEqual({ [FLAKY]: 2, [STEADY]: 1 });
+
+    mounted.healFlaky();
+    act(() => {
+      mounted.lists().retryFailed();
+    });
+
+    await waitFor(() => {
+      expect(mounted.lists().hostsByEnvironmentId.has(FLAKY)).toBe(true);
+    });
+    expect(mounted.lists().failedEnvironmentIds.size).toBe(0);
+    expect(mounted.lists().hostsByEnvironmentId.has(STEADY)).toBe(true);
+    expect(mounted.reads()).toEqual({ [FLAKY]: 3, [STEADY]: 1 });
   });
 });
