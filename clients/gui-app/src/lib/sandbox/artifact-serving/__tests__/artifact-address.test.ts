@@ -108,7 +108,7 @@ describe("parseArtifactAddress", () => {
   });
 
   it("splits the host at the LAST -- so a hyphenated artifact id round-trips", () => {
-    const url = buildArtifactAddress(SCHEME, "foo--bar", MOUNT, "x.txt");
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "foo--bar", mountId: MOUNT, treePath: "", path: "x.txt" });
     expect(parseArtifactAddress(url)).toEqual({
       artifactId: "foo--bar",
       mountId: MOUNT,
@@ -121,7 +121,7 @@ describe("parseArtifactAddress", () => {
     // LAST "--" can be the delimiter, because the mount id itself never
     // contains a hyphen, so greedily picking it from the right is the only
     // split that leaves a well-formed mount id.
-    const url = buildArtifactAddress(SCHEME, "foo-", MOUNT, "x.txt");
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "foo-", mountId: MOUNT, treePath: "", path: "x.txt" });
     expect(parseArtifactAddress(url)).toEqual({
       artifactId: "foo-",
       mountId: MOUNT,
@@ -132,13 +132,13 @@ describe("parseArtifactAddress", () => {
 
 describe("buildArtifactAddress", () => {
   it("accepts a scheme with or without a trailing colon, identically", () => {
-    const withColon = buildArtifactAddress(`${SCHEME}:`, "myart123", MOUNT, "x");
-    const withoutColon = buildArtifactAddress(SCHEME, "myart123", MOUNT, "x");
+    const withColon = buildArtifactAddress({ scheme: `${SCHEME}:`, artifactId: "myart123", mountId: MOUNT, treePath: "", path: "x" });
+    const withoutColon = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "", path: "x" });
     expect(withColon).toBe(withoutColon);
   });
 
   it("defaults an empty path to index.html", () => {
-    const url = buildArtifactAddress(SCHEME, "myart123", MOUNT, "");
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "", path: "" });
     expect(url.endsWith("/index.html")).toBe(true);
     expect(parseArtifactAddress(url)?.path).toBe("index.html");
   });
@@ -148,13 +148,13 @@ describe("buildArtifactAddress", () => {
     ["an uppercase mount id", "myart123", "ABCDEF", "x"],
   ])("throws instead of lowercasing %s", (_label, artifactId, mountId, path) => {
     expect(() =>
-      buildArtifactAddress(SCHEME, artifactId, mountId, path),
+      buildArtifactAddress({ scheme: SCHEME, artifactId: artifactId, mountId: mountId, treePath: "", path: path }),
     ).toThrow();
   });
 
   it("throws on an invalid scheme rather than coercing it", () => {
-    expect(() => buildArtifactAddress("9bad", "myart123", MOUNT, "x")).toThrow();
-    expect(() => buildArtifactAddress("has space", "myart123", MOUNT, "x")).toThrow();
+    expect(() => buildArtifactAddress({ scheme: "9bad", artifactId: "myart123", mountId: MOUNT, treePath: "", path: "x" })).toThrow();
+    expect(() => buildArtifactAddress({ scheme: "has space", artifactId: "myart123", mountId: MOUNT, treePath: "", path: "x" })).toThrow();
   });
 
   it.each<[string, string]>([
@@ -163,7 +163,7 @@ describe("buildArtifactAddress", () => {
     ["a backslash", "foo\\bar"],
     ["an empty segment", "a//b"],
   ])("throws on %s in the path", (_label, path) => {
-    expect(() => buildArtifactAddress(SCHEME, "myart123", MOUNT, path)).toThrow();
+    expect(() => buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "", path: path })).toThrow();
   });
 
   it.each<[string, string]>([
@@ -172,11 +172,47 @@ describe("buildArtifactAddress", () => {
     ["a question mark", "a?b"],
     ["unicode", "café.txt"],
   ])("round-trips a path that needs percent-encoding: %s", (_label, path) => {
-    const url = buildArtifactAddress(SCHEME, "myart123", MOUNT, path);
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "", path: path });
     expect(parseArtifactAddress(url)).toEqual({
       artifactId: "myart123",
       mountId: MOUNT,
       path,
+    });
+  });
+});
+
+describe("buildArtifactAddress — tree paths", () => {
+  it("joins a non-empty tree path in front of the artifact-relative path", () => {
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "parent/report", path: "index.html" });
+    expect(parseArtifactAddress(url)).toEqual({
+      artifactId: "myart123",
+      mountId: MOUNT,
+      path: "parent/report/index.html",
+    });
+  });
+
+  it("defaults an empty path to index.html even under a non-empty tree path", () => {
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "parent/report", path: "" });
+    expect(url.endsWith("/parent/report/index.html")).toBe(true);
+    expect(parseArtifactAddress(url)?.path).toBe("parent/report/index.html");
+  });
+
+  it.each<[string, string]>([
+    ["a .. segment", "../escape"],
+    ["a leading-dot segment", ".hidden"],
+    ["a backslash", "foo\\bar"],
+    ["an empty segment", "a//b"],
+  ])("throws on %s in the tree path", (_label, treePath) => {
+    expect(() => buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: treePath, path: "x" })).toThrow();
+  });
+
+  it("resolves a sibling tree path via ordinary relative URL resolution", () => {
+    const entryUrl = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: MOUNT, treePath: "parent/report", path: "index.html" });
+    const siblingUrl = new URL("../other/clip.mp4", entryUrl).href;
+    expect(parseArtifactAddress(siblingUrl)).toEqual({
+      artifactId: "myart123",
+      mountId: MOUNT,
+      path: "parent/other/clip.mp4",
     });
   });
 });
@@ -189,7 +225,7 @@ describe("newMountId", () => {
   });
 
   it("is usable directly as a valid mount id", () => {
-    const url = buildArtifactAddress(SCHEME, "myart123", newMountId(), "x");
+    const url = buildArtifactAddress({ scheme: SCHEME, artifactId: "myart123", mountId: newMountId(), treePath: "", path: "x" });
     expect(parseArtifactAddress(url)).not.toBeNull();
   });
 

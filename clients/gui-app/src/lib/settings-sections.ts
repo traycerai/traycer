@@ -25,6 +25,7 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
+  | "dev-artifact-proof"
   | "getting-started"
   | "general"
   | "browser"
@@ -229,6 +230,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "app",
   },
   {
+    id: "dev-artifact-proof",
+    label: "Dev: artifact serving proof",
+    icon: Activity,
+    group: "app",
+  },
+  {
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
@@ -409,13 +416,19 @@ const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
  * before the first render, which is not necessarily before this module is
  * evaluated.
  */
+// Keep the path resolvable so a production deep link reaches its 404 panel,
+// while only dev builds offer the proof in navigation.
+const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
+  (section) => import.meta.env.DEV || section.id !== "dev-artifact-proof",
+);
+
 const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =
-  SETTINGS_SECTIONS.filter(
+  OFFERED_SECTIONS.filter(
     (section) => !MOBILE_APP_ONLY_SECTION_IDS.has(section.id),
   );
 
 const MOBILE_APP_SECTIONS: ReadonlyArray<SettingsSection> =
-  SETTINGS_SECTIONS.filter(
+  OFFERED_SECTIONS.filter(
     (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
   );
 

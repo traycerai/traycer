@@ -66,6 +66,10 @@ export type SandboxSource =
   | {
       readonly kind: "artifact";
       readonly artifactId: string;
+      /** POSIX path from the artifacts tree root; empty for a top-level artifact. */
+      readonly treePath: string;
+      /** Manifest path of the document to open, including loose HTML files. */
+      readonly entryPath: string;
       readonly manifest: ArtifactManifest;
       readonly readSpan: ArtifactReadSpan;
       readonly resolveOutsideReference: ArtifactOutsideReferenceResolver;
@@ -77,6 +81,8 @@ function sameSource(previous: SandboxSource, next: SandboxSource): boolean {
   return (
     next.kind === "artifact" &&
     previous.artifactId === next.artifactId &&
+    previous.treePath === next.treePath &&
+    previous.entryPath === next.entryPath &&
     previous.manifest === next.manifest &&
     previous.readSpan === next.readSpan &&
     previous.resolveOutsideReference === next.resolveOutsideReference
@@ -413,6 +419,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       return;
     const nonce = crypto.randomUUID();
     const server = new ArtifactServer({
+      treePath: inputs.source.treePath,
       manifest: inputs.source.manifest,
       readSpan: inputs.source.readSpan,
       resolveOutsideReference: inputs.source.resolveOutsideReference,
@@ -424,12 +431,13 @@ export function SandboxFrame(props: SandboxFrameProps) {
       },
     });
     const mount = mountArtifact(inputs.runnerHost, server);
-    const url = buildArtifactAddress(
-      "traycer-sandbox",
-      inputs.source.artifactId,
-      mount.mountId,
-      "index.html",
-    );
+    const url = buildArtifactAddress({
+      scheme: "traycer-sandbox",
+      artifactId: inputs.source.artifactId,
+      mountId: mount.mountId,
+      treePath: inputs.source.treePath,
+      path: inputs.source.entryPath,
+    });
     let active = true;
     void mount.ready.then(
       () => {

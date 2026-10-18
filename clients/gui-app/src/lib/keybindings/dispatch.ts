@@ -73,8 +73,6 @@ const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 // ---------------------------------------------------------------------------
 
 export interface KeybindingRouter {
-  /** Present only in dev builds, on the live window router. */
-  readonly navigateArtifactProof?: () => void;
   readonly getPathname: () => string;
   readonly navigateHome: () => void;
   readonly navigateSettings: () => void;

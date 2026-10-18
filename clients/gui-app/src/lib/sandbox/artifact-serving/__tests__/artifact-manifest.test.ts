@@ -10,7 +10,6 @@ function entry(overrides: Partial<ArtifactManifestEntry>): ArtifactManifestEntry
     sha256: "sha-1",
     byteLength: 10,
     mediaType: "text/plain",
-    status: "published",
     ...overrides,
   };
 }

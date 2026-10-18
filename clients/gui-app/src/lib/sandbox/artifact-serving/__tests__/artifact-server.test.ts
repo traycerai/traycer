@@ -11,6 +11,7 @@ import {
   EPIC_READ_FILE_TEXT_MAX_BYTES,
 } from "@traycer/protocol/host/epic/files";
 import { describe, expect, it, vi } from "vitest";
+import { buildArtifactAddress, parseArtifactAddress } from "../artifact-address";
 import { buildArtifactDocument, type ArtifactDocumentOptions } from "../artifact-document";
 import type { ArtifactManifest, ArtifactManifestEntry } from "../artifact-manifest";
 import { ArtifactServer, type ArtifactReadSpanResult } from "../artifact-server";
@@ -35,7 +36,6 @@ function entry(overrides: Partial<ArtifactManifestEntry>): ArtifactManifestEntry
     sha256: "sha-1",
     byteLength: 10,
     mediaType: "application/octet-stream",
-    status: "published",
     ...overrides,
   };
 }
@@ -94,7 +94,7 @@ describe("ArtifactServer.serve — request validation", () => {
     "refuses the invalid path %j as missing, before touching the manifest",
     async (path) => {
       const readSpan = vi.fn();
-      const server = new ArtifactServer({ manifest, readSpan, document: DOCUMENT_OPTIONS });
+      const server = new ArtifactServer({ treePath: "", manifest, readSpan, document: DOCUMENT_OPTIONS });
       const result = await server.serve({ path, offset: 0, length: 1, signal: signal() });
       expect(result).toEqual({ kind: "unavailable", reason: "missing", status: 404 });
       expect(readSpan).not.toHaveBeenCalled();
@@ -110,7 +110,7 @@ describe("ArtifactServer.serve — request validation", () => {
     ["a non-integer length", 0, 1.5],
   ])("refuses %s as invalid-range", async (_label, offset, length) => {
     const readSpan = vi.fn();
-    const server = new ArtifactServer({ manifest, readSpan, document: DOCUMENT_OPTIONS });
+    const server = new ArtifactServer({ treePath: "", manifest, readSpan, document: DOCUMENT_OPTIONS });
     const result = await server.serve({ path: "index.html", offset, length, signal: signal() });
     expect(result).toEqual({ kind: "unavailable", reason: "invalid-range", status: 404 });
     expect(readSpan).not.toHaveBeenCalled();
@@ -120,7 +120,7 @@ describe("ArtifactServer.serve — request validation", () => {
     "treats an entry with byteLength %j as invalid-size, a 503",
     async (byteLength) => {
       const readSpan = vi.fn();
-      const server = new ArtifactServer({
+      const server = new ArtifactServer({ treePath: "",
         manifest: manifestWith("index.html", entry({ byteLength })),
         readSpan,
         document: DOCUMENT_OPTIONS,
@@ -133,7 +133,7 @@ describe("ArtifactServer.serve — request validation", () => {
   it("rejects an already-aborted request instead of resolving", async () => {
     const controller = new AbortController();
     controller.abort();
-    const server = new ArtifactServer({ manifest, readSpan: vi.fn(), document: DOCUMENT_OPTIONS });
+    const server = new ArtifactServer({ treePath: "", manifest, readSpan: vi.fn(), document: DOCUMENT_OPTIONS });
     await expect(
       server.serve({ path: "index.html", offset: 0, length: 1, signal: controller.signal }),
     ).rejects.toThrow();
@@ -145,7 +145,7 @@ describe("ArtifactServer.serve — manifest and outside resolver", () => {
     const inManifest = entry({ sha256: "sha-manifest" });
     const readSpan = spanOf(new Uint8Array(10), inManifest.mediaType);
     const resolveOutsideReference = vi.fn();
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", inManifest),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -164,7 +164,7 @@ describe("ArtifactServer.serve — manifest and outside resolver", () => {
     const outside = entry({ sha256: "sha-outside", byteLength: 10 });
     const readSpan = spanOf(new Uint8Array(10), outside.mediaType);
     const resolveOutsideReference = vi.fn(() => outside);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({})),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -180,7 +180,7 @@ describe("ArtifactServer.serve — manifest and outside resolver", () => {
   });
 
   it("is missing, 404, with no resolver configured at all", async () => {
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({})),
       readSpan: vi.fn(),
       document: DOCUMENT_OPTIONS,
@@ -191,7 +191,7 @@ describe("ArtifactServer.serve — manifest and outside resolver", () => {
 
   it("is missing, 404, when the outside resolver itself returns null", async () => {
     const resolveOutsideReference = vi.fn(() => null);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({})),
       readSpan: vi.fn(),
       document: DOCUMENT_OPTIONS,
@@ -204,16 +204,20 @@ describe("ArtifactServer.serve — manifest and outside resolver", () => {
 });
 
 describe("ArtifactServer.serve — entry status", () => {
-  // The manifest's status field describes upload/local progress; serve()
-  // does not gate on it at all - whether the port can actually produce
-  // bytes right now is entirely readSpan's call.
-  it.each<ArtifactManifestEntry["status"]>(["queued", "uploading", "local-only"])(
-    "still serves bytes for status %s once the local port can produce them",
+  // ArtifactManifestEntry itself carries no status field; this proves
+  // serve() reads the manifest structurally and does not key off one even
+  // when some other part of the system stamps a richer object onto it -
+  // whether the port can actually produce bytes right now is entirely
+  // readSpan's call.
+  it.each(["queued", "uploading", "local-only"])(
+    "still serves bytes for an entry carrying an unrelated status field (%s), once the local port can produce them",
     async (status) => {
       const bytes = new TextEncoder().encode("hello");
       const readSpan = spanOf(bytes, "text/plain");
+      const entryWithStatus = { ...entry({ byteLength: bytes.length }), status };
       const server = new ArtifactServer({
-        manifest: manifestWith("a.bin", entry({ byteLength: bytes.length, status })),
+        treePath: "",
+        manifest: manifestWith("a.bin", entryWithStatus),
         readSpan,
         document: DOCUMENT_OPTIONS,
       });
@@ -231,7 +235,7 @@ describe("ArtifactServer.serve — entry status", () => {
 describe("ArtifactServer.serve — raw bytes", () => {
   it("returns an empty slice at exactly EOF for a non-empty file, without reading", async () => {
     const readSpan = vi.fn();
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({ byteLength: 10 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -249,7 +253,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
 
   it("is invalid-range, 404, past EOF, without reading", async () => {
     const readSpan = vi.fn();
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({ byteLength: 10 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -269,7 +273,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
           mediaType: "application/octet-stream",
         }),
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("big.bin", entry({ byteLength })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -297,7 +301,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
           mediaType: "application/octet-stream",
         }),
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("big.bin", entry({ byteLength })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -343,7 +347,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
           mediaType: "application/octet-stream",
         }),
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("big.bin", entry({ byteLength })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -381,7 +385,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
         return Promise.resolve({ bytes: new Uint8Array(0), totalBytes: 0, mediaType: "application/octet-stream" });
       },
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("empty.bin", entry({ byteLength: 0 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -433,7 +437,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
     "surfaces a malformed port span as invalid-span, 503, for: %s",
     async (_label, byteLength, requestLength, response) => {
       const readSpan = vi.fn((): Promise<ArtifactReadSpanResult> => Promise.resolve(response));
-      const server = new ArtifactServer({
+      const server = new ArtifactServer({ treePath: "",
         manifest: manifestWith("a.bin", entry({ byteLength })),
         readSpan,
         document: DOCUMENT_OPTIONS,
@@ -457,14 +461,14 @@ describe("ArtifactServer.serve — raw bytes", () => {
     );
     const manifest = manifestWith("a.bin", entry({ byteLength: 10 }));
 
-    const missingResult = await new ArtifactServer({
+    const missingResult = await new ArtifactServer({ treePath: "",
       manifest,
       readSpan: missing,
       document: DOCUMENT_OPTIONS,
     }).serve({ path: "a.bin", offset: 0, length: 1, signal: signal() });
     expect(missingResult).toEqual({ kind: "unavailable", reason: "missing", status: 404 });
 
-    const otherResult = await new ArtifactServer({
+    const otherResult = await new ArtifactServer({ treePath: "",
       manifest,
       readSpan: other,
       document: DOCUMENT_OPTIONS,
@@ -487,7 +491,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const rawHtml = new TextEncoder().encode("<p>hi</p>");
     const e = htmlEntry(rawHtml, {});
     const readSpan = spanOf(rawHtml, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -511,7 +515,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const rawHtml = new TextEncoder().encode("<p>hello artifact world</p>");
     const e = htmlEntry(rawHtml, {});
     const readSpan = spanOf(rawHtml, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -546,7 +550,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const rawHtml = new TextEncoder().encode("a".repeat(size));
     const e = htmlEntry(rawHtml, {});
     const readSpan = spanOf(rawHtml, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -613,16 +617,17 @@ describe("ArtifactServer.serve — HTML documents", () => {
     expect(bytesMatch(reconstructed, expectedBytes)).toBe(true);
   });
 
-  it("caches the composed document by sha, and recomposes once the referenced sha changes for the same path", async () => {
+  it("caches the composed document by sha, and recomposes once its own manifest entry's sha changes for the same path", async () => {
+    // An outside reference is always served raw now (never composed), so
+    // this exercises the own-path cache invalidation through a live,
+    // mutable manifest instead: the server reads `files` fresh on every
+    // call, so swapping the entry under the same key simulates the
+    // referenced artifact changing underneath that path.
     const htmlA = new TextEncoder().encode("<p>a</p>");
     const htmlB = new TextEncoder().encode("<p>bb</p>");
-    const entryA = htmlEntry(htmlA, { sha256: "sha-a" });
-    const entryB = htmlEntry(htmlB, { sha256: "sha-b" });
-    let call = 0;
-    // The first two serve() calls below see entryA (same sha); the third
-    // sees entryB, simulating the referenced artifact changing underneath
-    // the same path.
-    const resolveOutsideReference = vi.fn(() => (call++ < 2 ? entryA : entryB));
+    const files: Record<string, ArtifactManifestEntry> = {
+      "page.html": htmlEntry(htmlA, { sha256: "sha-a" }),
+    };
     const readSpan = vi.fn(
       (sha: string, offset: number, length: number): Promise<ArtifactReadSpanResult> => {
         const source = sha === "sha-a" ? htmlA : htmlB;
@@ -634,10 +639,10 @@ describe("ArtifactServer.serve — HTML documents", () => {
       },
     );
     const server = new ArtifactServer({
-      manifest: { files: {} },
+      treePath: "",
+      manifest: { files },
       readSpan,
       document: DOCUMENT_OPTIONS,
-      resolveOutsideReference,
     });
 
     // Full-document comparisons below need the whole composed document (the
@@ -648,6 +653,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     expect(readSpan).toHaveBeenCalledTimes(1); // same sha: still cached
     expect(again).toEqual(first);
 
+    files["page.html"] = htmlEntry(htmlB, { sha256: "sha-b" });
     const changed = await server.serve({ path: "page.html", offset: 0, length: FOUR_MIB, signal: signal() });
     expect(readSpan).toHaveBeenCalledTimes(2); // different sha for the same path: recomposed
     if (first.kind !== "bytes" || changed.kind !== "bytes") {
@@ -659,7 +665,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
 
   it("refuses a document over 25 MiB as document-too-large, 503, without reading", async () => {
     const readSpan = vi.fn();
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", htmlEntry(new Uint8Array(0), { byteLength: TWENTY_FIVE_MIB + 1 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -679,7 +685,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
         return Promise.resolve({ bytes: new Uint8Array(0), totalBytes: 0, mediaType: "text/html" });
       },
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", htmlEntry(new Uint8Array(0), { byteLength: 0 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -709,7 +715,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
           mediaType: "text/html",
         }),
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", htmlEntry(new Uint8Array(0), { byteLength: 100 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -725,7 +731,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const rawHtml = new TextEncoder().encode("<p>hi</p>");
     const e = htmlEntry(rawHtml, {});
     const readSpan = spanOf(rawHtml, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -754,7 +760,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const rawHtml = new TextEncoder().encode("<p>snapshot</p>");
     const e = entry({ byteLength: rawHtml.length, mediaType: "text/html; charset=UTF-8" });
     const readSpan = spanOf(rawHtml, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("snapshot.bin", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -770,7 +776,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const rawHtml = new TextEncoder().encode("<p>snapshot</p>");
     const e = entry({ byteLength: rawHtml.length, mediaType: "application/octet-stream" });
     const readSpan = spanOf(rawHtml, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("index.html", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -786,7 +792,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     const bytes = new TextEncoder().encode('{"a":1}');
     const e = entry({ byteLength: bytes.length, mediaType: "application/json" });
     const readSpan = spanOf(bytes, e.mediaType);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("data.json", e),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -803,7 +809,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
   it("coalesces concurrent cold requests for the same block into a single port call", async () => {
     const gate = deferred<ArtifactReadSpanResult>();
     const readSpan = vi.fn(() => gate.promise);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({ byteLength: 10 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -834,7 +840,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
           ? gate.promise
           : Promise.resolve({ bytes: new Uint8Array(length), totalBytes, mediaType: "application/octet-stream" }),
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("asset.bin", entry({ byteLength: totalBytes })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -862,7 +868,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
       (_sha: string, _offset: number, length: number): Promise<ArtifactReadSpanResult> =>
         Promise.resolve({ bytes: new Uint8Array(length).fill(97), totalBytes: byteLength, mediaType: "text/html" }),
     );
-    const server = new ArtifactServer({ manifest: { files }, readSpan, document: DOCUMENT_OPTIONS });
+    const server = new ArtifactServer({ treePath: "", manifest: { files }, readSpan, document: DOCUMENT_OPTIONS });
     const at = (index: number) =>
       server.serve({ path: `page-${index}.html`, offset: 0, length: 1, signal: signal() });
     for (let index = 0; index < 5; index += 1) {
@@ -879,7 +885,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
   it("lets one waiter's abort fail just that request, without aborting the shared port read or any other waiter", async () => {
     const gate = deferred<ArtifactReadSpanResult>();
     const readSpan = vi.fn(() => gate.promise);
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({ byteLength: 10 })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -918,7 +924,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
           mediaType: "application/octet-stream",
         }),
     );
-    const server = new ArtifactServer({
+    const server = new ArtifactServer({ treePath: "",
       manifest: manifestWith("a.bin", entry({ byteLength })),
       readSpan,
       document: DOCUMENT_OPTIONS,
@@ -952,7 +958,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
         "other.bin": entry({ sha256: "sha-other", byteLength: otherByteLength }),
       },
     };
-    const server = new ArtifactServer({ manifest, readSpan, document: DOCUMENT_OPTIONS });
+    const server = new ArtifactServer({ treePath: "", manifest, readSpan, document: DOCUMENT_OPTIONS });
 
     // Start, but do not await, a read whose port call never settles yet.
     const pending = server.serve({ path: "pending.bin", offset: 0, length: FOUR_MIB, signal: signal() });
@@ -994,7 +1000,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
     const readSpan = spanOf(htmlBytes, "text/html");
     const sharedEntry = entry({ sha256: "sha-shared", byteLength: htmlBytes.length, mediaType: "text/html" });
     const manifest: ArtifactManifest = { files: { "a.html": sharedEntry, "b.html": sharedEntry } };
-    const server = new ArtifactServer({ manifest, readSpan, document: DOCUMENT_OPTIONS });
+    const server = new ArtifactServer({ treePath: "", manifest, readSpan, document: DOCUMENT_OPTIONS });
 
     const first = await server.serve({ path: "a.html", offset: 0, length: FOUR_MIB, signal: signal() });
     expect(readSpan).toHaveBeenCalledTimes(1);
@@ -1024,7 +1030,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
         mediaType: "text/html",
       });
     }
-    const server = new ArtifactServer({ manifest: { files }, readSpan, document: DOCUMENT_OPTIONS });
+    const server = new ArtifactServer({ treePath: "", manifest: { files }, readSpan, document: DOCUMENT_OPTIONS });
 
     for (let index = 0; index < COUNT; index += 1) {
       const result = await server.serve({
@@ -1058,5 +1064,185 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
     });
     expect(revisitLatest.kind).toBe("bytes");
     expect(readSpan.mock.calls.length).toBe(callsBeforeLatest);
+  });
+});
+
+describe("ArtifactServer.serve — tree-path nesting", () => {
+  it("serves its own nested html, with the tree prefix stripped before the manifest lookup", async () => {
+    const rawHtml = new TextEncoder().encode("<p>nested</p>");
+    const ownEntry = entry({
+      sha256: "sha-nested-html",
+      byteLength: rawHtml.length,
+      mediaType: "text/html",
+    });
+    const readSpan = spanOf(rawHtml, ownEntry.mediaType);
+    const server = new ArtifactServer({
+      treePath: "parent/report",
+      // Keyed by the artifact-relative path, not the full tree path the
+      // caller sends.
+      manifest: manifestWith("index.html", ownEntry),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+
+    const result = await server.serve({
+      path: "parent/report/index.html",
+      offset: 0,
+      length: FOUR_MIB,
+      signal: signal(),
+    });
+
+    expect(result.kind).toBe("bytes");
+    if (result.kind === "bytes") {
+      expect(result.mediaType).toBe("text/html; charset=utf-8");
+      expect(new TextDecoder().decode(result.bytes)).toBe(
+        buildArtifactDocument("<p>nested</p>", DOCUMENT_OPTIONS),
+      );
+    }
+  });
+
+  it("serves its own nested raw asset, with the tree prefix stripped before the manifest lookup", async () => {
+    const bytes = new TextEncoder().encode("binary-ish");
+    const ownEntry = entry({
+      sha256: "sha-nested-asset",
+      byteLength: bytes.length,
+      mediaType: "application/octet-stream",
+    });
+    const readSpan = spanOf(bytes, ownEntry.mediaType);
+    const server = new ArtifactServer({
+      treePath: "parent/report",
+      manifest: manifestWith("assets/logo.png", ownEntry),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+
+    const result = await server.serve({
+      path: "parent/report/assets/logo.png",
+      offset: 0,
+      length: 100,
+      signal: signal(),
+    });
+
+    expect(result.kind).toBe("bytes");
+    if (result.kind === "bytes") {
+      expect(result.mediaType).toBe("application/octet-stream");
+      expect(bytesMatch(result.bytes, bytes)).toBe(true);
+    }
+  });
+
+  it("falls back to the outside resolver with the full tree path for a sibling resolved via relative URL, and serves it raw", async () => {
+    const entryUrl = buildArtifactAddress({ scheme: "traycer-artifact", artifactId: "myart", mountId: "mountabc1234567890", treePath: "parent/report", path: "index.html" });
+    const siblingUrl = new URL("../other/clip.mp4", entryUrl).href;
+    const sibling = parseArtifactAddress(siblingUrl);
+    if (sibling === null) throw new Error("expected the sibling URL to parse");
+    expect(sibling.path).toBe("parent/other/clip.mp4");
+
+    const clipBytes = new TextEncoder().encode("fake-mp4-bytes");
+    const outsideEntry = entry({
+      sha256: "sha-clip",
+      byteLength: clipBytes.length,
+      mediaType: "video/mp4",
+    });
+    const resolveOutsideReference = vi.fn(() => outsideEntry);
+    const readSpan = spanOf(clipBytes, outsideEntry.mediaType);
+    const server = new ArtifactServer({
+      treePath: "parent/report",
+      manifest: manifestWith("index.html", entry({ byteLength: 0 })), // irrelevant here
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+      resolveOutsideReference,
+    });
+
+    const result = await server.serve({ path: sibling.path, offset: 0, length: 100, signal: signal() });
+
+    expect(resolveOutsideReference).toHaveBeenCalledWith("parent/other/clip.mp4");
+    expect(result.kind).toBe("bytes");
+    if (result.kind === "bytes") {
+      expect(result.mediaType).toBe("video/mp4");
+      expect(bytesMatch(result.bytes, clipBytes)).toBe(true);
+    }
+  });
+
+  it.each(["parent/other/page.html", "parent/report/child/page.html"])(
+    "serves outside HTML raw at %s, including a child under its own prefix",
+    async (path) => {
+    const rawHtmlLookingBytes = new TextEncoder().encode("<p>outside</p>");
+    const outsideEntry = entry({
+      sha256: "sha-outside-html",
+      byteLength: rawHtmlLookingBytes.length,
+      mediaType: "text/html",
+    });
+    const resolveOutsideReference = vi.fn(() => outsideEntry);
+    const readSpan = spanOf(rawHtmlLookingBytes, outsideEntry.mediaType);
+    const server = new ArtifactServer({
+      treePath: "parent/report",
+      manifest: { files: {} },
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+      resolveOutsideReference,
+    });
+
+    const result = await server.serve({
+      path,
+      offset: 0,
+      length: FOUR_MIB,
+      signal: signal(),
+    });
+
+    expect(resolveOutsideReference).toHaveBeenCalledWith(path);
+    expect(result.kind).toBe("bytes");
+    if (result.kind === "bytes") {
+      // Raw, byte for byte - never run through buildArtifactDocument.
+      expect(result.mediaType).toBe("text/html");
+      expect(bytesMatch(result.bytes, rawHtmlLookingBytes)).toBe(true);
+    }
+  });
+
+  it("does not let a sibling folder whose name merely starts with the tree path leak into the own manifest", async () => {
+    const readSpan = vi.fn();
+    const resolveOutsideReference = vi.fn(() => null);
+    const server = new ArtifactServer({
+      treePath: "report",
+      // Both incorrect prefix-strip lengths must produce manifest hits, or
+      // a lookup miss could hide a broken folder-boundary check.
+      manifest: {
+        files: {
+          "-other/x": entry({ byteLength: 5 }),
+          "other/x": entry({ byteLength: 5 }),
+        },
+      },
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+      resolveOutsideReference,
+    });
+
+    const result = await server.serve({ path: "report-other/x", offset: 0, length: 5, signal: signal() });
+
+    expect(resolveOutsideReference).toHaveBeenCalledWith("report-other/x");
+    expect(readSpan).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: "unavailable", reason: "missing", status: 404 });
+  });
+
+  it("still refuses a literal .. in the request path, before any tree-path or manifest logic runs", async () => {
+    const readSpan = vi.fn();
+    const resolveOutsideReference = vi.fn();
+    const server = new ArtifactServer({
+      treePath: "parent/report",
+      manifest: { files: {} },
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+      resolveOutsideReference,
+    });
+
+    const result = await server.serve({
+      path: "parent/report/../secret",
+      offset: 0,
+      length: 1,
+      signal: signal(),
+    });
+
+    expect(result).toEqual({ kind: "unavailable", reason: "missing", status: 404 });
+    expect(readSpan).not.toHaveBeenCalled();
+    expect(resolveOutsideReference).not.toHaveBeenCalled();
   });
 });

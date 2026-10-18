@@ -33,6 +33,8 @@ export type ArtifactOutsideReferenceResolver = (
 ) => ArtifactManifestEntry | null;
 
 export interface ArtifactServerOptions {
+  /** Folder relative to the artifacts tree root; empty for its root artifact. */
+  readonly treePath: string;
   readonly manifest: ArtifactManifest;
   readonly readSpan: ArtifactReadSpan;
   readonly document: ArtifactDocumentOptions;
@@ -40,6 +42,7 @@ export interface ArtifactServerOptions {
 }
 
 export interface ArtifactServeRequest {
+  /** Full decoded request path relative to the artifacts tree root. */
   readonly path: string;
   readonly offset: number;
   readonly length: number;
@@ -61,6 +64,11 @@ export type ArtifactServeResult =
     };
 
 type Unavailable = Extract<ArtifactServeResult, { kind: "unavailable" }>;
+
+interface ResolvedFile {
+  readonly entry: ArtifactManifestEntry;
+  readonly compose: boolean;
+}
 
 interface CachedBytes {
   readonly kind: "block" | "document";
@@ -137,9 +145,14 @@ export class ArtifactServer {
   private readonly pending = new Map<string, Promise<ReadResult>>();
   private cacheBytes = 0;
   private readonly outside: ArtifactOutsideReferenceResolver;
+  private readonly treePrefix: string;
   private readonly readSignal = new AbortController().signal;
 
   constructor(private readonly options: ArtifactServerOptions) {
+    if (options.treePath !== "" && !isArtifactPath(options.treePath)) {
+      throw new Error("Invalid artifact tree path");
+    }
+    this.treePrefix = options.treePath === "" ? "" : `${options.treePath}/`;
     this.outside = options.resolveOutsideReference ?? NO_OUTSIDE_REFERENCE;
   }
 
@@ -150,14 +163,14 @@ export class ArtifactServer {
     if (!isValidRange(offset, request.length)) {
       return unavailable("invalid-range", 404);
     }
-    const entry =
-      resolveManifestPath(this.options.manifest, path) ?? this.outside(path);
-    if (entry === null) return unavailable("missing", 404);
+    const resolved = this.resolve(path);
+    if (resolved === null) return unavailable("missing", 404);
+    const { entry } = resolved;
     if (!Number.isSafeInteger(entry.byteLength) || entry.byteLength < 0) {
       return unavailable("invalid-size", 503);
     }
     const length = Math.min(request.length, BLOCK_BYTES);
-    if (isDocument(path, entry)) {
+    if (resolved.compose) {
       const document = await waitForRead(this.documentBytes(path, entry), signal);
       if (document.kind === "unavailable") return document;
       if (document.sourceSize !== entry.byteLength) {
@@ -188,6 +201,20 @@ export class ArtifactServer {
       totalBytes: entry.byteLength,
       mediaType: entry.mediaType,
     };
+  }
+
+  private resolve(path: string): ResolvedFile | null {
+    const own = path.startsWith(this.treePrefix)
+      ? resolveManifestPath(
+          this.options.manifest,
+          path.slice(this.treePrefix.length),
+        )
+      : null;
+    if (own !== null) return { entry: own, compose: isDocument(path, own) };
+    // A miss inside our prefix may name a child artifact. The resolver needs
+    // the full tree path in both cases, and referenced files stay unmodified.
+    const outside = this.outside(path);
+    return outside === null ? null : { entry: outside, compose: false };
   }
 
   private async rangeBytes(

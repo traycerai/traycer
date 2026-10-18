@@ -17,7 +17,6 @@ import { Route as SampleWorkspaceRouteImport } from "./routes/sample-workspace";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as WhenYouQuitRouteImport } from "./routes/when-you-quit";
 import { Route as BotBotIdRouteImport } from "./routes/bot.$botId";
-import { Route as DevArtifactProofRouteImport } from "./routes/dev/artifact-proof";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
@@ -28,6 +27,7 @@ import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
+import { Route as SettingsDevArtifactProofRouteImport } from "./routes/settings.dev-artifact-proof";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
@@ -87,11 +87,6 @@ const BotBotIdRoute = BotBotIdRouteImport.update({
   path: "/bot/$botId",
   getParentRoute: () => rootRouteImport,
 } as any);
-const DevArtifactProofRoute = DevArtifactProofRouteImport.update({
-  id: "/dev/artifact-proof",
-  path: "/dev/artifact-proof",
-  getParentRoute: () => rootRouteImport,
-} as any);
 const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
   id: "/draft/$draftId",
   path: "/draft/$draftId",
@@ -143,6 +138,12 @@ const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
   path: "/delete-account",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsDevArtifactProofRoute =
+  SettingsDevArtifactProofRouteImport.update({
+    id: "/dev-artifact-proof",
+    path: "/dev-artifact-proof",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
   id: "/devices",
   path: "/devices",
@@ -243,7 +244,6 @@ export interface FileRoutesByFullPath {
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
   "/bot/$botId": typeof BotBotIdRoute;
-  "/dev/artifact-proof": typeof DevArtifactProofRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
@@ -252,6 +252,7 @@ export interface FileRoutesByFullPath {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
+  "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -280,7 +281,6 @@ export interface FileRoutesByTo {
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/when-you-quit": typeof WhenYouQuitRoute;
   "/bot/$botId": typeof BotBotIdRoute;
-  "/dev/artifact-proof": typeof DevArtifactProofRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
@@ -289,6 +289,7 @@ export interface FileRoutesByTo {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
+  "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -320,7 +321,6 @@ export interface FileRoutesById {
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
   "/bot/$botId": typeof BotBotIdRoute;
-  "/dev/artifact-proof": typeof DevArtifactProofRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
@@ -329,6 +329,7 @@ export interface FileRoutesById {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
+  "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -361,7 +362,6 @@ export interface FileRouteTypes {
     | "/settings"
     | "/when-you-quit"
     | "/bot/$botId"
-    | "/dev/artifact-proof"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
@@ -370,6 +370,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/browser"
     | "/settings/delete-account"
+    | "/settings/dev-artifact-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -398,7 +399,6 @@ export interface FileRouteTypes {
     | "/sample-workspace"
     | "/when-you-quit"
     | "/bot/$botId"
-    | "/dev/artifact-proof"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
@@ -407,6 +407,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/browser"
     | "/settings/delete-account"
+    | "/settings/dev-artifact-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -437,7 +438,6 @@ export interface FileRouteTypes {
     | "/settings"
     | "/when-you-quit"
     | "/bot/$botId"
-    | "/dev/artifact-proof"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
@@ -446,6 +446,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/browser"
     | "/settings/delete-account"
+    | "/settings/dev-artifact-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -477,7 +478,6 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren;
   WhenYouQuitRoute: typeof WhenYouQuitRoute;
   BotBotIdRoute: typeof BotBotIdRoute;
-  DevArtifactProofRoute: typeof DevArtifactProofRoute;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
 }
@@ -538,13 +538,6 @@ declare module "@tanstack/react-router" {
       path: "/bot/$botId";
       fullPath: "/bot/$botId";
       preLoaderRoute: typeof BotBotIdRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/dev/artifact-proof": {
-      id: "/dev/artifact-proof";
-      path: "/dev/artifact-proof";
-      fullPath: "/dev/artifact-proof";
-      preLoaderRoute: typeof DevArtifactProofRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/draft/$draftId": {
@@ -615,6 +608,13 @@ declare module "@tanstack/react-router" {
       path: "/delete-account";
       fullPath: "/settings/delete-account";
       preLoaderRoute: typeof SettingsDeleteAccountRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/dev-artifact-proof": {
+      id: "/settings/dev-artifact-proof";
+      path: "/dev-artifact-proof";
+      fullPath: "/settings/dev-artifact-proof";
+      preLoaderRoute: typeof SettingsDevArtifactProofRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/devices": {
@@ -765,6 +765,7 @@ interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsBrowserRoute: typeof SettingsBrowserRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
+  SettingsDevArtifactProofRoute: typeof SettingsDevArtifactProofRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsFallbackRoute: typeof SettingsFallbackRoute;
@@ -792,6 +793,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
+  SettingsDevArtifactProofRoute: SettingsDevArtifactProofRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsFallbackRoute: SettingsFallbackRoute,
@@ -825,7 +827,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   WhenYouQuitRoute: WhenYouQuitRoute,
   BotBotIdRoute: BotBotIdRoute,
-  DevArtifactProofRoute: DevArtifactProofRoute,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
 };

@@ -39,14 +39,11 @@ export const navigationSource: ReactCommandSource = {
       const items: Array<CommandItem> = [];
       if (ctx.pathname !== "/epics") items.push(OPEN_EPICS_ITEM);
       items.push(buildSettingsEntryItem(settingsChord, sectionItems));
-      if (
-        import.meta.env.DEV &&
-        ctx.router.navigateArtifactProof !== undefined
-      ) {
+      if (import.meta.env.DEV) {
         items.push(ARTIFACT_PROOF_ITEM);
       }
       return items;
-    }, [ctx.pathname, ctx.router, settingsChord, sectionItems]);
+    }, [ctx.pathname, settingsChord, sectionItems]);
   },
 };
 
@@ -59,7 +56,7 @@ const ARTIFACT_PROOF_ITEM: CommandItem = {
   scope: "actions",
   shortcut: null,
   actionId: null,
-  run: (ctx) => ctx.router.navigateArtifactProof?.(),
+  run: (ctx) => ctx.router.navigateSettingsSection("dev-artifact-proof"),
   subpage: null,
 };
 

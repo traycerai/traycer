@@ -1,6 +1,7 @@
 export interface ArtifactAddress {
   readonly mountId: string;
   readonly artifactId: string;
+  /** Full decoded path relative to the artifacts tree root. */
   readonly path: string;
 }
 
@@ -48,23 +49,31 @@ export function parseArtifactAddress(url: string): ArtifactAddress | null {
   return isArtifactPath(path) ? { artifactId, mountId, path } : null;
 }
 
-export function buildArtifactAddress(
-  scheme: string,
-  artifactId: string,
-  mountId: string,
-  path: string,
-): string {
+export interface ArtifactAddressParts {
+  readonly scheme: string;
+  readonly artifactId: string;
+  readonly mountId: string;
+  readonly treePath: string;
+  readonly path: string;
+}
+
+/** Keeping the folder in the URL lets the browser resolve parent references. */
+export function buildArtifactAddress(address: ArtifactAddressParts): string {
+  const { scheme, artifactId, mountId, treePath, path } = address;
   const protocol = scheme.endsWith(":") ? scheme.slice(0, -1) : scheme;
   const relativePath = path === "" ? "index.html" : path;
+  const fullPath = treePath === "" ? relativePath : `${treePath}/${relativePath}`;
   if (
     !SCHEME.test(protocol) ||
     !ARTIFACT_ID.test(artifactId) ||
     !MOUNT_ID.test(mountId) ||
-    !isArtifactPath(relativePath)
+    (treePath !== "" && !isArtifactPath(treePath)) ||
+    !isArtifactPath(relativePath) ||
+    !isArtifactPath(fullPath)
   ) {
     throw new Error("Invalid artifact address");
   }
-  return `${protocol}://artifact-${artifactId}--${mountId}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+  return `${protocol}://artifact-${artifactId}--${mountId}/${fullPath.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 export function newMountId(): string {

@@ -11,7 +11,7 @@ const INDEX = `<!doctype html><html><head><link rel="stylesheet" href="./style.c
 <li id="css">CSS: pending</li><li id="script">Classic script: pending</li>
 <li id="json">JSON: pending</li><li id="image">PNG: pending</li>
 <li id="video">Video: pending</li><li id="theme">Theme: pending</li><li id="range">Range: pending</li>
-<li id="stream">9 MiB stream: pending</li></ul>
+<li id="stream">9 MiB stream: pending</li><li id="parent">Parent reference: pending</li></ul>
 <img src="./logo.png" alt="Fixture pixel" width="32" height="32">
 <video src="./clip.webm" preload="auto" controls muted autoplay loop></video>
 <script src="./app.js"></script></body></html>`;
@@ -28,6 +28,10 @@ const img = document.querySelector('img');
 const imageResult = () => mark('image', img.naturalWidth ? 'PNG: decoded' : 'PNG: FAILED');
 if (img.complete) imageResult(); else { img.onload = imageResult; img.onerror = imageResult; }
 fetch('./data.json').then(r => r.json()).then(data => mark('json', 'JSON: ' + data.text)).catch(e => mark('json', 'JSON: FAILED ' + e.message));
+fetch('../shared.txt').then(async r => {
+ const text = await r.text();
+ mark('parent', r.ok && text === 'Parent reference resolved' ? 'Parent reference: loaded ../shared.txt' : 'Parent reference: FAILED');
+}).catch(e => mark('parent', 'Parent reference: FAILED ' + e.message));
 fetch('./big.bin', {headers: {Range: 'bytes=8388600-8388623'}}).then(async r => {
  const bytes = new Uint8Array(await r.arrayBuffer());
  const valid = r.status === 206 && bytes.length === 24 && bytes.every((value, i) => value === (8388600 + i) % 251);
@@ -43,17 +47,29 @@ function createFixture(): SandboxSource {
   const encoder = new TextEncoder();
   const files: Record<string, ArtifactManifestEntry> = {};
   const blobs = new Map<string, { bytes: Uint8Array; mediaType: string }>();
-  const add = (path: string, bytes: Uint8Array, mediaType: string): void => {
+  const addBlob = (
+    bytes: Uint8Array,
+    mediaType: string,
+  ): ArtifactManifestEntry => {
     // These keys never leave this fixture's reader; no published blob is involved.
     const sha256 = String(blobs.size + 1).padStart(64, "0");
     blobs.set(sha256, { bytes, mediaType });
-    files[path] = {
+    return {
       sha256,
       byteLength: bytes.length,
       mediaType,
       status: "local-only",
     };
   };
+  const add = (path: string, bytes: Uint8Array, mediaType: string): void => {
+    files[path] = addBlob(bytes, mediaType);
+  };
+  const outsideFiles = new Map([
+    [
+      "proof/shared.txt",
+      addBlob(encoder.encode("Parent reference resolved"), "text/plain"),
+    ],
+  ]);
   add("index.html", encoder.encode(INDEX), "text/html");
   add(
     "style.css",
@@ -96,6 +112,8 @@ function createFixture(): SandboxSource {
   return {
     kind: "artifact",
     artifactId: "desktop-proof",
+    treePath: "proof/nested",
+    entryPath: "index.html",
     manifest: { files },
     readSpan: (sha256, offset, length, signal) => {
       signal.throwIfAborted();
@@ -110,7 +128,7 @@ function createFixture(): SandboxSource {
             },
       );
     },
-    resolveOutsideReference: () => null,
+    resolveOutsideReference: (path) => outsideFiles.get(path) ?? null,
   };
 }
 

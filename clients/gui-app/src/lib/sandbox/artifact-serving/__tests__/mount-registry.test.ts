@@ -46,6 +46,7 @@ function serverFor(path: string, text: string): ArtifactServer {
       mediaType: "text/plain",
     });
   return new ArtifactServer({
+    treePath: "",
     manifest: manifestOf(path, bytes.length),
     readSpan,
     document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
@@ -291,6 +292,7 @@ describe("mountArtifact", () => {
         settle = resolve;
       });
     const server = new ArtifactServer({
+      treePath: "",
       manifest: manifestOf("a.txt", 5),
       readSpan,
       document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
@@ -329,6 +331,7 @@ describe("mountArtifact", () => {
           settles.push(resolve);
         });
       return new ArtifactServer({
+        treePath: "",
         manifest: manifestOf(path, 5),
         readSpan,
         document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
@@ -476,6 +479,7 @@ describe("request cancellation (onCancel)", () => {
         settle = resolve;
       });
     const server = new ArtifactServer({
+      treePath: "",
       manifest: manifestOf("a.txt", 5),
       readSpan,
       document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },

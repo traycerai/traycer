@@ -27,8 +27,30 @@ afterEach(() => {
   openLink.mockReset();
 });
 
-function artifactSource(artifactId: string): SandboxSource {
-  const manifest: ArtifactManifest = { files: {} };
+/**
+ * `treePath` is the POSIX-relative root inside the artifact's own file tree
+ * ("" for a top-level artifact, e.g. "proof/nested" for one rooted deeper);
+ * `entryPath` is the document served as the entry point ("index.html" by
+ * default, or a loose file like "report.html"). Narrowed to the artifact
+ * variant so a test can spread one call's result and override a single
+ * field without disturbing the shared `manifest`/`readSpan`/
+ * `resolveOutsideReference` identities `sameSource` also compares.
+ */
+function artifactSource(
+  artifactId: string,
+  treePath: string,
+  entryPath: string,
+): Extract<SandboxSource, { kind: "artifact" }> {
+  const manifest: ArtifactManifest = {
+    files: {
+      [entryPath]: {
+        sha256: "sha-stub",
+        byteLength: 0,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
+  };
   // Never actually invoked by these tests: jsdom does not load a custom
   // scheme's iframe `src`, so no byte range is ever requested through it.
   const readSpan: ArtifactReadSpan = () =>
@@ -37,6 +59,8 @@ function artifactSource(artifactId: string): SandboxSource {
   return {
     kind: "artifact",
     artifactId,
+    treePath,
+    entryPath,
     manifest,
     readSpan,
     resolveOutsideReference,
@@ -120,7 +144,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     render(
       <RunnerHostContext.Provider value={host}>
         {artifactFrame({
-          source: artifactSource("myart"),
+          source: artifactSource("myart", "", "index.html"),
           title: "Artifact page",
           onBridge: null,
         })}
@@ -131,7 +155,13 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     expect(bridge.registered).toHaveLength(1);
     const [mountId] = bridge.registered;
     expect(iframe.getAttribute("src")).toBe(
-      buildArtifactAddress("traycer-sandbox", "myart", mountId, "index.html"),
+      buildArtifactAddress({
+        scheme: "traycer-sandbox",
+        artifactId: "myart",
+        mountId: mountId,
+        treePath: "",
+        path: "index.html",
+      }),
     );
   });
 
@@ -157,7 +187,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     render(
       <RunnerHostContext.Provider value={host}>
         {artifactFrame({
-          source: artifactSource("myart"),
+          source: artifactSource("myart", "", "index.html"),
           title: "Artifact page",
           onBridge,
         })}
@@ -182,7 +212,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const { unmount } = render(
       <RunnerHostContext.Provider value={host}>
         {artifactFrame({
-          source: artifactSource("myart"),
+          source: artifactSource("myart", "", "index.html"),
           title: "Artifact page",
           onBridge: null,
         })}
@@ -201,7 +231,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const { rerender } = render(
       <RunnerHostContext.Provider value={host}>
         {artifactFrame({
-          source: artifactSource("first-art"),
+          source: artifactSource("first-art", "", "index.html"),
           title: "Artifact page",
           onBridge: null,
         })}
@@ -213,7 +243,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     rerender(
       <RunnerHostContext.Provider value={host}>
         {artifactFrame({
-          source: artifactSource("second-art"),
+          source: artifactSource("second-art", "", "index.html"),
           title: "Artifact page",
           onBridge: null,
         })}
@@ -226,12 +256,170 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
 
     const iframe = await screen.findByTitle("Artifact page");
     expect(iframe.getAttribute("src")).toBe(
-      buildArtifactAddress(
-        "traycer-sandbox",
-        "second-art",
-        secondMountId,
-        "index.html",
-      ),
+      buildArtifactAddress({
+        scheme: "traycer-sandbox",
+        artifactId: "second-art",
+        mountId: secondMountId,
+        treePath: "",
+        path: "index.html",
+      }),
+    );
+  });
+
+  it("includes a nested treePath in the artifact's served address", async () => {
+    const bridge = createFakeBridge();
+    const host = hostWith(bridge);
+    render(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: artifactSource("myart", "proof/nested", "index.html"),
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+
+    const iframe = await screen.findByTitle("Artifact page");
+    const [mountId] = bridge.registered;
+    expect(iframe.getAttribute("src")).toBe(
+      buildArtifactAddress({
+        scheme: "traycer-sandbox",
+        artifactId: "myart",
+        mountId: mountId,
+        treePath: "proof/nested",
+        path: "index.html",
+      }),
+    );
+  });
+
+  it("mounts a fresh server, with a fresh mount id, when only the treePath changes", async () => {
+    // One source, reused and overridden on only `treePath`: a fresh call to
+    // `artifactSource()` for the second render would also hand `sameSource`
+    // a new manifest/readSpan/resolver identity, which alone would force a
+    // remount and leave this test passing for the wrong reason.
+    const bridge = createFakeBridge();
+    const host = hostWith(bridge);
+    const firstSource = artifactSource("myart", "", "index.html");
+    const { rerender } = render(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: firstSource,
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+    await screen.findByTitle("Artifact page");
+    const [firstMountId] = bridge.registered;
+
+    rerender(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: { ...firstSource, treePath: "proof/nested" },
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+    await vi.waitFor(() => expect(bridge.registered).toHaveLength(2));
+    const [, secondMountId] = bridge.registered;
+    expect(secondMountId).not.toBe(firstMountId);
+    await vi.waitFor(() => expect(bridge.unregistered).toContain(firstMountId));
+
+    const iframe = await screen.findByTitle("Artifact page");
+    expect(iframe.getAttribute("src")).toBe(
+      buildArtifactAddress({
+        scheme: "traycer-sandbox",
+        artifactId: "myart",
+        mountId: secondMountId,
+        treePath: "proof/nested",
+        path: "index.html",
+      }),
+    );
+  });
+
+  it("serves a loose report.html as the entry document, not index.html", async () => {
+    const bridge = createFakeBridge();
+    const host = hostWith(bridge);
+    render(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: artifactSource("myart", "", "report.html"),
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+
+    const iframe = await screen.findByTitle("Artifact page");
+    const [mountId] = bridge.registered;
+    expect(iframe.getAttribute("src")).toBe(
+      buildArtifactAddress({
+        scheme: "traycer-sandbox",
+        artifactId: "myart",
+        mountId: mountId,
+        treePath: "",
+        path: "report.html",
+      }),
+    );
+  });
+
+  it("mounts a fresh server, with a fresh mount id, when only the entryPath changes", async () => {
+    // One source, reused and overridden on only `entryPath` - same reasoning
+    // as the treePath-only test above. The manifest needs both documents
+    // from the start, since it stays the same object across both renders.
+    const bridge = createFakeBridge();
+    const host = hostWith(bridge);
+    const base = artifactSource("myart", "", "index.html");
+    const firstSource: Extract<SandboxSource, { kind: "artifact" }> = {
+      ...base,
+      manifest: {
+        files: {
+          ...base.manifest.files,
+          "report.html": {
+            sha256: "sha-stub-report",
+            byteLength: 0,
+            mediaType: "text/html",
+            status: "published",
+          },
+        },
+      },
+    };
+    const { rerender } = render(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: firstSource,
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+    await screen.findByTitle("Artifact page");
+    const [firstMountId] = bridge.registered;
+
+    rerender(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: { ...firstSource, entryPath: "report.html" },
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+    await vi.waitFor(() => expect(bridge.registered).toHaveLength(2));
+    const [, secondMountId] = bridge.registered;
+    expect(secondMountId).not.toBe(firstMountId);
+    await vi.waitFor(() => expect(bridge.unregistered).toContain(firstMountId));
+
+    const iframe = await screen.findByTitle("Artifact page");
+    expect(iframe.getAttribute("src")).toBe(
+      buildArtifactAddress({
+        scheme: "traycer-sandbox",
+        artifactId: "myart",
+        mountId: secondMountId,
+        treePath: "",
+        path: "report.html",
+      }),
     );
   });
 });
@@ -241,7 +429,7 @@ describe("<SandboxFrame /> artifact source, with no artifact-serving capability"
     const onBridge = vi.fn<(bridge: SandboxBridgeHost | null) => void>();
     render(
       artifactFrame({
-        source: artifactSource("myart"),
+        source: artifactSource("myart", "", "index.html"),
         title: "Artifact page",
         onBridge,
       }),
@@ -261,7 +449,7 @@ describe("<SandboxFrame /> artifact source, with no artifact-serving capability"
     render(
       <RunnerHostContext.Provider value={host}>
         {artifactFrame({
-          source: artifactSource("myart"),
+          source: artifactSource("myart", "", "index.html"),
           title: "Artifact page",
           onBridge,
         })}

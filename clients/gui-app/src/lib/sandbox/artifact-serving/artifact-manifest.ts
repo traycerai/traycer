@@ -4,7 +4,6 @@ export interface ArtifactManifestEntry {
   readonly sha256: string;
   readonly byteLength: number;
   readonly mediaType: string;
-  readonly status: "queued" | "uploading" | "published" | "local-only" | "failed";
 }
 
 export interface ArtifactManifest {

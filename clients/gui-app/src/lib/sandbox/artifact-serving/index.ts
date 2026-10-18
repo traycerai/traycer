@@ -3,6 +3,7 @@ export {
   parseArtifactAddress,
   newMountId,
   type ArtifactAddress,
+  type ArtifactAddressParts,
 } from "./artifact-address";
 export {
   resolveManifestPath,
