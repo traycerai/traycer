@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   lockUnlinks: 0,
   // Fails the next unlinks of the settings lock, one code per call.
   unlinkFailures: [] as string[],
+  // Fails the next removals of the lock's temp record file, one code per call.
+  lockTmpRmFailures: [] as string[],
   // Fails the next `flag: "wx"` creates, one code per call.
   wxFailures: [] as string[],
 }));
@@ -84,6 +86,20 @@ vi.mock("node:fs/promises", async (importActual) => {
       }
       if (h.linkFailure !== null) throw simulatedError(h.linkFailure);
       await actual.link(existing, linkPath);
+    },
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      const target = args[0];
+      // The lock's own temp record (`config.json.lock.<uuid>.tmp`), not
+      // config.json's tmp (`config.json.<pid>.<hex>.tmp`).
+      if (
+        typeof target === "string" &&
+        target.startsWith(`${cliConfigPath()}.lock.`) &&
+        target.endsWith(".tmp")
+      ) {
+        const code = h.lockTmpRmFailures.shift();
+        if (code !== undefined) throw simulatedError(code);
+      }
+      return actual.rm(...args);
     },
     unlink: async (path: string) => {
       if (path === `${cliConfigPath()}.lock`) {
@@ -229,6 +245,7 @@ beforeEach(async () => {
   h.linkFailure = null;
   h.lockLinkFailures = [];
   h.unlinkFailures = [];
+  h.lockTmpRmFailures = [];
   h.wxFailures = [];
 });
 
@@ -241,6 +258,7 @@ afterEach(async () => {
   h.linkFailure = null;
   h.lockLinkFailures = [];
   h.unlinkFailures = [];
+  h.lockTmpRmFailures = [];
   h.wxFailures = [];
   setCliConfigLockTimingForTests(null);
   await rm(h.home, { recursive: true, force: true });
@@ -583,6 +601,29 @@ describe("concurrent config writers", () => {
         expect(existsSync(lockPath())).toBe(false);
       },
     );
+
+    it("keeps the lock it linked when its temp file cannot be removed", async () => {
+      setCliConfigLockTimingForTests({
+        waitMs: 1500,
+        pollMs: 10,
+        staleAgeMs: 300,
+      });
+      h.lockTmpRmFailures = ["EBUSY"];
+
+      await setEnvOverride("K", "v");
+
+      expect((await readCliConfig()).envOverrides).toEqual({ K: "v" });
+      expect(h.lockTmpRmFailures).toEqual([]);
+      expect(existsSync(lockPath())).toBe(false);
+
+      // A leaked lock would name this live process and time this one out.
+      await setEnvOverride("K2", "v2");
+
+      expect((await readCliConfig()).envOverrides).toEqual({
+        K: "v",
+        K2: "v2",
+      });
+    });
 
     it("never drops a failed release silently", async () => {
       const secret = "s3cr3t-value-123";

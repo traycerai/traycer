@@ -235,7 +235,9 @@ async function breakDeadLock(
         });
         return true;
       } finally {
-        await rm(tokenPath, { force: true });
+        // Best effort, like the temp file: the record it guarded is gone or
+        // replaced, so the next holder's sweep removes a token left here.
+        await rm(tokenPath, { force: true }).catch(() => undefined);
       }
     }
     // Another breaker holds this generation. Move past it only when its
@@ -325,7 +327,10 @@ async function tryCreate(path: string, serialized: string): Promise<boolean> {
     }
     return await tryExclusiveCreate(path, serialized);
   } finally {
-    await rm(tmp, { force: true });
+    // Best effort: once linked, the file at `path` is ours, and a temp file a
+    // filesystem filter will not let go of yet must not turn that into a
+    // failed acquire that leaves the lock behind.
+    await rm(tmp, { force: true }).catch(() => undefined);
   }
 }
 
