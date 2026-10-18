@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
+import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderCliState,
@@ -95,6 +96,7 @@ const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
   openSettings: vi.fn(),
+  reportContexts: new Array<ReportIssueContext>(),
   hostKind: "local",
 }));
 
@@ -187,6 +189,12 @@ vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
 }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
+}));
+vi.mock("@/components/report-issue/report-issue-action", () => ({
+  ReportIssueAction: (props: { readonly context: ReportIssueContext }) => {
+    mocks.reportContexts.push(props.context);
+    return null;
+  },
 }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
@@ -511,6 +519,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.openLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
+    mocks.reportContexts.length = 0;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -2126,5 +2135,53 @@ describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () =>
 
     expect(screen.queryByText(HEADLINE)).toBeNull();
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+});
+
+describe("<ProviderReauthBanner /> report action code", () => {
+  beforeEach(() => {
+    mocks.reportContexts.length = 0;
+  });
+
+  function lastReportCode(): string | null {
+    const context = mocks.reportContexts.at(-1);
+    if (context === undefined) throw new Error("no report action rendered");
+    return context.code;
+  }
+
+  it("carries the provider and reason so a report says what was blocked", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(lastReportCode()).toBe("codex:provider_unauthenticated");
+  });
+
+  it("never carries the profile id", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="profile_unauthenticated"
+        profileId="prof-SECRET-123"
+        profileLabel="Work"
+        onContinueOnAmbient={vi.fn()}
+      />,
+    );
+
+    const code = lastReportCode();
+    expect(code).toBe("codex:profile_unauthenticated");
+    expect(code ?? "").not.toContain("prof-SECRET-123");
   });
 });
