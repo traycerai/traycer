@@ -10,6 +10,7 @@ import { CanvasTweaksPanel } from "./canvas-tweaks-panel";
 import { useCanvasBoardDocument } from "./use-canvas-board-document";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
 import type { CanvasSelection } from "./canvas-selection-store";
+import { CanvasStructureToolbar } from "./canvas-structure-toolbar";
 
 export function CanvasEditingPanel(props: {
   readonly artifactId: string;
@@ -71,6 +72,7 @@ export function CanvasElementEditingPanel(props: {
   );
   return (
     <>
+      <CanvasStructureToolbar selection={props.selection} registry={props.registry} document={document.data ?? null} />
       <CanvasPropertiesPanel
         artifactId={props.selection.artifactId}
         menuContent={

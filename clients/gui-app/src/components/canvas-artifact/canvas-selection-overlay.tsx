@@ -42,10 +42,11 @@ export function CanvasSelectionOverlay(props: {
   readonly controls?: ReactNode;
   readonly actionControls?: ReactNode;
   readonly hideAction?: boolean;
+  readonly hideHandles?: boolean;
   readonly scope: CanvasAnnotationScope;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
-  readonly onPick: (path: string, point: { x: number; y: number }) => void;
+  readonly onPick: (path: string, point: { x: number; y: number; additive?: boolean }) => void;
   readonly onRetire: (path: string) => void;
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
@@ -57,7 +58,9 @@ export function CanvasSelectionOverlay(props: {
       : null,
   );
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  const gesture = useRef<{ x: number; y: number } | null>(null);
+  const additional = useCanvasSelectionStore((state) => state.additionalElements);
+  const multiple = selection !== null && additional.length > 0;
+  const gesture = useRef<{ x: number; y: number; additive: boolean } | null>(null);
   const frame = entry.frame;
   const bridge = entry.bridge;
   const { onRetire, boardPath } = props;
@@ -149,7 +152,7 @@ export function CanvasSelectionOverlay(props: {
       : clipCanvasBox(selection.element.box, { x: 0, y: 0, ...dimensions });
   const position = actionPosition(selection, box);
   const shields = canvasSelectionShields(
-    box,
+    multiple ? null : box,
     dimensions.width,
     dimensions.height,
   );
@@ -199,14 +202,16 @@ export function CanvasSelectionOverlay(props: {
             height: shield.height,
           }}
           onPointerDown={(event) => {
+            if (event.shiftKey) event.stopPropagation();
             gesture.current =
-              event.button === 0 && !event.shiftKey
-                ? { x: event.clientX, y: event.clientY }
+              event.button === 0
+                ? { x: event.clientX, y: event.clientY, additive: event.shiftKey }
                 : null;
           }}
           onPointerUp={(event) => {
             const start = gesture.current;
             gesture.current = null;
+            if (start?.additive === true) event.stopPropagation();
             if (
               start === null ||
               frame === null ||
@@ -221,6 +226,7 @@ export function CanvasSelectionOverlay(props: {
               y:
                 ((event.clientY - bounds.y) * frame.clientHeight) /
                 bounds.height,
+              ...(start.additive ? { additive: true } : {}),
             });
           }}
         />
@@ -248,7 +254,7 @@ export function CanvasSelectionOverlay(props: {
               height: box.height,
             }}
           >
-            {!selection.element.generated
+            {!selection.element.generated && !props.hideHandles
               ? [
                   "-left-1 -top-1",
                   "-right-1 -top-1",

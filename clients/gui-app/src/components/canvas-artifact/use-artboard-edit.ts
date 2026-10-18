@@ -88,7 +88,11 @@ export function useArtboardEdit(artifactId: string) {
               current.element.tid !== selection.element.tid))
         )
           return;
-        if (edit.kind === "delete-element") state.clear();
+        if (edit.kind === "delete-element" || edit.kind === "unwrap-element") state.clear();
+        else if (edit.kind === "wrap-elements" && result.tid !== null)
+          // Adopt the new wrapper's identity; the next served frame supplies
+          // its description and geometry. Added children stop being selected.
+          state.select({ ...current, element: { ...current.element, tid: result.tid }, textRange: null });
         else if (result.tid !== null)
           state.updateTid(
             artifactId,
