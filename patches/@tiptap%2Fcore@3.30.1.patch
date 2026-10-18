@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771a911fad7 100644
+index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1eddab914d 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -45,6 +45,7 @@ __export(index_exports, {
@@ -18,7 +18,15 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
    marksEqual: () => marksEqual,
    mergeAttributes: () => mergeAttributes,
    mergeDeep: () => mergeDeep,
-@@ -4402,9 +4404,11 @@ function isString(value) {
+@@ -152,6 +154,7 @@ __export(index_exports, {
+   objectIncludes: () => objectIncludes,
+   parseAttributes: () => parseAttributes,
+   parseIndentedBlocks: () => parseIndentedBlocks,
++  readMarkdownTaskItem: () => readMarkdownTaskItem,
+   pasteRulesPlugin: () => pasteRulesPlugin,
+   posToDOMRect: () => posToDOMRect,
+   removeDuplicates: () => removeDuplicates,
+@@ -4402,11 +4405,14 @@ function isString(value) {
  // src/utilities/markdown/index.ts
  var markdown_exports = {};
  __export(markdown_exports, {
@@ -29,8 +37,11 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
 +  markdownNextBulletRegex: () => markdownNextBulletRegex,
    parseAttributes: () => parseAttributes,
    parseIndentedBlocks: () => parseIndentedBlocks,
++  readMarkdownTaskItem: () => readMarkdownTaskItem,
    renderNestedMarkdownContent: () => renderNestedMarkdownContent,
-@@ -4788,84 +4792,148 @@ function createInlineMarkdownSpec(options) {
+   serializeAttributes: () => serializeAttributes
+ });
+@@ -4788,84 +4794,169 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
@@ -121,6 +132,28 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
 +function asParagraph(token) {
 +  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
 +}
++const THEMATIC_BREAK = /^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/;
++const TASK_CHECKBOX = /^\[([ xX])\](?=[ \n]|$)/;
++function readMarkdownTaskItem(text, lexer) {
++  const checkbox = TASK_CHECKBOX.exec(text);
++  if (checkbox === null) {
++    return void 0;
++  }
++  const task = /^\[[ xX]\] +[^ \t\n]/.test(text);
++  const tokens = lexer.listItemBlockTokens(task ? text : text.replace(/^\[[ xX]\] */, ""));
++  const first = tokens.findIndex((token) => token.type !== "space");
++  if (task && first !== -1 && tokens[first].type === "heading") {
++    const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, "");
++    tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) };
++  }
++  const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
++  const firstText = opensWithText ? tokens[first].text : "";
++  return {
++    checked: checkbox[1].toLowerCase() === "x",
++    mainContent: task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText,
++    nestedTokens: tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph)
++  };
++}
  function parseIndentedBlocks(src, config, lexer) {
 -  var _a, _b, _c, _d;
    const lines = src.split("\n");
@@ -132,14 +165,16 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
 -  const baseIndentSize = config.baseIndentSize || 2;
    while (i < lines.length) {
      const currentLine = lines[i];
-     const itemMatch = currentLine.match(config.itemPattern);
+-    const itemMatch = currentLine.match(config.itemPattern);
 -    if (!itemMatch) {
 -      if (items.length > 0) {
++    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern);
 +    const markerEnd = itemMatch ? (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length : 0;
 +    const item = itemMatch ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
 +      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line)
 +    }) : void 0;
-+    if (!itemMatch || !item || config.checkbox && !/^\[[ xX]\](?=[ \n]|$)/.test(item.text)) {
++    const task = item !== void 0 && (!config.checkbox || TASK_CHECKBOX.test(item.text));
++    if (!itemMatch || !item || !task && config.createPlainToken === void 0) {
 +      if (found.length > 0) {
          break;
 -      } else if (currentLine.trim() === "") {
@@ -201,36 +236,34 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
 -    }
 -    const token = config.createToken(itemData, nestedTokens);
 -    items.push(token);
-+    found.push({ match: itemMatch, text: item.text });
++    found.push({ match: itemMatch, text: item.text, raw: lines.slice(i, item.end).join("\n"), task });
 +    i = item.end;
 +    consumed = i;
    }
 -  if (items.length === 0) {
-+  if (found.length === 0) {
++  if (!found.some((item) => item.task)) {
      return void 0;
    }
 +  const last = found[found.length - 1];
 +  last.text = last.text.replace(/[ \t\n]+$/, "");
-+  const items = found.map(({ match, text }) => {
++  last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  const items = found.map(({ match, text, raw, task }) => {
++    if (!task && config.createPlainToken !== void 0) {
++      return config.createPlainToken({ raw, text, tokens: lexer.listItemBlockTokens(text) });
++    }
 +    const data = config.extractItemData(match);
-+    let content = text;
-+    const task = config.checkbox === true && /^\[[ xX]\] +[^ \t\n]/.test(content);
-+    if (config.checkbox && !task) {
-+      content = content.replace(/^\[[ xX]\] */, "");
++    const read = config.checkbox ? readMarkdownTaskItem(text, lexer) : void 0;
++    if (read === void 0) {
++      const tokens = lexer.listItemBlockTokens(text);
++      const first = tokens.findIndex((token) => token.type !== "space");
++      const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
++      data.mainContent = opensWithText ? tokens[first].text : "";
++      const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
++      return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
 +    }
-+    const tokens = lexer.listItemBlockTokens(content);
-+    const first = tokens.findIndex((token) => token.type !== "space");
-+    if (task && first !== -1 && tokens[first].type === "heading") {
-+      const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, "");
-+      tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) };
-+    }
-+    const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
-+    data.mainContent = opensWithText ? tokens[first].text : "";
-+    if (task && opensWithText) {
-+      data.mainContent = data.mainContent.replace(/^\[[ xX]\] +/, "");
-+    }
-+    const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
-+    return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
++    data.checked = read.checked;
++    data.mainContent = read.mainContent;
++    return config.createToken(data, read.nestedTokens.length > 0 ? read.nestedTokens : void 0);
 +  });
    return {
      items,
@@ -239,7 +272,7 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
    };
  }
 
-@@ -8642,6 +8710,7 @@ var Tracker = class {
+@@ -8642,6 +8733,7 @@ var Tracker = class {
    attrsEqual,
    callOrReturn,
    canInsertNode,
@@ -247,7 +280,7 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
    combineTransactionSteps,
    commands,
    createAtomBlockMarkdownSpec,
-@@ -8740,6 +8809,7 @@ var Tracker = class {
+@@ -8740,6 +8832,7 @@ var Tracker = class {
    markInputRule,
    markPasteRule,
    markdown,
@@ -255,8 +288,16 @@ index d828422b45e463c229bd937d39ea416278055dde..862aae712bc903ef89bf82afd7a14771
    marksEqual,
    mergeAttributes,
    mergeDeep,
+@@ -8749,6 +8842,7 @@ var Tracker = class {
+   objectIncludes,
+   parseAttributes,
+   parseIndentedBlocks,
++  readMarkdownTaskItem,
+   pasteRulesPlugin,
+   posToDOMRect,
+   removeDuplicates,
 diff --git a/dist/index.d.cts b/dist/index.d.cts
-index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371561da331 100644
+index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c57fe2335e 100644
 --- a/dist/index.d.cts
 +++ b/dist/index.d.cts
 @@ -2266,6 +2266,14 @@ type MarkdownLexerConfiguration = {
@@ -287,7 +328,7 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
      itemPattern: RegExp;
      /** Function to extract data from regex match */
      extractItemData: (match: RegExpMatchArray) => {
-@@ -5535,55 +5547,59 @@ interface BlockParserConfig {
+@@ -5535,55 +5547,84 @@ interface BlockParserConfig {
      };
      /** Function to create the final token */
      createToken: (data: any, nestedTokens?: any[]) => ParsedBlock;
@@ -300,9 +341,20 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
 +     * Whether an item's text starts with a task checkbox (`[ ]`, `[x]`), as
 +     * after a task item's bullet. A line the pattern matches whose text does
 +     * not, such as one with indented code after the bullet, is no such item.
++     */
++    checkbox?: boolean;
++    /**
++     * With `checkbox`, builds an item whose text holds no checkbox, from its
++     * source lines, its text and its blocks as marked lexes an item's, so a
++     * list of plain items and tasks is read in one pass by one reader. Without
++     * it such an item ends the list. A list with no task is left to marked.
       */
 -    customNestedParser?: (dedentedContent: string) => any[] | undefined;
-+    checkbox?: boolean;
++    createPlainToken?: (item: {
++        raw: string;
++        text: string;
++        tokens: any[];
++    }) => ParsedBlock;
  }
  /**
 - * Parses markdown text into hierarchical indented blocks with proper nesting.
@@ -375,11 +427,25 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
 +    indent: number;
 +};
 +/**
++ * A task item read from its text as `collectMarkdownListItem` gives it: whether
++ * it is checked, its first paragraph's text and the blocks after it, nested
++ * lists included; undefined when the text does not start with a checkbox.
++ * This is the one reader of a task item, whether its list holds only tasks or
++ * plain items too.
++ */
++declare function readMarkdownTaskItem(text: string, lexer: {
++    inlineTokens: (src: string) => any[];
++    listItemBlockTokens: (src: string) => any[];
++}): {
++    checked: boolean;
++    mainContent: string;
++    nestedTokens: any[];
++} | undefined;
++/**
 + * Parses a run of list items whose markers match `config.itemPattern`, each
-+ * item read as marked reads one (`collectMarkdownListItem`) and its content
-+ * lexed as marked lexes an item's (`lexer.listItemBlockTokens`): the item's
-+ * text is its first block when that is text, and the blocks after it, nested
-+ * lists included, are its nested tokens.
++ * item read as marked reads one (`collectMarkdownListItem`). A task item is
++ * read by `readMarkdownTaskItem`; with `config.createPlainToken`, a plain item
++ * keeps its blocks as marked lexes an item's (`lexer.listItemBlockTokens`).
   */
  declare function parseIndentedBlocks(src: string, config: BlockParserConfig, lexer: {
      inlineTokens: (src: string) => any[];
@@ -388,7 +454,7 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
  }): {
      items: ParsedBlock[];
      raw: string;
-@@ -5659,16 +5675,19 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
+@@ -5659,16 +5700,20 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
  type index_BlockMarkdownSpecOptions = BlockMarkdownSpecOptions;
  type index_BlockParserConfig = BlockParserConfig;
  type index_InlineMarkdownSpecOptions = InlineMarkdownSpecOptions;
@@ -401,22 +467,23 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
 +declare const index_markdownNextBulletRegex: typeof markdownNextBulletRegex;
  declare const index_parseAttributes: typeof parseAttributes;
  declare const index_parseIndentedBlocks: typeof parseIndentedBlocks;
++declare const index_readMarkdownTaskItem: typeof readMarkdownTaskItem;
  declare const index_renderNestedMarkdownContent: typeof renderNestedMarkdownContent;
  declare const index_serializeAttributes: typeof serializeAttributes;
  declare namespace index {
 -  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_ParsedBlock as ParsedBlock, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
-+  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_MarkdownListItemOptions as MarkdownListItemOptions, type index_ParsedBlock as ParsedBlock, index_collectMarkdownListItem as collectMarkdownListItem, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_markdownNextBulletRegex as markdownNextBulletRegex, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
++  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_MarkdownListItemOptions as MarkdownListItemOptions, type index_ParsedBlock as ParsedBlock, index_collectMarkdownListItem as collectMarkdownListItem, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_markdownNextBulletRegex as markdownNextBulletRegex, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_readMarkdownTaskItem as readMarkdownTaskItem, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
  }
 
  /**
-@@ -5712,4 +5731,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
+@@ -5712,4 +5757,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
      (value: any, replacer?: (number | string)[] | null, space?: string | number): string;
  }): T[];
 
 -export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
-+export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
++export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, readMarkdownTaskItem, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371561da331 100644
+index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c57fe2335e 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -2266,6 +2266,14 @@ type MarkdownLexerConfiguration = {
@@ -447,7 +514,7 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
      itemPattern: RegExp;
      /** Function to extract data from regex match */
      extractItemData: (match: RegExpMatchArray) => {
-@@ -5535,55 +5547,59 @@ interface BlockParserConfig {
+@@ -5535,55 +5547,84 @@ interface BlockParserConfig {
      };
      /** Function to create the final token */
      createToken: (data: any, nestedTokens?: any[]) => ParsedBlock;
@@ -460,9 +527,20 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
 +     * Whether an item's text starts with a task checkbox (`[ ]`, `[x]`), as
 +     * after a task item's bullet. A line the pattern matches whose text does
 +     * not, such as one with indented code after the bullet, is no such item.
++     */
++    checkbox?: boolean;
++    /**
++     * With `checkbox`, builds an item whose text holds no checkbox, from its
++     * source lines, its text and its blocks as marked lexes an item's, so a
++     * list of plain items and tasks is read in one pass by one reader. Without
++     * it such an item ends the list. A list with no task is left to marked.
       */
 -    customNestedParser?: (dedentedContent: string) => any[] | undefined;
-+    checkbox?: boolean;
++    createPlainToken?: (item: {
++        raw: string;
++        text: string;
++        tokens: any[];
++    }) => ParsedBlock;
  }
  /**
 - * Parses markdown text into hierarchical indented blocks with proper nesting.
@@ -535,11 +613,25 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
 +    indent: number;
 +};
 +/**
++ * A task item read from its text as `collectMarkdownListItem` gives it: whether
++ * it is checked, its first paragraph's text and the blocks after it, nested
++ * lists included; undefined when the text does not start with a checkbox.
++ * This is the one reader of a task item, whether its list holds only tasks or
++ * plain items too.
++ */
++declare function readMarkdownTaskItem(text: string, lexer: {
++    inlineTokens: (src: string) => any[];
++    listItemBlockTokens: (src: string) => any[];
++}): {
++    checked: boolean;
++    mainContent: string;
++    nestedTokens: any[];
++} | undefined;
++/**
 + * Parses a run of list items whose markers match `config.itemPattern`, each
-+ * item read as marked reads one (`collectMarkdownListItem`) and its content
-+ * lexed as marked lexes an item's (`lexer.listItemBlockTokens`): the item's
-+ * text is its first block when that is text, and the blocks after it, nested
-+ * lists included, are its nested tokens.
++ * item read as marked reads one (`collectMarkdownListItem`). A task item is
++ * read by `readMarkdownTaskItem`; with `config.createPlainToken`, a plain item
++ * keeps its blocks as marked lexes an item's (`lexer.listItemBlockTokens`).
   */
  declare function parseIndentedBlocks(src: string, config: BlockParserConfig, lexer: {
      inlineTokens: (src: string) => any[];
@@ -548,7 +640,7 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
  }): {
      items: ParsedBlock[];
      raw: string;
-@@ -5659,16 +5675,19 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
+@@ -5659,16 +5700,20 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
  type index_BlockMarkdownSpecOptions = BlockMarkdownSpecOptions;
  type index_BlockParserConfig = BlockParserConfig;
  type index_InlineMarkdownSpecOptions = InlineMarkdownSpecOptions;
@@ -561,25 +653,26 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..b27c97ffd73c13f63e93fe8f1373c371
 +declare const index_markdownNextBulletRegex: typeof markdownNextBulletRegex;
  declare const index_parseAttributes: typeof parseAttributes;
  declare const index_parseIndentedBlocks: typeof parseIndentedBlocks;
++declare const index_readMarkdownTaskItem: typeof readMarkdownTaskItem;
  declare const index_renderNestedMarkdownContent: typeof renderNestedMarkdownContent;
  declare const index_serializeAttributes: typeof serializeAttributes;
  declare namespace index {
 -  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_ParsedBlock as ParsedBlock, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
-+  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_MarkdownListItemOptions as MarkdownListItemOptions, type index_ParsedBlock as ParsedBlock, index_collectMarkdownListItem as collectMarkdownListItem, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_markdownNextBulletRegex as markdownNextBulletRegex, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
++  export { type index_AllowedAttribute as AllowedAttribute, type index_AtomBlockMarkdownSpecOptions as AtomBlockMarkdownSpecOptions, type index_BlockMarkdownSpecOptions as BlockMarkdownSpecOptions, type index_BlockParserConfig as BlockParserConfig, type index_InlineMarkdownSpecOptions as InlineMarkdownSpecOptions, type index_MarkdownListItemOptions as MarkdownListItemOptions, type index_ParsedBlock as ParsedBlock, index_collectMarkdownListItem as collectMarkdownListItem, index_createAtomBlockMarkdownSpec as createAtomBlockMarkdownSpec, index_createBlockMarkdownSpec as createBlockMarkdownSpec, index_createInlineMarkdownSpec as createInlineMarkdownSpec, index_markdownNextBulletRegex as markdownNextBulletRegex, index_parseAttributes as parseAttributes, index_parseIndentedBlocks as parseIndentedBlocks, index_readMarkdownTaskItem as readMarkdownTaskItem, index_renderNestedMarkdownContent as renderNestedMarkdownContent, index_serializeAttributes as serializeAttributes };
  }
 
  /**
-@@ -5712,4 +5731,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
+@@ -5712,4 +5757,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
      (value: any, replacer?: (number | string)[] | null, space?: string | number): string;
  }): T[];
 
 -export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
-+export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
++export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, readMarkdownTaskItem, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 diff --git a/dist/index.js b/dist/index.js
-index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650b73eb2fb 100644
+index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387275cbbcf 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -4240,9 +4240,11 @@ function isString(value) {
+@@ -4240,11 +4240,14 @@ function isString(value) {
  // src/utilities/markdown/index.ts
  var markdown_exports = {};
  __export(markdown_exports, {
@@ -590,8 +683,11 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
 +  markdownNextBulletRegex: () => markdownNextBulletRegex,
    parseAttributes: () => parseAttributes,
    parseIndentedBlocks: () => parseIndentedBlocks,
++  readMarkdownTaskItem: () => readMarkdownTaskItem,
    renderNestedMarkdownContent: () => renderNestedMarkdownContent,
-@@ -4626,84 +4628,148 @@ function createInlineMarkdownSpec(options) {
+   serializeAttributes: () => serializeAttributes
+ });
+@@ -4626,84 +4629,169 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
@@ -682,6 +778,28 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
 +function asParagraph(token) {
 +  return token.type === "text" && token.tokens ? { ...token, type: "paragraph" } : token;
 +}
++const THEMATIC_BREAK = /^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/;
++const TASK_CHECKBOX = /^\[([ xX])\](?=[ \n]|$)/;
++function readMarkdownTaskItem(text, lexer) {
++  const checkbox = TASK_CHECKBOX.exec(text);
++  if (checkbox === null) {
++    return void 0;
++  }
++  const task = /^\[[ xX]\] +[^ \t\n]/.test(text);
++  const tokens = lexer.listItemBlockTokens(task ? text : text.replace(/^\[[ xX]\] */, ""));
++  const first = tokens.findIndex((token) => token.type !== "space");
++  if (task && first !== -1 && tokens[first].type === "heading") {
++    const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, "");
++    tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) };
++  }
++  const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
++  const firstText = opensWithText ? tokens[first].text : "";
++  return {
++    checked: checkbox[1].toLowerCase() === "x",
++    mainContent: task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText,
++    nestedTokens: tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph)
++  };
++}
  function parseIndentedBlocks(src, config, lexer) {
 -  var _a, _b, _c, _d;
    const lines = src.split("\n");
@@ -693,14 +811,16 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
 -  const baseIndentSize = config.baseIndentSize || 2;
    while (i < lines.length) {
      const currentLine = lines[i];
-     const itemMatch = currentLine.match(config.itemPattern);
+-    const itemMatch = currentLine.match(config.itemPattern);
 -    if (!itemMatch) {
 -      if (items.length > 0) {
++    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern);
 +    const markerEnd = itemMatch ? (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length : 0;
 +    const item = itemMatch ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
 +      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line)
 +    }) : void 0;
-+    if (!itemMatch || !item || config.checkbox && !/^\[[ xX]\](?=[ \n]|$)/.test(item.text)) {
++    const task = item !== void 0 && (!config.checkbox || TASK_CHECKBOX.test(item.text));
++    if (!itemMatch || !item || !task && config.createPlainToken === void 0) {
 +      if (found.length > 0) {
          break;
 -      } else if (currentLine.trim() === "") {
@@ -762,36 +882,34 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
 -    }
 -    const token = config.createToken(itemData, nestedTokens);
 -    items.push(token);
-+    found.push({ match: itemMatch, text: item.text });
++    found.push({ match: itemMatch, text: item.text, raw: lines.slice(i, item.end).join("\n"), task });
 +    i = item.end;
 +    consumed = i;
    }
 -  if (items.length === 0) {
-+  if (found.length === 0) {
++  if (!found.some((item) => item.task)) {
      return void 0;
    }
 +  const last = found[found.length - 1];
 +  last.text = last.text.replace(/[ \t\n]+$/, "");
-+  const items = found.map(({ match, text }) => {
++  last.raw = last.raw.replace(/[ \t\n]+$/, "");
++  const items = found.map(({ match, text, raw, task }) => {
++    if (!task && config.createPlainToken !== void 0) {
++      return config.createPlainToken({ raw, text, tokens: lexer.listItemBlockTokens(text) });
++    }
 +    const data = config.extractItemData(match);
-+    let content = text;
-+    const task = config.checkbox === true && /^\[[ xX]\] +[^ \t\n]/.test(content);
-+    if (config.checkbox && !task) {
-+      content = content.replace(/^\[[ xX]\] */, "");
++    const read = config.checkbox ? readMarkdownTaskItem(text, lexer) : void 0;
++    if (read === void 0) {
++      const tokens = lexer.listItemBlockTokens(text);
++      const first = tokens.findIndex((token) => token.type !== "space");
++      const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
++      data.mainContent = opensWithText ? tokens[first].text : "";
++      const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
++      return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
 +    }
-+    const tokens = lexer.listItemBlockTokens(content);
-+    const first = tokens.findIndex((token) => token.type !== "space");
-+    if (task && first !== -1 && tokens[first].type === "heading") {
-+      const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, "");
-+      tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) };
-+    }
-+    const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
-+    data.mainContent = opensWithText ? tokens[first].text : "";
-+    if (task && opensWithText) {
-+      data.mainContent = data.mainContent.replace(/^\[[ xX]\] +/, "");
-+    }
-+    const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
-+    return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
++    data.checked = read.checked;
++    data.mainContent = read.mainContent;
++    return config.createToken(data, read.nestedTokens.length > 0 ? read.nestedTokens : void 0);
 +  });
    return {
      items,
@@ -800,7 +918,7 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
    };
  }
 
-@@ -8479,6 +8545,7 @@ export {
+@@ -8479,6 +8567,7 @@ export {
    attrsEqual,
    callOrReturn,
    canInsertNode,
@@ -808,7 +926,7 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
    combineTransactionSteps,
    commands_exports as commands,
    createAtomBlockMarkdownSpec,
-@@ -8577,6 +8644,7 @@ export {
+@@ -8577,6 +8666,7 @@ export {
    markInputRule,
    markPasteRule,
    markdown_exports as markdown,
@@ -816,6 +934,14 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..fa068f6834f4db600022c6d3a68a4650
    marksEqual,
    mergeAttributes,
    mergeDeep,
+@@ -8586,6 +8676,7 @@ export {
+   objectIncludes,
+   parseAttributes,
+   parseIndentedBlocks,
++  readMarkdownTaskItem,
+   pasteRulesPlugin,
+   posToDOMRect,
+   removeDuplicates,
 diff --git a/src/types.ts b/src/types.ts
 index 0fdbb9f8a835b3bb43310ce5ebc1ef4b10595558..b87796beeed9e3839aad8ec21d6b43f4b90dc71a 100644
 --- a/src/types.ts
@@ -837,7 +963,7 @@ index 0fdbb9f8a835b3bb43310ce5ebc1ef4b10595558..b87796beeed9e3839aad8ec21d6b43f4
 
  /** Custom tokenizer function for marked.js extensions */
 diff --git a/src/utilities/markdown/parseIndentedBlocks.ts b/src/utilities/markdown/parseIndentedBlocks.ts
-index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860db29ec61 100644
+index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7f860c898 100644
 --- a/src/utilities/markdown/parseIndentedBlocks.ts
 +++ b/src/utilities/markdown/parseIndentedBlocks.ts
 @@ -17,7 +17,11 @@ export interface ParsedBlock {
@@ -853,7 +979,7 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
    itemPattern: RegExp
    /** Function to extract data from regex match */
    extractItemData: (match: RegExpMatchArray) => {
-@@ -27,52 +31,191 @@ export interface BlockParserConfig {
+@@ -27,52 +31,256 @@ export interface BlockParserConfig {
    }
    /** Function to create the final token */
    createToken: (data: any, nestedTokens?: any[]) => ParsedBlock
@@ -866,9 +992,16 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
 +   * Whether an item's text starts with a task checkbox (`[ ]`, `[x]`), as
 +   * after a task item's bullet. A line the pattern matches whose text does
 +   * not, such as one with indented code after the bullet, is no such item.
++   */
++  checkbox?: boolean
++  /**
++   * With `checkbox`, builds an item whose text holds no checkbox, from its
++   * source lines, its text and its blocks as marked lexes an item's, so a
++   * list of plain items and tasks is read in one pass by one reader. Without
++   * it such an item ends the list. A list with no task is left to marked.
     */
 -  customNestedParser?: (dedentedContent: string) => any[] | undefined
-+  checkbox?: boolean
++  createPlainToken?: (item: { raw: string; text: string; tokens: any[] }) => ParsedBlock
  }
 
  /**
@@ -889,24 +1022,6 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
 - * @param config - Configuration object defining how to parse and create tokens
 - * @param lexer - Markdown lexer for parsing nested content
 - * @returns Parsed result with hierarchical items, or undefined if no matches
-- *
-- * @example
-- * ```ts
-- * const result = parseIndentedBlocks(src, {
-- *   itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-- *   extractItemData: (match) => ({
-- *     indentLevel: match[1].length,
-- *     mainContent: match[4],
-- *     checked: match[3].toLowerCase() === 'x'
-- *   }),
-- *   createToken: (data, nestedTokens) => ({
-- *     type: 'taskItem',
-- *     checked: data.checked,
-- *     text: data.mainContent,
-- *     nestedTokens
-- *   })
-- * }, lexer)
-- * ```
 + * Whether a line is blank: spaces and tabs only, as CommonMark defines it.
 + * marked tests `!line.trim()`, which also counts a line of no-break spaces as
 + * blank and then drops them; that is the one place this port departs from it.
@@ -1078,15 +1193,90 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
 +}
 +
 +/**
++ * marked's thematic break (`rules.ts`, `hr`): a line that would match a list
++ * marker but is a rule, which ends the list (Tokenizer.ts:264).
++ */
++const THEMATIC_BREAK = /^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/
++
++/**
++ * A task item's checkbox at the start of its text: `[ ]`, `[x]` or `[X]`,
++ * then a space, a line break or the end.
++ */
++const TASK_CHECKBOX = /^\[([ xX])\](?=[ \n]|$)/
++
++/**
++ * A task item read from its text as `collectMarkdownListItem` gives it: whether
++ * it is checked, its first paragraph's text and the blocks after it, nested
++ * lists included; undefined when the text does not start with a checkbox.
++ * This is the one reader of a task item, whether its list holds only tasks or
++ * plain items too.
+  *
+- * @example
+- * ```ts
+- * const result = parseIndentedBlocks(src, {
+- *   itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
+- *   extractItemData: (match) => ({
+- *     indentLevel: match[1].length,
+- *     mainContent: match[4],
+- *     checked: match[3].toLowerCase() === 'x'
+- *   }),
+- *   createToken: (data, nestedTokens) => ({
+- *     type: 'taskItem',
+- *     checked: data.checked,
+- *     text: data.mainContent,
+- *     nestedTokens
+- *   })
+- * }, lexer)
+- * ```
++ * Tokenizer.ts 391, 415-421: the checkbox is lexed with the text, so that text
++ * is never read as a block of its own, and taken off the first block after.
++ * Text after the checkbox's space may start with a no-break space, which
++ * marked's `\S` refuses: a task whose text starts with one is written so. An
++ * item whose first line holds the checkbox alone, which marked would not read
++ * as a task, loses it before its content is lexed.
++ */
++export function readMarkdownTaskItem(
++  text: string,
++  lexer: {
++    inlineTokens: (src: string) => any[]
++    listItemBlockTokens: (src: string) => any[]
++  },
++): { checked: boolean; mainContent: string; nestedTokens: any[] } | undefined {
++  const checkbox = TASK_CHECKBOX.exec(text)
++  if (checkbox === null) {
++    return undefined
++  }
++  const task = /^\[[ xX]\] +[^ \t\n]/.test(text)
++  const tokens = lexer.listItemBlockTokens(task ? text : text.replace(/^\[[ xX]\] */, ''))
++  const first = tokens.findIndex(token => token.type !== 'space')
++  // marked leaves the checkbox in the text of a setext heading the first
++  // line opens; it is the item's state, not its text, so it goes there too.
++  if (task && first !== -1 && tokens[first].type === 'heading') {
++    const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, '')
++    tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) }
++  }
++  const opensWithText =
++    first !== -1 && (tokens[first].type === 'text' || tokens[first].type === 'paragraph')
++  const firstText: string = opensWithText ? tokens[first].text : ''
++  return {
++    checked: checkbox[1].toLowerCase() === 'x',
++    mainContent: task ? firstText.replace(/^\[[ xX]\] +/, '') : firstText,
++    nestedTokens: tokens
++      .slice(opensWithText ? first + 1 : Math.max(first, 0))
++      .filter(token => first !== -1 || token.type !== 'space')
++      .map(asParagraph),
++  }
++}
++
++/**
 + * Parses a run of list items whose markers match `config.itemPattern`, each
-+ * item read as marked reads one (`collectMarkdownListItem`) and its content
-+ * lexed as marked lexes an item's (`lexer.listItemBlockTokens`): the item's
-+ * text is its first block when that is text, and the blocks after it, nested
-+ * lists included, are its nested tokens.
++ * item read as marked reads one (`collectMarkdownListItem`). A task item is
++ * read by `readMarkdownTaskItem`; with `config.createPlainToken`, a plain item
++ * keeps its blocks as marked lexes an item's (`lexer.listItemBlockTokens`).
   */
  export function parseIndentedBlocks(
    src: string,
-@@ -80,6 +223,7 @@ export function parseIndentedBlocks(
+@@ -80,6 +288,7 @@ export function parseIndentedBlocks(
    lexer: {
      inlineTokens: (src: string) => any[]
      blockTokens: (src: string) => any[]
@@ -1094,29 +1284,31 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
    },
  ):
    | {
-@@ -88,107 +232,83 @@ export function parseIndentedBlocks(
+@@ -88,107 +297,75 @@ export function parseIndentedBlocks(
      }
    | undefined {
    const lines = src.split('\n')
 -  const items: ParsedBlock[] = []
 -  let totalRaw = ''
-+  const found: Array<{ match: RegExpMatchArray; text: string }> = []
++  const found: Array<{ match: RegExpMatchArray; text: string; raw: string; task: boolean }> = []
 +  let consumed = 0
    let i = 0
 -  const baseIndentSize = config.baseIndentSize || 2
 
    while (i < lines.length) {
      const currentLine = lines[i]
-     const itemMatch = currentLine.match(config.itemPattern)
+-    const itemMatch = currentLine.match(config.itemPattern)
++    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern)
 +    const markerEnd = itemMatch ? (itemMatch[1] ?? '').length + (itemMatch[2] ?? '').length : 0
 +    const item = itemMatch
 +      ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
 +          endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line),
 +        })
 +      : undefined
++    const task = item !== undefined && (!config.checkbox || TASK_CHECKBOX.test(item.text))
 
 -    if (!itemMatch) {
-+    if (!itemMatch || !item || (config.checkbox && !/^\[[ xX]\](?=[ \n]|$)/.test(item.text))) {
++    if (!itemMatch || !item || (!task && config.createPlainToken === undefined)) {
        // Not a matching item - stop if we have items, otherwise this isn't our block type
 -      if (items.length > 0) {
 +      if (found.length > 0) {
@@ -1202,13 +1394,14 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
 -    // Create the token using the provided factory function
 -    const token = config.createToken(itemData, nestedTokens)
 -    items.push(token)
-+    found.push({ match: itemMatch, text: item.text })
++    found.push({ match: itemMatch, text: item.text, raw: lines.slice(i, item.end).join('\n'), task })
 +    i = item.end
 +    consumed = i
    }
 
 -  if (items.length === 0) {
-+  if (found.length === 0) {
++  // A list with no task is marked's own; it is left before anything is lexed.
++  if (!found.some(item => item.task)) {
      return undefined
    }
 
@@ -1217,39 +1410,29 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..f532f8b1adea777effb369131c398860
 +  // `trimEnd` would take a no-break space too).
 +  const last = found[found.length - 1]
 +  last.text = last.text.replace(/[ \t\n]+$/, '')
++  last.raw = last.raw.replace(/[ \t\n]+$/, '')
 +
-+  const items = found.map(({ match, text }) => {
++  const items = found.map(({ match, text, raw, task }) => {
++    if (!task && config.createPlainToken !== undefined) {
++      return config.createPlainToken({ raw, text, tokens: lexer.listItemBlockTokens(text) })
++    }
 +    const data = config.extractItemData(match)
-+    let content = text
-+    // 391, 415-421: a task item's checkbox is lexed with its text, so that
-+    // text is never read as a block of its own, and taken off the first
-+    // block after; an item whose first line holds the checkbox alone, which
-+    // marked would not read as a task, loses it before its content is lexed.
-+    // Text after the checkbox's space may start with a no-break space, which
-+    // marked's `\S` refuses: a task whose text starts with one is written so.
-+    const task = config.checkbox === true && /^\[[ xX]\] +[^ \t\n]/.test(content)
-+    if (config.checkbox && !task) {
-+      content = content.replace(/^\[[ xX]\] */, '')
++    const read = config.checkbox ? readMarkdownTaskItem(text, lexer) : undefined
++    if (read === undefined) {
++      const tokens = lexer.listItemBlockTokens(text)
++      const first = tokens.findIndex(token => token.type !== 'space')
++      const opensWithText =
++        first !== -1 && (tokens[first].type === 'text' || tokens[first].type === 'paragraph')
++      data.mainContent = opensWithText ? tokens[first].text : ''
++      const nestedTokens = tokens
++        .slice(opensWithText ? first + 1 : Math.max(first, 0))
++        .filter(token => first !== -1 || token.type !== 'space')
++        .map(asParagraph)
++      return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : undefined)
 +    }
-+    const tokens = lexer.listItemBlockTokens(content)
-+    const first = tokens.findIndex(token => token.type !== 'space')
-+    // marked leaves the checkbox in the text of a setext heading the first
-+    // line opens; it is the item's state, not its text, so it goes there too.
-+    if (task && first !== -1 && tokens[first].type === 'heading') {
-+      const headingText = tokens[first].text.replace(/^\[[ xX]\] +/, '')
-+      tokens[first] = { ...tokens[first], text: headingText, tokens: lexer.inlineTokens(headingText) }
-+    }
-+    const opensWithText =
-+      first !== -1 && (tokens[first].type === 'text' || tokens[first].type === 'paragraph')
-+    data.mainContent = opensWithText ? tokens[first].text : ''
-+    if (task && opensWithText) {
-+      data.mainContent = data.mainContent.replace(/^\[[ xX]\] +/, '')
-+    }
-+    const nestedTokens = tokens
-+      .slice(opensWithText ? first + 1 : Math.max(first, 0))
-+      .filter(token => first !== -1 || token.type !== 'space')
-+      .map(asParagraph)
-+    return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : undefined)
++    data.checked = read.checked
++    data.mainContent = read.mainContent
++    return config.createToken(data, read.nestedTokens.length > 0 ? read.nestedTokens : undefined)
 +  })
 +
    return {

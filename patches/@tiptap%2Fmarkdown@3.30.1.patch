@@ -1,25 +1,8 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..7972d245976172d775f0b93e3e1836b05ac95181 100644
+index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..963d67cb12a32c825b8ed47fb78ac3511e9c072a 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -115,7 +115,15 @@ function reopenMarksAfterNode(marksToReopen, activeMarks, getMarkOpening) {
- }
- function isTaskItem(item) {
-   const raw = item.raw || item.text || "";
--  const match = raw.match(/^(\s*)[-+*]\s+\[([ xX])\]\s+/);
-+  if (typeof item.task === "boolean") {
-+    const indentLevel = raw.match(/^[ \t]*/)[0].length;
-+    if (item.task) {
-+      return { isTask: true, checked: item.checked === true, indentLevel };
-+    }
-+    const box = (item.text || "").match(/^\[([ xX])\] +[^ \t\n]/);
-+    return box ? { isTask: true, checked: box[1].toLowerCase() === "x", indentLevel } : { isTask: false, indentLevel: 0 };
-+  }
-+  const match = raw.match(/^([ \t]*)[-+*][ \t]+\[([ xX])\] +[^ \t\n]/);
-   if (match) {
-     return { isTask: true, checked: match[2].toLowerCase() === "x", indentLevel: match[1].length };
-   }
-@@ -293,6 +301,15 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
+@@ -293,6 +293,15 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
  }
 
  // src/MarkdownManager.ts
@@ -35,7 +18,7 @@ index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..7972d245976172d775f0b93e3e1836b0
  var MarkdownManager = class {
    /**
     * Create a MarkdownManager.
-@@ -410,7 +427,8 @@ var MarkdownManager = class {
+@@ -410,7 +419,8 @@ var MarkdownManager = class {
    createTokenizerHelpers(lexer) {
      return {
        inlineTokens: (src) => lexer.inlineTokens(src),
@@ -45,10 +28,24 @@ index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..7972d245976172d775f0b93e3e1836b0
      };
    }
    tokenizeInline(src) {
-@@ -633,33 +651,21 @@ var MarkdownManager = class {
-       const { isTask, checked, indentLevel } = isTaskItem(item);
-       let processedItem = item;
-       if (isTask) {
+@@ -620,8 +630,8 @@ var MarkdownManager = class {
+     if (!token.items || token.items.length === 0) {
+       return this.parseTokenWithHandlers(token);
+     }
+-    const hasTask = token.items.some((item) => isTaskItem(item).isTask);
+-    const hasNonTask = token.items.some((item) => !isTaskItem(item).isTask);
++    const hasTask = token.items.some((item) => item.type === "taskItem");
++    const hasNonTask = token.items.some((item) => item.type !== "taskItem");
+     if (!hasTask || !hasNonTask || this.getHandlersForToken("taskList").length === 0) {
+       return this.parseTokenWithHandlers(token);
+     }
+@@ -630,48 +640,8 @@ var MarkdownManager = class {
+     let currentType = null;
+     for (let i = 0; i < token.items.length; i += 1) {
+       const item = token.items[i];
+-      const { isTask, checked, indentLevel } = isTaskItem(item);
+-      let processedItem = item;
+-      if (isTask) {
 -        const raw = item.raw || item.text || "";
 -        const lines = raw.split("\n");
 -        const firstLineMatch = lines[0].match(/^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/);
@@ -76,25 +73,24 @@ index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..7972d245976172d775f0b93e3e1836b0
 -              }
 -            }
 -          }
-+        const blocks = (item.tokens || []).filter((block) => block.type !== "checkbox");
-+        const first = blocks.findIndex((block) => block.type !== "space");
-+        const opensWithText = first !== -1 && (blocks[first].type === "text" || blocks[first].type === "paragraph");
-+        const firstText = opensWithText ? blocks[first].text : "";
-+        const mainContent = item.loose || !item.task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText;
-+        const nestedTokens = blocks.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((block) => first !== -1 || block.type !== "space").map(
-+          (block) => block.type === "text" && block.tokens ? { ...block, type: "paragraph" } : block
-+        );
-+        if (mainContent === "" && nestedTokens.length > 0 && nestedTokens[0].type === "heading") {
-+          const headingText = (nestedTokens[0].text || "").replace(/^\[[ xX]\] +/, "");
-+          nestedTokens[0] = {
-+            ...nestedTokens[0],
-+            text: headingText,
-+            tokens: this.tokenizeInline(headingText)
-+          };
-         }
-         processedItem = {
-           type: "taskItem",
-@@ -1098,7 +1104,7 @@ var MarkdownManager = class {
+-        }
+-        processedItem = {
+-          type: "taskItem",
+-          raw: "",
+-          mainContent,
+-          indentLevel,
+-          checked: checked != null ? checked : false,
+-          text: mainContent,
+-          tokens: this.tokenizeInline(mainContent),
+-          nestedTokens
+-        };
+-      }
++      const isTask = item.type === "taskItem";
++      const processedItem = item;
+       const itemType = isTask ? "taskList" : "list";
+       if (currentType !== itemType) {
+         if (currentGroup.length > 0) {
+@@ -1098,7 +1068,7 @@ var MarkdownManager = class {
     *   // → { type: 'paragraph', content: [{ type: 'text', text: '<enter foo>' }] }
     */
    htmlAsLiteralText(html, isBlock) {
@@ -104,27 +100,10 @@ index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..7972d245976172d775f0b93e3e1836b0
        return null;
      }
 diff --git a/dist/index.js b/dist/index.js
-index 2626d82021300047fc9e46ba99487097719f8ef9..509327e3833ea900fc153fd18f2f1d9cf8e675ed 100644
+index 2626d82021300047fc9e46ba99487097719f8ef9..aab8b129c404148b57f05ec97b36df7ae0664c38 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -115,7 +115,15 @@ function reopenMarksAfterNode(marksToReopen, activeMarks, getMarkOpening) {
- }
- function isTaskItem(item) {
-   const raw = item.raw || item.text || "";
--  const match = raw.match(/^(\s*)[-+*]\s+\[([ xX])\]\s+/);
-+  if (typeof item.task === "boolean") {
-+    const indentLevel = raw.match(/^[ \t]*/)[0].length;
-+    if (item.task) {
-+      return { isTask: true, checked: item.checked === true, indentLevel };
-+    }
-+    const box = (item.text || "").match(/^\[([ xX])\] +[^ \t\n]/);
-+    return box ? { isTask: true, checked: box[1].toLowerCase() === "x", indentLevel } : { isTask: false, indentLevel: 0 };
-+  }
-+  const match = raw.match(/^([ \t]*)[-+*][ \t]+\[([ xX])\] +[^ \t\n]/);
-   if (match) {
-     return { isTask: true, checked: match[2].toLowerCase() === "x", indentLevel: match[1].length };
-   }
-@@ -293,6 +301,15 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
+@@ -293,6 +293,15 @@ function htmlContainsUnrecognizedTag(html, schemaTags) {
  }
 
  // src/MarkdownManager.ts
@@ -140,7 +119,7 @@ index 2626d82021300047fc9e46ba99487097719f8ef9..509327e3833ea900fc153fd18f2f1d9c
  var MarkdownManager = class {
    /**
     * Create a MarkdownManager.
-@@ -410,7 +427,8 @@ var MarkdownManager = class {
+@@ -410,7 +419,8 @@ var MarkdownManager = class {
    createTokenizerHelpers(lexer) {
      return {
        inlineTokens: (src) => lexer.inlineTokens(src),
@@ -150,10 +129,24 @@ index 2626d82021300047fc9e46ba99487097719f8ef9..509327e3833ea900fc153fd18f2f1d9c
      };
    }
    tokenizeInline(src) {
-@@ -633,33 +651,21 @@ var MarkdownManager = class {
-       const { isTask, checked, indentLevel } = isTaskItem(item);
-       let processedItem = item;
-       if (isTask) {
+@@ -620,8 +630,8 @@ var MarkdownManager = class {
+     if (!token.items || token.items.length === 0) {
+       return this.parseTokenWithHandlers(token);
+     }
+-    const hasTask = token.items.some((item) => isTaskItem(item).isTask);
+-    const hasNonTask = token.items.some((item) => !isTaskItem(item).isTask);
++    const hasTask = token.items.some((item) => item.type === "taskItem");
++    const hasNonTask = token.items.some((item) => item.type !== "taskItem");
+     if (!hasTask || !hasNonTask || this.getHandlersForToken("taskList").length === 0) {
+       return this.parseTokenWithHandlers(token);
+     }
+@@ -630,48 +640,8 @@ var MarkdownManager = class {
+     let currentType = null;
+     for (let i = 0; i < token.items.length; i += 1) {
+       const item = token.items[i];
+-      const { isTask, checked, indentLevel } = isTaskItem(item);
+-      let processedItem = item;
+-      if (isTask) {
 -        const raw = item.raw || item.text || "";
 -        const lines = raw.split("\n");
 -        const firstLineMatch = lines[0].match(/^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/);
@@ -181,25 +174,24 @@ index 2626d82021300047fc9e46ba99487097719f8ef9..509327e3833ea900fc153fd18f2f1d9c
 -              }
 -            }
 -          }
-+        const blocks = (item.tokens || []).filter((block) => block.type !== "checkbox");
-+        const first = blocks.findIndex((block) => block.type !== "space");
-+        const opensWithText = first !== -1 && (blocks[first].type === "text" || blocks[first].type === "paragraph");
-+        const firstText = opensWithText ? blocks[first].text : "";
-+        const mainContent = item.loose || !item.task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText;
-+        const nestedTokens = blocks.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((block) => first !== -1 || block.type !== "space").map(
-+          (block) => block.type === "text" && block.tokens ? { ...block, type: "paragraph" } : block
-+        );
-+        if (mainContent === "" && nestedTokens.length > 0 && nestedTokens[0].type === "heading") {
-+          const headingText = (nestedTokens[0].text || "").replace(/^\[[ xX]\] +/, "");
-+          nestedTokens[0] = {
-+            ...nestedTokens[0],
-+            text: headingText,
-+            tokens: this.tokenizeInline(headingText)
-+          };
-         }
-         processedItem = {
-           type: "taskItem",
-@@ -1098,7 +1104,7 @@ var MarkdownManager = class {
+-        }
+-        processedItem = {
+-          type: "taskItem",
+-          raw: "",
+-          mainContent,
+-          indentLevel,
+-          checked: checked != null ? checked : false,
+-          text: mainContent,
+-          tokens: this.tokenizeInline(mainContent),
+-          nestedTokens
+-        };
+-      }
++      const isTask = item.type === "taskItem";
++      const processedItem = item;
+       const itemType = isTask ? "taskList" : "list";
+       if (currentType !== itemType) {
+         if (currentGroup.length > 0) {
+@@ -1098,7 +1068,7 @@ var MarkdownManager = class {
     *   // → { type: 'paragraph', content: [{ type: 'text', text: '<enter foo>' }] }
     */
    htmlAsLiteralText(html, isBlock) {
@@ -209,10 +201,16 @@ index 2626d82021300047fc9e46ba99487097719f8ef9..509327e3833ea900fc153fd18f2f1d9c
        return null;
      }
 diff --git a/src/MarkdownManager.ts b/src/MarkdownManager.ts
-index f5478f13e769850a5b3ffeeb60c41a0f6704e441..415fa6d8bbc25b144d7336ffa602bb1613395e47 100644
+index f5478f13e769850a5b3ffeeb60c41a0f6704e441..b7bb0da453baff3fef657f6303615fbc531aaa25 100644
 --- a/src/MarkdownManager.ts
 +++ b/src/MarkdownManager.ts
-@@ -35,6 +35,23 @@ import {
+@@ -29,12 +29,28 @@ import {
+   findMarksToClose,
+   findMarksToCloseAtEnd,
+   findMarksToOpen,
+-  isTaskItem,
+   reopenMarksAfterNode,
+   wrapInMarkdownBlock,
  } from './utils.js'
  import { htmlContainsUnrecognizedTag } from './utils/htmlTagDetection.js'
 
@@ -236,7 +234,7 @@ index f5478f13e769850a5b3ffeeb60c41a0f6704e441..415fa6d8bbc25b144d7336ffa602bb16
  export class MarkdownManager {
    private markedInstance: typeof marked
    private activeParseLexer: Lexer | null = null
-@@ -201,6 +218,7 @@ export class MarkdownManager {
+@@ -201,6 +217,7 @@ export class MarkdownManager {
      return {
        inlineTokens: (src: string) => lexer.inlineTokens(src),
        blockTokens: (src: string) => lexer.blockTokens(src),
@@ -244,10 +242,29 @@ index f5478f13e769850a5b3ffeeb60c41a0f6704e441..415fa6d8bbc25b144d7336ffa602bb16
      }
    }
 
-@@ -522,45 +540,31 @@ export class MarkdownManager {
-       let processedItem = item
+@@ -498,8 +515,12 @@ export class MarkdownManager {
+       return this.parseTokenWithHandlers(token)
+     }
 
-       if (isTask) {
+-    const hasTask = token.items.some(item => isTaskItem(item).isTask)
+-    const hasNonTask = token.items.some(item => !isTaskItem(item).isTask)
++    // The task-list tokenizer reads every bullet list that holds a task, so
++    // its task items arrive already read (`readMarkdownTaskItem`); marked's
++    // own list holds a task item only when no task list is registered, and
++    // then nothing is split.
++    const hasTask = token.items.some(item => item.type === 'taskItem')
++    const hasNonTask = token.items.some(item => item.type !== 'taskItem')
+
+     if (!hasTask || !hasNonTask || this.getHandlersForToken('taskList').length === 0) {
+       // Not mixed or no taskList extension, parse normally
+@@ -518,63 +539,8 @@ export class MarkdownManager {
+
+     for (let i = 0; i < token.items.length; i += 1) {
+       const item = token.items[i]
+-      const { isTask, checked, indentLevel } = isTaskItem(item)
+-      let processedItem = item
+-
+-      if (isTask) {
 -        // Transform list_item into taskItem token
 -        const raw = item.raw || item.text || ''
 -
@@ -287,35 +304,26 @@ index f5478f13e769850a5b3ffeeb60c41a0f6704e441..415fa6d8bbc25b144d7336ffa602bb16
 -                nestedTokens = this.markedInstance.lexer(`${nestedContent}\n`)
 -              }
 -            }
-+        // marked's list tokenizer has read the item and lexed its content
-+        // (Tokenizer.ts:413-453): the first block is the item's text, the
-+        // checkbox taken off it, and the blocks after it are nested content.
-+        // In a loose list marked puts the checkbox's text back in front of the
-+        // first paragraph, it never takes it off a setext heading, and it
-+        // leaves it on an item it did not read as a task (`isTaskItem`).
-+        const blocks = (item.tokens || []).filter(block => block.type !== 'checkbox')
-+        const first = blocks.findIndex(block => block.type !== 'space')
-+        const opensWithText =
-+          first !== -1 && (blocks[first].type === 'text' || blocks[first].type === 'paragraph')
-+        const firstText: string = opensWithText ? blocks[first].text : ''
-+        const mainContent =
-+          item.loose || !item.task ? firstText.replace(/^\[[ xX]\] +/, '') : firstText
-+        const nestedTokens: MarkdownToken[] = blocks
-+          .slice(opensWithText ? first + 1 : Math.max(first, 0))
-+          .filter(block => first !== -1 || block.type !== 'space')
-+          .map(block =>
-+            block.type === 'text' && block.tokens ? { ...block, type: 'paragraph' } : block,
-+          )
-+        if (mainContent === '' && nestedTokens[0]?.type === 'heading') {
-+          const headingText = (nestedTokens[0].text || '').replace(/^\[[ xX]\] +/, '')
-+          nestedTokens[0] = {
-+            ...nestedTokens[0],
-+            text: headingText,
-+            tokens: this.tokenizeInline(headingText),
-           }
-         }
+-          }
+-        }
+-
+-        processedItem = {
+-          type: 'taskItem',
+-          raw: '',
+-          mainContent,
+-          indentLevel,
+-          checked: checked ?? false,
+-          text: mainContent,
+-          tokens: this.tokenizeInline(mainContent),
+-          nestedTokens,
+-        }
+-      }
++      const isTask = item.type === 'taskItem'
++      const processedItem = item
 
-@@ -1119,7 +1123,8 @@ export class MarkdownManager {
+       const itemType: 'list' | 'taskList' = isTask ? 'taskList' : 'list'
+
+@@ -1119,7 +1085,8 @@ export class MarkdownManager {
    private htmlAsLiteralText(html: string, isBlock: boolean): JSONContent | JSONContent[] | null {
      // Strip trailing whitespace/newlines that marked appends to block HTML
      // tokens so the rendered text doesn't end with stray blank lines.
@@ -325,33 +333,3 @@ index f5478f13e769850a5b3ffeeb60c41a0f6704e441..415fa6d8bbc25b144d7336ffa602bb16
 
      if (!text) {
        return null
-diff --git a/src/utils.ts b/src/utils.ts
-index 7660780fb9d99cb6e3e7fd791df4b12e536382a6..90606de9370904aa9819b490dacce7b03b4ed904 100644
---- a/src/utils.ts
-+++ b/src/utils.ts
-@@ -208,8 +208,24 @@ export function isTaskItem(item: MarkdownToken): {
- } {
-   const raw = item.raw || item.text || ''
-
-+  // An item marked's list tokenizer read carries its verdict (`task`, from
-+  // `listIsTask`, and `checked`): only spaces and tabs are Markdown
-+  // whitespace, and text has to follow the checkbox. That text may also start
-+  // with a no-break space, which marked's `\S` refuses: a task whose text
-+  // starts with one is written so.
-+  if (typeof item.task === 'boolean') {
-+    const indentLevel = raw.match(/^[ \t]*/)![0].length
-+    if (item.task) {
-+      return { isTask: true, checked: item.checked === true, indentLevel }
-+    }
-+    const box = (item.text || '').match(/^\[([ xX])\] +[^ \t\n]/)
-+    return box
-+      ? { isTask: true, checked: box[1].toLowerCase() === 'x', indentLevel }
-+      : { isTask: false, indentLevel: 0 }
-+  }
-+
-   // Match patterns like "- [ ] " or "  - [x] "
--  const match = raw.match(/^(\s*)[-+*]\s+\[([ xX])\]\s+/)
-+  const match = raw.match(/^([ \t]*)[-+*][ \t]+\[([ xX])\] +[^ \t\n]/)
-
-   if (match) {
-     return { isTask: true, checked: match[2].toLowerCase() === 'x', indentLevel: match[1].length }

@@ -173,6 +173,7 @@ interface Mismatch {
 const D1 = "D1 unicode-whitespace-only line is text";
 const D2 = "D2 ordered legacy band at marker indent + 2";
 const D3 = "D3 task list holds only task items";
+const MIXED_D1_COUNT = 36;
 
 function classes(mismatch: Mismatch): string[] {
   const lines = mismatch.source.split("\n");
@@ -308,24 +309,54 @@ function mixedTheirs(source: string): readonly [boolean | "none", Shape[]] {
   return [item.task === true, shape];
 }
 
+function mixedTaskSources(): string[] {
+  const sources: string[] = [];
+  for (const gap of GAPS) {
+    for (const prefix of PREFIXES) {
+      for (const uni of UNIS) {
+        for (const [, build] of KINDS) {
+          sources.push(`- [ ]${gap}a\n${build(prefix + uni)}`);
+        }
+      }
+    }
+  }
+  return sources;
+}
+
+// What the first task item of a document reads as, wherever its list begins.
+function standaloneOurs(source: string): readonly [boolean | "none", Shape[]] {
+  const list = (parseMarkdown(source).content ?? [])[0];
+  const item = (list.content ?? [])[0];
+  return [list.type === "taskList", oursShape(item)];
+}
+
 describe("a task item in a list that opens with a bullet reads as marked reads it", () => {
-  it("matches marked's second item over gap, prefix, Unicode space and second line", () => {
-    const corpus = GAPS.flatMap((gap) =>
-      PREFIXES.flatMap((prefix) =>
-        UNIS.flatMap((uni) =>
-          KINDS.map(([, build]) => `- x\n- [ ]${gap}a\n${build(prefix + uni)}`),
-        ),
-      ),
-    );
-    const mismatches = corpus
-      .filter(
-        (source) =>
-          JSON.stringify(mixedOurs(source)) !==
-          JSON.stringify(mixedTheirs(source)),
-      )
-      .map((source) => JSON.stringify(source));
-    expect(corpus.length).toBe(4704);
+  it("reads a mixed list's task item as the same item on its own, over gap, prefix, Unicode space and second line", () => {
+    const mismatches: string[] = [];
+    const markedMismatches: Mismatch[] = [];
+    const tasks = mixedTaskSources();
+    const total = tasks.length;
+    for (const task of tasks) {
+      const source = `- x\n${task}`;
+      const mixed = mixedOurs(source);
+      const marked = mixedTheirs(source);
+      if (JSON.stringify(mixed) !== JSON.stringify(standaloneOurs(task))) {
+        mismatches.push(JSON.stringify(source));
+      }
+      if (JSON.stringify(mixed) !== JSON.stringify(marked)) {
+        markedMismatches.push({
+          source,
+          marker: "- [ ]",
+          ours: [1, [mixed[1]]],
+          theirs: [1, [marked[1]]],
+        });
+      }
+    }
+    expect(total).toBe(4704);
     expect(mismatches).toEqual([]);
+    const { counts, unclassified } = summarize(markedMismatches);
+    expect(unclassified).toEqual([]);
+    expect(counts).toEqual({ [D1]: MIXED_D1_COUNT });
   });
 
   function taskItemIn(source: string): JsonContent {
@@ -382,12 +413,156 @@ describe("a checkbox needs text after it, as marked requires", () => {
     expect(textOf(tasks ?? { type: "none" })).toBe("\u00a0ab");
   });
 
-  it("keeps `- [ ] ` a task on its own, and a plain bullet after another bullet as marked reads it", () => {
+  // D7: a checkbox with nothing after it is an empty task item, because the
+  // serializer writes an empty task as its marker line and it has to read
+  // back. marked reads it as a plain bullet whose text is `[ ]`.
+  it("reads `- [ ] ` as an empty task item on its own and after a plain bullet (D7)", () => {
     const list = (parseMarkdown("- [ ] ").content ?? [])[0];
     expect(list.type).toBe("taskList");
     expect(textOf(list)).toBe("");
-    expect(mixedOurs("- x\n- [ ] ")).toEqual(mixedTheirs("- x\n- [ ] "));
+    expect(standaloneOurs("- [ ] ")).toEqual([true, [["p", ""]]]);
+    expect(mixedOurs("- x\n- [ ] ")).toEqual([true, [["p", ""]]]);
+    expect(mixedTheirs("- x\n- [ ] ")).toEqual([false, [["p", "[ ]"]]]);
   });
+});
+
+// ---- the mixed path reads a task item as the standalone path does
+
+type ItemReading = readonly [string, unknown, Shape[]];
+
+// The second item of the document, wherever the lists split: its node type,
+// checked state and blocks.
+function secondItem(source: string): ItemReading {
+  const items = (parseMarkdown(source).content ?? [])
+    .filter((node) => (node.type ?? "").endsWith("List"))
+    .flatMap((list) =>
+      (list.content ?? []).map((item): [string, JsonContent] => [
+        item.type ?? "",
+        item,
+      ]),
+    );
+  const second = items.at(1);
+  if (second === undefined) return ["none", undefined, []];
+  return [second[0], second[1].attrs?.checked, oursShape(second[1])];
+}
+
+describe("a task item reads the same in a mixed list as in a list of tasks", () => {
+  const CHECKS = [" ", "x", "X"];
+  const BODIES = [
+    "a",
+    "[ ] a",
+    "[x] a",
+    "[X] a",
+    "",
+    "\u00a0",
+    "\u2003",
+    "\u3000",
+    "\u00a0a",
+  ];
+  // Where a blank line goes: inside the item, before it, after it, at the end.
+  const TIGHTNESS: ReadonlyArray<
+    readonly [string, (task: string) => readonly [string, string]]
+  > = [
+    ["tight", (task) => [`${task}`, "- y"]],
+    ["a second paragraph", (task) => [`${task}\n\n  b`, "- y"]],
+    ["a blank line before it", (task) => [`\n${task}`, "- y"]],
+    ["a blank line after it", (task) => [`${task}\n`, "- y"]],
+    ["a blank line at the very end", (task) => [`${task}`, "- y\n\n"]],
+  ];
+
+  for (const position of ["in the middle", "last"]) {
+    for (const [tightName, shape] of TIGHTNESS) {
+      it(`agrees ${position}, ${tightName}`, () => {
+        const mismatches: string[] = [];
+        for (const check of CHECKS) {
+          for (const body of BODIES) {
+            const [task, tail] = shape(`- [${check}] ${body}`);
+            const after = position === "last" ? "" : `\n${tail}`;
+            const plain = `- x\n${task}${after}`;
+            const tasks = `- [ ] x\n${task}${after.replace(/\n- y/, "\n- [ ] y")}`;
+            if (
+              JSON.stringify(secondItem(plain)) !==
+              JSON.stringify(secondItem(tasks))
+            ) {
+              mismatches.push(JSON.stringify(plain));
+            }
+          }
+        }
+        expect(mismatches).toEqual([]);
+      });
+    }
+  }
+
+  function items(source: string): JsonContent[] {
+    return parseMarkdown(source).content ?? [];
+  }
+
+  function taskParagraphs(item: JsonContent): string[] {
+    return (item.content ?? []).map((child) => {
+      expect(child.type).toBe("paragraph");
+      return textOf(child);
+    });
+  }
+
+  it("keeps the text `[ ] ` a checked task holds, in a loose mixed list", () => {
+    const top = items("- x\n- [x] [ ] a\n\n  b");
+    expect(top.map((node) => node.type)).toEqual(["bulletList", "taskList"]);
+    expect(textOf(top[0])).toBe("x");
+    const task = (top[1].content ?? [])[0];
+    expect(task.attrs?.checked).toBe(true);
+    expect(taskParagraphs(task)).toEqual(["[ ] a", "b"]);
+  });
+
+  it("keeps it with another task after it", () => {
+    const top = items("- x\n- [x] [ ] a\n\n  b\n- [ ] c");
+    expect(top.map((node) => node.type)).toEqual(["bulletList", "taskList"]);
+    const tasks = top[1].content ?? [];
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0].attrs?.checked).toBe(true);
+    expect(taskParagraphs(tasks[0])).toEqual(["[ ] a", "b"]);
+    expect(tasks[1].attrs?.checked).toBe(false);
+    expect(taskParagraphs(tasks[1])).toEqual(["c"]);
+  });
+
+  const EMPTY_CASES: ReadonlyArray<readonly [string, string, boolean, string]> =
+    [
+      ["a checked task of one extra space", "- x\n- [x]  ", true, ""],
+      ["an unchecked task of one extra space", "- x\n- [ ]  ", false, ""],
+      // The cold reviewer's input (29162a99): marked trims the last item's
+      // no-break space away, the one reader keeps it.
+      ["a checked task of a no-break space", "- x\n- [x]  ", true, " "],
+      ["an unchecked task of a no-break space", "- x\n- [ ]  ", false, " "],
+      ["a checked task of an em space", "- x\n- [x] \u2003", true, "\u2003"],
+      [
+        "a checked task of an ideographic space",
+        "- x\n- [x] \u3000",
+        true,
+        "\u3000",
+      ],
+      [
+        "an unchecked task of an em space",
+        "- x\n- [ ] \u2003",
+        false,
+        "\u2003",
+      ],
+      [
+        "an unchecked task of an ideographic space",
+        "- x\n- [ ] \u3000",
+        false,
+        "\u3000",
+      ],
+    ];
+
+  for (const [name, source, checked, text] of EMPTY_CASES) {
+    it(`keeps ${name} after a bullet as a task and nothing after it`, () => {
+      const top = items(source);
+      expect(top.map((node) => node.type)).toEqual(["bulletList", "taskList"]);
+      expect(textOf(top[0])).toBe("x");
+      const task = (top[1].content ?? [])[0];
+      expect(task.attrs?.checked).toBe(checked);
+      expect(taskParagraphs(task)).toEqual([text]);
+    });
+  }
 });
 
 // ---- plain-text ordered paste

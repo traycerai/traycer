@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 4c729511471466d470d01dae4ae2ab7393eb6e2d..084b88e882ee9bcfcc9ba4f19a0d4a0e53f0ade6 100644
+index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8b2e75a0657e71b8645e458b0928ba5f3d698061 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -430,6 +430,9 @@ function isSameLineOrderedListToken(token) {
@@ -367,7 +367,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..084b88e882ee9bcfcc9ba4f19a0d4a0e
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1601,53 +1506,14 @@ var TaskList = import_core13.Node.create({
+@@ -1601,57 +1506,18 @@ var TaskList = import_core13.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -419,22 +419,58 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..084b88e882ee9bcfcc9ba4f19a0d4a0e
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -1663,8 +1529,7 @@ var TaskList = import_core13.Node.create({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === "x"
++            mainContent: "",
++            checked: false
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: "taskItem",
+@@ -1663,17 +1529,36 @@ var TaskList = import_core13.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent
-+          checkbox: true
++          checkbox: true,
++          createPlainToken: (item) => ({
++            type: "list_item",
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens
++          })
          },
          lexer
        );
+       if (!result) {
+         return void 0;
+       }
++      if (result.items.every((item) => item.type === "taskItem")) {
++        return {
++          type: "taskList",
++          raw: result.raw,
++          items: result.items
++        };
++      }
+       return {
+-        type: "taskList",
++        type: "list",
+         raw: result.raw,
++        ordered: false,
++        start: "",
++        loose: false,
+         items: result.items
+       };
+     }
 diff --git a/dist/index.js b/dist/index.js
-index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..dc7e1b72be06b28fe3dbc516abfe597b7ca132ad 100644
+index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..be60e7110186aecf3dac835514b3da9be6b1c1ca 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -390,6 +390,9 @@ function isSameLineOrderedListToken(token) {
@@ -802,7 +838,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..dc7e1b72be06b28fe3dbc516abfe597b
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1567,53 +1472,14 @@ var TaskList = Node5.create({
+@@ -1567,57 +1472,18 @@ var TaskList = Node5.create({
      level: "block",
      start(src) {
        var _a;
@@ -854,20 +890,56 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..dc7e1b72be06b28fe3dbc516abfe597b
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -1629,8 +1495,7 @@ var TaskList = Node5.create({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === "x"
++            mainContent: "",
++            checked: false
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: "taskItem",
+@@ -1629,17 +1495,36 @@ var TaskList = Node5.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent
-+          checkbox: true
++          checkbox: true,
++          createPlainToken: (item) => ({
++            type: "list_item",
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens
++          })
          },
          lexer
        );
+       if (!result) {
+         return void 0;
+       }
++      if (result.items.every((item) => item.type === "taskItem")) {
++        return {
++          type: "taskList",
++          raw: result.raw,
++          items: result.items
++        };
++      }
+       return {
+-        type: "taskList",
++        type: "list",
+         raw: result.raw,
++        ordered: false,
++        start: "",
++        loose: false,
+         items: result.items
+       };
+     }
 diff --git a/dist/item/index.cjs b/dist/item/index.cjs
 index 2ebaf87e5350f25a1aed1458527ae01925b8e64c..445df31085b84de8e7608fd982ce9e229cbc30b6 100644
 --- a/dist/item/index.cjs
@@ -987,7 +1059,7 @@ index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..59376f0588121596903ab1a5d8b2e2e4
      }
      return {
 diff --git a/dist/kit/index.cjs b/dist/kit/index.cjs
-index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..7750854f68fa93a8bcc69723d14c0259e577cf7a 100644
+index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..ffa0d30c1b3e34280864d0bfb2b28e666630c225 100644
 --- a/dist/kit/index.cjs
 +++ b/dist/kit/index.cjs
 @@ -411,6 +411,9 @@ function isSameLineOrderedListToken(token) {
@@ -1355,7 +1427,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..7750854f68fa93a8bcc69723d14c0259
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1579,53 +1484,14 @@ var TaskList = import_core13.Node.create({
+@@ -1579,57 +1484,18 @@ var TaskList = import_core13.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -1407,22 +1479,58 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..7750854f68fa93a8bcc69723d14c0259
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -1641,8 +1507,7 @@ var TaskList = import_core13.Node.create({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === "x"
++            mainContent: "",
++            checked: false
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: "taskItem",
+@@ -1641,17 +1507,36 @@ var TaskList = import_core13.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent
-+          checkbox: true
++          checkbox: true,
++          createPlainToken: (item) => ({
++            type: "list_item",
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens
++          })
          },
          lexer
        );
+       if (!result) {
+         return void 0;
+       }
++      if (result.items.every((item) => item.type === "taskItem")) {
++        return {
++          type: "taskList",
++          raw: result.raw,
++          items: result.items
++        };
++      }
+       return {
+-        type: "taskList",
++        type: "list",
+         raw: result.raw,
++        ordered: false,
++        start: "",
++        loose: false,
+         items: result.items
+       };
+     }
 diff --git a/dist/kit/index.js b/dist/kit/index.js
-index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..5f938c9765bd10b7c7fb950cc6c5d8ff29a58a63 100644
+index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..a7b4cc27f72c0e98e223173f37c0bb69122ac76a 100644
 --- a/dist/kit/index.js
 +++ b/dist/kit/index.js
 @@ -393,6 +393,9 @@ function isSameLineOrderedListToken(token) {
@@ -1790,7 +1898,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..5f938c9765bd10b7c7fb950cc6c5d8ff
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1567,53 +1472,14 @@ var TaskList = Node5.create({
+@@ -1567,57 +1472,18 @@ var TaskList = Node5.create({
      level: "block",
      start(src) {
        var _a;
@@ -1842,20 +1950,56 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..5f938c9765bd10b7c7fb950cc6c5d8ff
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -1629,8 +1495,7 @@ var TaskList = Node5.create({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === "x"
++            mainContent: "",
++            checked: false
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: "taskItem",
+@@ -1629,17 +1495,36 @@ var TaskList = Node5.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent
-+          checkbox: true
++          checkbox: true,
++          createPlainToken: (item) => ({
++            type: "list_item",
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens
++          })
          },
          lexer
        );
+       if (!result) {
+         return void 0;
+       }
++      if (result.items.every((item) => item.type === "taskItem")) {
++        return {
++          type: "taskList",
++          raw: result.raw,
++          items: result.items
++        };
++      }
+       return {
+-        type: "taskList",
++        type: "list",
+         raw: result.raw,
++        ordered: false,
++        start: "",
++        loose: false,
+         items: result.items
+       };
+     }
 diff --git a/dist/ordered-list/index.cjs b/dist/ordered-list/index.cjs
 index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e072035859b1ae4bc 100644
 --- a/dist/ordered-list/index.cjs
@@ -2485,10 +2629,10 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
 diff --git a/dist/task-list/index.cjs b/dist/task-list/index.cjs
-index f7e3f3a8a87172053d42da971b6d8c83f92e3450..644d6736dd97b9219ef6596f17c6b7d5fc18b0c3 100644
+index f7e3f3a8a87172053d42da971b6d8c83f92e3450..aa24f694d7549a0041f90c49c832c66a376ef691 100644
 --- a/dist/task-list/index.cjs
 +++ b/dist/task-list/index.cjs
-@@ -67,53 +67,14 @@ var TaskList = import_core.Node.create({
+@@ -67,57 +67,18 @@ var TaskList = import_core.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -2540,25 +2684,61 @@ index f7e3f3a8a87172053d42da971b6d8c83f92e3450..644d6736dd97b9219ef6596f17c6b7d5
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -129,8 +90,7 @@ var TaskList = import_core.Node.create({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === "x"
++            mainContent: "",
++            checked: false
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: "taskItem",
+@@ -129,17 +90,36 @@ var TaskList = import_core.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent
-+          checkbox: true
++          checkbox: true,
++          createPlainToken: (item) => ({
++            type: "list_item",
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens
++          })
          },
          lexer
        );
+       if (!result) {
+         return void 0;
+       }
++      if (result.items.every((item) => item.type === "taskItem")) {
++        return {
++          type: "taskList",
++          raw: result.raw,
++          items: result.items
++        };
++      }
+       return {
+-        type: "taskList",
++        type: "list",
+         raw: result.raw,
++        ordered: false,
++        start: "",
++        loose: false,
+         items: result.items
+       };
+     }
 diff --git a/dist/task-list/index.js b/dist/task-list/index.js
-index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..8bed64e07ea3e94cf5f3fcb93969d39174caab0d 100644
+index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..2fa7945cb47fbfca805af20a940435a29fa8a8e5 100644
 --- a/dist/task-list/index.js
 +++ b/dist/task-list/index.js
-@@ -41,53 +41,14 @@ var TaskList = Node.create({
+@@ -41,57 +41,18 @@ var TaskList = Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -2610,20 +2790,56 @@ index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..8bed64e07ea3e94cf5f3fcb93969d391
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: (match) => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -103,8 +64,7 @@ var TaskList = Node.create({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === "x"
++            mainContent: "",
++            checked: false
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: "taskItem",
+@@ -103,17 +64,36 @@ var TaskList = Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent
-+          checkbox: true
++          checkbox: true,
++          createPlainToken: (item) => ({
++            type: "list_item",
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens
++          })
          },
          lexer
        );
+       if (!result) {
+         return void 0;
+       }
++      if (result.items.every((item) => item.type === "taskItem")) {
++        return {
++          type: "taskList",
++          raw: result.raw,
++          items: result.items
++        };
++      }
+       return {
+-        type: "taskList",
++        type: "list",
+         raw: result.raw,
++        ordered: false,
++        start: "",
++        loose: false,
+         items: result.items
+       };
+     }
 diff --git a/src/item/list-item.ts b/src/item/list-item.ts
 index e1227a05262b8e337a1406e7f63685d4f4f00fea..0a6fe93dc0a9ce1cd87eda41e4817ef1b20df7bd 100644
 --- a/src/item/list-item.ts
@@ -3226,10 +3442,10 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
        type: 'listItem',
        content,
 diff --git a/src/task-list/task-list.ts b/src/task-list/task-list.ts
-index 22302cc5515837bda68d467d9c5357f7f2049163..2155a34972eea89181aec303538de0c2fb170134 100644
+index 22302cc5515837bda68d467d9c5357f7f2049163..e855fd573348c3cf5f107024fac1f0eb73a79d67 100644
 --- a/src/task-list/task-list.ts
 +++ b/src/task-list/task-list.ts
-@@ -82,63 +82,17 @@ export const TaskList = Node.create<TaskListOptions>({
+@@ -82,67 +82,24 @@ export const TaskList = Node.create<TaskListOptions>({
      level: 'block',
      start(src) {
        // Look for the start of a task list item
@@ -3289,22 +3505,66 @@ index 22302cc5515837bda68d467d9c5357f7f2049163..2155a34972eea89181aec303538de0c2
 -
 +      // Each item is read as marked's list tokenizer reads one, and its
 +      // content lexed as marked lexes an item's, so a nested list of tasks, or
-+      // of plain items, is its own token inside the item.
++      // of plain items, is its own token inside the item. A bullet list that
++      // holds a task anywhere at its level is read here whole, plain items
++      // included, so every task item has one reader (`readMarkdownTaskItem`)
++      // and marked never reads one; a list with no task is left to marked.
        const result = parseIndentedBlocks(
          src,
          {
 -          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
-+          itemPattern: /^( {0,3})([-+*])[ \t]+\[([ xX])\][ \t]+(.*)$/,
++          itemPattern: /^( {0,3})([-+*])(?=[ \t]|$)/,
            extractItemData: match => ({
              indentLevel: match[1].length,
-             mainContent: match[4],
-@@ -154,8 +108,7 @@ export const TaskList = Node.create<TaskListOptions>({
+-            mainContent: match[4],
+-            checked: match[3].toLowerCase() === 'x',
++            mainContent: '',
++            checked: false,
+           }),
+           createToken: (data, nestedTokens) => ({
+             type: 'taskItem',
+@@ -154,8 +111,17 @@ export const TaskList = Node.create<TaskListOptions>({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens,
            }),
 -          // Use the recursive parser for nested content
 -          customNestedParser: parseTaskListContent,
 +          checkbox: true,
++          createPlainToken: item => ({
++            type: 'list_item',
++            raw: item.raw,
++            text: item.text,
++            mainContent: item.text,
++            indentLevel: 0,
++            task: false,
++            loose: false,
++            tokens: item.tokens,
++          }),
          },
          lexer,
        )
+@@ -164,9 +130,23 @@ export const TaskList = Node.create<TaskListOptions>({
+         return undefined
+       }
+
++      // A list of tasks alone is a task list. One with plain items too is a
++      // bullet list holding both, which the markdown parser splits into a
++      // bullet list and a task list for each run.
++      if (result.items.every(item => item.type === 'taskItem')) {
++        return {
++          type: 'taskList',
++          raw: result.raw,
++          items: result.items,
++        }
++      }
++
+       return {
+-        type: 'taskList',
++        type: 'list',
+         raw: result.raw,
++        ordered: false,
++        start: '',
++        loose: false,
+         items: result.items,
+       }
+     },
