@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DataRootResolution } from "@traycer/protocol/config/data-root";
 
 type Environment = "dev" | "production";
 
@@ -131,6 +132,40 @@ const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
+// The moved-data-root guard reads the process's data-root resolution. A test
+// moves the data folder by setting `movedRoot`; null is the default folder.
+const dataRootMock = vi.hoisted(() => ({ movedRoot: null as string | null }));
+vi.mock("@traycer/protocol/config/data-root", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@traycer/protocol/config/data-root")>();
+  const { homedir } = await import("node:os");
+  return {
+    ...actual,
+    currentDataRootResolution: (): DataRootResolution => {
+      const bootstrapDir = actual.dataBootstrapDir(homedir());
+      const movedRoot = dataRootMock.movedRoot;
+      if (movedRoot === null) {
+        return {
+          kind: "default",
+          root: actual.defaultDataRoot(homedir()),
+          bootstrapDir,
+        };
+      }
+      return {
+        kind: "configured",
+        root: movedRoot,
+        bootstrapDir,
+        record: {
+          version: 1,
+          generation: 1,
+          root: movedRoot,
+          migrationId: null,
+        },
+      };
+    },
+  };
 });
 
 // `observeSwapQuiescence`'s post-stop check asks `serviceManagerMayRespawn`
@@ -268,7 +303,10 @@ import {
   sweepOldTrash,
   type StagedHostInstallSource,
 } from "../install";
-import { readHostInstallRecord } from "../../manifest/host-install";
+import {
+  readHostInstallRecord,
+  writeHostInstallRecord,
+} from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { currentHostPlatformKey } from "../../registry";
@@ -1633,6 +1671,93 @@ describe("stageHostInstallSource", () => {
     expect(readdirSync(stagingRootFor(ENV))).toEqual([]);
     // Falsification: swallow the hook's rejection in `stageVerifiedSource`
     // and this resolves with `extractProgressSeen` true.
+  });
+});
+
+describe("stageHostInstallSource while the data folder is moved", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-install-test-"));
+    osHome.current = sandboxRoot;
+    dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+  });
+
+  afterEach(() => {
+    dataRootMock.movedRoot = null;
+    mocks.registryClient = null;
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  async function writeInstalled(version: string): Promise<void> {
+    const installDir = installDirFor(ENV);
+    mkdirSync(installDir, { recursive: true });
+    const executablePath = join(installDir, "traycer-host");
+    writeFileSync(executablePath, "binary");
+    await writeHostInstallRecord(ENV, {
+      installId: null,
+      version,
+      runtimeVersion: null,
+      platform: currentInstallPlatform(),
+      arch: currentInstallArch(),
+      installedAt: new Date().toISOString(),
+      source: { kind: "registry", value: version },
+      archiveSha256: "a".repeat(64),
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "test-key",
+      sizeBytes: 1,
+      executablePath,
+      executableSha256: null,
+    });
+  }
+
+  function registryFor(
+    version: string,
+    onDownloadStart: () => void,
+  ): RegistryClient {
+    return fakeRegistryClient({
+      version,
+      onDownloadStart,
+      downloadGate: Promise.resolve(),
+      onArchiveWritten: () => undefined,
+    });
+  }
+
+  it("refuses an older registry source over the install before any download or owned temp dir", async () => {
+    await writeInstalled("2.0.0");
+    let downloads = 0;
+    mocks.registryClient = registryFor("1.0.0", () => {
+      downloads += 1;
+    });
+
+    await expect(
+      stageHostInstallSource({
+        environment: ENV,
+        source: { kind: "registry", versionRequest: "1.0.0" },
+        onProgress: () => undefined,
+        recordVersionOverride: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+
+    expect(downloads).toBe(0);
+    expect(existsSync(stagingRootFor(ENV))).toBe(false);
+  });
+
+  it("control: with no install record the registry source stages as before", async () => {
+    let downloads = 0;
+    mocks.registryClient = registryFor("1.0.0", () => {
+      downloads += 1;
+    });
+
+    const staged = await stageHostInstallSource({
+      environment: ENV,
+      source: { kind: "registry", versionRequest: "1.0.0" },
+      onProgress: () => undefined,
+      recordVersionOverride: null,
+    });
+
+    expect(downloads).toBe(1);
+    expect(staged.version).toBe("1.0.0");
   });
 });
 

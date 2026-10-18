@@ -119,7 +119,8 @@ the location record and use `~/.traycer`: they can start from the backup and
 repeat queued or scheduled work (sending messages or making changes a second
 time), or create a second installation. Traycer warns at startup and in
 `data status` when the default folder is populated but is not a known backup;
-it never merges or deletes either folder.
+it never merges or deletes either folder. While the folder is moved, Traycer
+refuses to install a host that is not newer than the installed one.
 
 After a rollback, `traycer data cleanup <migration-id>` instead deletes the
 unused copy in the destination. Your data stays in, and is still used from,
