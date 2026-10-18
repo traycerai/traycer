@@ -22,7 +22,7 @@
  *     }>>,
  *   }
  */
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
@@ -184,7 +184,10 @@ export function readMaybeNullableNumber(
   return typeof value === "number" ? value : null;
 }
 
-export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
+// Keep non-Markdown kinds outside the projection until their presentation is supported.
+export function readArtifactKind(
+  map: Y.Map<unknown>,
+): MarkdownArtifactKind | null {
   const value = map.get("kind");
   if (
     value === "spec" ||

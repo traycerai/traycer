@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +17,7 @@ import {
   EPIC_NODE_LABELS,
 } from "@/lib/artifacts/node-display";
 
-const ARTIFACT_KINDS: ReadonlyArray<EpicArtifactKind> = [
+const ARTIFACT_KINDS: ReadonlyArray<MarkdownArtifactKind> = [
   "spec",
   "ticket",
   "story",

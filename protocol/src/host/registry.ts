@@ -351,6 +351,8 @@ import {
   chatSubscribeV124,
   chatSubscribeV125,
   chatSubscribeV126,
+  chatSubscribeV127,
+  chatSubscribeV128,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -369,6 +371,8 @@ import {
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
   commentsListThreadsV10,
+  commentsListThreadsV11,
+  commentsListThreadsUpgradeV10ToV11,
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
 import {
@@ -638,6 +642,7 @@ import {
   epicDeleteFileV10,
   epicFetchFileV10,
   epicReadFileV10,
+  epicReadArtifactObjectV10,
   epicRestoreFileV10,
 } from "@traycer/protocol/host/epic/files";
 import {
@@ -652,6 +657,8 @@ import {
   epicBatchDeleteV11,
   epicBatchUpdateRolesV10,
   epicCreateArtifactV10,
+  epicCreateArtifactV11,
+  epicCreateArtifactUpgradeV10ToV11,
   epicCreateChatUpgradeV10ToV11,
   epicCreateChatUpgradeV11ToV12,
   epicCreateChatV10,
@@ -659,6 +666,8 @@ import {
   epicCreateChatV12,
   epicContinueSubagentV10,
   epicCreateCommentThreadV10,
+  epicCreateCommentThreadV11,
+  epicCreateCommentThreadUpgradeV10ToV11,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
   epicCreateV10,
@@ -671,9 +680,15 @@ import {
   epicDeleteChatV11,
   epicDeleteChatUpgradeV10ToV11,
   epicDeleteCommentThreadV10,
+  epicDeleteCommentThreadV11,
+  epicDeleteCommentThreadUpgradeV10ToV11,
   epicDeleteCommentV10,
+  epicDeleteCommentV11,
+  epicDeleteCommentUpgradeV10ToV11,
   epicDeleteTuiAgentV10,
   epicEditCommentV10,
+  epicEditCommentV11,
+  epicEditCommentUpgradeV10ToV11,
   epicFinishArtifactImageV10,
   epicGetTaskContextsV10,
   epicGetTaskContextsV11,
@@ -717,6 +732,8 @@ import {
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicListCommentThreadsV11,
+  epicListCommentThreadsUpgradeV10ToV11,
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
   epicReadChatAttachmentV11,
@@ -731,6 +748,8 @@ import {
   epicListTasksV15,
   epicListTasksV16,
   epicListTasksV17,
+  epicListTasksV18,
+  epicListTasksUpgradeV17ToV18,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
@@ -756,14 +775,22 @@ import {
   epicReparentArtifactV10,
   epicReparentChatV10,
   epicReplyToCommentThreadV10,
+  epicReplyToCommentThreadV11,
+  epicReplyToCommentThreadUpgradeV10ToV11,
   epicResolveArtifactByPathV10,
+  epicResolveArtifactByPathV11,
+  epicResolveArtifactByPathUpgradeV10ToV11,
   epicSearchArtifactsV10,
+  epicSearchArtifactsV11,
+  epicSearchArtifactsUpgradeV10ToV11,
   epicRevokeCollaboratorV10,
   epicChatPublicationStateV10,
   epicSetChatArchivedV10,
   epicSetChatSharingDefaultV10,
   epicSetCloudChatVisibilityV10,
   epicSetCommentThreadResolvedV10,
+  epicSetCommentThreadResolvedV11,
+  epicSetCommentThreadResolvedUpgradeV10ToV11,
   epicSetPinnedUpgradeV10ToV11,
   epicSetPinnedV10,
   epicSetPinnedV11,
@@ -799,6 +826,7 @@ import {
   epicStateSubscribeV10,
   epicStateSubscribeV11,
   epicStateSubscribeV12,
+  epicStateSubscribeV13,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -6870,11 +6898,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 
   "comments.listThreads": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: commentsListThreadsV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: commentsListThreadsV11,
+          upgradeFromPreviousVersion: commentsListThreadsUpgradeV10ToV11,
+          // The host filters new-kind entries for 1.0 (resolve-by-path answers not-found).
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -7558,7 +7593,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -7595,6 +7630,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         7: {
           contract: epicListTasksV17,
           upgradeFromPreviousVersion: epicListTasksUpgradeV16ToV17,
+        },
+        8: {
+          contract: epicListTasksV18,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV17ToV18,
         },
       },
       downgradePathsFromLatest: {},
@@ -8028,11 +8067,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createArtifact": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCreateArtifactV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicCreateArtifactV11,
+          upgradeFromPreviousVersion: epicCreateArtifactUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8520,11 +8564,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.createCommentThread": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCreateCommentThreadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicCreateCommentThreadV11,
+          upgradeFromPreviousVersion: epicCreateCommentThreadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8532,11 +8581,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.replyToCommentThread": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicReplyToCommentThreadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicReplyToCommentThreadV11,
+          upgradeFromPreviousVersion: epicReplyToCommentThreadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8544,11 +8598,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.editComment": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicEditCommentV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicEditCommentV11,
+          upgradeFromPreviousVersion: epicEditCommentUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8556,11 +8615,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteComment": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicDeleteCommentV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicDeleteCommentV11,
+          upgradeFromPreviousVersion: epicDeleteCommentUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8568,11 +8632,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.setCommentThreadResolved": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSetCommentThreadResolvedV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicSetCommentThreadResolvedV11,
+          upgradeFromPreviousVersion:
+            epicSetCommentThreadResolvedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8580,11 +8650,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteCommentThread": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicDeleteCommentThreadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicDeleteCommentThreadV11,
+          upgradeFromPreviousVersion: epicDeleteCommentThreadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8592,11 +8667,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.listCommentThreads": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListCommentThreadsV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicListCommentThreadsV11,
+          upgradeFromPreviousVersion: epicListCommentThreadsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8604,11 +8684,18 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.resolveArtifactByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicResolveArtifactByPathV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicResolveArtifactByPathV11,
+          upgradeFromPreviousVersion: epicResolveArtifactByPathUpgradeV10ToV11,
+          // The host filters new-kind entries for 1.0 (resolve-by-path answers not-found).
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -8619,11 +8706,18 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // call only and the sidebar degrades to no search (no cross-Epic fallback).
   "epic.searchArtifacts": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSearchArtifactsV10,
           upgradeFromPreviousVersion: null,
+        },
+        // 1.1 adds new artifact kinds; 1.0 is frozen.
+        1: {
+          contract: epicSearchArtifactsV11,
+          upgradeFromPreviousVersion: epicSearchArtifactsUpgradeV10ToV11,
+          // The host filters new-kind entries for 1.0 (resolve-by-path answers not-found).
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -9073,6 +9167,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // explicit download of a big file, and tombstone/restore. Optional and off
   // the released floor: a new method name is handshake-fatal against a
   // released peer, and an old host simply hides the files surface.
+  // A peer without this method has no sha-addressed artifact read. Clients
+  // treat its bytes as unavailable; a path-based read is not a substitute.
+  "epic.readArtifactObject": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadArtifactObjectV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "epic.readFile": {
     1: {
       latestMinor: 0,
@@ -12945,7 +13054,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -12961,6 +13070,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         2: {
           contract: epicStateSubscribeV12,
         },
+        // The host drops new-kind rows for peers below 1.3.
+        3: { contract: epicStateSubscribeV13 },
       },
     },
   },
@@ -13727,7 +13838,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 26,
+      latestMinor: 28,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13894,6 +14005,15 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         26: {
           contract: chatSubscribeV126,
         },
+        // @1.27 is the task-overdue line: the `task-overdue` queue item on a
+        // bot's trunk (projection: the host omits it below @1.27, as it omits
+        // the task-checkin item below @1.26). @1.26 is frozen at its five-arm
+        // queue.
+        27: {
+          contract: chatSubscribeV127,
+        },
+        // New artifact kinds require 1.28; the host omits their blocks/events below it.
+        28: { contract: chatSubscribeV128 },
       },
     },
   },

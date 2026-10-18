@@ -13,14 +13,14 @@
  * host projects the path - no reverse RPC needed.
  */
 import { useCallback, useMemo } from "react";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import { useActiveEpicProjection } from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
 
 export interface ResolvedArtifact {
   readonly id: string;
-  readonly kind: EpicArtifactKind;
+  readonly kind: MarkdownArtifactKind;
   readonly title: string;
 }
 

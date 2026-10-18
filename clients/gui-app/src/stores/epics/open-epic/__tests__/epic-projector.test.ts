@@ -13,7 +13,7 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import {
   DOC_IS_THE_ONLY_RECORD_SOURCE,
   projectFullState,
@@ -156,7 +156,7 @@ function makeRoleClaimEntry(args: {
  */
 function makeTombstone(args: {
   id: string;
-  kind: EpicArtifactKind;
+  kind: MarkdownArtifactKind;
   title: string;
   deletedAt: string;
   status: number | null;

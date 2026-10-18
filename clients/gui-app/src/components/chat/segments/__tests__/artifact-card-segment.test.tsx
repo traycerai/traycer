@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-segment";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
@@ -11,7 +11,7 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 type TestArtifactProjection = {
   readonly id: string;
-  readonly kind: EpicArtifactKind;
+  readonly kind: MarkdownArtifactKind;
   readonly title: string;
   readonly status: number | null;
 };
@@ -83,6 +83,15 @@ const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
 }));
 
+// Counts the hooks the card calls on its way to a live form, so a test can
+// prove a hidden kind returned before any session or projection work.
+const hookCalls = vi.hoisted(() => ({
+  openEpicHandle: 0,
+  artifactById: 0,
+  deletedArtifact: 0,
+  tabHostId: 0,
+}));
+
 const tileNavigation = vi.hoisted(() => ({
   openTile: vi.fn<(intent: TileOpenIntent) => null>(() => null),
 }));
@@ -91,23 +100,33 @@ const tileNavigation = vi.hoisted(() => ({
 // the session handle); outside one it is inert, which the bot transcript
 // suite covers. This suite is the in-session half.
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
+  useMaybeOpenEpicHandle: () => {
+    hookCalls.openEpicHandle += 1;
+    return { epicId: "epic-1" };
+  },
   useOpenEpicHandle: () => ({ epicId: "epic-1" }),
 }));
 vi.mock("@/lib/epic-selectors", () => ({
-  useArtifactById: (id: string | null) =>
-    id !== null && Object.hasOwn(projection.artifacts, id)
+  useArtifactById: (id: string | null) => {
+    hookCalls.artifactById += 1;
+    return id !== null && Object.hasOwn(projection.artifacts, id)
       ? projection.artifacts[id]
-      : null,
-  useEpicDeletedArtifact: (id: string | null) =>
-    id !== null && Object.hasOwn(projection.deleted, id)
+      : null;
+  },
+  useEpicDeletedArtifact: (id: string | null) => {
+    hookCalls.deletedArtifact += 1;
+    return id !== null && Object.hasOwn(projection.deleted, id)
       ? projection.deleted[id]
-      : null,
+      : null;
+  },
   useOpenEpicId: () => "epic-1",
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => projection.hostId ?? "host-1",
+  useTabHostId: () => {
+    hookCalls.tabHostId += 1;
+    return projection.hostId ?? "host-1";
+  },
 }));
 vi.mock("@/components/epic-canvas/view-tab-context", () => ({
   useEpicViewTabId: () => projection.resolvedTabId,
@@ -166,6 +185,10 @@ describe("<ArtifactCardSegment />", () => {
     projection.hostId = "host-1";
     projection.resolvedTabId = "tab-1";
     dnd.draggables = [];
+    hookCalls.openEpicHandle = 0;
+    hookCalls.artifactById = 0;
+    hookCalls.deletedArtifact = 0;
+    hookCalls.tabHostId = 0;
     canvas.resolveTargetTabForEpic.mockClear();
     canvas.openTileInTab.mockClear();
     canvas.resolveTabIdForEpic.mockClear();
@@ -725,5 +748,118 @@ describe("<ArtifactCardSegment />", () => {
     const drag = dnd.draggables.at(-1) ?? null;
     expect(drag).not.toBeNull();
     expect(drag?.disabled).toBe(true);
+  });
+
+  describe("kinds the chat has no card for", () => {
+    const hiddenKinds = ["html", "canvas", "file"] as const;
+
+    it.each(hiddenKinds)(
+      "renders nothing for a %s block, even when its artifact is projected",
+      (hiddenKind) => {
+        projection.artifacts["h1"] = {
+          id: "h1",
+          kind: "spec",
+          title: "Projected Under The Hidden Id",
+          status: null,
+        };
+        const { container } = render(
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind={hiddenKind}
+            artifactId="h1"
+            title="Hidden Title"
+            change={{ beforeHash: "h0", afterHash: "h1" }}
+          />,
+        );
+
+        expect(container.childNodes).toHaveLength(0);
+        expect(screen.queryByText("Hidden Title")).toBeNull();
+        expect(screen.queryByText("Projected Under The Hidden Id")).toBeNull();
+        expect(screen.queryByText("Created")).toBeNull();
+        expect(screen.queryByRole("button")).toBeNull();
+      },
+    );
+
+    it.each(hiddenKinds)(
+      "calls no session, projection or drag hook for a %s block",
+      (hiddenKind) => {
+        render(
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="update"
+            artifactKind={hiddenKind}
+            artifactId="h1"
+            title={null}
+            change={null}
+          />,
+        );
+
+        expect(hookCalls).toEqual({
+          openEpicHandle: 0,
+          artifactById: 0,
+          deletedArtifact: 0,
+          tabHostId: 0,
+        });
+        expect(dnd.draggables).toHaveLength(0);
+        expect(tileNavigation.openTile).not.toHaveBeenCalled();
+      },
+    );
+
+    it("still renders the spec card beside hidden-kind blocks", () => {
+      projection.artifacts["a1"] = {
+        id: "a1",
+        kind: "spec",
+        title: "Auth Spec",
+        status: null,
+      };
+      render(
+        <>
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="html"
+            artifactId="h1"
+            title="Hidden Html"
+            change={null}
+          />
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="spec"
+            artifactId="a1"
+            title={null}
+            change={null}
+          />
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="canvas"
+            artifactId="c1"
+            title="Hidden Canvas"
+            change={null}
+          />
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="file"
+            artifactId="f1"
+            title="Hidden File"
+            change={null}
+          />
+        </>,
+      );
+
+      expect(screen.getByText("Auth Spec")).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Open Auth Spec" }),
+      ).toBeTruthy();
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+      expect(screen.queryByText("Hidden Html")).toBeNull();
+      expect(screen.queryByText("Hidden Canvas")).toBeNull();
+      expect(screen.queryByText("Hidden File")).toBeNull();
+      // Only the spec card reached the session and drag hooks.
+      expect(dnd.draggables).toHaveLength(1);
+    });
   });
 });

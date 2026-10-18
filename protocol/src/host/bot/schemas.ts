@@ -412,8 +412,9 @@ export const botCheckinSectionsSchema = lazySchema(() =>
      * - `idle`, reason `null`: nothing running;
      * - `running`: an agent is working or a shell is running (`working`, the
      *   agents and shells listed here), an agent still owes release work (a
-     *   shell it stopped has not finished; `owed-release-work`), or the task
-     *   resumed between the reads, so nothing is listed
+     *   shell it stopped has not finished; `owed-release-work`), the task has
+     *   no agent yet so it has not begun (`no-agent-yet`, nothing listed), or
+     *   the task resumed between the reads, so nothing is listed
      *   (`resumed-while-composing`);
      * - `unknown`, reason `check-failed`: the idle check could not be
      *   completed, so the task counted as running.
@@ -428,6 +429,7 @@ export const botCheckinSectionsSchema = lazySchema(() =>
         reason: z.enum([
           "working",
           "owed-release-work",
+          "no-agent-yet",
           "resumed-while-composing",
         ]),
       }),

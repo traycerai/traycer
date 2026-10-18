@@ -15,8 +15,11 @@
  * Allowed dependencies: `zod` and other protocol modules only - this file
  * must stay browser-safe.
  */
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
 import {
   agentModeSchema,
@@ -43,11 +46,13 @@ import {
 } from "@traycer/protocol/persistence/epic/images";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const LatestEpicArtifactKindSchema = getRecordSchema(
+const latestEpicArtifactKindSchema = getRecordSchema(
   commonRecordRegistry,
   "epic-artifact-kind",
   "latest",
 );
+// The unused artifact-light schemas below remain on the released four-kind leaf.
+
 export const LatestJsonContentSchema = getRecordSchema(
   commonRecordRegistry,
   "json-content",
@@ -235,7 +240,10 @@ export type TaskFilters = z.infer<typeof taskFiltersSchema>;
 
 // ─── Epic / phase light (with permission) ─────────────────────────────────────
 
-export const epicLightSchema = lazySchema(() =>
+// Only the task picker reads new-kind counts, through listTasks 1.8. Other
+// released methods keep this copy (and the delta below); a method gains the
+// counts when a consumer on that method reads them.
+export const epicLightSchemaPreHtml = lazySchema(() =>
   z.object({
     id: z.string(),
     title: z.string(),
@@ -251,15 +259,29 @@ export const epicLightSchema = lazySchema(() =>
     version: z.string(),
   }),
 );
+/** Optional counts for HTML, canvas and file artifacts on the new line. */
+export const epicLightSchema = lazySchema(() =>
+  epicLightSchemaPreHtml.extend({
+    htmlCount: z.number().optional(),
+    canvasCount: z.number().optional(),
+    fileCount: z.number().optional(),
+  }),
+);
 export type EpicLight = z.infer<typeof epicLightSchema>;
 
-export const epicLightWithPermissionSchema = lazySchema(() =>
+export const epicLightWithPermissionSchemaPreHtml = lazySchema(() =>
   z.object({
-    light: epicLightSchema.nullable(),
+    light: epicLightSchemaPreHtml.nullable(),
     permission: permissionDtoSchema.nullable(),
     repos: z.array(taskRepoAssociationSchema),
     workspaces: z.array(userTaskWorkspaceSchema),
     roomInfo: tiptapRoomInfoSchema.nullable(),
+  }),
+);
+/** Optional counts for HTML, canvas and file artifacts on the new line. */
+export const epicLightWithPermissionSchema = lazySchema(() =>
+  epicLightWithPermissionSchemaPreHtml.extend({
+    light: epicLightSchema.nullable(),
   }),
 );
 export type EpicLightWithPermission = z.infer<
@@ -299,7 +321,7 @@ export type PhaseLightWithPermission = z.infer<
 // cloudDataRpcRegistry["epic.update"] resolve to the same zod instances
 // (enforced by epic-update-title-instance-identity.test.ts).
 
-export const epicLightDeltaSchema = lazySchema(() =>
+export const epicLightDeltaSchemaPreHtml = lazySchema(() =>
   z.object({
     id: z.string(),
     title: z.string().optional(),
@@ -312,12 +334,18 @@ export const epicLightDeltaSchema = lazySchema(() =>
     initialUserPrompt: z.string().optional(),
   }),
 );
+/** Optional counts for HTML, canvas and file artifacts on the new line. */
+export const epicLightDeltaSchema = lazySchema(() =>
+  epicLightDeltaSchemaPreHtml.extend({
+    htmlCount: z.number().optional(),
+    canvasCount: z.number().optional(),
+    fileCount: z.number().optional(),
+  }),
+);
 export type EpicLightDelta = z.infer<typeof epicLightDeltaSchema>;
 
 export const updateEpicRequestSchema = lazySchema(() =>
-  z.object({
-    epicDelta: epicLightDeltaSchema.nullable(),
-  }),
+  z.object({ epicDelta: epicLightDeltaSchemaPreHtml.nullable() }),
 );
 export type UpdateEpicRequest = z.infer<typeof updateEpicRequestSchema>;
 
@@ -508,7 +536,7 @@ export type CreateEpicChatSeed = z.infer<typeof createEpicChatSeedSchema>;
 
 export const createEpicRequestSchema = lazySchema(() =>
   z.object({
-    epic: epicLightSchema,
+    epic: epicLightSchemaPreHtml,
     repoIdentifiers: z.array(taskRepoIdentifierSchema),
     workspaces: z.array(createEpicWorkspaceIdentifierSchema),
     // The first chat, folded into the epic create so it is seeded into the same
@@ -536,7 +564,7 @@ export const createEpicResponseSchemaPre11 = lazySchema(() =>
     // synthesize a list row (e.g. legacy/migration paths that pre-date this
     // field - clients fall back to a manual refresh in that case).
     task: z
-      .lazy(() => taskLightSchema)
+      .lazy(() => taskLightSchemaPreHtml)
       .nullable()
       .optional(),
     // True when the host confirmed the provider turn started from the folded
@@ -932,10 +960,16 @@ export type ListEpicCollaboratorsResponse = z.infer<
 
 // ─── Task list (versioned epic.listTasks wire shapes) ───────────────────────
 
-export const taskLightSchema = lazySchema(() =>
+export const taskLightSchemaPreHtml = lazySchema(() =>
   z.object({
-    epic: epicLightWithPermissionSchema.nullable().optional(),
+    epic: epicLightWithPermissionSchemaPreHtml.nullable().optional(),
     phase: phaseLightWithPermissionSchema.nullable().optional(),
+  }),
+);
+/** Optional counts for HTML, canvas and file artifacts on the new line. */
+export const taskLightSchema = lazySchema(() =>
+  taskLightSchemaPreHtml.extend({
+    epic: epicLightWithPermissionSchema.nullable().optional(),
   }),
 );
 export type TaskLight = z.infer<typeof taskLightSchema>;
@@ -943,11 +977,11 @@ export type TaskLight = z.infer<typeof taskLightSchema>;
 // The task list carries viewer-specific presentation state in addition to the
 // reusable TaskLight core. Keep the v1.0 row frozen so a v1.1 client can bridge
 // an older host by defaulting every row to unpinned.
-export const listTaskLightSchemaV10 = taskLightSchema;
+export const listTaskLightSchemaV10 = taskLightSchemaPreHtml;
 export type ListTaskLightV10 = z.infer<typeof listTaskLightSchemaV10>;
 
 export const listTaskLightSchemaPre13 = lazySchema(() =>
-  taskLightSchema.extend({
+  taskLightSchemaPreHtml.extend({
     pinned: z.boolean().optional(),
   }),
 );
@@ -1010,9 +1044,15 @@ export type ListTaskLightPre17 = z.infer<typeof listTaskLightSchemaPre17>;
 
 // `epic.listTasks@1.7` adds the per-viewer activity key. `updatedAt` inside
 // the Epic/Phase light remains the task document edit time.
-export const listTaskLightSchema = lazySchema(() =>
+export const listTaskLightSchemaPre18 = lazySchema(() =>
   listTaskLightSchemaPre17.extend({
     recentAt: z.number().optional(),
+  }),
+);
+/** Optional counts for HTML, canvas and file artifacts on the new line. */
+export const listTaskLightSchema = lazySchema(() =>
+  listTaskLightSchemaPre18.extend({
+    epic: epicLightWithPermissionSchema.nullable().optional(),
   }),
 );
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
@@ -1277,8 +1317,14 @@ export type ListTasksResponsePre17 = z.infer<
   typeof listTasksResponseSchemaPre17
 >;
 
-export const listTasksResponseSchema = lazySchema(() =>
+export const listTasksResponseSchemaPre18 = lazySchema(() =>
   listTasksResponseSchemaPre17.extend({
+    tasks: z.array(listTaskLightSchemaPre18),
+  }),
+);
+/** Optional counts for HTML, canvas and file artifacts on the new line. */
+export const listTasksResponseSchema = lazySchema(() =>
+  listTasksResponseSchemaPre18.extend({
     tasks: z.array(listTaskLightSchema),
   }),
 );
@@ -1559,7 +1605,7 @@ export type EpicMentionEpicSuggestion = z.infer<
 >;
 
 function epicMentionArtifactSuggestionSchemaFor<
-  const Kind extends EpicArtifactKind,
+  const Kind extends MarkdownArtifactKind,
 >(kind: Kind) {
   return z.object({
     kind: z.literal("epic-artifact"),
@@ -1628,7 +1674,7 @@ export type EpicMentionArtifactSuggestion = z.infer<
  * here rather than hand-rolling the template strings at each call site.
  */
 export function epicArtifactMentionId(
-  kind: EpicArtifactKind,
+  kind: MarkdownArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
@@ -1636,7 +1682,7 @@ export function epicArtifactMentionId(
 }
 
 export function epicArtifactMentionToken(
-  kind: EpicArtifactKind,
+  kind: MarkdownArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
@@ -1758,7 +1804,7 @@ export type TeamShareGrant = z.infer<typeof teamShareGrantSchema>;
 
 export const epicArtifactLightSchema = lazySchema(() =>
   z.object({
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     id: z.string(),
     epicId: z.string(),
     title: z.string(),
@@ -1773,7 +1819,7 @@ export type EpicArtifactLight = z.infer<typeof epicArtifactLightSchema>;
 
 export const epicArtifactLightDeltaSchema = lazySchema(() =>
   z.object({
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     id: z.string(),
     epicId: z.string(),
     title: z.string().optional(),
@@ -1788,12 +1834,18 @@ export type EpicArtifactLightDelta = z.infer<
 
 // ─── Artifact CRUD (epic.createArtifact / deleteArtifact / updateArtifactStatus / renameArtifact) ──
 
-export const createArtifactRequestSchema = lazySchema(() =>
+export const createArtifactRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
     parentId: z.string().nullable(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     title: z.string(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const createArtifactRequestSchema = lazySchema(() =>
+  createArtifactRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type CreateArtifactRequest = z.infer<typeof createArtifactRequestSchema>;
@@ -2740,13 +2792,19 @@ export type RevokeEpicCollaboratorResponse = z.infer<
   typeof revokeEpicCollaboratorResponseSchema
 >;
 
-export const createCommentThreadRequestSchema = lazySchema(() =>
+export const createCommentThreadRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     content: LatestJsonContentSchema,
     quotedText: z.string(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const createCommentThreadRequestSchema = lazySchema(() =>
+  createCommentThreadRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type CreateCommentThreadRequest = z.infer<
@@ -2762,13 +2820,19 @@ export type CreateCommentThreadResponse = z.infer<
   typeof createCommentThreadResponseSchema
 >;
 
-export const replyToCommentThreadRequestSchema = lazySchema(() =>
+export const replyToCommentThreadRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     content: LatestJsonContentSchema,
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const replyToCommentThreadRequestSchema = lazySchema(() =>
+  replyToCommentThreadRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type ReplyToCommentThreadRequest = z.infer<
@@ -2784,14 +2848,20 @@ export type ReplyToCommentThreadResponse = z.infer<
   typeof replyToCommentThreadResponseSchema
 >;
 
-export const editCommentRequestSchema = lazySchema(() =>
+export const editCommentRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     commentId: z.string(),
     content: LatestJsonContentSchema,
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const editCommentRequestSchema = lazySchema(() =>
+  editCommentRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type EditCommentRequest = z.infer<typeof editCommentRequestSchema>;
@@ -2801,13 +2871,19 @@ export const editCommentResponseSchema = lazySchema(() =>
 );
 export type EditCommentResponse = z.infer<typeof editCommentResponseSchema>;
 
-export const deleteCommentRequestSchema = lazySchema(() =>
+export const deleteCommentRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     commentId: z.string(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const deleteCommentRequestSchema = lazySchema(() =>
+  deleteCommentRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type DeleteCommentRequest = z.infer<typeof deleteCommentRequestSchema>;
@@ -2817,13 +2893,19 @@ export const deleteCommentResponseSchema = lazySchema(() =>
 );
 export type DeleteCommentResponse = z.infer<typeof deleteCommentResponseSchema>;
 
-export const setCommentThreadResolvedRequestSchema = lazySchema(() =>
+export const setCommentThreadResolvedRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     resolved: z.boolean(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const setCommentThreadResolvedRequestSchema = lazySchema(() =>
+  setCommentThreadResolvedRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type SetCommentThreadResolvedRequest = z.infer<
@@ -2839,12 +2921,18 @@ export type SetCommentThreadResolvedResponse = z.infer<
   typeof setCommentThreadResolvedResponseSchema
 >;
 
-export const deleteCommentThreadRequestSchema = lazySchema(() =>
+export const deleteCommentThreadRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const deleteCommentThreadRequestSchema = lazySchema(() =>
+  deleteCommentThreadRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type DeleteCommentThreadRequest = z.infer<
@@ -2901,11 +2989,17 @@ export const commentThreadWireSchema = lazySchema(() =>
 );
 export type CommentThreadWire = z.infer<typeof commentThreadWireSchema>;
 
-export const listCommentThreadsRequestSchema = lazySchema(() =>
+export const listCommentThreadsRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const listCommentThreadsRequestSchema = lazySchema(() =>
+  listCommentThreadsRequestSchemaPreHtml.extend({
+    artifactType: latestEpicArtifactKindSchema,
   }),
 );
 export type ListCommentThreadsRequest = z.infer<
@@ -2940,10 +3034,16 @@ export type ResolveArtifactByPathRequest = z.infer<
   typeof resolveArtifactByPathRequestSchema
 >;
 
-export const resolveArtifactByPathResultSchema = lazySchema(() =>
+export const resolveArtifactByPathResultSchemaPreHtml = lazySchema(() =>
   z.object({
     artifactId: z.string(),
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const resolveArtifactByPathResultSchema = lazySchema(() =>
+  resolveArtifactByPathResultSchemaPreHtml.extend({
+    kind: latestEpicArtifactKindSchema,
   }),
 );
 export type ResolveArtifactByPathResult = z.infer<
@@ -2954,8 +3054,14 @@ export type ResolveArtifactByPathResult = z.infer<
 // chain". The wrapper object is intentional: the versioned-RPC fingerprint
 // rejects a top-level nullable response, so the nullable lives on a field
 // (mirroring `epicLightWithPermissionSchema.light`).
-export const resolveArtifactByPathResponseSchema = lazySchema(() =>
+export const resolveArtifactByPathResponseSchemaPreHtml = lazySchema(() =>
   z.object({
+    artifact: resolveArtifactByPathResultSchemaPreHtml.nullable(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const resolveArtifactByPathResponseSchema = lazySchema(() =>
+  resolveArtifactByPathResponseSchemaPreHtml.extend({
     artifact: resolveArtifactByPathResultSchema.nullable(),
   }),
 );
@@ -2990,9 +3096,9 @@ export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
  * absolute filesystem root - the host derives and authorizes the real root
  * internally). A `null` field means "no restriction on this axis".
  */
-export const searchArtifactsFiltersSchema = lazySchema(() =>
+export const searchArtifactsFiltersSchemaPreHtml = lazySchema(() =>
   z.object({
-    kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
+    kinds: z.array(EpicArtifactKindSchemaPreHtml).nullable(),
     statuses: z.array(z.number().int()).nullable(),
     subtreePath: z
       .string()
@@ -3011,17 +3117,29 @@ export const searchArtifactsFiltersSchema = lazySchema(() =>
       .nullable(),
   }),
 );
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const searchArtifactsFiltersSchema = lazySchema(() =>
+  searchArtifactsFiltersSchemaPreHtml.extend({
+    kinds: z.array(latestEpicArtifactKindSchema).nullable(),
+  }),
+);
 export type SearchArtifactsFilters = z.infer<
   typeof searchArtifactsFiltersSchema
 >;
 
-export const searchArtifactsRequestSchema = lazySchema(() =>
+export const searchArtifactsRequestSchemaPreHtml = lazySchema(() =>
   z.object({
     epicId: z.string(),
     query: z.string(),
     fields: searchArtifactsFieldsSchema,
-    filters: searchArtifactsFiltersSchema,
+    filters: searchArtifactsFiltersSchemaPreHtml,
     limit: z.number().int().min(1).max(1_000),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const searchArtifactsRequestSchema = lazySchema(() =>
+  searchArtifactsRequestSchemaPreHtml.extend({
+    filters: searchArtifactsFiltersSchema,
   }),
 );
 export type SearchArtifactsRequest = z.infer<
@@ -3070,10 +3188,10 @@ export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
  * the existing `epic.resolveArtifactByPath` route so a stale disk result cannot
  * mutate or resurrect deleted state.
  */
-export const searchArtifactHitSchema = lazySchema(() =>
+export const searchArtifactHitSchemaPreHtml = lazySchema(() =>
   z.object({
     artifactId: z.string(),
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     title: z.string(),
     status: z.number().int().nullable(),
     relativePath: z.string(),
@@ -3081,6 +3199,12 @@ export const searchArtifactHitSchema = lazySchema(() =>
     sources: z.array(searchArtifactMatchSourceSchema),
     score: z.number(),
     snippets: z.array(searchArtifactSnippetSchema),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const searchArtifactHitSchema = lazySchema(() =>
+  searchArtifactHitSchemaPreHtml.extend({
+    kind: latestEpicArtifactKindSchema,
   }),
 );
 export type SearchArtifactHit = z.infer<typeof searchArtifactHitSchema>;
@@ -3098,11 +3222,17 @@ export type SearchArtifactsOutcome = z.infer<
   typeof searchArtifactsOutcomeSchema
 >;
 
-export const searchArtifactsResponseSchema = lazySchema(() =>
+export const searchArtifactsResponseSchemaPreHtml = lazySchema(() =>
   z.object({
     outcome: searchArtifactsOutcomeSchema,
-    results: z.array(searchArtifactHitSchema),
+    results: z.array(searchArtifactHitSchemaPreHtml),
     truncated: z.boolean(),
+  }),
+);
+/** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
+export const searchArtifactsResponseSchema = lazySchema(() =>
+  searchArtifactsResponseSchemaPreHtml.extend({
+    results: z.array(searchArtifactHitSchema),
   }),
 );
 export type SearchArtifactsResponse = z.infer<

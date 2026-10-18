@@ -1,4 +1,7 @@
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
@@ -84,16 +87,6 @@ const harnessIdSchemaPreReasonix = lazySchema(() =>
     "omp",
     "huggingface",
   ]),
-);
-
-// Canonical artifact-kind vocabulary (spec / ticket / story / review), shared
-// with the artifact metadata + tombstone schemas and the GUI node registries.
-// Reused here (not re-spelled) so the `artifact_operation` block can never drift
-// from the kinds the rest of the system recognizes.
-const artifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
 );
 
 // Durable provider-generated notice (Codex model reroute / safety
@@ -2328,12 +2321,12 @@ export function artifactOperationBlockId(
 // reflects without rewriting persisted history. The fallback is for the short
 // delete window before the tombstone projects. `blockId` follows
 // {@link artifactOperationBlockId}.
-export const artifactOperationBlockSchema = lazySchema(() =>
+export const artifactOperationBlockSchemaPreHtml = lazySchema(() =>
   z.object({
     ...baseBlockFields,
     type: z.literal("artifact_operation"),
     operation: artifactOperationActionSchema,
-    kind: artifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     title: z.string().nullable().default(null),
     // Content-addressed snapshot refs for the artifact's merged change this turn
@@ -2347,9 +2340,35 @@ export const artifactOperationBlockSchema = lazySchema(() =>
     afterHash: z.string().nullable().default(null),
   }),
 );
+/** New artifact kinds are carried only by chat.subscribe 1.28 and later. */
+export const artifactOperationBlockSchema = lazySchema(() =>
+  artifactOperationBlockSchemaPreHtml.extend({
+    kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),
+  }),
+);
 export type ArtifactOperationBlock = z.infer<
   typeof artifactOperationBlockSchema
 >;
+
+export const contentBlockSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
+  ]),
+);
 
 export const contentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
@@ -2478,7 +2497,7 @@ export const contentBlockSchemaPreReasonix = lazySchema(() =>
     autonomousResumeBlockSchema,
     steerBlockSchemaPreReasonix,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2509,7 +2528,7 @@ export const contentBlockSchemaPreImage = lazySchema(() =>
     autonomousResumeBlockSchemaV18,
     steerBlockSchemaPreReasonix,
     interviewBlockSchemaPreSettlement,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2539,7 +2558,7 @@ export const contentBlockSchemaPreSettlement = lazySchema(() =>
     autonomousResumeBlockSchemaV18,
     steerBlockSchemaPreReasonix,
     interviewBlockSchemaPreSettlement,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2609,7 +2628,7 @@ export const contentBlockSchemaPreFallback = lazySchema(() =>
     autonomousResumeBlockSchemaPreShellHost,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2637,7 +2656,7 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
     autonomousResumeBlockSchemaPreShellHost,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2661,7 +2680,7 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2688,7 +2707,7 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2715,7 +2734,7 @@ export const contentBlockSchemaPrePage = lazySchema(() =>
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2759,6 +2778,6 @@ export const contentBlockSchemaV18 = lazySchema(() =>
     autonomousResumeBlockSchemaV18,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );

@@ -2,14 +2,20 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { FileDiff, GripVertical } from "lucide-react";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type {
+  EpicArtifactKind,
+  MarkdownArtifactKind,
+} from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
 import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
-import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
+import {
+  EPIC_NODE_LABELS,
+  isEpicArtifactKind,
+} from "@/lib/artifacts/node-display";
 import {
   useArtifactById,
   useEpicDeletedArtifact,
@@ -38,6 +44,11 @@ interface ArtifactCardSegmentProps {
   readonly change: ArtifactSegmentChange | null;
   readonly findUnitId: string | null;
 }
+
+type MarkdownArtifactCardSegmentProps = Omit<
+  ArtifactCardSegmentProps,
+  "artifactKind"
+> & { readonly artifactKind: MarkdownArtifactKind };
 
 /**
  * File-diff toggle shown in the header, just left of the operation badge. A
@@ -150,7 +161,9 @@ function ArtifactCardHeaderRow(props: {
   );
 }
 
-const ARTIFACT_KIND_CARD_CLASSES: Readonly<Record<EpicArtifactKind, string>> = {
+const ARTIFACT_KIND_CARD_CLASSES: Readonly<
+  Record<MarkdownArtifactKind, string>
+> = {
   spec: "border-amber-400/45 border-l-2 shadow-sm shadow-amber-950/5 dark:border-amber-300/45",
   ticket:
     "border-violet-400/45 border-l-2 shadow-sm shadow-violet-950/5 dark:border-violet-300/45",
@@ -161,7 +174,7 @@ const ARTIFACT_KIND_CARD_CLASSES: Readonly<Record<EpicArtifactKind, string>> = {
 };
 
 const ARTIFACT_KIND_SURFACE_CLASSES: Readonly<
-  Record<EpicArtifactKind, string>
+  Record<MarkdownArtifactKind, string>
 > = {
   spec: "bg-amber-400/[0.07] dark:bg-amber-300/[0.08]",
   ticket: "bg-violet-400/[0.07] dark:bg-violet-300/[0.08]",
@@ -180,7 +193,7 @@ const ARTIFACT_KIND_SURFACE_CLASSES: Readonly<
 // - because Tailwind's `bg-<hue>/[a]` is an sRGB alpha-composite, so an `in srgb`
 // color-mix is the exact opaque match.
 const ARTIFACT_KIND_STICKY_SURFACE_CLASSES: Readonly<
-  Record<EpicArtifactKind, string>
+  Record<MarkdownArtifactKind, string>
 > = {
   spec: "bg-[color-mix(in_srgb,var(--background)_86.5%,var(--color-amber-400))] dark:bg-[color-mix(in_srgb,var(--background)_84.6%,var(--color-amber-300))]",
   ticket:
@@ -191,7 +204,9 @@ const ARTIFACT_KIND_STICKY_SURFACE_CLASSES: Readonly<
     "bg-[color-mix(in_srgb,var(--background)_86.5%,var(--color-rose-400))] dark:bg-[color-mix(in_srgb,var(--background)_84.6%,var(--color-rose-300))]",
 };
 
-const ARTIFACT_KIND_ICON_CLASSES: Readonly<Record<EpicArtifactKind, string>> = {
+const ARTIFACT_KIND_ICON_CLASSES: Readonly<
+  Record<MarkdownArtifactKind, string>
+> = {
   spec: "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:border-amber-300/25 dark:bg-amber-300/10 dark:text-amber-300",
   ticket:
     "border-violet-400/25 bg-violet-400/10 text-violet-700 dark:border-violet-300/25 dark:bg-violet-300/10 dark:text-violet-300",
@@ -201,13 +216,14 @@ const ARTIFACT_KIND_ICON_CLASSES: Readonly<Record<EpicArtifactKind, string>> = {
     "border-rose-400/25 bg-rose-400/10 text-rose-700 dark:border-rose-300/25 dark:bg-rose-300/10 dark:text-rose-300",
 };
 
-const ARTIFACT_KIND_HOVER_CLASSES: Readonly<Record<EpicArtifactKind, string>> =
-  {
-    spec: "group-hover/artifact-card:bg-amber-400/[0.11]",
-    ticket: "group-hover/artifact-card:bg-violet-400/[0.11]",
-    story: "group-hover/artifact-card:bg-emerald-400/[0.11]",
-    review: "group-hover/artifact-card:bg-rose-400/[0.11]",
-  };
+const ARTIFACT_KIND_HOVER_CLASSES: Readonly<
+  Record<MarkdownArtifactKind, string>
+> = {
+  spec: "group-hover/artifact-card:bg-amber-400/[0.11]",
+  ticket: "group-hover/artifact-card:bg-violet-400/[0.11]",
+  story: "group-hover/artifact-card:bg-emerald-400/[0.11]",
+  review: "group-hover/artifact-card:bg-rose-400/[0.11]",
+};
 
 /**
  * Operation glyph ported from the old VS Code webview
@@ -279,7 +295,7 @@ function ArtifactOperationBadge(props: {
 }
 
 function ArtifactKindIconTile(props: {
-  readonly displayKind: EpicArtifactKind;
+  readonly displayKind: MarkdownArtifactKind;
 }) {
   return (
     <span
@@ -300,7 +316,7 @@ function ArtifactKindIconTile(props: {
  * Other kinds show just the short kind label: "Spec", "Story", "Review".
  */
 function ArtifactKindMeta(props: {
-  readonly displayKind: EpicArtifactKind;
+  readonly displayKind: MarkdownArtifactKind;
   readonly status: number | null;
 }) {
   const kindLabel = EPIC_NODE_LABELS[props.displayKind];
@@ -319,7 +335,7 @@ function ArtifactSummaryControl(props: {
   readonly canOpen: boolean;
   readonly openTitle: string;
   readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
-  readonly displayKind: EpicArtifactKind;
+  readonly displayKind: MarkdownArtifactKind;
   readonly title: string | null;
   readonly isDeleted: boolean;
   readonly status: number | null;
@@ -403,7 +419,7 @@ function resolveArtifactTitle(
 
 function ArtifactTitle(props: {
   readonly title: string | null;
-  readonly displayKind: EpicArtifactKind;
+  readonly displayKind: MarkdownArtifactKind;
   readonly isDeleted: boolean;
 }) {
   if (props.title === null) {
@@ -471,20 +487,26 @@ function canOpenArtifactCard(input: {
  * no body, so a deleted card is not openable).
  */
 export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
+  const { artifactKind } = props;
+  // The presentation track adds cards for non-Markdown kinds.
+  if (!isEpicArtifactKind(artifactKind)) return null;
   // The card's projection, drag source and open action are the Epic's. A
   // transcript outside an Epic session (a bot's, Tracy Bots) gets the inert
   // form: the operation and the title the row recorded, nothing to act on.
   return (
-    <EpicSessionGate fallback={<ArtifactCardInert {...props} />}>
+    <EpicSessionGate
+      fallback={<ArtifactCardInert {...props} artifactKind={artifactKind} />}
+    >
       <ArtifactCardSegmentContent
         key={artifactCardDiffStateKey(props)}
         {...props}
+        artifactKind={artifactKind}
       />
     </EpicSessionGate>
   );
 }
 
-function ArtifactCardInert(props: ArtifactCardSegmentProps) {
+function ArtifactCardInert(props: MarkdownArtifactCardSegmentProps) {
   const title = resolveArtifactTitle(null, props.title);
   return (
     <div
@@ -514,7 +536,7 @@ function artifactCardDiffStateKey(props: ArtifactCardSegmentProps): string {
   return `${props.change.beforeHash ?? "null"}:${props.change.afterHash ?? "null"}`;
 }
 
-function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
+function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   const { operation, artifactKind, artifactId } = props;
   const live = useArtifactById(artifactId);
   const tombstone = useEpicDeletedArtifact(artifactId);
@@ -527,7 +549,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   // live projection. Both null ⇒ pending/unavailable - render a graceful
   // placeholder; the subscription fills it in when the id syncs.
   const resolved = tombstone ?? live;
-  const displayKind: EpicArtifactKind = resolved?.kind ?? artifactKind;
+  const displayKind: MarkdownArtifactKind = resolved?.kind ?? artifactKind;
   const projectionTitle = resolved === null ? null : resolved.title;
   const title = resolveArtifactTitle(projectionTitle, props.title);
   const hasLiveArtifact = live !== null;

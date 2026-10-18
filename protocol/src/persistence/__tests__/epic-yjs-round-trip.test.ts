@@ -233,15 +233,25 @@ describe("epic V200 Yjs → JSON → protocol round-trip (metadata-only artifact
     // `artifacts` map with the right discriminator, parent wiring, and
     // artifact-room reference.
     const epic = parsed.data;
+    // Markdown and canvas artifacts expose `artifactRoomId`; html and file
+    // artifacts carry no artifact room.
+    const artifactRoomIdOf = (
+      artifact: (typeof epic.artifacts)[string],
+    ): string | undefined =>
+      "artifactRoomId" in artifact ? artifact.artifactRoomId : undefined;
     expect(epic.artifacts["spec-1"].kind).toBe("spec");
-    expect(epic.artifacts["spec-1"].artifactRoomId).toBe("artifact-room-0");
+    expect(artifactRoomIdOf(epic.artifacts["spec-1"])).toBe("artifact-room-0");
     expect(epic.artifacts["ticket-1"].kind).toBe("ticket");
     expect(epic.artifacts["ticket-1"].parentId).toBe("spec-1");
-    expect(epic.artifacts["ticket-1"].artifactRoomId).toBe("artifact-room-0");
+    expect(artifactRoomIdOf(epic.artifacts["ticket-1"])).toBe(
+      "artifact-room-0",
+    );
     expect(epic.artifacts["story-1"].kind).toBe("story");
-    expect(epic.artifacts["story-1"].artifactRoomId).toBe("artifact-room-0");
+    expect(artifactRoomIdOf(epic.artifacts["story-1"])).toBe("artifact-room-0");
     expect(epic.artifacts["review-1"].kind).toBe("review");
-    expect(epic.artifacts["review-1"].artifactRoomId).toBe("artifact-room-1");
+    expect(artifactRoomIdOf(epic.artifacts["review-1"])).toBe(
+      "artifact-room-1",
+    );
     expect(epic.deletedArtifacts["spec-2"].kind).toBe("spec");
     expect(epic.deletedArtifacts["ticket-2"].kind).toBe("ticket");
     expect(Object.keys(epic.chats)).toEqual(["chat-1"]);

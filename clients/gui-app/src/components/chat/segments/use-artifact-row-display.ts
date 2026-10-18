@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { CheckpointFileOperation } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -14,7 +14,7 @@ function nonEmpty(value: string | null | undefined): string | null {
 }
 
 export interface ArtifactRowDisplay {
-  readonly displayKind: EpicArtifactKind;
+  readonly displayKind: MarkdownArtifactKind;
   readonly title: string;
   readonly isDeleted: boolean;
   readonly canOpen: boolean;
@@ -29,7 +29,7 @@ export interface ArtifactRowDisplay {
  */
 export function useArtifactRowDisplay(input: {
   readonly artifactId: string | null;
-  readonly artifactKind: EpicArtifactKind | null;
+  readonly artifactKind: MarkdownArtifactKind | null;
   readonly fallbackTitle: string | null;
   readonly operation: CheckpointFileOperation;
 }): ArtifactRowDisplay {
@@ -71,7 +71,7 @@ export function useArtifactRowDisplay(input: {
  * workspace): the captured tag's kind and title, and nothing to open.
  */
 export function sessionlessArtifactRowDisplay(input: {
-  readonly artifactKind: EpicArtifactKind | null;
+  readonly artifactKind: MarkdownArtifactKind | null;
   readonly fallbackTitle: string | null;
   readonly operation: CheckpointFileOperation;
 }): ArtifactRowDisplay {
@@ -82,14 +82,14 @@ export function sessionlessArtifactRowDisplay(input: {
 }
 
 function rowDisplayFields(
-  live: { readonly kind: EpicArtifactKind; readonly title: string } | null,
+  live: { readonly kind: MarkdownArtifactKind; readonly title: string } | null,
   input: {
-    readonly artifactKind: EpicArtifactKind | null;
+    readonly artifactKind: MarkdownArtifactKind | null;
     readonly fallbackTitle: string | null;
     readonly operation: CheckpointFileOperation;
   },
 ): Omit<ArtifactRowDisplay, "openArtifact"> {
-  const displayKind: EpicArtifactKind =
+  const displayKind: MarkdownArtifactKind =
     live?.kind ?? input.artifactKind ?? "spec";
   const title =
     nonEmpty(live?.title) ??

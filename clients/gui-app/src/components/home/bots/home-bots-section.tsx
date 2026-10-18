@@ -1,11 +1,11 @@
 import { useId, useMemo, type ReactNode } from "react";
-import { Bot } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { Button } from "@/components/ui/button";
 import { useHostClient } from "@/lib/host/runtime";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -74,7 +74,12 @@ export function HomeBotsSection(): ReactNode {
 
   let body: ReactNode;
   if (!support) {
-    body = <BotsUnavailableNotice hostLabel={hostLabel} />;
+    body = (
+      <BotsUnavailableNotice
+        hostLabel={hostLabel}
+        testId="home-bots-unavailable"
+      />
+    );
   } else if (environments.isError || bots.isError) {
     body = (
       <div
@@ -138,35 +143,5 @@ export function HomeBotsSection(): ReactNode {
       </div>
       {body}
     </section>
-  );
-}
-
-/**
- * The same notice anatomy as Settings ▸ Usage's: the host answered, and the
- * answer is that it predates bots. Nothing else on Home depends on this.
- */
-function BotsUnavailableNotice(props: {
-  readonly hostLabel: string | null;
-}): ReactNode {
-  return (
-    <div
-      role="status"
-      data-testid="home-bots-unavailable"
-      className="mx-3 flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
-    >
-      <span className="flex size-9 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
-        <Bot className="size-4.5" aria-hidden="true" />
-      </span>
-      <div className="max-w-[60ch] space-y-1">
-        <p className="font-medium text-ui-sm text-foreground">
-          {props.hostLabel === null
-            ? "Bots aren't available on this host yet"
-            : `Bots aren't available on ${props.hostLabel} yet`}
-        </p>
-        <p className="text-ui-sm text-muted-foreground">
-          This host predates bots. Update it to create and run them from here.
-        </p>
-      </div>
-    </div>
   );
 }

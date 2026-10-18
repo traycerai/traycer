@@ -25,7 +25,12 @@ const mocks = vi.hoisted(() => ({
     directory: [] as Array<{ hostId: string; label: string }>,
     listedBotIds: undefined as string[] | undefined,
     claimPending: false,
+    support: null as boolean | null,
   },
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: () => mocks.state.support,
 }));
 
 vi.mock("@/components/epic-canvas/tab-host-provider", () => ({
@@ -167,6 +172,7 @@ beforeEach(() => {
   ];
   mocks.state.listedBotIds = undefined;
   mocks.state.claimPending = false;
+  mocks.state.support = true;
   useBotTabsStore.setState({ tabs: {} });
   useBotTabsStore
     .getState()
@@ -175,6 +181,30 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("<BotTabSurface /> on a host without bots", () => {
+  it("shows the update notice naming the host and none of the tab's controls when the host lacks bot.list", () => {
+    mocks.state.support = false;
+    mocks.state.snapshot = snapshotBoundTo(BOUND_HOST, false);
+    render(surface());
+
+    expect(screen.getByTestId("bot-tab-unavailable").textContent).toContain(
+      "Bots aren't available on Laptop yet",
+    );
+    expect(screen.queryByTestId("bot-tab-bound-elsewhere")).toBeNull();
+    expect(screen.queryByTestId("bot-tab-move-here")).toBeNull();
+    expect(screen.queryByTestId("stub-conversation")).toBeNull();
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+  });
+
+  it("draws nothing until the handshake has answered either way", () => {
+    mocks.state.support = null;
+    const { container } = render(surface());
+
+    expect(container.textContent).toBe("");
+    expect(screen.queryByTestId("stub-conversation")).toBeNull();
+  });
 });
 
 describe("<BotTabSurface /> bound elsewhere", () => {

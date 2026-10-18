@@ -361,3 +361,57 @@ export function decodeEpicStateFilesArm(
   }
   return { revision: arm.revision, files };
 }
+
+/**
+ * A sha-addressed artifact read. epic.readFile is gated by the files-plane path;
+ * this read is authorised by the host when the sha appears in an artifact head
+ * or a stamped chat row. It carries neither a path nor a via hint.
+ */
+export const epicReadArtifactObjectRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    sha256: epicFileSha256Schema,
+    want: epicReadFileWantSchema,
+  }),
+);
+export type EpicReadArtifactObjectRequest = z.infer<
+  typeof epicReadArtifactObjectRequestSchema
+>;
+
+/**
+ * For an authorised sha absent from its store, the host starts an on-demand
+ * cloud download and waits up to 3 s before answering `downloading`. The caller
+ * asks again until another arm comes back. Spans are served only once the whole
+ * object is on disk. Authorisation requires the sha in an artifact head or a
+ * stamped chat row.
+ */
+export const epicReadArtifactObjectResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicReadFileResponseSchema.options[0],
+    epicReadFileResponseSchema.options[1],
+    epicReadFileResponseSchema.options[2],
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: z.enum(["missing", "not-downloaded", "failed"]),
+    }),
+    z
+      .object({
+        kind: z.literal("downloading"),
+        receivedBytes: z.number().int().nonnegative(),
+        totalBytes: z.number().int().nonnegative(),
+      })
+      .refine((progress) => progress.receivedBytes <= progress.totalBytes, {
+        message: "Received bytes must not exceed total bytes",
+        path: ["receivedBytes"],
+      }),
+  ]),
+);
+export type EpicReadArtifactObjectResponse = z.infer<
+  typeof epicReadArtifactObjectResponseSchema
+>;
+export const epicReadArtifactObjectV10 = defineRpcContract({
+  method: "epic.readArtifactObject",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: epicReadArtifactObjectRequestSchema,
+  responseSchema: epicReadArtifactObjectResponseSchema,
+});

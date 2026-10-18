@@ -15,6 +15,9 @@ import {
   epicStateSubscribeOpenRequestSchemaV10,
   epicStateSubscribeServerFrameSchemaV10,
   epicStateSubscribeServerFrameSchemaV11,
+  epicStateSubscribeServerFrameSchemaV12,
+  epicStateSubscribeServerFrameSchemaV13,
+  epicStateSubscribeV13,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicDeletionAttributionSchema,
@@ -75,12 +78,13 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
   it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
     // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
-    // and `@1.2` (the epic files arm),
+    // `@1.2` (the epic files arm) and `@1.3` (the html, canvas and file
+    // artifact kinds),
     // `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0, and
     // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
     // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
-      ["epic.state.subscribe", 2],
+      ["epic.state.subscribe", 3],
       ["epic.status.subscribe", 1],
       ["artifact.subscribe", 1],
     ] as const) {
@@ -1592,6 +1596,204 @@ describe("epic.state.subscribe@1.1: tombstones carry artifact metadata; @1.0 sta
       artifactTombstones: [ticketWithoutStatus],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("epic.state.subscribe@1.3: html, canvas and file artifact records and tombstones", () => {
+  const artifactBase = {
+    folderName: "page-1",
+    title: "A page",
+    createdAt: 1,
+    updatedAt: 2,
+    createdManually: false,
+    parentId: null,
+    revision: 5,
+  };
+  const head = { files: {}, capturedAt: 3 };
+  const sha256 = "a".repeat(64);
+  const htmlRecord = {
+    ...artifactBase,
+    kind: "html" as const,
+    id: "html-1",
+    layout: "folder" as const,
+    head,
+  };
+  // A canvas keeps a Yjs body, but the lane row names no room: the room id
+  // is host-private and the lane omits it for every kind.
+  const canvasRecord = {
+    ...artifactBase,
+    kind: "canvas" as const,
+    id: "canvas-1",
+    layout: "folder" as const,
+    head,
+  };
+  const fileRecord = {
+    ...artifactBase,
+    kind: "file" as const,
+    id: "file-1",
+    layout: "file" as const,
+    sha256,
+    byteLength: 12,
+    mediaType: "image/png",
+    status: "published" as const,
+  };
+  const markdownRecord = {
+    ...artifactBase,
+    kind: "spec" as const,
+    id: "spec-1",
+    layout: "folder" as const,
+  };
+  const tombstoneBase = {
+    title: "Gone",
+    deletedAt: "2026-01-01T00:00:00.000Z",
+    revision: 6,
+    folderName: "gone-1",
+    parentId: null,
+    createdAt: 1,
+    createdManually: false,
+    assignee: null,
+    status: null,
+  };
+  const tombstones = (["html", "canvas", "file"] as const).map((kind) => ({
+    ...tombstoneBase,
+    kind,
+    id: `${kind}-gone`,
+  }));
+  const newKindDelta = {
+    kind: "delta" as const,
+    authorityEpoch: "epoch-1",
+    seq: 8,
+    artifactUpserts: [htmlRecord, canvasRecord, fileRecord, markdownRecord],
+    artifactTombstones: tombstones,
+    commentThreadUpserts: [],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims: null,
+    hasBinaryPayload: false,
+  };
+  const newKindSnapshot = {
+    kind: "snapshot" as const,
+    authorityEpoch: "epoch-1",
+    position: 8,
+    basis: "cold" as const,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title: "An epic", updatedAt: 1 } },
+    artifactRecords: [htmlRecord, canvasRecord, fileRecord, markdownRecord],
+    deletedArtifacts: tombstones,
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+    hasBinaryPayload: false,
+  };
+
+  it("@1.3 parses upserts and tombstones of the three new kinds, with the markdown rows beside them", () => {
+    const parsed = epicStateSubscribeServerFrameSchemaV13.parse(newKindDelta);
+    if (parsed.kind !== "delta") throw new Error("expected a delta frame");
+    expect(parsed.artifactUpserts.map((record) => record.kind)).toEqual([
+      "html",
+      "canvas",
+      "file",
+      "spec",
+    ]);
+    expect(parsed.artifactTombstones.map((record) => record.kind)).toEqual([
+      "html",
+      "canvas",
+      "file",
+    ]);
+  });
+
+  it("@1.3 parses a snapshot holding the three new kinds as records and as tombstones", () => {
+    const parsed =
+      epicStateSubscribeServerFrameSchemaV13.parse(newKindSnapshot);
+    if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(parsed.artifactRecords).toHaveLength(4);
+    expect(parsed.deletedArtifacts.map((record) => record.kind)).toEqual([
+      "html",
+      "canvas",
+      "file",
+    ]);
+  });
+
+  it.each(["html", "canvas", "file"] as const)(
+    "@1.2 refuses the %s kind in an upsert and in a tombstone, where @1.3 accepts it: the released peer cannot decode the kind",
+    (kind) => {
+      const upsert = {
+        html: htmlRecord,
+        canvas: canvasRecord,
+        file: fileRecord,
+      }[kind];
+      const upsertOnly = {
+        ...newKindDelta,
+        artifactUpserts: [upsert],
+        artifactTombstones: [],
+      };
+      const tombstoneOnly = {
+        ...newKindDelta,
+        artifactUpserts: [],
+        artifactTombstones: tombstones.filter((row) => row.kind === kind),
+      };
+      expect(
+        epicStateSubscribeServerFrameSchemaV13.safeParse(upsertOnly).success,
+      ).toBe(true);
+      expect(
+        epicStateSubscribeServerFrameSchemaV12.safeParse(upsertOnly).success,
+      ).toBe(false);
+      expect(
+        epicStateSubscribeServerFrameSchemaV13.safeParse(tombstoneOnly).success,
+      ).toBe(true);
+      expect(
+        epicStateSubscribeServerFrameSchemaV12.safeParse(tombstoneOnly).success,
+      ).toBe(false);
+    },
+  );
+
+  it("@1.2 refuses a snapshot holding a new kind, in records or in tombstones", () => {
+    expect(
+      epicStateSubscribeServerFrameSchemaV12.safeParse({
+        ...newKindSnapshot,
+        deletedArtifacts: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      epicStateSubscribeServerFrameSchemaV12.safeParse({
+        ...newKindSnapshot,
+        artifactRecords: [markdownRecord],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("@1.2 still decodes a frame holding only markdown rows, and @1.3 decodes the same frame", () => {
+    const markdownOnly = {
+      ...newKindDelta,
+      artifactUpserts: [markdownRecord],
+      artifactTombstones: [],
+    };
+    expect(
+      epicStateSubscribeServerFrameSchemaV12.safeParse(markdownOnly).success,
+    ).toBe(true);
+    expect(
+      epicStateSubscribeServerFrameSchemaV13.safeParse(markdownOnly).success,
+    ).toBe(true);
+  });
+
+  it("@1.3 refuses a file record without its object fields", () => {
+    const { sha256: _dropped, ...fileWithoutSha } = fileRecord;
+    expect(
+      epicStateSubscribeServerFrameSchemaV13.safeParse({
+        ...newKindDelta,
+        artifactUpserts: [fileWithoutSha],
+        artifactTombstones: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is the registered top of the line, with @1.2 still installed", () => {
+    expect(epicStateSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+    const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
+    expect(line.latestMinor).toBe(3);
+    expect(line.versions[3].contract).toBe(epicStateSubscribeV13);
+    expect(line.versions[2].contract.serverFrameSchema).toBe(
+      epicStateSubscribeServerFrameSchemaV12,
+    );
   });
 });
 

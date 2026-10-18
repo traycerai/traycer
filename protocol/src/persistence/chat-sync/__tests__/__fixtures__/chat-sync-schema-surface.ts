@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 8
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 8
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 8
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 8
             }
           },
           "required": [
@@ -5354,12 +5354,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             },
                                             "kind": {
                                               "type": "string",
-                                              "enum": [
-                                                "spec",
-                                                "ticket",
-                                                "story",
-                                                "review"
-                                              ]
+                                              "minLength": 1
                                             },
                                             "artifactId": {
                                               "type": "string"

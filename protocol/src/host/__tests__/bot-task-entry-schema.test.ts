@@ -475,6 +475,7 @@ describe("botTaskEntrySchema lastCheckin", () => {
     it.each([
       ["running", "working"],
       ["running", "owed-release-work"],
+      ["running", "no-agent-yet"],
       ["running", "resumed-while-composing"],
       ["unknown", "check-failed"],
       ["idle", null],

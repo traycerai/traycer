@@ -66,6 +66,10 @@ import type {
   EpicStateStreamCallbacks,
   EpicStateTrustChangedFrame,
 } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import {
+  epicArtifactRecordSchema,
+  type EpicArtifactRecord,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import {
   decodeEpicStateFilesArm,
@@ -83,6 +87,13 @@ import {
   type EpicStateRow,
 } from "./epic-state-rows";
 import { EPIC_STATE_LANE_ID, type EpicStateLaneEvent } from "./lane-events";
+
+/** Normalize frozen host rows through the live schema's defaults. */
+function normalizeArtifactRecord(
+  record: EpicStateSnapshotFrame["artifactRecords"][number],
+): EpicArtifactRecord {
+  return "layout" in record ? record : epicArtifactRecordSchema.parse(record);
+}
 
 /**
  * The subset of the state lane's stream client this adapter drives. Narrowed at
@@ -245,7 +256,7 @@ export function createEpicStateLaneAdapter(
       rows.push({
         rowId: artifactRowId(record.id),
         revision: record.revision,
-        row: { kind: "artifact", record },
+        row: { kind: "artifact", record: normalizeArtifactRecord(record) },
       });
     }
     for (const record of frame.deletedArtifacts) {
@@ -302,7 +313,7 @@ export function createEpicStateLaneAdapter(
         row: {
           rowId: artifactRowId(record.id),
           revision: record.revision,
-          row: { kind: "artifact", record },
+          row: { kind: "artifact", record: normalizeArtifactRecord(record) },
         },
       });
     }

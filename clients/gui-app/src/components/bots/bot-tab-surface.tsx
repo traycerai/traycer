@@ -7,7 +7,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import {
   useBotSubscriptionForHost,
@@ -52,6 +54,30 @@ export function BotTabSurface(props: {
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
+  // A tab is created only from Home's bots band, which draws nothing until
+  // the host advertises `bot.list`; a RESTORED tab (the store persists per
+  // window) meets whatever that host advertises now. The `bot.*` namespace
+  // ships as one block, so this one presence check stands for every write
+  // the tab offers; without it the tab shows the update notice and no
+  // control that would call a method the host lacks.
+  const support = useHostMethodSupport(hostId, "bot.list");
+  const directory = useHostDirectoryList();
+  if (support === null) return null;
+  if (!support) {
+    const hostLabel =
+      directory.data?.find((entry) => entry.hostId === hostId)?.label ?? hostId;
+    return (
+      <div
+        className="flex h-full flex-col justify-center"
+        data-testid="bot-tab"
+      >
+        <BotsUnavailableNotice
+          hostLabel={hostLabel}
+          testId="bot-tab-unavailable"
+        />
+      </div>
+    );
+  }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
       <BotTabBody botId={botId} hostId={hostId} />

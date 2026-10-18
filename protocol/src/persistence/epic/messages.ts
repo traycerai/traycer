@@ -2,6 +2,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaPreHtml,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
   contentBlockSchemaPrePage,
@@ -515,6 +516,16 @@ export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
+);
+/** Epic records and released chat lines retain the four-kind operation block. */
+export const assistantMessageSchemaPreHtml = lazySchema(() =>
+  assistantMessageSchema.extend({ blocks: z.array(contentBlockSchemaPreHtml) }),
+);
+export const messageSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchema,
+    assistantMessageSchemaPreHtml,
+  ]),
 );
 export type Message = z.infer<typeof messageSchema>;
 

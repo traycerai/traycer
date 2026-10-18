@@ -55,6 +55,7 @@ export type {
 import type { Attachment } from "@/lib/composer/types";
 import type {
   EpicArtifactKind,
+  MarkdownArtifactKind,
   JsonContent,
 } from "@traycer/protocol/common/registry";
 import type {
@@ -417,7 +418,7 @@ export interface ArtifactOperationSegment {
  */
 export interface ArtifactChangeRow {
   artifactId: string | null;
-  artifactKind: EpicArtifactKind | null;
+  artifactKind: MarkdownArtifactKind | null;
   title: string | null;
   operation: CheckpointFileOperation;
   filePath: string;

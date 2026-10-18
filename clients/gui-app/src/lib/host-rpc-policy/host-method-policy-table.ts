@@ -1127,6 +1127,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
   "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  // Artifact object bytes are read on demand and never polled.
+  "epic.readArtifactObject": { ...LATEST_SCHEDULING, poll: null },
   "epic.artifactVersions.restore": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -1,6 +1,6 @@
 /**
  * Source of truth for epic node kinds, display registries, and tree
- * conversion. The GUI treats chat + the four backend artifact kinds
+ * conversion. The GUI treats chat + the four Markdown artifact kinds
  * (spec, ticket, story, review) as a single "EpicNode" concept.
  * `Record<EpicNodeKind, …>` tables below fail compilation until every
  * key is filled in when a kind is added.
@@ -17,21 +17,16 @@ import {
 } from "lucide-react";
 import type { TreeNodeNested } from "@/lib/tree-types";
 import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
-import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  markdownArtifactKindSchema,
+  type MarkdownArtifactKind,
+} from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
-
-const epicArtifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
-);
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 export type EpicNodeKind =
-  | EpicArtifactKind
+  | MarkdownArtifactKind
   | "chat"
   | "terminal-agent"
   | "terminal";
@@ -39,17 +34,17 @@ export type EpicNodeKind =
 export const EPIC_NODE_KINDS: ReadonlyArray<EpicNodeKind> = [
   "chat",
   "terminal-agent",
-  ...epicArtifactKindSchema.options,
+  ...markdownArtifactKindSchema.options,
   "terminal",
 ];
 
 const EPIC_ARTIFACT_KIND_SET: ReadonlySet<string> = new Set(
-  epicArtifactKindSchema.options,
+  markdownArtifactKindSchema.options,
 );
 
 export function isEpicArtifactKind(
   value: string | null | undefined,
-): value is EpicArtifactKind {
+): value is MarkdownArtifactKind {
   return (
     value !== null && value !== undefined && EPIC_ARTIFACT_KIND_SET.has(value)
   );
@@ -171,7 +166,7 @@ export function normalizeEpicNodeIconColors(
  * artifact kind fails compilation until its hint is written.
  */
 export const EPIC_NODE_PLACEHOLDER_TEXT: Readonly<
-  Record<EpicArtifactKind, string>
+  Record<MarkdownArtifactKind, string>
 > = {
   spec: "Describe what you want to build — goals, requirements, constraints…",
   ticket: "Describe this ticket — what needs to change and how to verify it…",
