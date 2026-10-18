@@ -197,12 +197,17 @@ export async function acquireCliConfigLock(
     null;
   while (true) {
     await releaseUnreleased(lockPath);
+    await removeRetainedTokens();
     if (await tryCreate(lockPath, serialized)) {
       await sweepBreakTokens(lockPath, record.nonce);
       return makeHandle(lockPath, record);
     }
     const holder = await readHolder(lockPath);
-    if (holder === null) continue; // released between our create and read
+    if (holder === null) {
+      // Released between our create and read: retry at once, within the wait.
+      if (Date.now() >= deadline) throw lockTimeoutError(timing, lockPath);
+      continue;
+    }
     const ageMs = await lockAgeMs(lockPath);
     if (
       holder.record !== null &&
@@ -235,13 +240,18 @@ export async function acquireCliConfigLock(
         }
       }
     }
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `Timed out after ${timing.waitMs}ms waiting for the settings lock ${lockPath}. Another Traycer process is changing settings; if none is running, delete that file and retry.`,
-      );
-    }
+    if (Date.now() >= deadline) throw lockTimeoutError(timing, lockPath);
     await sleep(timing.pollMs);
   }
+}
+
+function lockTimeoutError(
+  timing: CliConfigLockTiming,
+  lockPath: string,
+): Error {
+  return new Error(
+    `Timed out after ${timing.waitMs}ms waiting for the settings lock ${lockPath}. Another Traycer process is changing settings; if none is running, delete that file and retry.`,
+  );
 }
 
 /**
@@ -302,9 +312,12 @@ async function breakDeadLock(
         }
         return true;
       } finally {
-        // Best effort, like the temp file: the record it guarded is gone or
-        // replaced, so the next holder's sweep removes a token left here.
-        await rm(tokenPath, { force: true }).catch(() => undefined);
+        // Never fails the acquire. A token that will not go is retried by this
+        // process: when the dead lock is still there (a blocked unlink), only
+        // its removal lets the next breaker in, since it names a live creator.
+        await rm(tokenPath, { force: true }).catch(() => {
+          retainTokenRemoval(tokenPath, serialized);
+        });
       }
     }
     // Another breaker claimed that generation first: look again.
@@ -462,6 +475,9 @@ interface Holder {
   // `null` when the file names no holder (empty, unparseable, or unreadable
   // mid-release on Windows): never broken.
   readonly record: LockRecord | null;
+  // The file exists but a Windows filter would not let us read it. Its owner
+  // is unknown, not absent.
+  readonly unreadable: boolean;
 }
 
 async function readHolder(path: string): Promise<Holder | null> {
@@ -471,10 +487,12 @@ async function readHolder(path: string): Promise<Holder | null> {
   } catch (err) {
     const code = errorCode(err);
     if (code === "ENOENT") return null;
-    if (isTransientWindowsError(code)) return { raw: "", record: null };
+    if (isTransientWindowsError(code)) {
+      return { raw: "", record: null, unreadable: true };
+    }
     throw err;
   }
-  return { raw, record: parseRecord(raw) };
+  return { raw, record: parseRecord(raw), unreadable: false };
 }
 
 function parseRecord(raw: string): LockRecord | null {
@@ -525,7 +543,11 @@ async function removeIfOurs(
   record: LockRecord,
 ): Promise<boolean> {
   try {
-    if (!isOurs(await readHolder(lockPath), record)) return true;
+    const holder = await readHolder(lockPath);
+    // An owner check a Windows filter blocked has not shown the lock is not
+    // ours: retry it like a blocked unlink.
+    if (holder !== null && holder.unreadable) return false;
+    if (!isOurs(holder, record)) return true;
     await unlink(lockPath);
     return true;
   } catch (err) {
@@ -549,23 +571,67 @@ function forget(lockPath: string, record: LockRecord): void {
 }
 
 /**
- * Keeps retrying a release that failed in the foreground until it lands or
- * an acquire in this process lands it first. Unref'd: a process that exits
- * leaves a dead holder, which the next writer breaks.
+ * Keeps calling `retry` with backoff until it reports it landed: a release
+ * that failed in the foreground, or a break token that would not go. An
+ * acquire in this process retries both first. Unref'd: a process that exits
+ * leaves a dead holder or creator, which the next writer handles.
  */
-function retryReleaseInBackground(
-  lockPath: string,
-  record: LockRecord,
+function retryInBackground(
+  retry: () => Promise<boolean>,
   attempt: number,
 ): void {
   const delays = currentTiming().backgroundReleaseDelaysMs;
   const delay = delays[Math.min(attempt, delays.length - 1)] ?? 5_000;
   const timer = setTimeout(() => {
-    void retryRelease(lockPath, record).then((landed) => {
-      if (!landed) retryReleaseInBackground(lockPath, record, attempt + 1);
+    void retry().then((landed) => {
+      if (!landed) retryInBackground(retry, attempt + 1);
     });
   }, delay);
   timer.unref();
+}
+
+// This process's break tokens whose removal failed, by path, with the bytes
+// this process wrote into each.
+const retainedTokens = new Map<string, string>();
+
+function retainTokenRemoval(tokenPath: string, serialized: string): void {
+  retainedTokens.set(tokenPath, serialized);
+  retryInBackground(() => retryTokenRemoval(tokenPath), 0);
+}
+
+/**
+ * Removes a retained token if it still carries this process's bytes. Chained
+ * per path like release retries, so two retries never remove a token another
+ * breaker created at that path after the first removed ours.
+ */
+function retryTokenRemoval(tokenPath: string): Promise<boolean> {
+  let landed = false;
+  return serializeRemoval(tokenPath, async () => {
+    const serialized = retainedTokens.get(tokenPath);
+    if (serialized === undefined) {
+      landed = true;
+      return;
+    }
+    try {
+      if ((await readFile(tokenPath, "utf8")) === serialized) {
+        await rm(tokenPath, { force: true });
+      }
+      retainedTokens.delete(tokenPath);
+      landed = true;
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") {
+        retainedTokens.delete(tokenPath);
+        landed = true;
+      }
+    }
+  }).then(() => landed);
+}
+
+/** Retries every retained token removal once. */
+async function removeRetainedTokens(): Promise<void> {
+  for (const tokenPath of [...retainedTokens.keys()]) {
+    await retryTokenRemoval(tokenPath);
+  }
 }
 
 function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
@@ -585,7 +651,7 @@ function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
         `Could not remove the settings lock ${lockPath}; retrying in the background.`,
       );
       unreleased.set(lockPath, [...(unreleased.get(lockPath) ?? []), record]);
-      retryReleaseInBackground(lockPath, record, 0);
+      retryInBackground(() => retryRelease(lockPath, record), 0);
     },
   };
 }

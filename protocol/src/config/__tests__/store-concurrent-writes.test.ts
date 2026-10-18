@@ -1,6 +1,14 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +45,17 @@ const h = vi.hoisted(() => ({
   unlinkFailures: [] as string[],
   // Fails the next removals of the lock's temp record file, one code per call.
   lockTmpRmFailures: [] as string[],
+  // Fails the next removals of a break token, one code per call.
+  tokenRmFailures: [] as string[],
+  // When set, a failed token removal first replaces the token with this
+  // record, aged an hour: another breaker claiming the freed generation.
+  tokenRmReplacement: null as string | null,
+  // Fails the next reads of the lock file, one code per call.
+  lockReadFailures: [] as string[],
+  // Once set, the config rename arms this many lock-read failures (EBUSY).
+  lockReadFailuresAfterRename: 0,
+  // Every link into the lock fails EEXIST and every read of it ENOENT.
+  lockAlwaysVanishing: false,
   // Fails the next `flag: "wx"` creates, one code per call.
   wxFailures: [] as string[],
 }));
@@ -59,6 +78,11 @@ vi.mock("node:fs/promises", async (importActual) => {
   return {
     ...actual,
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      if (args[0] === `${cliConfigPath()}.lock`) {
+        if (h.lockAlwaysVanishing) throw simulatedError("ENOENT");
+        const code = h.lockReadFailures.shift();
+        if (code !== undefined) throw simulatedError(code);
+      }
       const lockSeam = h.lockReadPark;
       if (lockSeam !== null && args[0] === `${cliConfigPath()}.lock`) {
         h.lockReadPark = null;
@@ -87,10 +111,18 @@ vi.mock("node:fs/promises", async (importActual) => {
         }
       }
       await actual.rename(source, target);
+      if (target === cliConfigPath() && h.lockReadFailuresAfterRename > 0) {
+        h.lockReadFailures = Array.from(
+          { length: h.lockReadFailuresAfterRename },
+          () => "EBUSY",
+        );
+        h.lockReadFailuresAfterRename = 0;
+      }
     },
     link: async (existing: string, linkPath: string) => {
       if (linkPath === `${cliConfigPath()}.lock`) {
         h.lockLinks += 1;
+        if (h.lockAlwaysVanishing) throw simulatedError("EEXIST");
         const code = h.lockLinkFailures.shift();
         if (code !== undefined) throw simulatedError(code);
       }
@@ -108,6 +140,21 @@ vi.mock("node:fs/promises", async (importActual) => {
       ) {
         const code = h.lockTmpRmFailures.shift();
         if (code !== undefined) throw simulatedError(code);
+      }
+      if (
+        typeof target === "string" &&
+        target.includes(".break-") &&
+        !target.endsWith(".tmp")
+      ) {
+        const code = h.tokenRmFailures.shift();
+        if (code !== undefined) {
+          if (h.tokenRmReplacement !== null) {
+            await actual.writeFile(target, h.tokenRmReplacement);
+            const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+            await actual.utimes(target, anHourAgo, anHourAgo);
+          }
+          throw simulatedError(code);
+        }
       }
       return actual.rm(...args);
     },
@@ -136,6 +183,7 @@ vi.mock("node:fs/promises", async (importActual) => {
 });
 
 import { setCliConfigLockTimingForTests } from "../cli-config-lock";
+import { queryPidStartFingerprintAsync } from "../credentials-lock";
 import { cliConfigPath } from "../paths";
 import {
   EMPTY_CLI_CONFIG,
@@ -169,6 +217,7 @@ const FISH = "/opt/test/bin/fish";
 const NU = "/opt/test/bin/nu";
 
 let lastSeam: ParkSeam | null = null;
+const spawned: ChildProcess[] = [];
 
 function lockPath(): string {
   return `${cliConfigPath()}.lock`;
@@ -255,6 +304,28 @@ async function deadPid(): Promise<number> {
   return pid;
 }
 
+/** A child that stays alive until the test ends, once it reports ready. */
+async function liveChildPid(): Promise<number> {
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.stdout.write('ready\\n'); setInterval(() => {}, 1 << 30)"],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+  spawned.push(child);
+  const pid = child.pid;
+  if (pid === undefined) throw new Error("could not spawn a helper process");
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", () => {
+      reject(new Error("live helper exited early"));
+    });
+    child.stdout?.once("data", () => {
+      resolve();
+    });
+  });
+  return pid;
+}
+
 beforeEach(async () => {
   h.home = await mkdtemp(join(tmpdir(), "traycer-config-concurrent-"));
   h.platform = process.platform;
@@ -268,6 +339,11 @@ beforeEach(async () => {
   h.lockLinkFailures = [];
   h.unlinkFailures = [];
   h.lockTmpRmFailures = [];
+  h.tokenRmFailures = [];
+  h.tokenRmReplacement = null;
+  h.lockReadFailures = [];
+  h.lockReadFailuresAfterRename = 0;
+  h.lockAlwaysVanishing = false;
   h.wxFailures = [];
 });
 
@@ -282,7 +358,13 @@ afterEach(async () => {
   h.lockLinkFailures = [];
   h.unlinkFailures = [];
   h.lockTmpRmFailures = [];
+  h.tokenRmFailures = [];
+  h.tokenRmReplacement = null;
+  h.lockReadFailures = [];
+  h.lockReadFailuresAfterRename = 0;
+  h.lockAlwaysVanishing = false;
   h.wxFailures = [];
+  for (const child of spawned.splice(0)) child.kill();
   setCliConfigLockTimingForTests(null);
   await rm(h.home, { recursive: true, force: true });
 });
@@ -675,6 +757,134 @@ describe("concurrent config writers", () => {
       // The refused removal, then the one that landed (and the release).
       expect(h.lockUnlinks).toBeGreaterThanOrEqual(2);
       expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it("retries a release whose owner check a Windows filter blocks", async () => {
+      h.platform = "win32";
+      setCliConfigLockTimingForTests({
+        waitMs: 1500,
+        pollMs: 10,
+        staleAgeMs: 300,
+        backgroundReleaseDelaysMs: [60_000],
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // The three release attempts' owner-check reads are blocked; the reads
+      // before the rename (the config read, the still-held check) are not.
+      h.lockReadFailuresAfterRename = 3;
+
+      await setEnvOverride("FIRST", "1");
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.flat().join(" ")).toContain(lockPath());
+
+      await setEnvOverride("SECOND", "2");
+
+      expect((await readCliConfig()).envOverrides).toEqual({
+        FIRST: "1",
+        SECOND: "2",
+      });
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it("keeps the wait bounded when the holder keeps vanishing", async () => {
+      setCliConfigLockTimingForTests({ waitMs: 300, pollMs: 10 });
+      h.lockAlwaysVanishing = true;
+
+      const error = await setEnvOverride("K", "v").then(
+        () => null,
+        (rejection: unknown) => rejection,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      const message = error instanceof Error ? error.message : "";
+      expect(message).toMatch(
+        /Timed out after 300ms waiting for the settings lock/,
+      );
+      expect(message).toContain(lockPath());
+    }, 5000);
+
+    it("removes its own break token when a Windows filter blocked both the break and the token's removal", async () => {
+      h.platform = "win32";
+      setCliConfigLockTimingForTests({
+        waitMs: 3000,
+        pollMs: 10,
+        staleAgeMs: 300,
+        backgroundReleaseDelaysMs: [60_000],
+      });
+      await mkdir(dirname(lockPath()), { recursive: true });
+      await writeFile(
+        lockPath(),
+        JSON.stringify({
+          pid: await deadPid(),
+          pidStartTime: null,
+          nonce: "dead-holder",
+          acquiredAt: 0,
+        }),
+      );
+      const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await utimes(lockPath(), anHourAgo, anHourAgo);
+      h.unlinkFailures = ["EBUSY"];
+      h.tokenRmFailures = ["EBUSY"];
+
+      // The retained token names this live process, so only this process's own
+      // retry of its removal lets the next attempt break the lock.
+      await setEnvOverride("K", "v");
+
+      expect((await readCliConfig()).envOverrides).toEqual({ K: "v" });
+      expect(existsSync(lockPath())).toBe(false);
+      const tokens = (await readdir(dirname(cliConfigPath()))).filter((name) =>
+        name.includes(".break-"),
+      );
+      expect(tokens).toEqual([]);
+    });
+
+    it("never removes a retained token that another breaker now owns", async () => {
+      h.platform = "win32";
+      setCliConfigLockTimingForTests({
+        waitMs: 800,
+        pollMs: 10,
+        staleAgeMs: 300,
+        backgroundReleaseDelaysMs: [60_000],
+      });
+      const live = await liveChildPid();
+      const foreignToken = JSON.stringify({
+        pid: live,
+        pidStartTime: await queryPidStartFingerprintAsync(live),
+        nonce: "other-breaker",
+        acquiredAt: 0,
+      });
+      await mkdir(dirname(lockPath()), { recursive: true });
+      await writeFile(
+        lockPath(),
+        JSON.stringify({
+          pid: await deadPid(),
+          pidStartTime: null,
+          nonce: "dead-holder",
+          acquiredAt: 0,
+        }),
+      );
+      const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await utimes(lockPath(), anHourAgo, anHourAgo);
+      h.unlinkFailures = ["EBUSY"];
+      h.tokenRmFailures = ["EBUSY"];
+      h.tokenRmReplacement = foreignToken;
+
+      await expect(setEnvOverride("K", "v")).rejects.toThrow(
+        /Timed out after 800ms/,
+      );
+
+      // The retry of our token's removal finds another breaker's bytes there
+      // and leaves them alone.
+      const dir = dirname(cliConfigPath());
+      const tokens = (await readdir(dir)).filter(
+        (name) => name.includes(".break-") && !name.endsWith(".tmp"),
+      );
+      expect(tokens).toHaveLength(1);
+      expect(await readFile(join(dir, tokens[0] ?? ""), "utf8")).toBe(
+        foreignToken,
+      );
+      expect(existsSync(lockPath())).toBe(true);
+      expect(existsSync(cliConfigPath())).toBe(false);
     });
 
     it("never drops a failed release silently", async () => {
