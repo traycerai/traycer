@@ -45,9 +45,9 @@ describe("secretChangeRefusalLine", () => {
     );
   });
 
-  it("a create refused for an unknown provider name says to choose the provider", () => {
+  it("a create refused for an unknown provider name says to use its provider's key variable", () => {
     expect(secretChangeRefusalLine("create", "provider_name_unknown")).toBe(
-      "Choose the provider; a model provider key takes its provider's variable name.",
+      "Use its provider's key variable as the name.",
     );
   });
 

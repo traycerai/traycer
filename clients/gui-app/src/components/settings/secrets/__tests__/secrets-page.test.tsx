@@ -526,6 +526,23 @@ describe("saving a secret", () => {
     expect(host.reads.list).toBe(1);
   });
 
+  it("says to use the provider's key variable when the name is not a provider's", async () => {
+    const host = buildSecretsHost({
+      secrets: [],
+      createAnswer: { outcome: "refused", code: "provider_name_unknown" },
+    });
+    renderPage(host);
+
+    await saveApiKey();
+
+    const note = await screen.findByTestId("secret-save-note");
+    expect(note.textContent).toBe(
+      "Use its provider's key variable as the name.",
+    );
+    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
+    expect(host.reads.list).toBe(1);
+  });
+
   it("says a code it has no line for with a plain failure line", async () => {
     const host = buildSecretsHost({
       secrets: [],
