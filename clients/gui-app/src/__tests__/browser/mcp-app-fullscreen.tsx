@@ -16,9 +16,14 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
-  EpicFileRpcContext,
-  type EpicFileRpc,
-} from "@/lib/files/epic-file-rpc";
+  hostRpcRegistry,
+  HostRuntimeProvider,
+  type HostRpcRegistry,
+  type MessengerFactory,
+} from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { McpAppRpcContext, type McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import "@/lib/theme-applier";
@@ -127,17 +132,37 @@ const STAMP: ToolCallMcpAppStamp = {
   modelContext: null,
 };
 
-const fileRpc: EpicFileRpc = {
-  readFile: () =>
-    Promise.resolve({
-      kind: "text",
-      text: appHtml(),
-      mediaType: "text/html",
-      networkPolicy: "https-only",
-    }),
-  fetchFile: () => Promise.reject(new Error("not in this fixture")),
-  cancelFetchFile: () => Promise.reject(new Error("not in this fixture")),
-};
+const fixtureMessengerFactory: MessengerFactory<HostRpcRegistry> = (args) =>
+  new MockHostMessenger<HostRpcRegistry>({
+    registry: args.registry,
+    requestId: () => `fixture-${crypto.randomUUID()}`,
+    handlers: {
+      "epic.readArtifactObject": () => ({
+        kind: "text",
+        text: appHtml(),
+        mediaType: "text/html",
+        networkPolicy: "https-only",
+      }),
+    },
+  });
+
+const runnerHost = new MockRunnerHost({
+  signInUrl: "https://auth.traycer.invalid/sign-in",
+  authnBaseUrl: "http://127.0.0.1:1",
+  localHost: {
+    hostId: "host-1",
+    websocketUrl: "ws://127.0.0.1:1/rpc",
+    version: "0.0.0-fixture",
+    pid: 1,
+    systemHostName: "fixture",
+    displayName: "fixture",
+    availability: "available",
+  },
+  hosts: [],
+  workspaceFolderPickerPaths: undefined,
+  hasLocalHost: undefined,
+  traycerCli: undefined,
+});
 
 let calls = 0;
 const mcpRpc: McpAppRpc = {
@@ -209,6 +234,15 @@ const container = document.getElementById("root");
 if (container !== null) {
   createRoot(container).render(
     <QueryClientProvider client={client}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={fixtureMessengerFactory}
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+          fallback={<div>Loading app</div>}
+        >
       <ResolvedThemeContext.Provider
         value={{ resolvedTheme: "light", themePreset: "traycer-green" }}
       >
@@ -222,7 +256,6 @@ if (container !== null) {
               client: null,
             }}
           >
-            <EpicFileRpcContext.Provider value={fileRpc}>
               <McpAppRpcContext.Provider value={mcpRpc}>
                 {scenario === "dialog" ? <AlreadyOpenDialog /> : null}
                 <div className="mx-auto w-full max-w-2xl p-6">
@@ -233,10 +266,11 @@ if (container !== null) {
                   />
                 </div>
               </McpAppRpcContext.Provider>
-            </EpicFileRpcContext.Provider>
           </ChatAttachmentScopeContext.Provider>
         </TooltipProvider>
       </ResolvedThemeContext.Provider>
+        </HostRuntimeProvider>
+      </RunnerHostProvider>
     </QueryClientProvider>,
   );
 }

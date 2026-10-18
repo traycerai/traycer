@@ -9,7 +9,6 @@ import type {
   ImageGenerationResult,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
-  ToolCallPageStamp,
   ToolCallArtifactStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
@@ -55,9 +54,7 @@ import { ImageGenerationCard } from "./image-generation-card";
 import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
-import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
-import { PageRow } from "./page-row";
 import { ArtifactRow } from "./artifact-row";
 
 interface ToolSegmentProps {
@@ -93,9 +90,6 @@ interface ToolSegmentProps {
   startedAt: number;
   durationMs: number | null;
   imageResults: ReadonlyArray<ImageGenerationResult>;
-  // The page a `traycer_show_page` call showed (null otherwise). With the tool
-  // name, routes the call to the page row.
-  page: ToolCallPageStamp | null;
   artifact: ToolCallArtifactStamp | null;
   // The MCP App the call rendered (null otherwise). Routes the call to the
   // app row.
@@ -284,8 +278,7 @@ export function ToolSegment(props: ToolSegmentProps) {
         id={props.id}
         app={props.mcpApp}
         // What a reader with no app to run sees, and what "Show original tool call"
-        // reveals: the ordinary row. Find skips the app row (see the page
-        // row below), so this copy carries no find anchor.
+        // reveals: the ordinary row. Find skips the app row, so this copy carries no find anchor.
         fallback={<GenericToolSegment {...props} headerFindUnitId={null} />}
       />
     );
@@ -294,23 +287,6 @@ export function ToolSegment(props: ToolSegmentProps) {
     return (
       <ArtifactRow
         artifact={props.artifact}
-        fallback={<GenericToolSegment {...props} headerFindUnitId={null} />}
-      />
-    );
-  }
-  if (isPageToolCall(props)) {
-    return (
-      <PageRow
-        id={props.id}
-        page={props.page}
-        inputSummary={props.inputSummary}
-        inputDetail={props.inputDetail}
-        error={props.error}
-        isStreaming={props.isStreaming}
-        stopped={props.stopped}
-        startedAt={props.startedAt}
-        // The page row paints nothing find indexes (`chat-find-projection`),
-        // so the ordinary row it falls back to carries no find anchor either.
         fallback={<GenericToolSegment {...props} headerFindUnitId={null} />}
       />
     );

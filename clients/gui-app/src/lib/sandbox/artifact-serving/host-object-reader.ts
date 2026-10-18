@@ -28,7 +28,7 @@ function waitForDownload(delay: number, signal: AbortSignal): Promise<void> {
 }
 
 // An imperative byte port called by the mount dispatcher outside React.
-// Like byte-source.ts and epic-file-rpc.ts, span reads bypass the Query cache.
+// Span reads bypass the Query cache.
 /** The host may still be copying an authorised object onto the tile's host. */
 export function createHostObjectReader(options: {
   readonly request: ArtifactObjectRequest;

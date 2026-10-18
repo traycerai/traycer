@@ -24,7 +24,6 @@ import {
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type {
   EpicReadArtifactObjectResponse,
-  EpicReadFileResponse,
 } from "@traycer/protocol/host/epic/files";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
@@ -52,7 +51,6 @@ import { BlockFloatingToolbar } from "@/editor-core/nodes/shared/block-floating-
 import { ToolbarButton } from "@/editor-core/toolbar/toolbar-button";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
-import { useEpicFileTextQuery } from "@/hooks/files/use-epic-file-text-query";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
@@ -193,25 +191,12 @@ interface LiveMcpAppProps {
 }
 
 function useMcpAppSnapshotQuery(props: LiveMcpAppProps) {
-  const { id, app, epicId, chatId, hostId } = props;
-  const objectSnapshot = useArtifactObjectTextQuery(hostId, {
+  const { app, epicId, hostId } = props;
+  return useArtifactObjectTextQuery(hostId, {
     epicId,
     sha256: app.snapshot.sha256,
   });
-  // Older captures may predate the artifact stamp ledger. Only a definitive
-  // unavailable answer tries their original files-plane address.
-  const useLegacySnapshot = objectSnapshot.data?.kind === "unavailable";
-  const legacySnapshot = useEpicFileTextQuery(
-    hostId,
-    {
-      epicId,
-      path: app.snapshot.path,
-      sha256: app.snapshot.sha256,
-      via: { chatId, blockId: id },
-    },
-    useLegacySnapshot,
-  );
-  return useLegacySnapshot ? legacySnapshot : objectSnapshot;
+
 }
 
 type SnapshotContent =
@@ -222,7 +207,7 @@ type SnapshotContent =
 function snapshotContent(query: {
   readonly isPending: boolean;
   readonly isError: boolean;
-  readonly data: EpicReadArtifactObjectResponse | EpicReadFileResponse | undefined;
+  readonly data: EpicReadArtifactObjectResponse | undefined;
 }): SnapshotContent {
   // A reconnect can fail after the immutable snapshot has already loaded.
   if (query.data?.kind === "text") {
@@ -562,8 +547,8 @@ function LiveMcpApp(props: LiveMcpAppProps) {
             popover="manual"
             aria-label={`${app.server} app`}
             className={cn(
-              // `tc-node-page` lends the agent-page hover bar.
-              "tc-node-page relative inset-auto m-0 block h-auto w-full overflow-visible border-0 bg-transparent p-0 text-inherit",
+              // Shared toolbar visibility for the app surface.
+              "tc-node-app relative inset-auto m-0 block h-auto w-full overflow-visible border-0 bg-transparent p-0 text-inherit",
               // The top layer escapes `#root`'s safe-area reservation, so the
               // surface restores all four insets itself.
               "open:fixed open:inset-0 open:flex open:size-full open:flex-col open:bg-background open:pt-safe-top open:pr-safe-right open:pb-safe-bottom open:pl-safe-left",

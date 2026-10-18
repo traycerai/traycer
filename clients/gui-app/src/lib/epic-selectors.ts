@@ -108,7 +108,6 @@ import type {
   DeletedArtifactProjection,
   EpicArtifactRoomAvailability,
   EpicTreeNodeType,
-  FilesSlice,
   TuiAgentProjection,
   TreeNode,
   TreeSlice,
@@ -167,10 +166,6 @@ export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
   return useEpicStore((s) => s.snapshotMeta);
 }
 
-/** The epic's files from the records lane; `served: false` when it has none. */
-export function useEpicFiles(): FilesSlice {
-  return useEpicStore((s) => s.files);
-}
 
 export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);

@@ -452,8 +452,8 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
   });
 });
 
-describe("<BrowserSettingsSection /> agent pages", () => {
-  const PAGES_SWITCH = "Let agents show pages in chat";
+describe("<BrowserSettingsSection /> inline artifacts", () => {
+  const PAGES_SWITCH = "Let agents show artifacts in chat";
 
   it("shows the switch only when the host serves both visualization methods", async () => {
     const cases: ReadonlyArray<readonly [boolean | null, boolean | null]> = [

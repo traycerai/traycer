@@ -10,7 +10,6 @@ import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-inp
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import type {
   ToolCallArtifactStamp,
-  ToolCallPageStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -48,7 +47,6 @@ function inputProps(toolName: string, input: unknown) {
     inputSummary: deriveToolInputSummary(toolName, input),
     inputDetail: deriveToolInputDetail(toolName, input),
     imageResults: [],
-    page: null,
     artifact: null,
     mcpApp: null,
   };
@@ -190,11 +188,10 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "active-host-1",
 }));
 
-// The row-routing suite below stubs the two stamp-driven rows so it can
+// The row-routing suite below stubs the stamp-driven row so it can
 // assert the SELECTION (which row, with which stamp/fallback) without
 // standing up each row's own scope/store dependencies - those are each
-// row's own test file's job. No other test in this file ever stamps `page`
-// or `artifact`, so these stubs never engage outside that suite.
+// row's own test file's job. No other test in this file stamps `artifact`, so these stubs never engage outside that suite.
 vi.mock("@/components/chat/segments/artifact-row", () => ({
   // Deliberately renders neither the stamp nor the fallback: the routing
   // suite below asserts SELECTION, and a stub that painted its fallback
@@ -204,13 +201,6 @@ vi.mock("@/components/chat/segments/artifact-row", () => ({
     readonly artifact: ToolCallArtifactStamp | null;
     readonly fallback: ReactNode;
   }) => <div data-testid="artifact-row-stub" />,
-}));
-
-vi.mock("@/components/chat/segments/page-row", () => ({
-  PageRow: (_props: {
-    readonly page: ToolCallPageStamp | null;
-    readonly fallback: ReactNode;
-  }) => <div data-testid="page-row-stub" />,
 }));
 
 interface OpenA2ASendButtonProps {
@@ -1395,18 +1385,7 @@ describe("<ToolSegment /> row routing", () => {
     originChatId: "chat-1",
   };
 
-  const PAGE_STAMP: ToolCallPageStamp = {
-    path: "files/pages/report.html",
-    sha256: "a".repeat(64),
-    title: "Report",
-    height: 400,
-    heights: [],
-    derivedFrom: null,
-    originChatId: "chat-1",
-  };
-
   function renderRouted(
-    page: ToolCallPageStamp | null,
     artifact: ToolCallArtifactStamp | null,
   ) {
     return render(
@@ -1415,7 +1394,6 @@ describe("<ToolSegment /> row routing", () => {
         id="routing-1"
         toolName="Bash"
         {...inputProps("Bash", { command: "echo hi" })}
-        page={page}
         artifact={artifact}
         error={null}
         agentMessageSend={null}
@@ -1435,33 +1413,16 @@ describe("<ToolSegment /> row routing", () => {
   }
 
   it("routes a stamped artifact call to the artifact row", () => {
-    renderRouted(null, ARTIFACT_STAMP);
+    renderRouted(ARTIFACT_STAMP);
 
     expect(screen.getByTestId("artifact-row-stub")).toBeTruthy();
-    expect(screen.queryByTestId("page-row-stub")).toBeNull();
     expect(screen.queryByText("Bash")).toBeNull();
   });
 
-  it("routes a stamped page call (with no artifact stamp) to the page row", () => {
-    renderRouted(PAGE_STAMP, null);
-
-    expect(screen.getByTestId("page-row-stub")).toBeTruthy();
-    expect(screen.queryByTestId("artifact-row-stub")).toBeNull();
-    expect(screen.queryByText("Bash")).toBeNull();
-  });
-
-  it("prefers the artifact row over the page row when a call carries both stamps", () => {
-    renderRouted(PAGE_STAMP, ARTIFACT_STAMP);
-
-    expect(screen.getByTestId("artifact-row-stub")).toBeTruthy();
-    expect(screen.queryByTestId("page-row-stub")).toBeNull();
-  });
-
-  it("falls through to the generic tool row when neither stamp is set", () => {
-    renderRouted(null, null);
+  it("falls through to the generic tool row when no artifact stamp is set", () => {
+    renderRouted(null);
 
     expect(screen.queryByTestId("artifact-row-stub")).toBeNull();
-    expect(screen.queryByTestId("page-row-stub")).toBeNull();
     expect(screen.getByText("Bash")).toBeTruthy();
   });
 });

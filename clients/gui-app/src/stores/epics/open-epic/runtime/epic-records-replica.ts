@@ -1567,14 +1567,7 @@ export function createEpicRecordsReplica(
     applyLaneState(slices): void {
       if (isDisposed()) return;
       laneSlices = slices;
-      // The files set rides the records projection beside the doc-derived
-      // slices rather than through the projector: it has no `@1` equivalent,
-      // so there is nothing to compose it with. One transaction, so a files
-      // change and the re-projection it forces are one store write.
-      sink.transact(() => {
-        publish({ files: slices.files });
-        projector.projectFull();
-      });
+      projector.projectFull();
     },
 
     applyChatRecords(records, issuedAtSeq): void {

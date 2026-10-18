@@ -45,7 +45,6 @@ import {
 } from "@/components/chat/chat-diff-target";
 import {
   ChatScrollToBlockContext,
-  ChatScrollToPageContext,
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
 import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
@@ -185,7 +184,6 @@ import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
   messageIdForBlock,
-  pageBlockIdForRef,
   isStreamingInterviewBlock,
   landingBlockIdForJumpTarget,
   resolveApprovalJumpLanding,
@@ -1063,15 +1061,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       view.messages,
     ],
   );
-  const scrollToPage = useCallback(
-    (pageRef: string): boolean => {
-      const blockId = pageBlockIdForRef(view.messages, pageRef);
-      if (blockId === null) return false;
-      scrollToBlock(blockId, "plan");
-      return true;
-    },
-    [scrollToBlock, view.messages],
-  );
   const scrollToBackgroundItem = useCallback(
     (item: BackgroundItem): void => {
       const target = resolveBackgroundClickTarget(
@@ -1571,7 +1560,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     <ChatAttachmentScopeContext.Provider value={attachmentScope}>
       <ChatDiffTargetContext.Provider value={diffOpener}>
         <ChatScrollToBlockContext.Provider value={scrollToBlock}>
-          <ChatScrollToPageContext.Provider value={scrollToPage}>
             <SubagentContinueAsChatContext.Provider
               value={subagentContinueAsChat}
             >
@@ -1747,7 +1735,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 />
               </div>
             </SubagentContinueAsChatContext.Provider>
-          </ChatScrollToPageContext.Provider>
         </ChatScrollToBlockContext.Provider>
       </ChatDiffTargetContext.Provider>
     </ChatAttachmentScopeContext.Provider>
