@@ -61,9 +61,11 @@ export type ArtifactObjectRef = z.infer<typeof artifactObjectRefSchema>;
 /**
  * JSON projection of the Yjs head; Y.Map readers call toJSON before parsing.
  * head is a Y.Map; files is a Y.Map of path -> Y.Map containing sha256,
- * byteLength, mediaType and status. Writes to different paths, or a status flip
- * and a captured sha change, merge independently. capturedAt is a plain epoch-ms
- * leaf on head, used by the status file and the disk-vs-head tiebreak.
+ * byteLength, mediaType and status. Each per-path map is one capture generation:
+ * a different sha replaces the whole map with status queued; a same-sha capture
+ * touches nothing. Only a status flip mutates the map in place, guarded by the
+ * sha. Different paths still merge independently. capturedAt is a plain
+ * epoch-ms leaf on head, used for the status file and the disk-vs-head tiebreak.
  */
 export const artifactHeadSchema = lazySchema(() =>
   z.object({
@@ -124,8 +126,15 @@ const artifactRoomFields = {
 const baseEpicArtifactFields = {
   ...baseEpicArtifactFieldsPreHtml,
   layout: lazySchema(() => z.enum(["folder", "file"]).default("folder")),
-  // File-layout entries: relative to the parent artifact's folder or tree root.
-  // folderName retains its existing meaning.
+  // Where the entry lives relative to the parent artifact's folder or the tree
+  // root, on either layout. A file-layout entry names its file; a folder-layout
+  // entry names its folder, which is how an html or canvas folder nested under
+  // a plain folder (`research/site/index.html`) is representable: the
+  // `parentId` chain alone cannot carry the `research/` segment. When present
+  // it replaces `folderName` in the path chain; `folderName` stays the last
+  // segment for anything that displays it. Absent means the entry sits directly
+  // under its parent (or the root) as `folderName`, which is every entry
+  // written before this field existed.
   relativePath: artifactManifestPathSchema.optional(),
 } as const;
 
@@ -211,13 +220,19 @@ export const canvasArtifactSchema = lazySchema(() =>
 );
 export type CanvasArtifact = z.infer<typeof canvasArtifactSchema>;
 
-// Object fields are plain leaves on the entry's own Y.Map so per-field writes merge.
+/**
+ * The object Y.Map is one capture generation. Four flat leaves can tear under
+ * a merge: a peer's published status can win against a concurrent sha change
+ * and mark bytes nobody uploaded as published. A different sha replaces the
+ * whole object map with status queued; a same-sha capture touches nothing.
+ * Only a sha-guarded status flip mutates the map in place.
+ */
 export const fileArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("file"),
     ...baseEpicArtifactFields,
     layout: z.literal("file").default("file"),
-    ...artifactObjectFields,
+    object: artifactObjectRefSchema,
   }),
 );
 export type FileArtifact = z.infer<typeof fileArtifactSchema>;
@@ -253,6 +268,8 @@ export const ARTIFACT_ARTIFACT_ROOM_FIELD = "artifactRoomId";
 export const ARTIFACT_HEAD_FIELD = "head";
 export const ARTIFACT_HEAD_FILES_FIELD = "files";
 export const ARTIFACT_HEAD_FILE_STATUS_FIELD = "status";
+/** Y.Map field holding a file artifact's complete capture generation. */
+export const ARTIFACT_FILE_OBJECT_FIELD = "object";
 
 /**
  * Deterministic Y.Doc root key for an artifact's body fragment inside its

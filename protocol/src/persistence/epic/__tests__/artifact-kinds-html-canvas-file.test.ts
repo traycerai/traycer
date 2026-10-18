@@ -62,7 +62,7 @@ function canvasEntry() {
 }
 
 function fileEntry() {
-  return { kind: "file", ...COMMON_FIELDS, ...OBJECT_REF };
+  return { kind: "file", ...COMMON_FIELDS, object: OBJECT_REF };
 }
 
 function specEntry() {
@@ -154,17 +154,18 @@ describe("new artifact kinds parse from minimal entries", () => {
     expect(parsed.success).toBe(true);
     if (parsed.success) {
       expect(parsed.data).not.toHaveProperty("artifactRoomId");
-      expect(parsed.data.sha256).toBe(SHA256);
-      expect(parsed.data.byteLength).toBe(12);
-      expect(parsed.data.mediaType).toBe("text/html");
-      expect(parsed.data.status).toBe("published");
+      expect(parsed.data.object.sha256).toBe(SHA256);
+      expect(parsed.data.object.byteLength).toBe(12);
+      expect(parsed.data.object.mediaType).toBe("text/html");
+      expect(parsed.data.object.status).toBe("published");
     }
   });
 
-  it("fileArtifactSchema requires every top-level object field", () => {
+  it("fileArtifactSchema requires every nested object field", () => {
     for (const field of ["sha256", "byteLength", "mediaType", "status"]) {
-      const entry: Record<string, unknown> = { ...fileEntry() };
-      delete entry[field];
+      const object: Record<string, unknown> = { ...OBJECT_REF };
+      delete object[field];
+      const entry = { ...fileEntry(), object };
       expect(fileArtifactSchema.safeParse(entry).success).toBe(false);
     }
   });

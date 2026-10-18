@@ -8050,28 +8050,39 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "string",
                   "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
                 },
-                "sha256": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
-                },
-                "byteLength": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "mediaType": {
-                  "type": "string",
-                  "maxLength": 127,
-                  "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
-                },
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "queued",
-                    "uploading",
-                    "published",
-                    "local-only",
-                    "failed"
+                "object": {
+                  "type": "object",
+                  "properties": {
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "byteLength": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "mediaType": {
+                      "type": "string",
+                      "maxLength": 127,
+                      "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "uploading",
+                        "published",
+                        "local-only",
+                        "failed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sha256",
+                    "byteLength",
+                    "mediaType",
+                    "status"
                   ]
                 }
               },
@@ -8084,10 +8095,7 @@ export const epicSchemaSurfaceBaseline = {
                 "updatedAt",
                 "createdManually",
                 "parentId",
-                "sha256",
-                "byteLength",
-                "mediaType",
-                "status"
+                "object"
               ]
             }
           ]
@@ -18156,29 +18164,41 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "string",
                   "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
                 },
-                "sha256": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
-                },
-                "byteLength": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "mediaType": {
-                  "type": "string",
-                  "maxLength": 127,
-                  "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
-                },
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "queued",
-                    "uploading",
-                    "published",
-                    "local-only",
-                    "failed"
-                  ]
+                "object": {
+                  "type": "object",
+                  "properties": {
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "byteLength": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "mediaType": {
+                      "type": "string",
+                      "maxLength": 127,
+                      "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "uploading",
+                        "published",
+                        "local-only",
+                        "failed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sha256",
+                    "byteLength",
+                    "mediaType",
+                    "status"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -18191,10 +18211,7 @@ export const epicSchemaSurfaceBaseline = {
                 "createdManually",
                 "parentId",
                 "layout",
-                "sha256",
-                "byteLength",
-                "mediaType",
-                "status"
+                "object"
               ],
               "additionalProperties": false
             }

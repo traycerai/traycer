@@ -393,10 +393,12 @@ describe("seeded protocol registries", () => {
       createdManually: false,
       parentId: null,
       layout: "file" as const,
-      sha256: "a".repeat(64),
-      byteLength: 12,
-      mediaType: "text/html",
-      status: "published" as const,
+      object: {
+        sha256: "a".repeat(64),
+        byteLength: 12,
+        mediaType: "text/html",
+        status: "published" as const,
+      },
     };
     const newKindArtifacts = [
       { label: "html", id: "artifact-2", artifact: htmlArtifact },
