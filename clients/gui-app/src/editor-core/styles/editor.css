@@ -741,7 +741,7 @@
   animation: tc-thread-anchor-flash 1s ease-out;
 }
 
-[data-resolved="true"] {
+.thread-anchor [data-resolved="true"] {
   --tc-thread-anchor-fill: transparent;
   --tc-thread-anchor-line: transparent;
 
