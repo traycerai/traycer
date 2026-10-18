@@ -882,8 +882,6 @@ describe("artifact unresolved image text: the reader decides", () => {
       paragraphOfText("![a](x"),
       paragraphOfText("[a](x)"),
       paragraphOfText("!a](x)"),
-      paragraphOfText("![a](x)\n![b](y)"),
-      paragraphOfText("![a](x\n)"),
       // Not one unmarked text node:
       doc([paragraph([text("![a](x)", [{ type: "bold" }])])]),
       doc([paragraph([plain("![a]"), plain("(x)")])]),
@@ -894,9 +892,24 @@ describe("artifact unresolved image text: the reader decides", () => {
     expect(reader).not.toHaveBeenCalled();
   });
 
-  it("does not ask the reader inside a table cell", () => {
-    const reader = vi.fn((): ArtifactImage => ({ alt: "a", src: "x" }));
-    const content = doc([
+  it("asks the reader about a multiline candidate, and keeps it raw when the reader reads it as the image", () => {
+    const text = "![a\nb](x)";
+    const reader = vi.fn((): ArtifactImage => ({ alt: "a\nb", src: "x" }));
+    expect(artifactWith(paragraphOfText(text), reader)).toBe(text);
+    expect(reader).toHaveBeenCalledWith(text);
+  });
+
+  it("escapes a multiline candidate the reader does not read as one image", () => {
+    const text = "![a\n# b](x)";
+    const reader = vi.fn((): ArtifactImage | null => null);
+    expect(artifactWith(paragraphOfText(text), reader)).toBe(
+      "!\\[a\n\\# b](x)",
+    );
+    expect(reader).toHaveBeenCalledWith(text);
+  });
+
+  const inCell = (text: string): JsonContent =>
+    doc([
       {
         type: "table",
         content: [
@@ -905,15 +918,37 @@ describe("artifact unresolved image text: the reader decides", () => {
             content: [
               {
                 type: "tableCell",
-                content: [paragraph([plain("![a](x)")])],
+                content: [paragraph([plain(text)])],
               },
             ],
           },
         ],
       },
     ]);
-    artifactWith(content, reader);
-    expect(reader).not.toHaveBeenCalled();
+
+  it("asks the reader inside a table cell, and writes an accepted image's text with its pipes escaped", () => {
+    const text = unresolvedArtifactImageText("a|b", "x");
+    const reader = vi.fn((): ArtifactImage => ({ alt: "a|b", src: "x" }));
+    expect(artifactWith(inCell(text), reader)).toContain("![a\\|b](x)");
+    expect(reader).toHaveBeenCalledWith(text);
+  });
+
+  it("writes an accepted image's text in a cell verbatim when it holds no pipe", () => {
+    const reader: ArtifactImageReader = () => ({ alt: "a", src: "x" });
+    expect(artifactWith(inCell("![a](x)"), reader)).toContain("| ![a](x) |");
+  });
+
+  it("escapes a multiline candidate in a table cell as text even when the reader accepts it", () => {
+    const text = "![a\nb](x)";
+    const reader = vi.fn((): ArtifactImage => ({ alt: "a\nb", src: "x" }));
+    const md = artifactWith(inCell(text), reader);
+    expect(md).toContain("!\\[a<br>b](x)");
+    expect(md).not.toContain("| ![a");
+    expect(reader).toHaveBeenCalledWith(text);
+  });
+
+  it("escapes text in a cell that the reader does not accept", () => {
+    expect(artifactWith(inCell("![a](x)"), () => null)).toContain("!\\[a](x)");
   });
 
   it("leaves the prompt serializer's output for the same text unchanged", () => {

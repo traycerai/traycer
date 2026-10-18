@@ -1109,11 +1109,12 @@ function unresolvedImageSourceText(
     return null;
   }
   const text = only.text;
-  // Only a candidate is handed to the parser: one line that opens an image
-  // and ends its destination.
-  if (!text.startsWith("![") || !text.endsWith(")") || text.includes("\n")) {
-    return null;
-  }
+  // Not a shortcut in front of the reader: the check below requires the text
+  // to equal `unresolvedArtifactImageText` of what the reader read, and that
+  // text always starts with `![` and ends with `)`, so text that does not can
+  // never pass it. Everything else - newlines in the label included - is the
+  // reader's call.
+  if (!text.startsWith("![") || !text.endsWith(")")) return null;
   const image = readImage(text);
   return image !== null &&
     unresolvedArtifactImageText(image.alt, image.src) === text
@@ -1148,10 +1149,20 @@ function rendersAsParagraphEnd(node: JsonContent | undefined): boolean {
 function serializeParagraph(node: JsonContent, ctx: SerializerContext): string {
   const indent = ctx.inListItem ? "" : getIndent(ctx);
   const unresolvedImage =
-    ctx.readImage !== null && !ctx.inTableCell
+    ctx.readImage !== null
       ? unresolvedImageSourceText(node, ctx.readImage)
       : null;
-  if (unresolvedImage !== null) return `${indent}${unresolvedImage}`;
+  if (unresolvedImage !== null && !ctx.inTableCell) {
+    return `${indent}${unresolvedImage}`;
+  }
+  // A table cell is one line, and the reader reads a cell's text with `\|`
+  // as a `|` that does not end the cell, so the image's text is written with
+  // its pipes escaped. A line break cannot be in a cell at all - the cell
+  // writer turns it into `<br>`, which the reader keeps in the label as
+  // text - so a multiline image's text is escaped as text there.
+  if (unresolvedImage !== null && !unresolvedImage.includes("\n")) {
+    return unresolvedImage.replace(/\|/g, "\\|");
+  }
   const children = serializeChildren(
     ctx.escapeText && !ctx.inTableCell
       ? withoutTrailingHardBreaks(node.content)
