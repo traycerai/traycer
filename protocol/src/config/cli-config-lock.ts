@@ -195,9 +195,10 @@ export async function acquireCliConfigLock(
   const deadline = Date.now() + timing.waitMs;
   let liveVerdict: { readonly raw: string; readonly until: number } | null =
     null;
-  // Break tokens whose creators were proven dead during this acquire, so a
-  // long chain of dead tokens is probed once, not on every poll.
-  const deadTokens = new Set<string>();
+  const tokenVerdicts: TokenVerdicts = {
+    dead: new Set(),
+    liveUntil: new Map(),
+  };
   while (true) {
     await releaseUnreleased(lockPath);
     await removeRetainedTokens();
@@ -235,7 +236,7 @@ export async function acquireCliConfigLock(
               serialized,
               timing,
               deadline,
-              deadTokens,
+              tokenVerdicts,
             )
           ) {
             continue;
@@ -281,7 +282,7 @@ async function breakDeadLock(
   serialized: string,
   timing: CliConfigLockTiming,
   deadline: number,
-  deadTokens: Set<string>,
+  tokenVerdicts: TokenVerdicts,
 ): Promise<boolean> {
   const tokenBase = breakTokenBase(lockPath, deadNonce);
   const generations = await tokenGenerations(tokenBase);
@@ -295,7 +296,7 @@ async function breakDeadLock(
       !(await tokenCreatorDead(
         `${tokenBase}.${generation}`,
         timing,
-        deadTokens,
+        tokenVerdicts,
       ))
     ) {
       return false;
@@ -362,10 +363,19 @@ async function tokenGenerations(tokenBase: string): Promise<number[]> {
  * A token that vanished, is young, names no holder, or whose holder may be
  * alive is not.
  */
+// Liveness verdicts on break tokens, kept for one acquire. A creator proven
+// dead stays dead, so a long chain of dead tokens is probed once. A creator
+// found alive is reused for LIVE_VERDICT_REUSE_MS, as for the lock holder, so
+// a paused breaker does not cost a `tasklist` on every Windows poll.
+interface TokenVerdicts {
+  readonly dead: Set<string>;
+  readonly liveUntil: Map<string, number>;
+}
+
 async function tokenCreatorDead(
   tokenPath: string,
   timing: CliConfigLockTiming,
-  deadTokens: Set<string>,
+  verdicts: TokenVerdicts,
 ): Promise<boolean> {
   const token = await readHolder(tokenPath);
   if (token === null || token.record === null) return false;
@@ -375,9 +385,14 @@ async function tokenCreatorDead(
   // pid: on Windows a record has no start time, so a pid proven dead can be
   // reused by a live breaker whose new token must be probed afresh.
   const key = `${tokenPath}\n${token.raw}`;
-  if (deadTokens.has(key)) return true;
-  if (!(await recordHolderDead(token.record))) return false;
-  deadTokens.add(key);
+  if (verdicts.dead.has(key)) return true;
+  const liveUntil = verdicts.liveUntil.get(key);
+  if (liveUntil !== undefined && Date.now() < liveUntil) return false;
+  if (!(await recordHolderDead(token.record))) {
+    verdicts.liveUntil.set(key, Date.now() + LIVE_VERDICT_REUSE_MS);
+    return false;
+  }
+  verdicts.dead.add(key);
   return true;
 }
 

@@ -41,6 +41,10 @@ const h = vi.hoisted(() => ({
   lockLinkAlways: null as string | null,
   // Fails the next links into the lock, one code per call, then passes.
   lockLinkFailures: [] as string[],
+  // Pids whose liveness probe always answers alive.
+  alivePids: new Set<number>(),
+  // The pid whose liveness probe answers alive once, then dead.
+  aliveOncePid: null as number | null,
   // While set, every even-numbered read of the lock file fails EBUSY.
   lockReadAlternates: false,
   lockReads: 0,
@@ -109,6 +113,8 @@ vi.mock("../credentials-lock", async (importActual) => {
     ) => {
       h.probeCalls.set(pid, (h.probeCalls.get(pid) ?? 0) + 1);
       if (pid === h.recycledPid) return h.probeCalls.get(pid) === 1;
+      if (h.alivePids.has(pid)) return false;
+      if (pid === h.aliveOncePid) return (h.probeCalls.get(pid) ?? 0) > 1;
       if (h.slowPids.has(pid)) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, h.probeDelayMs);
@@ -180,6 +186,8 @@ beforeEach(async () => {
   h.lockLinks = 0;
   h.lockLinkAlways = null;
   h.lockLinkFailures = [];
+  h.alivePids.clear();
+  h.aliveOncePid = null;
 });
 
 afterEach(async () => {
@@ -192,6 +200,8 @@ afterEach(async () => {
   h.lockReadAlternates = false;
   h.lockLinkAlways = null;
   h.lockLinkFailures = [];
+  h.alivePids.clear();
+  h.aliveOncePid = null;
   setCliConfigLockTimingForTests(null);
   await rm(h.home, { recursive: true, force: true });
 });
@@ -340,6 +350,66 @@ describe("the settings lock wait while breaking a dead lock", () => {
 
     expect(Date.now() - started).toBeLessThan(500);
     expect(h.lockLinks).toBe(2);
+  });
+
+  it("reuses a live verdict on an unchanged break token instead of probing every poll", async () => {
+    setCliConfigLockTimingForTests({
+      waitMs: 500,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    const paused = 4_400_000;
+    h.alivePids.add(paused);
+    await writeAged(lockPath(), await deadPid(), "dead-holder", ONE_HOUR_MS);
+    await writeAged(
+      breakTokenPath("dead-holder", 0),
+      paused,
+      "paused-breaker",
+      ONE_HOUR_MS,
+    );
+    const lockBefore = await readFile(lockPath());
+    const tokenBefore = await readFile(breakTokenPath("dead-holder", 0));
+
+    await expect(setEnvOverride("K", "v")).rejects.toThrow(
+      /Timed out after 500ms/,
+    );
+
+    // About fifty polls fit in the wait; the creator is probed once, not each.
+    expect(h.probeCalls.get(paused) ?? 0).toBeLessThanOrEqual(2);
+    expect(await readFile(lockPath())).toEqual(lockBefore);
+    expect(await readFile(breakTokenPath("dead-holder", 0))).toEqual(
+      tokenBefore,
+    );
+  });
+
+  it("probes a live break token again once the verdict expires", async () => {
+    setCliConfigLockTimingForTests({
+      waitMs: 3000,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    const paused = 4_400_001;
+    h.aliveOncePid = paused;
+    await writeAged(lockPath(), await deadPid(), "dead-holder", ONE_HOUR_MS);
+    await writeAged(
+      breakTokenPath("dead-holder", 0),
+      paused,
+      "paused-breaker",
+      ONE_HOUR_MS,
+    );
+
+    const started = Date.now();
+    await setEnvOverride("K", "v");
+    const elapsed = Date.now() - started;
+
+    expect(JSON.parse(await readFile(cliConfigPath(), "utf8"))).toMatchObject({
+      envOverrides: { K: "v" },
+    });
+    expect(existsSync(lockPath())).toBe(false);
+    // Alive once, then dead: exactly one re-probe, after the reuse window.
+    expect(h.probeCalls.get(paused)).toBe(2);
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(2500);
   });
 
   it("probes each dead break-token creator once per acquire", async () => {
