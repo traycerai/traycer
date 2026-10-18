@@ -5,9 +5,9 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 /**
  * The source store behind `kind: "bot"` tabs (Tracy Bots).
  *
- * A bot tab is bound to ONE host for its whole life - the host the bot was
- * bound to when the tab opened - exactly as a chat tab is bound to its tile's
- * host. That binding has to live somewhere a strip ref can be resolved from
+ * A bot tab is bound to ONE host at a time - the host that serves the bot,
+ * as `bot.open` answered it - and reads everything through that host, as a
+ * chat tab reads through its tile's host. That binding has to live somewhere a strip ref can be resolved from
  * (`tabSourceRefs`, `useHeaderTabForRef`, hydration), and a `TabRef` carries
  * only `{kind, id}`, so this store holds the record: bot id, host id, and the
  * title the strip shows. Opening the same bot again finds the existing record
@@ -35,8 +35,8 @@ interface BotTabsState {
    * Opens a tab for `botId` bound to `hostId`, or keeps the existing one. The
    * existing record's host WINS: a tab's binding is for life, and a second
    * open naming another host is a request to view the bot through a tab that
-   * already exists, not to rebind it (that is `bot.claimAuthority`'s job, and
-   * it goes through `rebindBotTab`).
+   * already exists, not to rebind it (the tab's own `bot.open` does that,
+   * through `rebindBotTab`).
    */
   readonly openBotTab: (record: {
     readonly botId: string;
@@ -46,10 +46,11 @@ interface BotTabsState {
   readonly closeBotTab: (botId: string) => void;
   readonly setBotTabTitle: (botId: string, title: string) => void;
   /**
-   * The ONE way a tab's host moves: after `bot.claimAuthority` succeeded on
-   * `hostId`, the bot now lives there and a tab bound to the previous host
-   * would be bound to a machine that refuses its chats. The tab keeps its
-   * strip slot and re-keys its surface on the new host.
+   * The ONE way a tab's host moves: `bot.open` answered that `hostId` serves
+   * the bot (a tab bound elsewhere would read chats that host does not
+   * serve), or Home reopened a tab whose host this client can no longer
+   * dial. The tab keeps its strip slot and re-keys its surface on the new
+   * host.
    */
   readonly rebindBotTab: (botId: string, hostId: string) => void;
 }

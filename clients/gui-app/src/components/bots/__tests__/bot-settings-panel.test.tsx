@@ -1,13 +1,17 @@
 /**
- * A bot's model settings (Tracy Bots): the picker opens on what the bot RUNS,
- * not on the app default, so Apply has nothing to apply until the person
- * changes something. The toolbar-store hook is replaced by one that records
- * the seed source it was given and builds a REAL toolbar store from it, so
- * what the picker would show and what Apply compares are the production
- * store's own values.
+ * A bot's settings (Tracy Bots). Model: the picker opens on what the bot
+ * RUNS, not on the app default, so Apply has nothing to apply until the
+ * person changes something. The toolbar-store hook is replaced by one that
+ * records the seed source it was given and builds a REAL toolbar store from
+ * it, so what the picker would show and what Apply compares are the
+ * production store's own values.
+ *
+ * No control is gated on which host serves the tab (the panel takes no
+ * `canEdit`): every control is live, and a host that refuses a write has the
+ * refusal shown in place, under the control that made it.
  */
 import { StrictMode, useState } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
@@ -19,7 +23,19 @@ const mocks = vi.hoisted(() => ({
   seeds: [] as ComposerSeedSource[],
   stores: [] as ComposerToolbarStore[],
   updateRunSettings: vi.fn<(variables: object) => void>(),
+  updateTitle: vi.fn<(variables: object) => void>(),
+  deleteBot: vi.fn<(variables: object) => void>(),
+  // What each write's mutation reports as its error; `null` = no refusal.
+  refusal: {
+    title: null as string | null,
+    runSettings: null as string | null,
+    remove: null as string | null,
+  },
 }));
+
+function refusalOf(message: string | null): { message: string } | null {
+  return message === null ? null : { message };
+}
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.hostClient,
@@ -31,10 +47,19 @@ vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: () => <div data-testid="stub-harness-model-picker" />,
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
-  useBotUpdateTitleMutation: () => ({ isPending: false, mutate: vi.fn() }),
-  useBotDeleteMutation: () => ({ isPending: false, mutate: vi.fn() }),
+  useBotUpdateTitleMutation: () => ({
+    isPending: false,
+    error: refusalOf(mocks.refusal.title),
+    mutate: mocks.updateTitle,
+  }),
+  useBotDeleteMutation: () => ({
+    isPending: false,
+    error: refusalOf(mocks.refusal.remove),
+    mutate: mocks.deleteBot,
+  }),
   useBotUpdateRunSettingsMutation: () => ({
     isPending: false,
+    error: refusalOf(mocks.refusal.runSettings),
     mutate: mocks.updateRunSettings,
   }),
 }));
@@ -98,10 +123,10 @@ const BOT: BotRecord = {
   archivedAt: null,
 };
 
-function mountPanel(bot: BotRecord, canEdit: boolean): void {
+function mountPanel(bot: BotRecord): void {
   render(
     <StrictMode>
-      <BotSettingsPanel bot={bot} canEdit={canEdit} />
+      <BotSettingsPanel bot={bot} />
     </StrictMode>,
   );
 }
@@ -124,6 +149,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.seeds.length = 0;
   mocks.stores.length = 0;
+  mocks.refusal.title = null;
+  mocks.refusal.runSettings = null;
+  mocks.refusal.remove = null;
 });
 
 afterEach(() => {
@@ -132,7 +160,7 @@ afterEach(() => {
 
 describe("<BotSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
-    mountPanel(BOT, true);
+    mountPanel(BOT);
 
     const seed = mocks.seeds.at(-1);
     expect(seed).toEqual({
@@ -153,7 +181,7 @@ describe("<BotSettingsPanel /> model", () => {
 
   it("enables Apply once the person picks another model, and applies exactly that", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT, true);
+    mountPanel(BOT);
     expect(applyButton().disabled).toBe(true);
 
     act(() => {
@@ -177,7 +205,7 @@ describe("<BotSettingsPanel /> model", () => {
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {
-    mountPanel(BOT, true);
+    mountPanel(BOT);
 
     act(() => {
       liveStore().getState().setSelection({
@@ -198,8 +226,23 @@ describe("<BotSettingsPanel /> model", () => {
     expect(applyButton().disabled).toBe(true);
   });
 
-  it("keeps Apply disabled for a bot this host cannot edit, whatever the picker holds", () => {
-    mountPanel(BOT, false);
+  it("seeds nothing when the bot's harness is not one this client can pick", () => {
+    mountPanel({ ...BOT, harness: "not-a-harness" });
+
+    expect(mocks.seeds.at(-1)).toEqual({ kind: "none" });
+  });
+});
+
+describe("<BotSettingsPanel /> controls", () => {
+  it("leaves every control live: nothing is gated on which host serves the tab", async () => {
+    const user = userEvent.setup();
+    mountPanel(BOT);
+
+    const name = screen.getByRole("textbox", { name: "Name" });
+    await user.clear(name);
+    await user.type(name, "Renamed Bot");
+    const rename = screen.getByRole("button", { name: "Rename" });
+    expect(rename).toHaveProperty("disabled", false);
 
     act(() => {
       liveStore().getState().setSelection({
@@ -208,12 +251,91 @@ describe("<BotSettingsPanel /> model", () => {
         profileId: "profile-1",
       });
     });
-    expect(applyButton().disabled).toBe(true);
+    expect(applyButton().disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Delete bot" })).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 
-  it("seeds nothing when the bot's harness is not one this client can pick", () => {
-    mountPanel({ ...BOT, harness: "not-a-harness" }, true);
+  it("renames through the tab host with the trimmed name", async () => {
+    const user = userEvent.setup();
+    mountPanel(BOT);
 
-    expect(mocks.seeds.at(-1)).toEqual({ kind: "none" });
+    const name = screen.getByRole("textbox", { name: "Name" });
+    await user.clear(name);
+    await user.type(name, "  Renamed Bot  ");
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(mocks.updateTitle).toHaveBeenCalledTimes(1);
+    expect(mocks.updateTitle.mock.calls[0][0]).toEqual({
+      botId: BOT.botId,
+      title: "Renamed Bot",
+    });
+  });
+});
+
+describe("<BotSettingsPanel /> refusals", () => {
+  it("shows no refusal line while every write is accepted", () => {
+    mountPanel(BOT);
+
+    expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
+  });
+
+  it("states a rename refusal under the name field, and nowhere else", () => {
+    mocks.refusal.title = "Only the bot's owner can rename it";
+    mountPanel(BOT);
+
+    const refusals = screen.getAllByTestId("bot-settings-refusal");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].textContent).toBe("Only the bot's owner can rename it");
+    expect(refusals[0].getAttribute("role")).toBe("alert");
+    expect(screen.getByTestId("bot-settings-title").contains(refusals[0])).toBe(
+      true,
+    );
+  });
+
+  it("states a model refusal inside the model section, and nowhere else", () => {
+    mocks.refusal.runSettings = "This machine cannot change the model";
+    mountPanel(BOT);
+
+    const refusals = screen.getAllByTestId("bot-settings-refusal");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].textContent).toBe(
+      "This machine cannot change the model",
+    );
+    expect(screen.getByTestId("bot-settings-model").contains(refusals[0])).toBe(
+      true,
+    );
+  });
+
+  it("states a delete refusal inside the confirm dialog, not on the panel", async () => {
+    const user = userEvent.setup();
+    mocks.refusal.remove = "Only the bot's owner can delete it";
+    mountPanel(BOT);
+    // Closed: the refusal lives in the dialog, which is not rendered yet.
+    expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Delete bot" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("bot-settings-refusal").textContent).toBe(
+      "Only the bot's owner can delete it",
+    );
+    expect(mocks.deleteBot).not.toHaveBeenCalled();
+  });
+
+  it("deletes the bot when the confirm dialog is confirmed", async () => {
+    const user = userEvent.setup();
+    mountPanel(BOT);
+
+    await user.click(screen.getByRole("button", { name: "Delete bot" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Delete bot" }),
+    );
+
+    expect(mocks.deleteBot).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteBot.mock.calls[0][0]).toEqual({ botId: BOT.botId });
   });
 });

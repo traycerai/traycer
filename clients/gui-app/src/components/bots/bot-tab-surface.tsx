@@ -1,5 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Bot } from "lucide-react";
+import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,20 +17,28 @@ import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
-import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import {
+  useConnectableHostIds,
+  type ConnectableHosts,
+} from "@/hooks/host/use-connectable-host-ids";
 import {
   useBotSubscriptionForHost,
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useBotClaimAuthorityMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotConversationView } from "@/components/bots/bot-conversation-view";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
+import {
+  botPausedCopy,
+  botTabMoveTarget,
+  botTabOpenState,
+  type BotTabPausedReason,
+} from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
 
 type BotTabView = "conversation" | "under-the-hood" | "settings";
@@ -35,52 +52,49 @@ function isBotTabView(value: string): value is BotTabView {
 }
 
 /**
- * A bot's tab (Tracy Bots). Bound to ONE host for life through
- * `TabHostProvider`: the host the bot's trunk runs on when that host can be
- * dialled, else the host the window reads (the offline state). Everything
- * below reads that host - the stream, the conversation list, every write.
+ * A bot's tab (Tracy Bots). The person never picks the machine a bot runs
+ * on: the tab opens through the host it was created on (this host, from
+ * Home), asks it `bot.open`, and follows the answer (T18) -
+ * - another host serves the bot and this client can reach it: the tab is
+ *   rebound there silently, and this surface remounts on it;
+ * - this host serves it (bound here, or claimed here because its host was
+ *   away): the full tab;
+ * - nobody can serve it from here: the paused state, which names no machine;
+ *   the conversation list and a queued send keep working through this host.
  *
- * Three relations between the tab's host and the bot's bound host:
- * - bound here: the full tab;
- * - bound elsewhere and that host is reachable: view it THROUGH that host
- *   (the tab record is rebound and this surface remounts) or move it here
- *   with `bot.claimAuthority`; never a clone;
- * - bound elsewhere and that host is offline: the transcript is a
- *   placeholder naming the host, the conversation list and a queued send
- *   go through this tab's host, and "Move it here" is offered.
+ * Bound to ONE host at a time through `TabHostProvider`; everything below
+ * reads that host - the stream, the conversation list, every write. A tab
+ * left on a host this client can no longer dial is moved back to the app's
+ * host by the next open from Home (`HomeBotRow`), which may read that host;
+ * the tab itself never reads the app-wide host.
  */
 export function BotTabSurface(props: {
   readonly botId: string;
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
+  const connectable = useConnectableHostIds();
   // A tab is created only from Home's bots band, which draws nothing until
   // the host advertises `bot.list`; a RESTORED tab (the store persists per
-  // window) meets whatever that host advertises now. The `bot.*` namespace
-  // ships as one block, so this one presence check stands for every write
-  // the tab offers; without it the tab shows the update notice and no
+  // window) meets whatever that host advertises now. `bot.open` is the
+  // newest method of the `bot.*` block, so its presence stands for every
+  // write the tab offers; without it the tab shows the update notice and no
   // control that would call a method the host lacks.
-  const support = useHostMethodSupport(hostId, "bot.list");
-  const directory = useHostDirectoryList();
+  const support = useHostMethodSupport(hostId, "bot.open");
   if (support === null) return null;
   if (!support) {
-    const hostLabel =
-      directory.data?.find((entry) => entry.hostId === hostId)?.label ?? hostId;
     return (
       <div
         className="flex h-full flex-col justify-center"
         data-testid="bot-tab"
       >
-        <BotsUnavailableNotice
-          hostLabel={hostLabel}
-          testId="bot-tab-unavailable"
-        />
+        <BotsUnavailableNotice testId="bot-tab-unavailable" />
       </div>
     );
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <BotTabBody botId={botId} hostId={hostId} />
+      <BotTabBody botId={botId} hostId={hostId} connectable={connectable} />
     </TabHostProvider>
   );
 }
@@ -88,8 +102,9 @@ export function BotTabSurface(props: {
 function BotTabBody(props: {
   readonly botId: string;
   readonly hostId: string;
+  readonly connectable: ConnectableHosts;
 }): ReactNode {
-  const { botId, hostId } = props;
+  const { botId, hostId, connectable } = props;
   const subscription = useBotSubscriptionForHost({
     botId,
     hostId,
@@ -98,12 +113,56 @@ function BotTabBody(props: {
   const client = useTabHostClient();
   const closeBotTab = useBotTabsStore((s) => s.closeBotTab);
   const setBotTabTitle = useBotTabsStore((s) => s.setBotTabTitle);
+  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
   const [view, setView] = useState<BotTabView>("conversation");
+
+  // Open once per (bot, tab host) - this body remounts with the host - and
+  // again on Retry or when the tab comes back into view. A mutation, not a
+  // query: an open may claim the bot onto this host, which a background
+  // refetch must never do on its own. The last answer is HELD across a
+  // re-open, so asking again never blanks a tab that is serving; a failed
+  // re-open is shown above it instead.
+  const { mutate: openBot } = useBotOpenMutation(client);
+  const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const reopen = useCallback(
+    () =>
+      openBot(
+        { botId },
+        {
+          onSuccess: (response) => {
+            setAnswer(response);
+            setOpenError(null);
+          },
+          onError: (error) => setOpenError(error.message),
+        },
+      ),
+    [botId, openBot],
+  );
+  useEffect(() => {
+    reopen();
+  }, [reopen]);
+
+  const openState = botTabOpenState({
+    response: answer,
+    error: answer === undefined ? openError : null,
+    tabHostId: hostId,
+    connectable,
+  });
+  const moveToHostId = botTabMoveTarget({
+    response: answer,
+    tabHostId: hostId,
+    connectable,
+  });
+  useEffect(() => {
+    if (moveToHostId !== null) rebindBotTab(botId, moveToHostId);
+  }, [botId, moveToHostId, rebindBotTab]);
 
   // A deleted bot has no tab: the store removal closes it everywhere. Two
   // signals say so - the stream's `deleted` frame, and a `bot.list` answer
-  // (refetched on focus) that no longer carries the bot, which is how a
-  // delete made while this stream was down reaches the tab.
+  // that no longer carries the bot, which is how a delete made while this
+  // stream was down reaches the tab, and how a `bot.open` that found no bot
+  // does (every open invalidates the list).
   const botList = useBotListQuery(client, true);
   const listedBots = botList.data?.bots;
   const goneFromList =
@@ -120,37 +179,55 @@ function BotTabBody(props: {
 
   // The host re-sends a snapshot only for changes IT made; a bot rebound or
   // edited from another host reaches this client on the next subscribe, so
-  // the tab asks again when it comes back into view: the window becoming
+  // the tab asks again - and opens again, since the bot's host may have come
+  // back or gone away - when it comes back into view: the window becoming
   // visible, and this tab becoming the active one (inactive tabs stay
   // mounted, hidden).
   const { resubscribe } = subscription;
+  const refresh = useCallback(() => {
+    reopen();
+    resubscribe();
+  }, [reopen, resubscribe]);
   const paneVisible = usePaneVisible();
   const wasVisibleRef = useRef(paneVisible);
   useEffect(() => {
     const becameVisible = paneVisible && !wasVisibleRef.current;
     wasVisibleRef.current = paneVisible;
-    if (becameVisible) resubscribe();
-  }, [paneVisible, resubscribe]);
+    if (becameVisible) refresh();
+  }, [paneVisible, refresh]);
+  // Only the tab in view re-opens when the window returns: an open can claim
+  // the bot onto this host, and a hidden tab is not a person asking for it.
+  const onWindowVisible = useEffectEvent(() => {
+    if (document.visibilityState === "visible") refresh();
+  });
   useEffect(() => {
-    const onVisibilityChange = (): void => {
-      if (document.visibilityState === "visible") resubscribe();
-    };
+    if (!paneVisible) return undefined;
+    const onVisibilityChange = (): void => onWindowVisible();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [resubscribe]);
+  }, [paneVisible]);
 
+  if (openState.kind === "failed") {
+    return (
+      <ErrorNotice
+        text={`Couldn't open this bot: ${openState.message}`}
+        onRetry={reopen}
+        className="m-4"
+      />
+    );
+  }
   const snapshot = subscription.snapshot;
-  if (snapshot === null) {
-    if (subscription.error !== null) {
-      return (
-        <StreamErrorNotice
-          message={subscription.error}
-          onRetry={resubscribe}
-          className="m-4"
-        />
-      );
-    }
+  if (snapshot === null && subscription.error !== null) {
+    return (
+      <ErrorNotice
+        text={`Couldn't reach this bot: ${subscription.error}`}
+        onRetry={resubscribe}
+        className="m-4"
+      />
+    );
+  }
+  if (snapshot === null || openState.kind === "opening") {
     return (
       <div
         className="flex h-full items-center justify-center text-muted-foreground"
@@ -171,6 +248,9 @@ function BotTabBody(props: {
       botId={botId}
       hostId={hostId}
       snapshot={snapshot}
+      pausedReason={openState.kind === "paused" ? openState.reason : null}
+      reopenError={openError}
+      onReopen={reopen}
       streamError={subscription.error}
       onRetry={resubscribe}
       view={view}
@@ -183,54 +263,62 @@ function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly snapshot: BotSubscriptionSnapshot;
+  readonly pausedReason: BotTabPausedReason | null;
+  /** A re-open failed after an earlier one answered; the tab keeps that
+   * answer and says the re-open failed. */
+  readonly reopenError: string | null;
+  readonly onReopen: () => void;
   readonly streamError: string | null;
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
 }): ReactNode {
-  const { botId, hostId, snapshot, streamError, onRetry, view, onViewChange } =
-    props;
-  const connectable = useConnectableHostIds();
-  const directory = useHostDirectoryList();
-  const boundHere = snapshot.boundHost.isThisHost;
-  const boundHostId = snapshot.boundHost.hostId;
-  const boundHostLabel = useMemo(
-    () =>
-      boundHostId === null
-        ? "No host"
-        : (directory.data?.find((entry) => entry.hostId === boundHostId)
-            ?.label ?? boundHostId),
-    [boundHostId, directory.data],
-  );
-  // Offline means: not this host, and not dialable right now. Until the
-  // directory has answered the host counts as reachable, so a tab does not
-  // flash the offline state on every open.
-  // A bot no host runs (`boundHostId` null) is offline outright.
-  const boundOffline =
-    !boundHere &&
-    (boundHostId === null ||
-      (connectable.resolved && !connectable.hostIds.includes(boundHostId)));
-  const offlineHostLabel = boundOffline ? boundHostLabel : null;
+  const {
+    botId,
+    hostId,
+    snapshot,
+    pausedReason,
+    reopenError,
+    onReopen,
+    streamError,
+    onRetry,
+    view,
+    onViewChange,
+  } = props;
+  const client = useTabHostClient();
+  const environments = useEnvironmentListQuery(client, true);
+  const environmentLabel = useMemo(() => {
+    const match = environments.data?.environments.find(
+      (environment) => environment.environmentId === snapshot.bot.environmentId,
+    );
+    return match?.label ?? snapshot.bot.environmentId;
+  }, [environments.data, snapshot.bot.environmentId]);
+  const paused = pausedReason !== null;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="bot-tab">
-      <BotTabHeader hostId={hostId} snapshot={snapshot} />
+      <BotTabHeader snapshot={snapshot} environmentLabel={environmentLabel} />
       {streamError === null ? null : (
         // A fatal close AFTER a snapshot: the last reading stays on screen,
         // marked as such, and the retry sits on top of it.
-        <StreamErrorNotice
-          message={streamError}
+        <ErrorNotice
+          text={`Couldn't reach this bot: ${streamError}`}
           onRetry={onRetry}
           className="mx-4 mb-2"
         />
       )}
-      {boundHere ? null : (
-        <BoundElsewhereBanner
-          botId={botId}
-          boundHostId={boundHostId}
-          boundHostLabel={boundHostLabel}
-          offline={boundOffline}
-          onMoved={onRetry}
+      {reopenError === null ? null : (
+        <ErrorNotice
+          text={`Couldn't open this bot: ${reopenError}`}
+          onRetry={onReopen}
+          className="mx-4 mb-2"
+        />
+      )}
+      {pausedReason === null ? null : (
+        <PausedBanner
+          reason={pausedReason}
+          environmentLabel={environmentLabel}
+          onRetry={onReopen}
         />
       )}
       <Tabs
@@ -265,7 +353,7 @@ function BotTabContent(props: {
             botId={botId}
             hostId={hostId}
             botTitle={snapshot.bot.title}
-            offlineHostLabel={offlineHostLabel}
+            paused={paused}
           />
         </TabsContent>
         <TabsContent
@@ -279,19 +367,19 @@ function BotTabContent(props: {
             trunkChatId={snapshot.bot.trunkChatId}
             tasks={snapshot.tasks}
             openRequestCount={snapshot.openRequestCount}
-            offlineHostLabel={offlineHostLabel}
+            paused={paused}
           />
         </TabsContent>
         <TabsContent value="settings" className="flex min-h-0 flex-1 flex-col">
-          <BotSettingsPanel bot={snapshot.bot} canEdit={boundHere} />
+          <BotSettingsPanel bot={snapshot.bot} />
         </TabsContent>
       </Tabs>
     </div>
   );
 }
 
-function StreamErrorNotice(props: {
-  readonly message: string;
+function ErrorNotice(props: {
+  readonly text: string;
   readonly onRetry: () => void;
   readonly className: string;
 }): ReactNode {
@@ -304,7 +392,7 @@ function StreamErrorNotice(props: {
         props.className,
       )}
     >
-      <span>Couldn&apos;t reach this bot: {props.message}</span>
+      <span>{props.text}</span>
       <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
         Retry
       </Button>
@@ -313,24 +401,10 @@ function StreamErrorNotice(props: {
 }
 
 function BotTabHeader(props: {
-  readonly hostId: string;
   readonly snapshot: BotSubscriptionSnapshot;
+  readonly environmentLabel: string;
 }): ReactNode {
-  const { hostId, snapshot } = props;
-  const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
-  const directory = useHostDirectoryList();
-  const environmentLabel = useMemo(() => {
-    const match = environments.data?.environments.find(
-      (environment) => environment.environmentId === snapshot.bot.environmentId,
-    );
-    return match?.label ?? snapshot.bot.environmentId;
-  }, [environments.data, snapshot.bot.environmentId]);
-  const hostLabel = useMemo(
-    () =>
-      directory.data?.find((entry) => entry.hostId === hostId)?.label ?? hostId,
-    [directory.data, hostId],
-  );
+  const { snapshot, environmentLabel } = props;
   const openRequests = snapshot.openRequestCount;
   return (
     <header className="flex flex-wrap items-center gap-3 px-4 pt-4 pb-3">
@@ -345,7 +419,7 @@ function BotTabHeader(props: {
           {snapshot.bot.title}
         </h1>
         <p className="truncate text-ui-xs text-muted-foreground">
-          {environmentLabel} · {hostLabel}
+          {environmentLabel}
         </p>
       </div>
       {openRequests !== null && openRequests > 0 ? (
@@ -359,79 +433,34 @@ function BotTabHeader(props: {
   );
 }
 
-function boundElsewhereText(
-  boundHostId: string | null,
-  boundHostLabel: string,
-  offline: boolean,
-): string {
-  if (boundHostId === null) {
-    return "No host runs this bot. Move it here to message it.";
-  }
-  if (offline) {
-    return `This bot runs on ${boundHostLabel}, which is offline. A message you send now is saved and delivered when it is back.`;
-  }
-  return `This bot runs on ${boundHostLabel}. Its conversation is read there.`;
-}
-
 /**
- * The bot's trunk runs on another host. Reachable: view it through that host
- * (the tab rebinds and remounts there), or move it here, which makes THIS
- * host the bound one and re-reads the stream. Offline: say so, say what a
- * send does meanwhile, and offer the move alone - there is nothing to view
- * through until the host is back. No host (`boundHostId` null): nothing
- * queues a send, so the move is the only way to message it.
+ * The paused state: why the bot cannot be served to this tab now, with no
+ * machine named, and Retry where asking again can change the answer.
  */
-function BoundElsewhereBanner(props: {
-  readonly botId: string;
-  readonly boundHostId: string | null;
-  readonly boundHostLabel: string;
-  readonly offline: boolean;
-  readonly onMoved: () => void;
+function PausedBanner(props: {
+  readonly reason: BotTabPausedReason;
+  readonly environmentLabel: string;
+  readonly onRetry: () => void;
 }): ReactNode {
-  const { botId, boundHostId, boundHostLabel, offline, onMoved } = props;
-  const client = useTabHostClient();
-  const claim = useBotClaimAuthorityMutation(client);
-  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
+  const copy = botPausedCopy(props.reason, props.environmentLabel);
   return (
     <div
       role="status"
-      data-testid="bot-tab-bound-elsewhere"
-      data-offline={offline ? "true" : "false"}
+      data-testid="bot-tab-paused"
+      data-reason={props.reason}
       className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-ui-sm text-info-foreground"
     >
-      <span>{boundElsewhereText(boundHostId, boundHostLabel, offline)}</span>
-      <span className="flex items-center gap-2">
-        {offline || boundHostId === null ? null : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={claim.isPending}
-            onClick={() => rebindBotTab(botId, boundHostId)}
-          >
-            View on {boundHostLabel}
-          </Button>
-        )}
+      <span>{copy.text}</span>
+      {copy.retry ? (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          disabled={claim.isPending}
-          data-testid="bot-tab-move-here"
-          onClick={() =>
-            claim.mutate({ botId }, { onSuccess: () => onMoved() })
-          }
+          onClick={props.onRetry}
         >
-          Move it here
-          {claim.isPending ? (
-            <AgentSpinningDots
-              className="ml-1"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
+          Retry
         </Button>
-      </span>
+      ) : null}
     </div>
   );
 }

@@ -657,6 +657,8 @@ import {
   epicBatchDeleteV10,
   epicBatchDeleteV11,
   epicBatchUpdateRolesV10,
+  epicBatchUpdateRolesV11,
+  epicBatchUpdateRolesUpgradeV10ToV11,
   epicCreateArtifactV10,
   epicCreateChatUpgradeV10ToV11,
   epicCreateChatUpgradeV11ToV12,
@@ -695,6 +697,8 @@ import {
   epicGetTaskContextsUpgradeV12ToV13,
   epicGetTaskContextsUpgradeV13ToV14,
   epicGrantAccessV10,
+  epicGrantAccessV11,
+  epicGrantAccessUpgradeV10ToV11,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicFetchArtifactAttachmentV10,
@@ -726,6 +730,8 @@ import {
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
+  epicListCollaboratorsV11,
+  epicListCollaboratorsUpgradeV10ToV11,
   epicListCommentThreadsV10,
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
@@ -769,6 +775,8 @@ import {
   epicResolveArtifactByPathV10,
   epicSearchArtifactsV10,
   epicRevokeCollaboratorV10,
+  epicRevokeCollaboratorV11,
+  epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
   epicSetChatArchivedV10,
   epicSetChatArchivedV11,
@@ -8032,11 +8040,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listCollaborators": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListCollaboratorsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListCollaboratorsV11,
+          upgradeFromPreviousVersion: epicListCollaboratorsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8527,11 +8539,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.grantAccess": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicGrantAccessV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicGrantAccessV11,
+          upgradeFromPreviousVersion: epicGrantAccessUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8539,11 +8555,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.batchUpdateRoles": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicBatchUpdateRolesV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicBatchUpdateRolesV11,
+          upgradeFromPreviousVersion: epicBatchUpdateRolesUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8551,11 +8571,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.revokeCollaborator": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicRevokeCollaboratorV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicRevokeCollaboratorV11,
+          upgradeFromPreviousVersion: epicRevokeCollaboratorUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

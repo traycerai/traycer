@@ -6,7 +6,8 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { Badge } from "@/components/ui/badge";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
-import { BotTranscriptOffline } from "@/components/bots/bot-transcript-offline";
+import { UNRESOLVED_BOT_MEMBER_NAMES } from "@/lib/bots/bot-member-names";
+import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import {
@@ -48,10 +49,10 @@ export function BotUnderTheHoodPanel(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The stream's open-request hint; `null` is unknown and renders nothing. */
   readonly openRequestCount: number | null;
-  /** The bound host's label while it is offline and this tab is not on it:
-   * the trunk is that host's to serve, so a placeholder stands in for it. The
-   * task list comes from the stream snapshot and keeps rendering. */
-  readonly offlineHostLabel: string | null;
+  /** The bot is paused from this tab: the trunk is the serving host's to
+   * show, so a placeholder stands in for it. The task list comes from the
+   * stream snapshot and keeps rendering. */
+  readonly paused: boolean;
 }): ReactNode {
   const {
     botId,
@@ -60,27 +61,29 @@ export function BotUnderTheHoodPanel(props: {
     trunkChatId,
     tasks,
     openRequestCount,
-    offlineHostLabel,
+    paused,
   } = props;
   return (
     <div className="@container flex min-h-0 flex-1 flex-col">
       <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] @3xl:grid-rows-1">
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto border-b border-border/60 p-4 @3xl:border-r @3xl:border-b-0">
           <BotTasksList tasks={tasks} />
-          {offlineHostLabel === null ? (
+          {paused ? null : (
             <BotTrunkState
               botId={botId}
               hostId={hostId}
               trunkChatId={trunkChatId}
               openRequestCount={openRequestCount}
             />
-          ) : null}
+          )}
         </div>
         <div className="flex min-h-0 flex-col">
           <h3 className="shrink-0 px-4 pt-3 pb-1 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
             Trunk
           </h3>
-          {offlineHostLabel === null ? (
+          {paused ? (
+            <BotTranscriptPaused />
+          ) : (
             <BotChatTranscript
               botId={botId}
               chatId={trunkChatId}
@@ -88,9 +91,8 @@ export function BotUnderTheHoodPanel(props: {
               title={botTitle}
               instanceId={`bot-trunk:${botId}`}
               linkRequests={false}
+              resolveMemberName={UNRESOLVED_BOT_MEMBER_NAMES}
             />
-          ) : (
-            <BotTranscriptOffline hostLabel={offlineHostLabel} />
           )}
         </div>
       </div>
