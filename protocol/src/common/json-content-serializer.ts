@@ -381,24 +381,36 @@ const artifactTableCellEscaping: TextRunEscaping = {
  * so the same rules apply there. A line start inside an inline code span is
  * left alone: code text is literal.
  */
-function escapeParagraphLineStarts(paragraph: string): string {
-  // Up to three leading spaces read back as the paragraph's own text, and the
-  // marker behind them is escaped below. Four or more (or a tab) would make
-  // the line an indented code block instead, so that whitespace is dropped.
-  const rendered = /^(?: {4}| {0,3}\t)/.test(paragraph)
-    ? paragraph.replace(/^[ \t]+/, "")
-    : paragraph;
+function escapeParagraphLineStarts(
+  rendered: string,
+  inListItem: boolean,
+): string {
   let out = "";
   let codeRun = 0;
   let insertAt = -1;
   for (let i = 0; i < rendered.length;) {
     if ((i === 0 || rendered[i - 1] === "\n") && codeRun === 0) {
+      const firstLine = i === 0;
+      // Up to three leading spaces read back as the line's own text, and the
+      // marker behind them is escaped below. Four or more (or a tab) cannot
+      // be kept: on a paragraph's first line they would open an indented code
+      // block, and on a later line of a list item's paragraph the item's
+      // parser drops them. So that whitespace is dropped here, once, and the
+      // markdown reads back as what it says. A later line of a top-level
+      // paragraph keeps its spaces as text.
+      if (
+        (firstLine || inListItem) &&
+        INDENTED_CODE_START.test(rendered.slice(i, i + 4))
+      ) {
+        while (rendered[i] === " " || rendered[i] === "\t") i++;
+        if (i >= rendered.length) break;
+      }
       const newline = rendered.indexOf("\n", i);
       const line = rendered.slice(
         i,
         newline === -1 ? rendered.length : newline,
       );
-      const offset = lineStartEscapeOffset(line, i === 0);
+      const offset = lineStartEscapeOffset(line, firstLine);
       insertAt = offset === -1 ? -1 : i + offset;
     }
     if (i === insertAt) {
@@ -426,6 +438,7 @@ function escapeParagraphLineStarts(paragraph: string): string {
   return out;
 }
 
+const INDENTED_CODE_START = /^(?: {4}| {0,3}\t)/;
 const ATX_HEADING_START = /^#{1,6}(?=[ \t]|$)/;
 const BULLET_START = /^[-+](?=[ \t]|$)/;
 const DASH_BREAK_OR_UNDERLINE = /^-(?:[ \t]*-)*[ \t]*$/;
@@ -1073,7 +1086,7 @@ function serializeParagraph(node: JsonContent, ctx: SerializerContext): string {
   const children = serializeChildren(node.content, ctx);
   const content =
     ctx.escapeText && !ctx.inTableCell
-      ? escapeParagraphLineStarts(children)
+      ? escapeParagraphLineStarts(children, ctx.inListItem)
       : children;
   return `${indent}${content}`;
 }

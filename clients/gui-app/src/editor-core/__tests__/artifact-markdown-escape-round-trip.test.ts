@@ -374,11 +374,7 @@ interface ListCase {
 
 const LIST_CASES: ReadonlyArray<ListCase> = [
   ...ITEM_KINDS.flatMap((kind) =>
-    LINES_AFTER_BREAK.filter(
-      // A task item's parse drops these spaces: see
-      // `artifact-list-hard-break-2574-pending.test.ts`.
-      (line) => !(kind.startsWith("task") && line.startsWith("  ")),
-    ).map((line) => ({
+    LINES_AFTER_BREAK.map((line) => ({
       name: `${kind} item, line after the break ${JSON.stringify(line)}`,
       doc: { type: "doc", content: [listOf(kind, [brokenParagraph(line)])] },
       breaks: 1,
@@ -405,6 +401,35 @@ const LIST_CASES: ReadonlyArray<ListCase> = [
     },
     breaks: 1,
   })),
+  // traycer#2574 shape C: an item whose first line is empty, then a nested
+  // list whose item has the hard break.
+  ...ITEM_KINDS.map((kind) => ({
+    name: `${kind} item nested in an item with an empty first line`,
+    doc: {
+      type: "doc",
+      content: [
+        listOf("bullet", [
+          textParagraph([]),
+          listOf(kind, [brokenParagraph("- s")]),
+        ]),
+      ],
+    },
+    breaks: 1,
+  })),
+  // Control for shape C: the same empty-first-line item with no hard break.
+  {
+    name: "bullet item nested in an item with an empty first line, no hard break",
+    doc: {
+      type: "doc",
+      content: [
+        listOf("bullet", [
+          textParagraph([]),
+          listOf("bullet", [textParagraph([plainText("s")])]),
+        ]),
+      ],
+    },
+    breaks: 0,
+  },
   // traycer#2574 shape E: an ordered list under a bullet item, under a task
   // item, and a task list under an ordered item holding an ordered list, with
   // the hard break in the innermost item.
@@ -585,5 +610,195 @@ describe("an indented code block after an empty task item line (traycer#2574)", 
     expect(codeBlocksOf(json2)).toEqual(["code"]);
     expect(serialize(fragment2)).toBe(md1);
     expect(proseMirrorJsonOf(fragment2)).toEqual(proseMirrorJsonOf(fragment1));
+  });
+});
+
+/**
+ * Paragraph TEXT that would open a block if it were written raw: whatever the
+ * position, the serializer must escape it so the parse reads the same text in
+ * the same paragraph. Each row builds the document as JSON, writes it, parses
+ * it back and checks the parse reproduces the original document exactly
+ * (identical Yjs), then that a second pass writes the same markdown.
+ *
+ * One normalization is by design: four or more leading spaces cannot be kept
+ * at a paragraph's start (written back they would open an indented code
+ * block, and the parser does not decode entities to protect them), nor on the
+ * line after a hard break inside a list item (the item's parser drops them).
+ * That whitespace is dropped once; the text keeps everything else, stays a
+ * paragraph, and the markdown is stable from the first pass. The line after a
+ * hard break in a top-level paragraph keeps its spaces as text.
+ */
+const BLOCK_OPENING_TEXTS: ReadonlyArray<string> = [
+  "# h",
+  "> q",
+  "---",
+  "```js",
+  "    code",
+  "1. x",
+  "- x",
+  "<div>",
+];
+
+interface ClassCase {
+  readonly name: string;
+  readonly text: string;
+  readonly doc: JsonContent;
+  // True when leading whitespace of four or more columns cannot be kept here.
+  readonly dropsIndentedCodeStart: boolean;
+}
+
+/** `- plain` and `- [ ] task` in one list, with `text` in each item. */
+function mixedListDoc(text: string): JsonContent {
+  const parsed = parseJson("- plain\n- [ ] task");
+  const swap = (node: JsonContent): JsonContent => {
+    if (node.type === "text") {
+      return { ...node, text };
+    }
+    return node.content === undefined
+      ? node
+      : { ...node, content: node.content.map(swap) };
+  };
+  return swap(parsed);
+}
+
+const CLASS_CASES: ReadonlyArray<ClassCase> = BLOCK_OPENING_TEXTS.flatMap(
+  (text) => {
+    const label = JSON.stringify(text);
+    const make = (
+      name: string,
+      doc: JsonContent,
+      dropsIndentedCodeStart: boolean,
+    ): ClassCase => ({
+      name: `${name}, ${label}`,
+      text,
+      doc,
+      dropsIndentedCodeStart,
+    });
+    return [
+      make(
+        "top-level paragraph",
+        { type: "doc", content: [textParagraph([plainText(text)])] },
+        true,
+      ),
+      make(
+        "top-level later paragraph",
+        {
+          type: "doc",
+          content: [
+            textParagraph([plainText("first")]),
+            textParagraph([plainText(text)]),
+          ],
+        },
+        true,
+      ),
+      make(
+        "line after a hard break",
+        {
+          type: "doc",
+          content: [brokenParagraph(text)],
+        },
+        false,
+      ),
+      ...ITEM_KINDS.flatMap((kind) => [
+        make(
+          `${kind} item, first paragraph`,
+          {
+            type: "doc",
+            content: [listOf(kind, [textParagraph([plainText(text)])])],
+          },
+          true,
+        ),
+        make(
+          `${kind} item, later paragraph`,
+          {
+            type: "doc",
+            content: [
+              listOf(kind, [
+                textParagraph([plainText("a")]),
+                textParagraph([plainText(text)]),
+              ]),
+            ],
+          },
+          true,
+        ),
+        make(
+          `${kind} item, line after a hard break`,
+          { type: "doc", content: [listOf(kind, [brokenParagraph(text)])] },
+          true,
+        ),
+      ]),
+      make("mixed plain and task items", mixedListDoc(text), true),
+    ];
+  },
+);
+
+/** `doc` with every text node equal to `text` cut to `replacement`. */
+function withText(
+  doc: JsonContent,
+  text: string,
+  replacement: string,
+): JsonContent {
+  if (doc.type === "text" && doc.text === text) {
+    return { ...doc, text: replacement };
+  }
+  return doc.content === undefined
+    ? doc
+    : {
+        ...doc,
+        content: doc.content.map((c) => withText(c, text, replacement)),
+      };
+}
+
+describe("paragraph text that would open a block stays text (traycer#1563)", () => {
+  it.each(CLASS_CASES)("$name", ({ text, doc, dropsIndentedCodeStart }) => {
+    const fragment0 = fragmentOf(doc);
+    const md1 = serialize(fragment0);
+    const json1 = parseJson(md1);
+    const fragment1 = fragmentOf(json1);
+    const md2 = serialize(fragment1);
+
+    // Stable from the first pass, always.
+    expect(md2).toBe(md1);
+
+    // Where four or more leading spaces cannot be kept, the text is read back
+    // without them, in the same structure: no code block, no new block.
+    const expected =
+      dropsIndentedCodeStart && /^[ \t]{4}/.test(text)
+        ? fragmentOf(withText(doc, text, text.trimStart()))
+        : fragment0;
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(expected));
+    expect(fragment1.toJSON()).toBe(expected.toJSON());
+    expect(textOf(json1)).toBe(textOf(proseMirrorJsonOf(expected)));
+  });
+});
+
+/**
+ * Whitespace dropped on the line after a hard break inside a list item: the
+ * item's parser drops four or more columns there, so the serializer writes
+ * none, and the first pass is already the fixed point.
+ */
+describe("the line after a hard break in a list item drops four or more leading columns (traycer#1563)", () => {
+  const cases = [
+    ["bullet", "    code", "- First\\\n  code"],
+    ["ordered-10", "    code", "10. First\\\n    code"],
+    ["bullet", "     x", "- First\\\n  x"],
+    ["bullet", "    # h", "- First\\\n  \\# h"],
+  ] as const;
+
+  it.each(cases)("%s item, %j", (kind, line, expected) => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [listOf(kind, [brokenParagraph(line)])],
+    };
+    const md1 = serialize(fragmentOf(doc));
+    expect(md1).toBe(expected);
+
+    const json1 = parseJson(md1);
+    expect(serialize(fragmentOf(json1))).toBe(md1);
+    // Read back as text, after the hard break, in the same paragraph.
+    const trimmed = withText(doc, line, line.trimStart());
+    expect(proseMirrorJsonOf(fragmentOf(json1))).toEqual(
+      proseMirrorJsonOf(fragmentOf(trimmed)),
+    );
   });
 });

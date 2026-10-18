@@ -582,3 +582,48 @@ describe("artifact hard breaks in a quote inside a task item", () => {
     expect(artifact(content)).toBe("- [ ] > First\\\n  > Second");
   });
 });
+
+describe("artifact line after a hard break in a list item with four or more leading columns", () => {
+  const item = (kind: "bullet" | "ordered", next: string): string => {
+    const content = paragraph([
+      plain("First"),
+      { type: "hardBreak" },
+      plain(next),
+    ]);
+    return artifact(
+      doc([
+        kind === "bullet"
+          ? bulletList([listItem([content])])
+          : {
+              type: "orderedList",
+              attrs: { start: 10, type: null },
+              content: [listItem([content])],
+            },
+      ]),
+    );
+  };
+
+  it("drops the whitespace, since the item's parser would drop it and the next pass would move it", () => {
+    expect(item("bullet", "    code")).toBe("- First\\\n  code");
+    expect(item("ordered", "    code")).toBe("10. First\\\n    code");
+    expect(item("bullet", "     x")).toBe("- First\\\n  x");
+  });
+
+  it("escapes a marker that the dropped whitespace exposes", () => {
+    expect(item("bullet", "    # h")).toBe("- First\\\n  \\# h");
+  });
+
+  it("keeps one to three leading spaces as text there, escaping the marker behind them", () => {
+    expect(item("bullet", "   # h")).toBe("- First\\\n     \\# h");
+  });
+
+  it("keeps all the spaces on the line after a hard break in a top-level paragraph", () => {
+    expect(
+      artifact(
+        doc([
+          paragraph([plain("First"), { type: "hardBreak" }, plain("    code")]),
+        ]),
+      ),
+    ).toBe("First\\\n    code");
+  });
+});
