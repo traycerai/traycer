@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1eddab914d 100644
+index d828422b45e463c229bd937d39ea416278055dde..abb4776395f0b7d21f13c959664c95124e6a9358 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -45,6 +45,7 @@ __export(index_exports, {
@@ -41,10 +41,22 @@ index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1e
    renderNestedMarkdownContent: () => renderNestedMarkdownContent,
    serializeAttributes: () => serializeAttributes
  });
-@@ -4788,84 +4794,169 @@ function createInlineMarkdownSpec(options) {
+@@ -4788,84 +4794,195 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
+-function parseIndentedBlocks(src, config, lexer) {
+-  var _a, _b, _c, _d;
+-  const lines = src.split("\n");
+-  const items = [];
+-  let totalRaw = "";
+-  let i = 0;
+-  const baseIndentSize = config.baseIndentSize || 2;
+-  while (i < lines.length) {
+-    const currentLine = lines[i];
+-    const itemMatch = currentLine.match(config.itemPattern);
+-    if (!itemMatch) {
+-      if (items.length > 0) {
 +function isBlankLine(line) {
 +  return !/[^ \t]/.test(line);
 +}
@@ -112,17 +124,67 @@ index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1e
 +${nextLineWithoutTabs.slice(indent)}`;
 +    } else {
 +      if (blankLine) {
-+        break;
-+      }
+         break;
+-      } else if (currentLine.trim() === "") {
+-        i += 1;
+-        totalRaw = `${totalRaw}${currentLine}
+-`;
+-        continue;
+-      } else {
+-        return void 0;
+       }
+-    }
+-    const itemData = config.extractItemData(itemMatch);
+-    const { indentLevel, mainContent } = itemData;
+-    totalRaw = `${totalRaw}${currentLine}
+-`;
+-    const itemContent = [mainContent];
+-    i += 1;
+-    while (i < lines.length) {
+-      const nextLine = lines[i];
+-      if (nextLine.trim() === "") {
+-        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
+-        if (nextNonEmptyIndex === -1) {
+-          break;
+-        }
+-        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
+-        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^(\s*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
+-        if (nextIndent2 > indentLevel) {
+-          itemContent.push(nextLine);
+-          totalRaw = `${totalRaw}${nextLine}
+-`;
+-          i += 1;
+-          continue;
+-        } else {
+-          break;
+-        }
 +      if (line.replace(/\t/g, "    ").search(/[^ ]/) >= 4) {
 +        break;
-+      }
+       }
+-      const nextIndent = ((_d = (_c = nextLine.match(/^(\s*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
+-      if (nextIndent > indentLevel) {
+-        itemContent.push(nextLine);
+-        totalRaw = `${totalRaw}${nextLine}
+-`;
+-        i += 1;
+-      } else {
 +      if (opens.fences.test(line) || opens.heading.test(line) || opens.hr.test(line)) {
-+        break;
-+      }
+         break;
+       }
 +      text += `
 +${nextLine}`;
-+    }
+     }
+-    let nestedTokens;
+-    const nestedContent = itemContent.slice(1);
+-    if (nestedContent.length > 0) {
+-      const dedentedNested = nestedContent.map((nestedLine) => nestedLine.slice(indentLevel + baseIndentSize)).join("\n");
+-      if (dedentedNested.trim()) {
+-        if (config.customNestedParser) {
+-          nestedTokens = config.customNestedParser(dedentedNested);
+-        } else {
+-          nestedTokens = lexer.blockTokens(dedentedNested);
+-        }
+-      }
 +    blankLine = isBlankLine(nextLine);
 +    end += 1;
 +    line = nextLineWithoutTabs.slice(indent);
@@ -150,129 +212,98 @@ index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1e
 +  const firstText = opensWithText ? tokens[first].text : "";
 +  return {
 +    checked: checkbox[1].toLowerCase() === "x",
++    tokens,
 +    mainContent: task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText,
 +    nestedTokens: tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph)
 +  };
 +}
- function parseIndentedBlocks(src, config, lexer) {
--  var _a, _b, _c, _d;
-   const lines = src.split("\n");
--  const items = [];
--  let totalRaw = "";
++function parseIndentedBlocks(src, config, lexer) {
++  const lines = src.split("\n");
++  const sourceOf = (start, end) => lines.slice(start, end).map((line, index) => start + index < lines.length - 1 ? `${line}
++` : line).join("");
++  let i = 0;
 +  const found = [];
-+  let consumed = 0;
-   let i = 0;
--  const baseIndentSize = config.baseIndentSize || 2;
-   while (i < lines.length) {
-     const currentLine = lines[i];
--    const itemMatch = currentLine.match(config.itemPattern);
--    if (!itemMatch) {
--      if (items.length > 0) {
++  let bullet;
++  while (i < lines.length) {
++    const currentLine = lines[i];
 +    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern);
-+    const markerEnd = itemMatch ? (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length : 0;
-+    const item = itemMatch ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
++    if (!itemMatch || bullet !== void 0 && itemMatch[2] !== bullet) {
++      break;
++    }
++    bullet = itemMatch[2];
++    const markerEnd = (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length;
++    const item = collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
 +      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line)
-+    }) : void 0;
-+    const task = item !== void 0 && (!config.checkbox || TASK_CHECKBOX.test(item.text));
-+    if (!itemMatch || !item || !task && config.createPlainToken === void 0) {
-+      if (found.length > 0) {
-         break;
--      } else if (currentLine.trim() === "") {
-+      } else if (isBlankLine(currentLine)) {
-         i += 1;
--        totalRaw = `${totalRaw}${currentLine}
--`;
-         continue;
-       } else {
-         return void 0;
-       }
++    });
++    const task = !config.checkbox || TASK_CHECKBOX.test(item.text);
++    if (!task && config.createPlainToken === void 0) {
++      break;
      }
--    const itemData = config.extractItemData(itemMatch);
--    const { indentLevel, mainContent } = itemData;
--    totalRaw = `${totalRaw}${currentLine}
--`;
--    const itemContent = [mainContent];
--    i += 1;
--    while (i < lines.length) {
--      const nextLine = lines[i];
--      if (nextLine.trim() === "") {
--        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
--        if (nextNonEmptyIndex === -1) {
--          break;
--        }
--        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
--        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^(\s*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
--        if (nextIndent2 > indentLevel) {
--          itemContent.push(nextLine);
--          totalRaw = `${totalRaw}${nextLine}
--`;
--          i += 1;
--          continue;
--        } else {
--          break;
--        }
--      }
--      const nextIndent = ((_d = (_c = nextLine.match(/^(\s*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
--      if (nextIndent > indentLevel) {
--        itemContent.push(nextLine);
--        totalRaw = `${totalRaw}${nextLine}
--`;
--        i += 1;
--      } else {
--        break;
--      }
--    }
--    let nestedTokens;
--    const nestedContent = itemContent.slice(1);
--    if (nestedContent.length > 0) {
--      const dedentedNested = nestedContent.map((nestedLine) => nestedLine.slice(indentLevel + baseIndentSize)).join("\n");
--      if (dedentedNested.trim()) {
--        if (config.customNestedParser) {
--          nestedTokens = config.customNestedParser(dedentedNested);
--        } else {
--          nestedTokens = lexer.blockTokens(dedentedNested);
--        }
--      }
--    }
 -    const token = config.createToken(itemData, nestedTokens);
 -    items.push(token);
-+    found.push({ match: itemMatch, text: item.text, raw: lines.slice(i, item.end).join("\n"), task });
++    found.push({ match: itemMatch, text: item.text, raw: sourceOf(i, item.end), task });
 +    i = item.end;
-+    consumed = i;
    }
 -  if (items.length === 0) {
 +  if (!found.some((item) => item.task)) {
      return void 0;
    }
++  let loose = false;
++  let endsWithBlankLine = false;
++  found.forEach((item) => {
++    if (!loose) {
++      if (endsWithBlankLine) {
++        loose = true;
++      } else if (/\n[ \t]*\n[ \t]*$/.test(item.raw)) {
++        endsWithBlankLine = true;
++      }
++    }
++  });
 +  const last = found[found.length - 1];
 +  last.text = last.text.replace(/[ \t\n]+$/, "");
 +  last.raw = last.raw.replace(/[ \t\n]+$/, "");
-+  const items = found.map(({ match, text, raw, task }) => {
-+    if (!task && config.createPlainToken !== void 0) {
-+      return config.createPlainToken({ raw, text, tokens: lexer.listItemBlockTokens(text) });
++  const read = found.map((item) => {
++    if (item.task && config.checkbox) {
++      const task = readMarkdownTaskItem(item.text, lexer);
++      return { item, task, tokens: task === void 0 ? [] : task.tokens };
 +    }
-+    const data = config.extractItemData(match);
-+    const read = config.checkbox ? readMarkdownTaskItem(text, lexer) : void 0;
-+    if (read === void 0) {
-+      const tokens = lexer.listItemBlockTokens(text);
++    return { item, task: void 0, tokens: lexer.listItemBlockTokens(item.text) };
++  });
++  read.forEach(({ tokens }) => {
++    if (!loose) {
++      loose = tokens.some((token) => token.type === "space" && /\n.*\n/.test(token.raw));
++    }
++  });
++  const items = read.map(({ item, task, tokens }) => {
++    if (!item.task && config.createPlainToken !== void 0) {
++      return config.createPlainToken({
++        raw: item.raw,
++        text: item.text,
++        tokens: loose ? tokens.map((token) => token.type === "text" ? { ...token, type: "paragraph" } : token) : tokens,
++        loose
++      });
++    }
++    const data = config.extractItemData(item.match);
++    if (task === void 0) {
 +      const first = tokens.findIndex((token) => token.type !== "space");
 +      const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
 +      data.mainContent = opensWithText ? tokens[first].text : "";
 +      const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
 +      return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
 +    }
-+    data.checked = read.checked;
-+    data.mainContent = read.mainContent;
-+    return config.createToken(data, read.nestedTokens.length > 0 ? read.nestedTokens : void 0);
++    data.checked = task.checked;
++    data.mainContent = task.mainContent;
++    return config.createToken(data, task.nestedTokens.length > 0 ? task.nestedTokens : void 0);
 +  });
    return {
      items,
 -    raw: totalRaw
-+    raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
++    raw: sourceOf(0, i).replace(/[ \t\n]+$/, ""),
++    loose
    };
  }
 
-@@ -8642,6 +8733,7 @@ var Tracker = class {
+@@ -8642,6 +8759,7 @@ var Tracker = class {
    attrsEqual,
    callOrReturn,
    canInsertNode,
@@ -280,7 +311,7 @@ index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1e
    combineTransactionSteps,
    commands,
    createAtomBlockMarkdownSpec,
-@@ -8740,6 +8832,7 @@ var Tracker = class {
+@@ -8740,6 +8858,7 @@ var Tracker = class {
    markInputRule,
    markPasteRule,
    markdown,
@@ -288,7 +319,7 @@ index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1e
    marksEqual,
    mergeAttributes,
    mergeDeep,
-@@ -8749,6 +8842,7 @@ var Tracker = class {
+@@ -8749,6 +8868,7 @@ var Tracker = class {
    objectIncludes,
    parseAttributes,
    parseIndentedBlocks,
@@ -297,7 +328,7 @@ index d828422b45e463c229bd937d39ea416278055dde..d3fd271d0f19064a2c44145e6cff6d1e
    posToDOMRect,
    removeDuplicates,
 diff --git a/dist/index.d.cts b/dist/index.d.cts
-index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c57fe2335e 100644
+index 6f803b5c646b232b8507e7a9dfd9857606d02161..a7e043ed1e769daec0e623d4f69a8acead0382dc 100644
 --- a/dist/index.d.cts
 +++ b/dist/index.d.cts
 @@ -2266,6 +2266,14 @@ type MarkdownLexerConfiguration = {
@@ -328,7 +359,7 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
      itemPattern: RegExp;
      /** Function to extract data from regex match */
      extractItemData: (match: RegExpMatchArray) => {
-@@ -5535,55 +5547,84 @@ interface BlockParserConfig {
+@@ -5535,58 +5547,96 @@ interface BlockParserConfig {
      };
      /** Function to create the final token */
      createToken: (data: any, nestedTokens?: any[]) => ParsedBlock;
@@ -345,16 +376,42 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 +    checkbox?: boolean;
 +    /**
 +     * With `checkbox`, builds an item whose text holds no checkbox, from its
-+     * source lines, its text and its blocks as marked lexes an item's, so a
-+     * list of plain items and tasks is read in one pass by one reader. Without
-+     * it such an item ends the list. A list with no task is left to marked.
-      */
--    customNestedParser?: (dedentedContent: string) => any[] | undefined;
++     * source lines, its text, its blocks as marked lexes an item's and whether
++     * the list is loose (its text blocks are then paragraphs), so a list of
++     * plain items and tasks is read in one pass, with marked's boundaries and
++     * looseness. Without it such an item ends the list. A list with no task is
++     * left to marked.
++     */
 +    createPlainToken?: (item: {
 +        raw: string;
 +        text: string;
 +        tokens: any[];
++        loose: boolean;
 +    }) => ParsedBlock;
++}
++/**
++ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
++ * item instead of continuing an item whose content starts at `indent`.
++ */
++declare function markdownNextBulletRegex(indent: number): RegExp;
++interface MarkdownListItemOptions {
++    /**
++     * Whether `line` starts a new item, for an item whose content starts at
++     * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
++     */
++    endsItem: (line: string, indent: number) => boolean;
++    /**
++     * An ordered list written before nested lists were indented to the item's
++     * content column put them, and fences, two columns past the marker: at
++     * `column`. A list marker or fence at exactly that column, short of the
++     * content column, keeps the item open, and the item's content column is
++     * `column` from that line on. marked would end the item there instead.
+      */
+-    customNestedParser?: (dedentedContent: string) => any[] | undefined;
++    legacy?: {
++        column: number;
++        opens: (text: string) => boolean;
++    };
  }
  /**
 - * Parses markdown text into hierarchical indented blocks with proper nesting.
@@ -392,29 +449,6 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 - *   })
 - * }, lexer)
 - * ```
-+ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
-+ * item instead of continuing an item whose content starts at `indent`.
-+ */
-+declare function markdownNextBulletRegex(indent: number): RegExp;
-+interface MarkdownListItemOptions {
-+    /**
-+     * Whether `line` starts a new item, for an item whose content starts at
-+     * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
-+     */
-+    endsItem: (line: string, indent: number) => boolean;
-+    /**
-+     * An ordered list written before nested lists were indented to the item's
-+     * content column put them, and fences, two columns past the marker: at
-+     * `column`. A list marker or fence at exactly that column, short of the
-+     * content column, keeps the item open, and the item's content column is
-+     * `column` from that line on. marked would end the item there instead.
-+     */
-+    legacy?: {
-+        column: number;
-+        opens: (text: string) => boolean;
-+    };
-+}
-+/**
 + * A list item as marked 17.0.6's list tokenizer reads it (`Tokenizer.list`,
 + * src/Tokenizer.ts), for the marker line `lines[start]` whose marker, with any
 + * indent before it, ends at column `markerEnd` and is followed by `rest`:
@@ -431,7 +465,8 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 + * it is checked, its first paragraph's text and the blocks after it, nested
 + * lists included; undefined when the text does not start with a checkbox.
 + * This is the one reader of a task item, whether its list holds only tasks or
-+ * plain items too.
++ * plain items too. `tokens` are the item's blocks as lexed, for the list's
++ * loose test.
 + */
 +declare function readMarkdownTaskItem(text: string, lexer: {
 +    inlineTokens: (src: string) => any[];
@@ -440,12 +475,16 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 +    checked: boolean;
 +    mainContent: string;
 +    nestedTokens: any[];
++    tokens: any[];
 +} | undefined;
 +/**
-+ * Parses a run of list items whose markers match `config.itemPattern`, each
-+ * item read as marked reads one (`collectMarkdownListItem`). A task item is
-+ * read by `readMarkdownTaskItem`; with `config.createPlainToken`, a plain item
-+ * keeps its blocks as marked lexes an item's (`lexer.listItemBlockTokens`).
++ * Parses a list as marked 17.0.6's list tokenizer does (`Tokenizer.list`,
++ * src/Tokenizer.ts:231-475; the cited line numbers are marked's): the list is
++ * bound to its first item's marker, each item is read by
++ * `collectMarkdownListItem`, the list ends where marked's does, and its
++ * looseness is marked's. Only a task item differs: `readMarkdownTaskItem`
++ * reads it. With `config.createPlainToken`, a plain item keeps its blocks as
++ * marked lexes and finishes them.
   */
  declare function parseIndentedBlocks(src: string, config: BlockParserConfig, lexer: {
      inlineTokens: (src: string) => any[];
@@ -454,7 +493,11 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
  }): {
      items: ParsedBlock[];
      raw: string;
-@@ -5659,16 +5700,20 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
++    loose: boolean;
+ } | undefined;
+
+ /**
+@@ -5659,16 +5709,20 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
  type index_BlockMarkdownSpecOptions = BlockMarkdownSpecOptions;
  type index_BlockParserConfig = BlockParserConfig;
  type index_InlineMarkdownSpecOptions = InlineMarkdownSpecOptions;
@@ -476,14 +519,14 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
  }
 
  /**
-@@ -5712,4 +5757,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
+@@ -5712,4 +5766,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
      (value: any, replacer?: (number | string)[] | null, space?: string | number): string;
  }): T[];
 
 -export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 +export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, readMarkdownTaskItem, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c57fe2335e 100644
+index 6f803b5c646b232b8507e7a9dfd9857606d02161..a7e043ed1e769daec0e623d4f69a8acead0382dc 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -2266,6 +2266,14 @@ type MarkdownLexerConfiguration = {
@@ -514,7 +557,7 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
      itemPattern: RegExp;
      /** Function to extract data from regex match */
      extractItemData: (match: RegExpMatchArray) => {
-@@ -5535,55 +5547,84 @@ interface BlockParserConfig {
+@@ -5535,58 +5547,96 @@ interface BlockParserConfig {
      };
      /** Function to create the final token */
      createToken: (data: any, nestedTokens?: any[]) => ParsedBlock;
@@ -531,16 +574,42 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 +    checkbox?: boolean;
 +    /**
 +     * With `checkbox`, builds an item whose text holds no checkbox, from its
-+     * source lines, its text and its blocks as marked lexes an item's, so a
-+     * list of plain items and tasks is read in one pass by one reader. Without
-+     * it such an item ends the list. A list with no task is left to marked.
-      */
--    customNestedParser?: (dedentedContent: string) => any[] | undefined;
++     * source lines, its text, its blocks as marked lexes an item's and whether
++     * the list is loose (its text blocks are then paragraphs), so a list of
++     * plain items and tasks is read in one pass, with marked's boundaries and
++     * looseness. Without it such an item ends the list. A list with no task is
++     * left to marked.
++     */
 +    createPlainToken?: (item: {
 +        raw: string;
 +        text: string;
 +        tokens: any[];
++        loose: boolean;
 +    }) => ParsedBlock;
++}
++/**
++ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
++ * item instead of continuing an item whose content starts at `indent`.
++ */
++declare function markdownNextBulletRegex(indent: number): RegExp;
++interface MarkdownListItemOptions {
++    /**
++     * Whether `line` starts a new item, for an item whose content starts at
++     * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
++     */
++    endsItem: (line: string, indent: number) => boolean;
++    /**
++     * An ordered list written before nested lists were indented to the item's
++     * content column put them, and fences, two columns past the marker: at
++     * `column`. A list marker or fence at exactly that column, short of the
++     * content column, keeps the item open, and the item's content column is
++     * `column` from that line on. marked would end the item there instead.
+      */
+-    customNestedParser?: (dedentedContent: string) => any[] | undefined;
++    legacy?: {
++        column: number;
++        opens: (text: string) => boolean;
++    };
  }
  /**
 - * Parses markdown text into hierarchical indented blocks with proper nesting.
@@ -578,29 +647,6 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 - *   })
 - * }, lexer)
 - * ```
-+ * marked's `nextBulletRegex` (src/rules.ts): a list marker that starts a new
-+ * item instead of continuing an item whose content starts at `indent`.
-+ */
-+declare function markdownNextBulletRegex(indent: number): RegExp;
-+interface MarkdownListItemOptions {
-+    /**
-+     * Whether `line` starts a new item, for an item whose content starts at
-+     * `indent`; marked's `nextBulletRegex(indent)` for a bullet or task list.
-+     */
-+    endsItem: (line: string, indent: number) => boolean;
-+    /**
-+     * An ordered list written before nested lists were indented to the item's
-+     * content column put them, and fences, two columns past the marker: at
-+     * `column`. A list marker or fence at exactly that column, short of the
-+     * content column, keeps the item open, and the item's content column is
-+     * `column` from that line on. marked would end the item there instead.
-+     */
-+    legacy?: {
-+        column: number;
-+        opens: (text: string) => boolean;
-+    };
-+}
-+/**
 + * A list item as marked 17.0.6's list tokenizer reads it (`Tokenizer.list`,
 + * src/Tokenizer.ts), for the marker line `lines[start]` whose marker, with any
 + * indent before it, ends at column `markerEnd` and is followed by `rest`:
@@ -617,7 +663,8 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 + * it is checked, its first paragraph's text and the blocks after it, nested
 + * lists included; undefined when the text does not start with a checkbox.
 + * This is the one reader of a task item, whether its list holds only tasks or
-+ * plain items too.
++ * plain items too. `tokens` are the item's blocks as lexed, for the list's
++ * loose test.
 + */
 +declare function readMarkdownTaskItem(text: string, lexer: {
 +    inlineTokens: (src: string) => any[];
@@ -626,12 +673,16 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
 +    checked: boolean;
 +    mainContent: string;
 +    nestedTokens: any[];
++    tokens: any[];
 +} | undefined;
 +/**
-+ * Parses a run of list items whose markers match `config.itemPattern`, each
-+ * item read as marked reads one (`collectMarkdownListItem`). A task item is
-+ * read by `readMarkdownTaskItem`; with `config.createPlainToken`, a plain item
-+ * keeps its blocks as marked lexes an item's (`lexer.listItemBlockTokens`).
++ * Parses a list as marked 17.0.6's list tokenizer does (`Tokenizer.list`,
++ * src/Tokenizer.ts:231-475; the cited line numbers are marked's): the list is
++ * bound to its first item's marker, each item is read by
++ * `collectMarkdownListItem`, the list ends where marked's does, and its
++ * looseness is marked's. Only a task item differs: `readMarkdownTaskItem`
++ * reads it. With `config.createPlainToken`, a plain item keeps its blocks as
++ * marked lexes and finishes them.
   */
  declare function parseIndentedBlocks(src: string, config: BlockParserConfig, lexer: {
      inlineTokens: (src: string) => any[];
@@ -640,7 +691,11 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
  }): {
      items: ParsedBlock[];
      raw: string;
-@@ -5659,16 +5700,20 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
++    loose: boolean;
+ } | undefined;
+
+ /**
+@@ -5659,16 +5709,20 @@ type index_AtomBlockMarkdownSpecOptions = AtomBlockMarkdownSpecOptions;
  type index_BlockMarkdownSpecOptions = BlockMarkdownSpecOptions;
  type index_BlockParserConfig = BlockParserConfig;
  type index_InlineMarkdownSpecOptions = InlineMarkdownSpecOptions;
@@ -662,14 +717,14 @@ index 6f803b5c646b232b8507e7a9dfd9857606d02161..f497001005e965b9c1209e7eb075f2c5
  }
 
  /**
-@@ -5712,4 +5757,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
+@@ -5712,4 +5766,4 @@ declare function removeDuplicates<T>(array: T[], by?: {
      (value: any, replacer?: (number | string)[] | null, space?: string | number): string;
  }): T[];
 
 -export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 +export { type AllowedAttribute, type AnyCommands, type AnyConfig, type AnyExtension, type AtomBlockMarkdownSpecOptions, type Attribute, type Attributes$1 as Attributes, type BaseDecorationSpec, type BlockMarkdownSpecOptions, type BlockParserConfig, type CanCommands, type ChainedCommands, type ChangedRange, type ChangedRangesDecorationSpec, type Command, CommandManager, type CommandProps, type CommandSpec, type Commands$1 as Commands, type Content, type CreateNodeFromContentOptions, type CreateWidgetDecorationOptions, DECORATION_MANAGER_PLUGIN_KEY, type DOMNode, type DOMOutputSpecArray$1 as DOMOutputSpecArray, Decoration, type DecorationCreateProps, DecorationManager, type DecorationManagerEntry, type DecorationManagerState, type DecorationRangeProps, type DecorationShouldUpdateProps, type DecorationSpec, type DecorationType, type DecorationUpdateStrategy, type DecorationWithType, type Diff, type Dispatch, type DispatchTransactionProps, type DocumentDecorationSpec, type DocumentType, Editor, type EditorEvents, type EditorOptions, type EnableRules, Extendable, type ExtendableConfig, type ExtendedRegExpMatchArray, Extension, type ExtensionAttribute, type ExtensionConfig, type Extensions, type FocusPosition, Fragment, type FullMarkdownHelpers, type GetUpdatedPositionResult, type GlobalAttributes, type HTMLContent, InlineDecoration, type InlineMarkdownSpecOptions, InputRule, type InputRuleFinder, type InputRuleMatch, type InsertContentAtOptions, type InsertContentOptions, type InsertDefaultBlockOptions, type JSONContent, type KeyboardShortcutCommand, type KeysWithTypeOf, type ManualDecorationSpec, MappablePosition, Mark, type MarkConfig, type MarkLike, type MarkRange, type MarkType, MarkView, type MarkViewProps, type MarkViewRenderer, type MarkViewRendererOptions, type MarkViewRendererProps, type MarkdownExtensionSpec, type MarkdownHelpers, type MarkdownLexerConfiguration, type MarkdownListItemOptions, type MarkdownParseHelpers, type MarkdownParseResult, type MarkdownRendererHelpers, type MarkdownToken, type MarkdownTokenizer, type MaybeReturnType, type MaybeThisParameterType, Node, type NodeConfig, NodeDecoration, NodePos, type NodeRange, type NodeType, NodeView, type NodeViewProps, type NodeViewRenderer, type NodeViewRendererOptions, type NodeViewRendererProps, type NodeWithPos, type Overwrite, type ParentConfig, type ParsedBlock, PasteRule, type PasteRuleFinder, type PasteRuleMatch, type PickValue, type Predicate, type Primitive, type Range, type RawCommands, type RemoveThis, type RenderContext, type ResizableNodeDimensions, ResizableNodeView, type ResizableNodeViewDirection, type ResizableNodeViewOptions, ResizableNodeview, type ResolvedDecorationEntry, type SetContentOptions, type SingleCommands, type Storage, type TextSerializer, type TextType, type TiptapEditorHTMLElement, Tracker, type TrackerResult, type UnionCommands, type UnionToIntersection, type Utils, type ValuesOf, WidgetDecoration, type WidgetDecorationOptions, type WidgetRenderer, attrsEqual, blur, callOrReturn, canInsertNode, clearContent, clearNodes, collectMarkdownListItem, combineTransactionSteps, command, index$2 as commands, createAtomBlockMarkdownSpec, createBlockMarkdownSpec, createChainableState, createDocument, h as createElement, createInlineMarkdownSpec, createMappablePosition, createNodeFromContent, createParagraphNear, createStyleTag, createWidgetDecoration, cut, decodeHtmlEntities, defaultBlockAt, deleteCurrentNode, deleteNode, deleteProps, deleteRange, deleteSelection, elementFromString, encodeHtmlEntities, enter, escapeForRegEx, exitCode, extendMarkRange, index$1 as extensions, findChildren, findChildrenInRange, findDuplicates, findParentNode, findParentNodeClosestToPos, first, flattenExtensions, focus, forEach, fromString, generateHTML, generateJSON, generateText, getAttributes, getAttributesFromExtensions, getChangedRanges, getDebugJSON, getExtensionField, getHTMLFromFragment, getMarkAttributes, getMarkRange, getMarkType, getMarksBetween, getNodeAtPosition, getNodeAttributes, getNodeType, getPreviousBlockSibling, getRenderedAttributes, getSchema, getSchemaByResolvedExtensions, getSchemaTypeByName, getSchemaTypeNameByName, getSplittedAttributes, getStyleProperty, getText, getTextBetween, getTextContentFromNodes, getTextSerializersFromSchema, getUpdatedPosition, h, injectExtensionAttributesToParseRule, inputRulesPlugin, insertContent, insertContentAt, insertDefaultBlock, isActive, isAndroid, isAtEndOfNode, isAtStartOfNode, isEmptyObject, isExtensionRulesEnabled, isFirefox, isFunction, isList, isMacOS, isMarkActive, isNodeActive, isNodeEmpty, isNodeSelection, isNodeViewSelected, isNumber, isPlainObject, isProseMirrorAddMarkStep, isProseMirrorAddNodeMarkStep, isProseMirrorAttrStep, isProseMirrorCellSelection, isProseMirrorDocAttrStep, isProseMirrorFragment, isProseMirrorNodeSelection, isProseMirrorRemoveMarkStep, isProseMirrorRemoveNodeMarkStep, isProseMirrorReplaceAroundStep, isProseMirrorReplaceStep, isProseMirrorSlice, isProseMirrorStep, isProseMirrorStepResult, isRegExp, isSafari, isString, isTextSelection, isiOS, joinBackward, joinDown, joinForward, joinItemBackward, joinItemForward, joinTextblockBackward, joinTextblockForward, joinUp, keyboardShortcut, lift, liftEmptyBlock, liftListItem, liveWidgetKeys, markInputRule, markPasteRule, index as markdown, markdownNextBulletRegex, marksEqual, mergeAttributes, mergeDeep, minMax, newlineInCode, nodeInputRule, nodePasteRule, objectIncludes, parseAttributes, parseIndentedBlocks, pasteRulesPlugin, posToDOMRect, readMarkdownTaskItem, removeDuplicates, renderNestedMarkdownContent, resetAttributes, resolveExtensions, resolveFocusPosition, rewriteUnknownContent, scrollIntoView, selectAll, selectNodeBackward, selectNodeForward, selectParentNode, selectTextblockEnd, selectTextblockStart, selectionToInsertionEnd, serializeAttributes, setContent, setMark, setMeta, setNode, setNodeSelection, setTextDirection, setTextSelection, sinkListItem, sortExtensions, splitBlock, splitExtensions, splitListItem, textInputRule, textPasteRule, textblockTypeInputRule, toggleList, toggleMark, toggleNode, toggleWrap, undoInputRule, unsetAllMarks, unsetMark, unsetTextDirection, updateAttributes, updateDecorations, updateMarkViewAttributes, wrapIn, wrapInList, wrappingInputRule };
 diff --git a/dist/index.js b/dist/index.js
-index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387275cbbcf 100644
+index a0f6db230e5c24f99066beda95637818680b3fd2..46d8536e278def97c9da89ee72c0c395a82bc58d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -4240,11 +4240,14 @@ function isString(value) {
@@ -687,10 +742,22 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387
    renderNestedMarkdownContent: () => renderNestedMarkdownContent,
    serializeAttributes: () => serializeAttributes
  });
-@@ -4626,84 +4629,169 @@ function createInlineMarkdownSpec(options) {
+@@ -4626,84 +4629,195 @@ function createInlineMarkdownSpec(options) {
  }
 
  // src/utilities/markdown/parseIndentedBlocks.ts
+-function parseIndentedBlocks(src, config, lexer) {
+-  var _a, _b, _c, _d;
+-  const lines = src.split("\n");
+-  const items = [];
+-  let totalRaw = "";
+-  let i = 0;
+-  const baseIndentSize = config.baseIndentSize || 2;
+-  while (i < lines.length) {
+-    const currentLine = lines[i];
+-    const itemMatch = currentLine.match(config.itemPattern);
+-    if (!itemMatch) {
+-      if (items.length > 0) {
 +function isBlankLine(line) {
 +  return !/[^ \t]/.test(line);
 +}
@@ -758,17 +825,67 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387
 +${nextLineWithoutTabs.slice(indent)}`;
 +    } else {
 +      if (blankLine) {
-+        break;
-+      }
+         break;
+-      } else if (currentLine.trim() === "") {
+-        i += 1;
+-        totalRaw = `${totalRaw}${currentLine}
+-`;
+-        continue;
+-      } else {
+-        return void 0;
+       }
+-    }
+-    const itemData = config.extractItemData(itemMatch);
+-    const { indentLevel, mainContent } = itemData;
+-    totalRaw = `${totalRaw}${currentLine}
+-`;
+-    const itemContent = [mainContent];
+-    i += 1;
+-    while (i < lines.length) {
+-      const nextLine = lines[i];
+-      if (nextLine.trim() === "") {
+-        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
+-        if (nextNonEmptyIndex === -1) {
+-          break;
+-        }
+-        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
+-        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^(\s*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
+-        if (nextIndent2 > indentLevel) {
+-          itemContent.push(nextLine);
+-          totalRaw = `${totalRaw}${nextLine}
+-`;
+-          i += 1;
+-          continue;
+-        } else {
+-          break;
+-        }
 +      if (line.replace(/\t/g, "    ").search(/[^ ]/) >= 4) {
 +        break;
-+      }
+       }
+-      const nextIndent = ((_d = (_c = nextLine.match(/^(\s*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
+-      if (nextIndent > indentLevel) {
+-        itemContent.push(nextLine);
+-        totalRaw = `${totalRaw}${nextLine}
+-`;
+-        i += 1;
+-      } else {
 +      if (opens.fences.test(line) || opens.heading.test(line) || opens.hr.test(line)) {
-+        break;
-+      }
+         break;
+       }
 +      text += `
 +${nextLine}`;
-+    }
+     }
+-    let nestedTokens;
+-    const nestedContent = itemContent.slice(1);
+-    if (nestedContent.length > 0) {
+-      const dedentedNested = nestedContent.map((nestedLine) => nestedLine.slice(indentLevel + baseIndentSize)).join("\n");
+-      if (dedentedNested.trim()) {
+-        if (config.customNestedParser) {
+-          nestedTokens = config.customNestedParser(dedentedNested);
+-        } else {
+-          nestedTokens = lexer.blockTokens(dedentedNested);
+-        }
+-      }
 +    blankLine = isBlankLine(nextLine);
 +    end += 1;
 +    line = nextLineWithoutTabs.slice(indent);
@@ -796,129 +913,98 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387
 +  const firstText = opensWithText ? tokens[first].text : "";
 +  return {
 +    checked: checkbox[1].toLowerCase() === "x",
++    tokens,
 +    mainContent: task ? firstText.replace(/^\[[ xX]\] +/, "") : firstText,
 +    nestedTokens: tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph)
 +  };
 +}
- function parseIndentedBlocks(src, config, lexer) {
--  var _a, _b, _c, _d;
-   const lines = src.split("\n");
--  const items = [];
--  let totalRaw = "";
++function parseIndentedBlocks(src, config, lexer) {
++  const lines = src.split("\n");
++  const sourceOf = (start, end) => lines.slice(start, end).map((line, index) => start + index < lines.length - 1 ? `${line}
++` : line).join("");
++  let i = 0;
 +  const found = [];
-+  let consumed = 0;
-   let i = 0;
--  const baseIndentSize = config.baseIndentSize || 2;
-   while (i < lines.length) {
-     const currentLine = lines[i];
--    const itemMatch = currentLine.match(config.itemPattern);
--    if (!itemMatch) {
--      if (items.length > 0) {
++  let bullet;
++  while (i < lines.length) {
++    const currentLine = lines[i];
 +    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern);
-+    const markerEnd = itemMatch ? (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length : 0;
-+    const item = itemMatch ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
++    if (!itemMatch || bullet !== void 0 && itemMatch[2] !== bullet) {
++      break;
++    }
++    bullet = itemMatch[2];
++    const markerEnd = (itemMatch[1] ?? "").length + (itemMatch[2] ?? "").length;
++    const item = collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
 +      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line)
-+    }) : void 0;
-+    const task = item !== void 0 && (!config.checkbox || TASK_CHECKBOX.test(item.text));
-+    if (!itemMatch || !item || !task && config.createPlainToken === void 0) {
-+      if (found.length > 0) {
-         break;
--      } else if (currentLine.trim() === "") {
-+      } else if (isBlankLine(currentLine)) {
-         i += 1;
--        totalRaw = `${totalRaw}${currentLine}
--`;
-         continue;
-       } else {
-         return void 0;
-       }
++    });
++    const task = !config.checkbox || TASK_CHECKBOX.test(item.text);
++    if (!task && config.createPlainToken === void 0) {
++      break;
      }
--    const itemData = config.extractItemData(itemMatch);
--    const { indentLevel, mainContent } = itemData;
--    totalRaw = `${totalRaw}${currentLine}
--`;
--    const itemContent = [mainContent];
--    i += 1;
--    while (i < lines.length) {
--      const nextLine = lines[i];
--      if (nextLine.trim() === "") {
--        const nextNonEmptyIndex = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
--        if (nextNonEmptyIndex === -1) {
--          break;
--        }
--        const nextNonEmpty = lines[i + 1 + nextNonEmptyIndex];
--        const nextIndent2 = ((_b = (_a = nextNonEmpty.match(/^(\s*)/)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) || 0;
--        if (nextIndent2 > indentLevel) {
--          itemContent.push(nextLine);
--          totalRaw = `${totalRaw}${nextLine}
--`;
--          i += 1;
--          continue;
--        } else {
--          break;
--        }
--      }
--      const nextIndent = ((_d = (_c = nextLine.match(/^(\s*)/)) == null ? void 0 : _c[1]) == null ? void 0 : _d.length) || 0;
--      if (nextIndent > indentLevel) {
--        itemContent.push(nextLine);
--        totalRaw = `${totalRaw}${nextLine}
--`;
--        i += 1;
--      } else {
--        break;
--      }
--    }
--    let nestedTokens;
--    const nestedContent = itemContent.slice(1);
--    if (nestedContent.length > 0) {
--      const dedentedNested = nestedContent.map((nestedLine) => nestedLine.slice(indentLevel + baseIndentSize)).join("\n");
--      if (dedentedNested.trim()) {
--        if (config.customNestedParser) {
--          nestedTokens = config.customNestedParser(dedentedNested);
--        } else {
--          nestedTokens = lexer.blockTokens(dedentedNested);
--        }
--      }
--    }
 -    const token = config.createToken(itemData, nestedTokens);
 -    items.push(token);
-+    found.push({ match: itemMatch, text: item.text, raw: lines.slice(i, item.end).join("\n"), task });
++    found.push({ match: itemMatch, text: item.text, raw: sourceOf(i, item.end), task });
 +    i = item.end;
-+    consumed = i;
    }
 -  if (items.length === 0) {
 +  if (!found.some((item) => item.task)) {
      return void 0;
    }
++  let loose = false;
++  let endsWithBlankLine = false;
++  found.forEach((item) => {
++    if (!loose) {
++      if (endsWithBlankLine) {
++        loose = true;
++      } else if (/\n[ \t]*\n[ \t]*$/.test(item.raw)) {
++        endsWithBlankLine = true;
++      }
++    }
++  });
 +  const last = found[found.length - 1];
 +  last.text = last.text.replace(/[ \t\n]+$/, "");
 +  last.raw = last.raw.replace(/[ \t\n]+$/, "");
-+  const items = found.map(({ match, text, raw, task }) => {
-+    if (!task && config.createPlainToken !== void 0) {
-+      return config.createPlainToken({ raw, text, tokens: lexer.listItemBlockTokens(text) });
++  const read = found.map((item) => {
++    if (item.task && config.checkbox) {
++      const task = readMarkdownTaskItem(item.text, lexer);
++      return { item, task, tokens: task === void 0 ? [] : task.tokens };
 +    }
-+    const data = config.extractItemData(match);
-+    const read = config.checkbox ? readMarkdownTaskItem(text, lexer) : void 0;
-+    if (read === void 0) {
-+      const tokens = lexer.listItemBlockTokens(text);
++    return { item, task: void 0, tokens: lexer.listItemBlockTokens(item.text) };
++  });
++  read.forEach(({ tokens }) => {
++    if (!loose) {
++      loose = tokens.some((token) => token.type === "space" && /\n.*\n/.test(token.raw));
++    }
++  });
++  const items = read.map(({ item, task, tokens }) => {
++    if (!item.task && config.createPlainToken !== void 0) {
++      return config.createPlainToken({
++        raw: item.raw,
++        text: item.text,
++        tokens: loose ? tokens.map((token) => token.type === "text" ? { ...token, type: "paragraph" } : token) : tokens,
++        loose
++      });
++    }
++    const data = config.extractItemData(item.match);
++    if (task === void 0) {
 +      const first = tokens.findIndex((token) => token.type !== "space");
 +      const opensWithText = first !== -1 && (tokens[first].type === "text" || tokens[first].type === "paragraph");
 +      data.mainContent = opensWithText ? tokens[first].text : "";
 +      const nestedTokens = tokens.slice(opensWithText ? first + 1 : Math.max(first, 0)).filter((token) => first !== -1 || token.type !== "space").map(asParagraph);
 +      return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : void 0);
 +    }
-+    data.checked = read.checked;
-+    data.mainContent = read.mainContent;
-+    return config.createToken(data, read.nestedTokens.length > 0 ? read.nestedTokens : void 0);
++    data.checked = task.checked;
++    data.mainContent = task.mainContent;
++    return config.createToken(data, task.nestedTokens.length > 0 ? task.nestedTokens : void 0);
 +  });
    return {
      items,
 -    raw: totalRaw
-+    raw: lines.slice(0, consumed).join("\n").replace(/[ \t\n]+$/, "")
++    raw: sourceOf(0, i).replace(/[ \t\n]+$/, ""),
++    loose
    };
  }
 
-@@ -8479,6 +8567,7 @@ export {
+@@ -8479,6 +8593,7 @@ export {
    attrsEqual,
    callOrReturn,
    canInsertNode,
@@ -926,7 +1012,7 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387
    combineTransactionSteps,
    commands_exports as commands,
    createAtomBlockMarkdownSpec,
-@@ -8577,6 +8666,7 @@ export {
+@@ -8577,6 +8692,7 @@ export {
    markInputRule,
    markPasteRule,
    markdown_exports as markdown,
@@ -934,7 +1020,7 @@ index a0f6db230e5c24f99066beda95637818680b3fd2..1631d1256c5f6fda9d2bd2ce71aea387
    marksEqual,
    mergeAttributes,
    mergeDeep,
-@@ -8586,6 +8676,7 @@ export {
+@@ -8586,6 +8702,7 @@ export {
    objectIncludes,
    parseAttributes,
    parseIndentedBlocks,
@@ -963,7 +1049,7 @@ index 0fdbb9f8a835b3bb43310ce5ebc1ef4b10595558..b87796beeed9e3839aad8ec21d6b43f4
 
  /** Custom tokenizer function for marked.js extensions */
 diff --git a/src/utilities/markdown/parseIndentedBlocks.ts b/src/utilities/markdown/parseIndentedBlocks.ts
-index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7f860c898 100644
+index ae4956bd21ffe5489a64d08486cf323e82859c06..fd4e74603097cf90bedc4a48b14458fab6a1dfc1 100644
 --- a/src/utilities/markdown/parseIndentedBlocks.ts
 +++ b/src/utilities/markdown/parseIndentedBlocks.ts
 @@ -17,7 +17,11 @@ export interface ParsedBlock {
@@ -979,7 +1065,7 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
    itemPattern: RegExp
    /** Function to extract data from regex match */
    extractItemData: (match: RegExpMatchArray) => {
-@@ -27,52 +31,256 @@ export interface BlockParserConfig {
+@@ -27,52 +31,268 @@ export interface BlockParserConfig {
    }
    /** Function to create the final token */
    createToken: (data: any, nestedTokens?: any[]) => ParsedBlock
@@ -996,12 +1082,19 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 +  checkbox?: boolean
 +  /**
 +   * With `checkbox`, builds an item whose text holds no checkbox, from its
-+   * source lines, its text and its blocks as marked lexes an item's, so a
-+   * list of plain items and tasks is read in one pass by one reader. Without
-+   * it such an item ends the list. A list with no task is left to marked.
++   * source lines, its text, its blocks as marked lexes an item's and whether
++   * the list is loose (its text blocks are then paragraphs), so a list of
++   * plain items and tasks is read in one pass, with marked's boundaries and
++   * looseness. Without it such an item ends the list. A list with no task is
++   * left to marked.
     */
 -  customNestedParser?: (dedentedContent: string) => any[] | undefined
-+  createPlainToken?: (item: { raw: string; text: string; tokens: any[] }) => ParsedBlock
++  createPlainToken?: (item: {
++    raw: string
++    text: string
++    tokens: any[]
++    loose: boolean
++  }) => ParsedBlock
  }
 
  /**
@@ -1209,7 +1302,8 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 + * it is checked, its first paragraph's text and the blocks after it, nested
 + * lists included; undefined when the text does not start with a checkbox.
 + * This is the one reader of a task item, whether its list holds only tasks or
-+ * plain items too.
++ * plain items too. `tokens` are the item's blocks as lexed, for the list's
++ * loose test.
   *
 - * @example
 - * ```ts
@@ -1241,7 +1335,7 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 +    inlineTokens: (src: string) => any[]
 +    listItemBlockTokens: (src: string) => any[]
 +  },
-+): { checked: boolean; mainContent: string; nestedTokens: any[] } | undefined {
++): { checked: boolean; mainContent: string; nestedTokens: any[]; tokens: any[] } | undefined {
 +  const checkbox = TASK_CHECKBOX.exec(text)
 +  if (checkbox === null) {
 +    return undefined
@@ -1260,6 +1354,7 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 +  const firstText: string = opensWithText ? tokens[first].text : ''
 +  return {
 +    checked: checkbox[1].toLowerCase() === 'x',
++    tokens,
 +    mainContent: task ? firstText.replace(/^\[[ xX]\] +/, '') : firstText,
 +    nestedTokens: tokens
 +      .slice(opensWithText ? first + 1 : Math.max(first, 0))
@@ -1269,14 +1364,17 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 +}
 +
 +/**
-+ * Parses a run of list items whose markers match `config.itemPattern`, each
-+ * item read as marked reads one (`collectMarkdownListItem`). A task item is
-+ * read by `readMarkdownTaskItem`; with `config.createPlainToken`, a plain item
-+ * keeps its blocks as marked lexes an item's (`lexer.listItemBlockTokens`).
++ * Parses a list as marked 17.0.6's list tokenizer does (`Tokenizer.list`,
++ * src/Tokenizer.ts:231-475; the cited line numbers are marked's): the list is
++ * bound to its first item's marker, each item is read by
++ * `collectMarkdownListItem`, the list ends where marked's does, and its
++ * looseness is marked's. Only a task item differs: `readMarkdownTaskItem`
++ * reads it. With `config.createPlainToken`, a plain item keeps its blocks as
++ * marked lexes and finishes them.
   */
  export function parseIndentedBlocks(
    src: string,
-@@ -80,6 +288,7 @@ export function parseIndentedBlocks(
+@@ -80,115 +300,123 @@ export function parseIndentedBlocks(
    lexer: {
      inlineTokens: (src: string) => any[]
      blockTokens: (src: string) => any[]
@@ -1284,44 +1382,61 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
    },
  ):
    | {
-@@ -88,107 +297,75 @@ export function parseIndentedBlocks(
+       items: ParsedBlock[]
+       raw: string
++      loose: boolean
      }
    | undefined {
    const lines = src.split('\n')
 -  const items: ParsedBlock[] = []
 -  let totalRaw = ''
-+  const found: Array<{ match: RegExpMatchArray; text: string; raw: string; task: boolean }> = []
-+  let consumed = 0
++  // A line's source with the line break that ends it, as marked consumes it.
++  const sourceOf = (start: number, end: number) =>
++    lines
++      .slice(start, end)
++      .map((line, index) => (start + index < lines.length - 1 ? `${line}\n` : line))
++      .join('')
++  // 233: a list starts at its first marker. Blank lines before it are
++  // marked's `space` token (or the line break it gives the block before), so
++  // they are never the list's.
    let i = 0
 -  const baseIndentSize = config.baseIndentSize || 2
++  const found: Array<{ match: RegExpMatchArray; text: string; raw: string; task: boolean }> = []
++  let bullet: string | undefined
 
++  // 254-397: the items, each opening with the list's own marker (236-246,
++  // `listItemRegex`); a thematic break is no item (264).
    while (i < lines.length) {
      const currentLine = lines[i]
 -    const itemMatch = currentLine.match(config.itemPattern)
-+    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern)
-+    const markerEnd = itemMatch ? (itemMatch[1] ?? '').length + (itemMatch[2] ?? '').length : 0
-+    const item = itemMatch
-+      ? collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
-+          endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line),
-+        })
-+      : undefined
-+    const task = item !== undefined && (!config.checkbox || TASK_CHECKBOX.test(item.text))
-
+-
 -    if (!itemMatch) {
-+    if (!itemMatch || !item || (!task && config.createPlainToken === undefined)) {
-       // Not a matching item - stop if we have items, otherwise this isn't our block type
+-      // Not a matching item - stop if we have items, otherwise this isn't our block type
 -      if (items.length > 0) {
-+      if (found.length > 0) {
-         break
+-        break
 -      } else if (currentLine.trim() === '') {
-+      } else if (isBlankLine(currentLine)) {
-         i += 1
+-        i += 1
 -        totalRaw = `${totalRaw}${currentLine}\n`
-         continue
-       } else {
-         return undefined
-       }
+-        continue
+-      } else {
+-        return undefined
+-      }
++    const itemMatch = THEMATIC_BREAK.test(currentLine) ? null : currentLine.match(config.itemPattern)
++    if (!itemMatch || (bullet !== undefined && itemMatch[2] !== bullet)) {
++      break
      }
++    bullet = itemMatch[2]
++    const markerEnd = (itemMatch[1] ?? '').length + (itemMatch[2] ?? '').length
++    const item = collectMarkdownListItem(lines, i, markerEnd, currentLine.slice(markerEnd), {
++      endsItem: (line, indent) => markdownNextBulletRegex(indent).test(line),
++    })
++    const task = !config.checkbox || TASK_CHECKBOX.test(item.text)
++    if (!task && config.createPlainToken === undefined) {
++      break
++    }
++    found.push({ match: itemMatch, text: item.text, raw: sourceOf(i, item.end), task })
++    i = item.end
++  }
 
 -    const itemData = config.extractItemData(itemMatch)
 -    const { indentLevel, mainContent } = itemData
@@ -1359,7 +1474,11 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 -      }
 -
 -      const nextIndent = nextLine.match(/^(\s*)/)?.[1]?.length || 0
--
++  // A list with no task is marked's own; it is left before anything is lexed.
++  if (!found.some(item => item.task)) {
++    return undefined
++  }
+
 -      if (nextIndent > indentLevel) {
 -        // This is nested content for the current item
 -        itemContent.push(nextLine)
@@ -1368,9 +1487,20 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 -      } else {
 -        // Same or less indentation - this belongs to parent level
 -        break
--      }
--    }
--
++  // 379-386: an item that ends in a blank line, with another after it, makes
++  // the list loose.
++  let loose = false
++  let endsWithBlankLine = false
++  found.forEach(item => {
++    if (!loose) {
++      if (endsWithBlankLine) {
++        loose = true
++      } else if (/\n[ \t]*\n[ \t]*$/.test(item.raw)) {
++        endsWithBlankLine = true
+       }
+     }
++  })
+
 -    // Parse nested content if present
 -    let nestedTokens: any[] | undefined
 -    const nestedContent = itemContent.slice(1)
@@ -1390,36 +1520,49 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 -        }
 -      }
 -    }
--
--    // Create the token using the provided factory function
--    const token = config.createToken(itemData, nestedTokens)
--    items.push(token)
-+    found.push({ match: itemMatch, text: item.text, raw: lines.slice(i, item.end).join('\n'), task })
-+    i = item.end
-+    consumed = i
-   }
-
--  if (items.length === 0) {
-+  // A list with no task is marked's own; it is left before anything is lexed.
-+  if (!found.some(item => item.task)) {
-     return undefined
-   }
-
 +  // 400-409: the list does not take the blank lines after its last item, and
 +  // that item's text loses its trailing spaces, tabs and line breaks (marked's
 +  // `trimEnd` would take a no-break space too).
 +  const last = found[found.length - 1]
 +  last.text = last.text.replace(/[ \t\n]+$/, '')
 +  last.raw = last.raw.replace(/[ \t\n]+$/, '')
-+
-+  const items = found.map(({ match, text, raw, task }) => {
-+    if (!task && config.createPlainToken !== undefined) {
-+      return config.createPlainToken({ raw, text, tokens: lexer.listItemBlockTokens(text) })
+
+-    // Create the token using the provided factory function
+-    const token = config.createToken(itemData, nestedTokens)
+-    items.push(token)
+-  }
++  // 411-461: each item's blocks, lexed outside top mode; an item holding a
++  // blank line between its blocks makes the list loose.
++  const read = found.map(item => {
++    if (item.task && config.checkbox) {
++      const task = readMarkdownTaskItem(item.text, lexer)
++      return { item, task, tokens: task === undefined ? [] : task.tokens }
 +    }
-+    const data = config.extractItemData(match)
-+    const read = config.checkbox ? readMarkdownTaskItem(text, lexer) : undefined
-+    if (read === undefined) {
-+      const tokens = lexer.listItemBlockTokens(text)
++    return { item, task: undefined, tokens: lexer.listItemBlockTokens(item.text) }
++  })
++  read.forEach(({ tokens }) => {
++    if (!loose) {
++      loose = tokens.some(token => token.type === 'space' && /\n.*\n/.test(token.raw))
++    }
++  })
+
+-  if (items.length === 0) {
+-    return undefined
+-  }
++  const items = read.map(({ item, task, tokens }) => {
++    if (!item.task && config.createPlainToken !== undefined) {
++      // 465-473: in a loose list an item's text blocks are paragraphs.
++      return config.createPlainToken({
++        raw: item.raw,
++        text: item.text,
++        tokens: loose
++          ? tokens.map(token => (token.type === 'text' ? { ...token, type: 'paragraph' } : token))
++          : tokens,
++        loose,
++      })
++    }
++    const data = config.extractItemData(item.match)
++    if (task === undefined) {
 +      const first = tokens.findIndex(token => token.type !== 'space')
 +      const opensWithText =
 +        first !== -1 && (tokens[first].type === 'text' || tokens[first].type === 'paragraph')
@@ -1430,14 +1573,15 @@ index ae4956bd21ffe5489a64d08486cf323e82859c06..24148ad3ec21bba520006bed5d0b28b7
 +        .map(asParagraph)
 +      return config.createToken(data, nestedTokens.length > 0 ? nestedTokens : undefined)
 +    }
-+    data.checked = read.checked
-+    data.mainContent = read.mainContent
-+    return config.createToken(data, read.nestedTokens.length > 0 ? read.nestedTokens : undefined)
++    data.checked = task.checked
++    data.mainContent = task.mainContent
++    return config.createToken(data, task.nestedTokens.length > 0 ? task.nestedTokens : undefined)
 +  })
-+
+
    return {
      items,
 -    raw: totalRaw,
-+    raw: lines.slice(0, consumed).join('\n').replace(/[ \t\n]+$/, ''),
++    raw: sourceOf(0, i).replace(/[ \t\n]+$/, ''),
++    loose,
    }
  }

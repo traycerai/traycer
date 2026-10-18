@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8b2e75a0657e71b8645e458b0928ba5f3d698061 100644
+index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20ff03309d 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -430,6 +430,9 @@ function isSameLineOrderedListToken(token) {
@@ -429,7 +429,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8b2e75a0657e71b8645e458b0928ba5f
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1663,17 +1529,36 @@ var TaskList = import_core13.Node.create({
+@@ -1663,17 +1529,37 @@ var TaskList = import_core13.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -443,7 +443,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8b2e75a0657e71b8645e458b0928ba5f
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens
 +          })
          },
@@ -456,6 +456,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8b2e75a0657e71b8645e458b0928ba5f
 +        return {
 +          type: "taskList",
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items
 +        };
 +      }
@@ -465,12 +466,12 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8b2e75a0657e71b8645e458b0928ba5f
          raw: result.raw,
 +        ordered: false,
 +        start: "",
-+        loose: false,
++        loose: result.loose,
          items: result.items
        };
      }
 diff --git a/dist/index.js b/dist/index.js
-index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..be60e7110186aecf3dac835514b3da9be6b1c1ca 100644
+index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bdbe3f362f 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -390,6 +390,9 @@ function isSameLineOrderedListToken(token) {
@@ -900,7 +901,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..be60e7110186aecf3dac835514b3da9b
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1629,17 +1495,36 @@ var TaskList = Node5.create({
+@@ -1629,17 +1495,37 @@ var TaskList = Node5.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -914,7 +915,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..be60e7110186aecf3dac835514b3da9b
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens
 +          })
          },
@@ -927,6 +928,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..be60e7110186aecf3dac835514b3da9b
 +        return {
 +          type: "taskList",
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items
 +        };
 +      }
@@ -936,7 +938,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..be60e7110186aecf3dac835514b3da9b
          raw: result.raw,
 +        ordered: false,
 +        start: "",
-+        loose: false,
++        loose: result.loose,
          items: result.items
        };
      }
@@ -1059,7 +1061,7 @@ index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..59376f0588121596903ab1a5d8b2e2e4
      }
      return {
 diff --git a/dist/kit/index.cjs b/dist/kit/index.cjs
-index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..ffa0d30c1b3e34280864d0bfb2b28e666630c225 100644
+index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fdefa14f25 100644
 --- a/dist/kit/index.cjs
 +++ b/dist/kit/index.cjs
 @@ -411,6 +411,9 @@ function isSameLineOrderedListToken(token) {
@@ -1489,7 +1491,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..ffa0d30c1b3e34280864d0bfb2b28e66
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1641,17 +1507,36 @@ var TaskList = import_core13.Node.create({
+@@ -1641,17 +1507,37 @@ var TaskList = import_core13.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -1503,7 +1505,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..ffa0d30c1b3e34280864d0bfb2b28e66
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens
 +          })
          },
@@ -1516,6 +1518,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..ffa0d30c1b3e34280864d0bfb2b28e66
 +        return {
 +          type: "taskList",
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items
 +        };
 +      }
@@ -1525,12 +1528,12 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..ffa0d30c1b3e34280864d0bfb2b28e66
          raw: result.raw,
 +        ordered: false,
 +        start: "",
-+        loose: false,
++        loose: result.loose,
          items: result.items
        };
      }
 diff --git a/dist/kit/index.js b/dist/kit/index.js
-index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..a7b4cc27f72c0e98e223173f37c0bb69122ac76a 100644
+index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe0e3d80d2 100644
 --- a/dist/kit/index.js
 +++ b/dist/kit/index.js
 @@ -393,6 +393,9 @@ function isSameLineOrderedListToken(token) {
@@ -1960,7 +1963,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..a7b4cc27f72c0e98e223173f37c0bb69
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1629,17 +1495,36 @@ var TaskList = Node5.create({
+@@ -1629,17 +1495,37 @@ var TaskList = Node5.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -1974,7 +1977,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..a7b4cc27f72c0e98e223173f37c0bb69
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens
 +          })
          },
@@ -1987,6 +1990,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..a7b4cc27f72c0e98e223173f37c0bb69
 +        return {
 +          type: "taskList",
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items
 +        };
 +      }
@@ -1996,7 +2000,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..a7b4cc27f72c0e98e223173f37c0bb69
          raw: result.raw,
 +        ordered: false,
 +        start: "",
-+        loose: false,
++        loose: result.loose,
          items: result.items
        };
      }
@@ -2629,7 +2633,7 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
 diff --git a/dist/task-list/index.cjs b/dist/task-list/index.cjs
-index f7e3f3a8a87172053d42da971b6d8c83f92e3450..aa24f694d7549a0041f90c49c832c66a376ef691 100644
+index f7e3f3a8a87172053d42da971b6d8c83f92e3450..d4ddede41fcf4f48a11a1f2e82ab76334038e924 100644
 --- a/dist/task-list/index.cjs
 +++ b/dist/task-list/index.cjs
 @@ -67,57 +67,18 @@ var TaskList = import_core.Node.create({
@@ -2694,7 +2698,7 @@ index f7e3f3a8a87172053d42da971b6d8c83f92e3450..aa24f694d7549a0041f90c49c832c66a
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -129,17 +90,36 @@ var TaskList = import_core.Node.create({
+@@ -129,17 +90,37 @@ var TaskList = import_core.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -2708,7 +2712,7 @@ index f7e3f3a8a87172053d42da971b6d8c83f92e3450..aa24f694d7549a0041f90c49c832c66a
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens
 +          })
          },
@@ -2721,6 +2725,7 @@ index f7e3f3a8a87172053d42da971b6d8c83f92e3450..aa24f694d7549a0041f90c49c832c66a
 +        return {
 +          type: "taskList",
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items
 +        };
 +      }
@@ -2730,12 +2735,12 @@ index f7e3f3a8a87172053d42da971b6d8c83f92e3450..aa24f694d7549a0041f90c49c832c66a
          raw: result.raw,
 +        ordered: false,
 +        start: "",
-+        loose: false,
++        loose: result.loose,
          items: result.items
        };
      }
 diff --git a/dist/task-list/index.js b/dist/task-list/index.js
-index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..2fa7945cb47fbfca805af20a940435a29fa8a8e5 100644
+index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..d065c4f9ec96dd65d9cd60369a7ee8a6794a42d9 100644
 --- a/dist/task-list/index.js
 +++ b/dist/task-list/index.js
 @@ -41,57 +41,18 @@ var TaskList = Node.create({
@@ -2800,7 +2805,7 @@ index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..2fa7945cb47fbfca805af20a940435a2
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -103,17 +64,36 @@ var TaskList = Node.create({
+@@ -103,17 +64,37 @@ var TaskList = Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -2814,7 +2819,7 @@ index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..2fa7945cb47fbfca805af20a940435a2
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens
 +          })
          },
@@ -2827,6 +2832,7 @@ index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..2fa7945cb47fbfca805af20a940435a2
 +        return {
 +          type: "taskList",
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items
 +        };
 +      }
@@ -2836,7 +2842,7 @@ index db3f6fb5e3e8f63f148e7eb298fcf78c9e0b34a3..2fa7945cb47fbfca805af20a940435a2
          raw: result.raw,
 +        ordered: false,
 +        start: "",
-+        loose: false,
++        loose: result.loose,
          items: result.items
        };
      }
@@ -3442,7 +3448,7 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
        type: 'listItem',
        content,
 diff --git a/src/task-list/task-list.ts b/src/task-list/task-list.ts
-index 22302cc5515837bda68d467d9c5357f7f2049163..e855fd573348c3cf5f107024fac1f0eb73a79d67 100644
+index 22302cc5515837bda68d467d9c5357f7f2049163..4047f7dc6ac2ce67c981b8715c4079c05c22a0fa 100644
 --- a/src/task-list/task-list.ts
 +++ b/src/task-list/task-list.ts
 @@ -82,67 +82,24 @@ export const TaskList = Node.create<TaskListOptions>({
@@ -3537,13 +3543,13 @@ index 22302cc5515837bda68d467d9c5357f7f2049163..e855fd573348c3cf5f107024fac1f0eb
 +            mainContent: item.text,
 +            indentLevel: 0,
 +            task: false,
-+            loose: false,
++            loose: item.loose,
 +            tokens: item.tokens,
 +          }),
          },
          lexer,
        )
-@@ -164,9 +130,23 @@ export const TaskList = Node.create<TaskListOptions>({
+@@ -164,9 +130,24 @@ export const TaskList = Node.create<TaskListOptions>({
          return undefined
        }
 
@@ -3554,6 +3560,7 @@ index 22302cc5515837bda68d467d9c5357f7f2049163..e855fd573348c3cf5f107024fac1f0eb
 +        return {
 +          type: 'taskList',
 +          raw: result.raw,
++          loose: result.loose,
 +          items: result.items,
 +        }
 +      }
@@ -3564,7 +3571,7 @@ index 22302cc5515837bda68d467d9c5357f7f2049163..e855fd573348c3cf5f107024fac1f0eb
          raw: result.raw,
 +        ordered: false,
 +        start: '',
-+        loose: false,
++        loose: result.loose,
          items: result.items,
        }
      },
