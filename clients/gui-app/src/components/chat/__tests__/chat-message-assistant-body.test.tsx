@@ -138,6 +138,7 @@ const PROMOTED_SUBAGENT_SEGMENT: SubagentSegmentModel = {
   spawnToolCallId: null,
   parentId: null,
   workflowMeta: null,
+  toolImageResults: [],
   children: [
     {
       id: "subagent-transcript-text",

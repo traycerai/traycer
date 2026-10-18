@@ -312,6 +312,9 @@ export interface CommandSegment {
 export interface SubagentSegment {
   id: string;
   kind: "subagent";
+  // A tool owning child blocks is re-cast as this card. Keep that tool's own
+  // results visible on the parent card; ordinary subagents carry an empty list.
+  toolImageResults: ReadonlyArray<ImageGenerationResult>;
   name: string | null;
   agentType: string | null;
   task: string | null;
