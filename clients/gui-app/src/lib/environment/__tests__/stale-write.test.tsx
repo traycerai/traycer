@@ -88,27 +88,25 @@ afterEach(() => {
 describe("staleWriteMessage", () => {
   it("says the dashboard changed the setting", () => {
     expect(staleWriteMessage(DASHBOARD)).toBe(
-      "This setting was changed in the dashboard just now. Showing the latest.",
+      "This setting was changed in the dashboard just now.",
     );
   });
 
   it("names the host that changed it", () => {
     expect(staleWriteMessage(changedOnHost("dev-box"))).toBe(
-      "This setting was changed on dev-box just now. Showing the latest.",
+      "This setting was changed on dev-box just now.",
     );
   });
 
   it("says another host when the changing host has no label", () => {
     expect(staleWriteMessage(changedOnHost(null))).toBe(
-      "This setting was changed on another host just now. Showing the latest.",
+      "This setting was changed on another host just now.",
     );
   });
 
   it("leaves markup in a host label as literal text", () => {
     const message = staleWriteMessage(changedOnHost("<b>x</b>"));
-    expect(message).toBe(
-      "This setting was changed on <b>x</b> just now. Showing the latest.",
-    );
+    expect(message).toBe("This setting was changed on <b>x</b> just now.");
     const { container } = render(<p>{message}</p>);
     expect(container.querySelector("b")).toBeNull();
     expect(screen.getByText(message)).toBeTruthy();
@@ -146,7 +144,7 @@ describe("a stale save in the host error toast", () => {
     toastFromHostError(staleError(changedOnHost("dev-box")), "Couldn't save.");
     expect(toast.info).toHaveBeenCalledTimes(1);
     expect(toast.info).toHaveBeenCalledWith(
-      "This setting was changed on dev-box just now. Showing the latest.",
+      "This setting was changed on dev-box just now.",
       { id: "environment-write-stale" },
     );
     expect(toast.error).not.toHaveBeenCalled();
@@ -156,7 +154,7 @@ describe("a stale save in the host error toast", () => {
   it("does the same on the background-mutation policy", () => {
     toastFromHostErrorWithDetail(staleError(DASHBOARD), "Couldn't save.");
     expect(toast.info).toHaveBeenCalledWith(
-      "This setting was changed in the dashboard just now. Showing the latest.",
+      "This setting was changed in the dashboard just now.",
       { id: "environment-write-stale" },
     );
     expect(toast.error).not.toHaveBeenCalled();

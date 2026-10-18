@@ -31,9 +31,9 @@ export function staleWriteOfHostError(
 export function staleWriteMessage(staleWrite: EnvironmentStaleWrite): string {
   const { changedBy } = staleWrite;
   if (changedBy.kind === "dashboard") {
-    return "This setting was changed in the dashboard just now. Showing the latest.";
+    return "This setting was changed in the dashboard just now.";
   }
   return changedBy.hostLabel === null
-    ? "This setting was changed on another host just now. Showing the latest."
-    : `This setting was changed on ${changedBy.hostLabel} just now. Showing the latest.`;
+    ? "This setting was changed on another host just now."
+    : `This setting was changed on ${changedBy.hostLabel} just now.`;
 }
