@@ -98,31 +98,42 @@ export type ProviderNativeScopeTuple = z.infer<
 
 // ── Native error contract (rides inside additive native result fields) ─────
 
+const providerNativeErrorCodesV11 = [
+  "duplicate_name",
+  "unsupported_scope",
+  "unsupported_action",
+  "no_change_detected",
+  "external_drift",
+  "store_version_unsupported",
+  "rollback_failed",
+  // The provider's own config could not be READ or PARSED - a malformed
+  // `config.yaml`/`config.toml`/`mcp.json`, or an unreadable one.
+  //
+  // This is a LIST-side failure, unlike every code above it, and it exists
+  // because the alternative is worse in both directions. Swallowing the
+  // failure into an empty list tells the user "this provider has no MCP
+  // servers", which is indistinguishable from the truth and sends them
+  // looking for the wrong bug. Letting it reject instead takes down the whole
+  // `providers.list` response - native results ride on that call, so one
+  // malformed file would empty the entire provider catalog on every poll.
+  //
+  // A typed result is the only option that scopes the failure to the provider
+  // it belongs to. `detail` carries a REDACTED parser message (see
+  // `ConfigParseError`, which redacts at construction): parse errors quote the
+  // offending source line, which is routinely a credential.
+  "config_unreadable",
+] as const;
+
+/** The error vocabulary on every published list, mutation and auth line. */
+export const providerNativeErrorCodeSchemaV11Preimage = lazySchema(() =>
+  z.enum(providerNativeErrorCodesV11),
+);
+
 export const providerNativeErrorCodeSchema = lazySchema(() =>
   z.enum([
-    "duplicate_name",
-    "unsupported_scope",
-    "unsupported_action",
-    "no_change_detected",
-    "external_drift",
-    "store_version_unsupported",
-    "rollback_failed",
-    // The provider's own config could not be READ or PARSED - a malformed
-    // `config.yaml`/`config.toml`/`mcp.json`, or an unreadable one.
-    //
-    // This is a LIST-side failure, unlike every code above it, and it exists
-    // because the alternative is worse in both directions. Swallowing the
-    // failure into an empty list tells the user "this provider has no MCP
-    // servers", which is indistinguishable from the truth and sends them
-    // looking for the wrong bug. Letting it reject instead takes down the whole
-    // `providers.list` response - native results ride on that call, so one
-    // malformed file would empty the entire provider catalog on every poll.
-    //
-    // A typed result is the only option that scopes the failure to the provider
-    // it belongs to. `detail` carries a REDACTED parser message (see
-    // `ConfigParseError`, which redacts at construction): parse errors quote the
-    // offending source line, which is routinely a credential.
-    "config_unreadable",
+    ...providerNativeErrorCodesV11,
+    "server_not_found",
+    "change_shadowed",
   ]),
 );
 export type ProviderNativeErrorCode = z.infer<
@@ -133,6 +144,13 @@ export const providerNativeErrorResultSchema = lazySchema(() =>
   z.object({
     ok: z.literal(false),
     code: providerNativeErrorCodeSchema,
+    detail: z.string().nullable(),
+  }),
+);
+export const providerNativeErrorResultSchemaV11Preimage = lazySchema(() =>
+  z.object({
+    ok: z.literal(false),
+    code: providerNativeErrorCodeSchemaV11Preimage,
     detail: z.string().nullable(),
   }),
 );
@@ -721,7 +739,8 @@ export type ProviderMcpToolDenySource = z.infer<
   typeof providerMcpToolDenySourceSchema
 >;
 
-export const providerMcpToolSchema = lazySchema(() =>
+/** Tool row published through list@10.2 and nativeMutate@1.1. */
+export const providerMcpToolSchemaV101Preimage = lazySchema(() =>
   z.object({
     name: z.string(),
     description: z.string().nullable(),
@@ -748,6 +767,59 @@ export const providerMcpToolSchema = lazySchema(() =>
       .optional(),
   }),
 );
+export const providerMcpSourceScopeSchema = lazySchema(() =>
+  z.enum(["global", "project", "env", "managed", "cloud", "legacy"]),
+);
+export const providerMcpOriginSchema = lazySchema(() =>
+  z.object({
+    scope: providerMcpSourceScopeSchema,
+    label: z.string(),
+    path: z.string().nullable(),
+    inherited: z.boolean(),
+    editable: z.boolean(),
+  }),
+);
+export type ProviderMcpOrigin = z.infer<typeof providerMcpOriginSchema>;
+
+export const providerMcpCoverageSchema = lazySchema(() =>
+  z.object({
+    complete: z.boolean(),
+    sources: z.array(
+      z.object({
+        label: z.string(),
+        path: z.string().nullable(),
+        scope: providerMcpSourceScopeSchema,
+        outcome: z.enum([
+          "absent",
+          "read",
+          "rejected",
+          "invalid",
+          "unsupported",
+          "unrefreshed",
+        ]),
+        reason: z.string().nullable(),
+      }),
+    ),
+  }),
+);
+export type ProviderMcpCoverage = z.infer<typeof providerMcpCoverageSchema>;
+
+export const providerMcpToolDecidedBySchema = lazySchema(() =>
+  z.object({
+    pattern: z.string(),
+    action: z.enum(["allow", "ask", "deny"]),
+    label: z.string(),
+    path: z.string().nullable(),
+  }),
+);
+export const providerMcpToolSchema = lazySchema(() =>
+  providerMcpToolSchemaV101Preimage.extend({
+    decidedBy: providerMcpToolDecidedBySchema
+      .nullable()
+      .default(null)
+      .optional(),
+  }),
+);
 /**
  * Inferred type keeps `denySources` optional so host constructors that do not
  * set Claude provenance need not pass an empty array. Wire parse still
@@ -767,7 +839,7 @@ export const providerMcpServerSchemaV70Preimage = lazySchema(() =>
      */
     statusSource: providerMcpDataSourceSchema,
     statusDetail: z.string().nullable(),
-    tools: z.array(providerMcpToolSchema),
+    tools: z.array(providerMcpToolSchemaV101Preimage),
     /**
      * True while discovery is in-flight; client re-fetches / polls list.
      */
@@ -809,13 +881,19 @@ export const providerMcpNoticeSchema = lazySchema(() =>
 );
 export type ProviderMcpNotice = z.infer<typeof providerMcpNoticeSchema>;
 
-export const providerMcpServerSchema = lazySchema(() =>
+export const providerMcpServerSchemaV101Preimage = lazySchema(() =>
   providerMcpServerSchemaV70Preimage.extend({
     remedy: providerMcpRemedySchema.nullable().default(null).optional(),
     enableConfirmation: providerMcpRemedySchema
       .nullable()
       .default(null)
       .optional(),
+  }),
+);
+export const providerMcpServerSchema = lazySchema(() =>
+  providerMcpServerSchemaV101Preimage.extend({
+    tools: z.array(providerMcpToolSchema),
+    origin: providerMcpOriginSchema.nullable().default(null).optional(),
   }),
 );
 export type ProviderMcpServer = z.infer<typeof providerMcpServerSchema>;
@@ -1198,6 +1276,7 @@ const nativeListSuccessResultSchema = lazySchema(() =>
       kind: z.literal("mcp"),
       servers: z.array(providerMcpServerSchema),
       notices: z.array(providerMcpNoticeSchema).default([]).optional(),
+      coverage: providerMcpCoverageSchema.nullable().default(null).optional(),
     }),
     z.object({
       ok: z.literal(true),
@@ -1226,6 +1305,41 @@ export const nativeListResultSchema = lazySchema(() =>
   z.union([nativeListSuccessResultSchema, providerNativeErrorResultSchema]),
 );
 export type NativeListResult = z.infer<typeof nativeListResultSchema>;
+
+/** MCP result published on list@10.1 and 10.2, before origin and coverage. */
+export const nativeListResultSchemaV101Preimage = lazySchema(() =>
+  z.union([
+    z.discriminatedUnion("kind", [
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("mcp"),
+        servers: z.array(providerMcpServerSchemaV101Preimage),
+        notices: z.array(providerMcpNoticeSchema).default([]).optional(),
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("plugins"),
+        plugins: z.array(providerPluginSchema),
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("skills"),
+        skills: z.array(providerSkillSchema),
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("mcpDiscover"),
+        server: providerMcpServerSchemaV101Preimage,
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("pluginIcon"),
+        icon: providerPluginIconSchema,
+      }),
+    ]),
+    providerNativeErrorResultSchemaV11Preimage,
+  ]),
+);
 
 /** MCP arms before remedies; used by every released list carrier. */
 export const nativeListResultSchemaBeforeMcpRemedies = lazySchema(() =>
@@ -1257,7 +1371,7 @@ export const nativeListResultSchemaBeforeMcpRemedies = lazySchema(() =>
         icon: providerPluginIconSchema,
       }),
     ]),
-    providerNativeErrorResultSchema,
+    providerNativeErrorResultSchemaV11Preimage,
   ]),
 );
 
@@ -1300,7 +1414,7 @@ const nativeListSuccessResultSchemaV70Preimage = lazySchema(() =>
 export const nativeListResultSchemaV70Preimage = lazySchema(() =>
   z.union([
     nativeListSuccessResultSchemaV70Preimage,
-    providerNativeErrorResultSchema,
+    providerNativeErrorResultSchemaV11Preimage,
   ]),
 );
 export type NativeListResultV70Preimage = z.infer<
@@ -1426,6 +1540,7 @@ const nativeMutationSuccessResultSchema = lazySchema(() =>
       kind: z.literal("mcp"),
       servers: z.array(providerMcpServerSchema),
       notices: z.array(providerMcpNoticeSchema).default([]).optional(),
+      coverage: providerMcpCoverageSchema.nullable().default(null).optional(),
     }),
     z.object({
       ok: z.literal(true),
@@ -1449,6 +1564,36 @@ export const nativeMutationResultSchema = lazySchema(() =>
   z.union([nativeMutationSuccessResultSchema, providerNativeErrorResultSchema]),
 );
 export type NativeMutationResult = z.infer<typeof nativeMutationResultSchema>;
+
+/** MCP mutation result published on nativeMutate@1.1. */
+export const nativeMutationResultSchemaV11Preimage = lazySchema(() =>
+  z.union([
+    z.discriminatedUnion("kind", [
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("mcp"),
+        servers: z.array(providerMcpServerSchemaV101Preimage),
+        notices: z.array(providerMcpNoticeSchema).default([]).optional(),
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("plugins"),
+        plugins: z.array(providerPluginSchema),
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("skills"),
+        skills: z.array(providerSkillSchema),
+      }),
+      z.object({
+        ok: z.literal(true),
+        kind: z.literal("skillsInspect"),
+        ...providersSkillsInspectResultSchema.shape,
+      }),
+    ]),
+    providerNativeErrorResultSchemaV11Preimage,
+  ]),
+);
 
 /** Response preimage for the released nativeMutate@1.0 carrier. */
 export const nativeMutationResultSchemaV10Preimage = lazySchema(() =>
@@ -1475,7 +1620,7 @@ export const nativeMutationResultSchemaV10Preimage = lazySchema(() =>
         ...providersSkillsInspectResultSchema.shape,
       }),
     ]),
-    providerNativeErrorResultSchema,
+    providerNativeErrorResultSchemaV11Preimage,
   ]),
 );
 
@@ -1587,7 +1732,7 @@ export const nativeAuthResultSchema = lazySchema(() =>
     }),
     z.object({
       kind: z.literal("error"),
-      code: providerNativeErrorCodeSchema,
+      code: providerNativeErrorCodeSchemaV11Preimage,
       detail: z.string().nullable(),
     }),
   ]),

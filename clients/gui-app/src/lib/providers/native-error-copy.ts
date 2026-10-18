@@ -19,6 +19,9 @@ const NATIVE_ERROR_COPY: Readonly<Record<ProviderNativeErrorCode, string>> = {
   // sends a redacted parser/errno message as `detail`, which supersedes this.
   config_unreadable:
     "This provider's config could not be read. Check the file, then try again.",
+  server_not_found:
+    "This server is no longer in this provider's configuration. Refresh the list.",
+  change_shadowed: "Not changed: another settings file decides this.",
 };
 
 export function nativeErrorMessage(

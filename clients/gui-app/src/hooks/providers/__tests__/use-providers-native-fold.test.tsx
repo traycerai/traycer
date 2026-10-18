@@ -155,6 +155,7 @@ describe("native response mappers", () => {
       },
     });
     expect(Object.keys(mapped).sort()).toEqual([
+      "coverage",
       "notices",
       "refreshError",
       "servers",
@@ -242,6 +243,7 @@ describe("useProvidersMcpList fold", () => {
     });
     const cached = fixture.queryClient.getQueryData<McpListData>(key);
     expect(Object.keys(cached ?? {}).sort()).toEqual([
+      "coverage",
       "notices",
       "refreshError",
       "servers",
