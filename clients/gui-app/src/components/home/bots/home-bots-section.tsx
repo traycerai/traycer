@@ -8,6 +8,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
@@ -49,6 +50,7 @@ export function HomeBotsSection(): ReactNode {
   const hostListSupport = useHostMethodSupport(hostId, "environment.host.list");
   const headingId = useId();
 
+  const registeredHosts = useRegisteredHosts();
   const hostReach = useMemo(
     () => ({
       directoryHostIds: new Set(
@@ -56,8 +58,18 @@ export function HomeBotsSection(): ReactNode {
       ),
       connectableHostIds: new Set(connectable.hostIds),
       connectableResolved: connectable.resolved,
+      personalHostIds: new Set(
+        (registeredHosts.data?.hosts ?? [])
+          .filter((host) => host.kind === "personal")
+          .map((host) => host.hostId),
+      ),
     }),
-    [connectable.hostIds, connectable.resolved, directory.data],
+    [
+      connectable.hostIds,
+      connectable.resolved,
+      directory.data,
+      registeredHosts.data,
+    ],
   );
   const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
   // A team environment's machines the reader may see beyond their own (its

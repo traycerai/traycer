@@ -4389,11 +4389,14 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     scoped host, a remote host with a borrowable session); any other row says
     nothing. Every other host picker passes `environmentLabelForHost={null}`
     and shows no label.
-    Binding to a TEAM asks first (a dialog): on a host the registry
-    (`useRegisteredHosts`) calls `personal` the copy says it will run the
-    team's bots and skills and stays the person's own; on a `sandbox` it says
-    the host becomes the team's; with no registry answer only the first
-    clause. Binding to the personal environment needs no confirmation. A host
+    A team's bots run only on the team's machines: only a host the registry
+    (`useRegisteredHosts`) calls `sandbox` is offered the team environments,
+    and binding it to one asks first (a dialog saying the host becomes the
+    team's). Any other host - a person's own machine, or one the registry has
+    not described - is offered only the personal environment (plus the one it
+    reports now, so the marked row is never hidden), with one line saying a
+    team's bots run on the team's machines. Binding to the personal
+    environment needs no confirmation. A host
     another member added to a team (`explicit && !canUnbind`) is shown with
     every option disabled and one sentence saying only that member can
     change it. Below the picker, `panels/environment-machines-list.tsx` lists

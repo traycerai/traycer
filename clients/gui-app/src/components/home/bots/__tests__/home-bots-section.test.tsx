@@ -42,6 +42,9 @@ const mocks = vi.hoisted(() => {
         refetch: botRefetch,
       },
       directory: [] as Array<{ hostId: string; label: string }>,
+      registeredHosts: undefined as
+        | { hosts: Array<{ hostId: string; kind: "personal" | "sandbox" }> }
+        | undefined,
       connectableHostIds: [] as string[],
       connectableResolved: true,
       hostListSupport: true,
@@ -53,6 +56,7 @@ const mocks = vi.hoisted(() => {
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
       connectableResolved: boolean;
+      personalHostIds: ReadonlySet<string>;
       environmentHostIds: ReadonlySet<string> | null;
     }>,
     useEnvironmentHostLists:
@@ -83,6 +87,9 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: mocks.state.directory }),
+}));
+vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
+  useRegisteredHosts: () => ({ data: mocks.state.registeredHosts }),
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({
@@ -120,6 +127,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
       connectableResolved: boolean;
+      personalHostIds: ReadonlySet<string>;
     };
     environmentHostIds: ReadonlySet<string> | null;
   }) => {
@@ -128,6 +136,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
       directoryHostIds: props.hostReach.directoryHostIds,
       connectableHostIds: props.hostReach.connectableHostIds,
       connectableResolved: props.hostReach.connectableResolved,
+      personalHostIds: props.hostReach.personalHostIds,
       environmentHostIds: props.environmentHostIds,
     });
     return (
@@ -203,6 +212,7 @@ beforeEach(() => {
   mocks.state.bots.data = undefined;
   mocks.state.bots.isError = false;
   mocks.state.directory = [{ hostId: "host-1", label: "Studio Mac" }];
+  mocks.state.registeredHosts = undefined;
   mocks.state.connectableHostIds = [];
   mocks.state.connectableResolved = true;
   mocks.state.hostListSupport = true;
@@ -399,6 +409,34 @@ describe("HomeBotsSection what each group is told", () => {
       const props = latestGroupProps(environmentId);
       expect([...props.directoryHostIds].sort()).toEqual(["host-1", "host-2"]);
       expect([...props.connectableHostIds]).toEqual(["host-1"]);
+    }
+  });
+
+  it("hands every group the reader's personal hosts, and only those the registry calls personal", () => {
+    mocks.state.registeredHosts = {
+      hosts: [
+        { hostId: "host-1", kind: "personal" },
+        { hostId: "host-sandbox", kind: "sandbox" },
+      ],
+    };
+    resolveBothQueries();
+    mountSection();
+
+    for (const environmentId of ["env-personal", "env-team"]) {
+      expect([...latestGroupProps(environmentId).personalHostIds]).toEqual([
+        "host-1",
+      ]);
+    }
+  });
+
+  it("hands every group no personal host while the registry has not answered", () => {
+    resolveBothQueries();
+    mountSection();
+
+    for (const environmentId of ["env-personal", "env-team"]) {
+      expect(latestGroupProps(environmentId).personalHostIds).toEqual(
+        new Set(),
+      );
     }
   });
 

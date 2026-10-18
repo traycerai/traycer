@@ -41,11 +41,13 @@ import { cn } from "@/lib/utils";
  * becomes this host's environment only when the person picks it here. A
  * refusal from the host is shown in place, beside the list.
  *
- * Binding to a team asks first, in words that depend on what the host is: a
- * person's own machine serves the team's bots and skills and stays theirs; a
- * sandbox becomes the team's. A host a team member other than the reader
- * added to a team is shown, not changed: only the member who added it can
- * move it (`canUnbind`). Below the picker, every team's machines the reader
+ * A team's bots run only on the team's machines, its sandboxes: only a host
+ * the registry calls `sandbox` is offered a team, and binding it asks first,
+ * since the sandbox becomes the team's. Any other host - a person's own
+ * machine, or one the registry has not described - is offered only the
+ * personal environment, with one line saying where a team's bots run. A host
+ * a team member other than the reader added to a team is shown, not changed:
+ * only the member who added it can move it (`canUnbind`). Below the picker, every team's machines the reader
  * may see (`EnvironmentMachinesList`) - admin surface only; the bot flow
  * never asks for a machine.
  *
@@ -174,6 +176,18 @@ function HostEnvironmentPicker(props: {
     null,
   );
   const currentEnvironmentId = binding.environment.environmentId;
+  // A team environment admits only the team's machines: anything that is not
+  // a sandbox is offered the personal environment, plus whatever it reports
+  // now, so the marked row is never hidden.
+  const offersTeams = hostKind === "sandbox";
+  const offered = offersTeams
+    ? environments
+    : environments.filter(
+        (environment) =>
+          environment.ownerKind === "user" ||
+          environment.environmentId === currentEnvironmentId,
+      );
+  const hidesTeams = offered.length < environments.length;
   // Another member added this host to a team: it is listed, never moved from
   // here. Only the member who added it can change its environment.
   const locked = binding.explicit && !binding.canUnbind;
@@ -192,7 +206,7 @@ function HostEnvironmentPicker(props: {
         aria-labelledby={labelledBy}
         data-testid="host-environment-list"
       >
-        {environments.map((environment) => {
+        {offered.map((environment) => {
           const current = environment.environmentId === currentEnvironmentId;
           return (
             <li key={environment.environmentId}>
@@ -231,6 +245,14 @@ function HostEnvironmentPicker(props: {
           );
         })}
       </ul>
+      {hidesTeams ? (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="host-environment-team-hosts-only"
+        >
+          A team&apos;s bots run on the team&apos;s machines.
+        </p>
+      ) : null}
       {locked ? (
         <p
           className="text-ui-xs text-muted-foreground"
@@ -263,7 +285,7 @@ function HostEnvironmentPicker(props: {
             <DialogDescription data-testid="host-environment-confirm-copy">
               {confirming === null
                 ? null
-                : bindConfirmationCopy(hostLabel, confirming.label, hostKind)}
+                : bindConfirmationCopy(hostLabel, confirming.label)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -288,21 +310,9 @@ function HostEnvironmentPicker(props: {
 }
 
 /**
- * What binding a host to a team does to it, by kind: a person's own machine
- * serves the team and stays theirs; a sandbox becomes the team's. A host
- * whose kind the registry has not said gets the sentence true of both.
+ * What binding a host to a team does to it: only a sandbox is offered a team,
+ * and it becomes the team's.
  */
-function bindConfirmationCopy(
-  hostLabel: string,
-  teamLabel: string,
-  hostKind: HostRegistryKind | null,
-): string {
-  switch (hostKind) {
-    case "personal":
-      return `${hostLabel} will run ${teamLabel}'s bots and skills. It stays yours; only you see it here and can change this.`;
-    case "sandbox":
-      return `${hostLabel} becomes ${teamLabel}'s: every member sees it, and the team's bots and tasks can run on it.`;
-    case null:
-      return `${hostLabel} will run ${teamLabel}'s bots and skills.`;
-  }
+function bindConfirmationCopy(hostLabel: string, teamLabel: string): string {
+  return `${hostLabel} becomes ${teamLabel}'s: every member sees it, and the team's bots and tasks can run on it.`;
 }

@@ -1,7 +1,8 @@
 /**
  * The Settings host-environment picker (Tracy Bots): another member's team
- * binding is shown, never changed; choosing a team asks first, in words that
- * depend on what the host is; the bind fires only after Confirm.
+ * binding is shown, never changed; a team is offered only to a sandbox (a
+ * team's bots run on the team's machines), and choosing one asks first; the
+ * bind fires only after Confirm.
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -37,6 +38,14 @@ const TEAM: EnvironmentDescriptor = {
   label: "Acme",
 };
 
+const OTHER_TEAM: EnvironmentDescriptor = {
+  environmentId: "env-other-team",
+  ownerKind: "organization",
+  ownerId: "team-2",
+  roomId: "room-other-team",
+  label: "Globex",
+};
+
 const mocks = vi.hoisted(() => ({
   bindMutate: vi.fn<(variables: { readonly environmentId: string }) => void>(),
   state: {
@@ -64,7 +73,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
     isError: false,
-    data: { environments: [PERSONAL, TEAM] },
+    data: { environments: [PERSONAL, TEAM, OTHER_TEAM] },
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
@@ -130,6 +139,12 @@ function optionFor(environmentId: string): HTMLElement {
   return option;
 }
 
+function optionIds(): string[] {
+  return screen
+    .getAllByTestId("host-environment-option")
+    .map((el) => el.getAttribute("data-environment-id") ?? "");
+}
+
 function teamBinding(canUnbind: boolean): EnvironmentHostBinding {
   return {
     hostId: "host-a",
@@ -182,36 +197,65 @@ describe("HostEnvironmentSection lock", () => {
   });
 });
 
-describe("HostEnvironmentSection bind confirmation", () => {
-  it.each([
-    [
-      "personal",
-      "Mac mini will run Acme's bots and skills. It stays yours; only you see it here and can change this.",
-    ],
-    [
-      "sandbox",
-      "Mac mini becomes Acme's: every member sees it, and the team's bots and tasks can run on it.",
-    ],
-    [null, "Mac mini will run Acme's bots and skills."],
-  ] as const)(
-    "words the %s host's confirmation for what binding does to it",
-    async (kind, copy) => {
+describe("HostEnvironmentSection team hosts only", () => {
+  it.each([["personal" as const], [null]])(
+    "offers a %s host only the personal environment, and says where a team's bots run",
+    (kind) => {
       mocks.state.hostKind = kind;
       renderSection();
 
-      await userEvent.click(optionFor(TEAM.environmentId));
-
-      const dialog = screen.getByRole("dialog");
+      expect(optionIds()).toEqual([PERSONAL.environmentId]);
       expect(
-        within(dialog).getByText("Run Acme's bots on Mac mini?"),
-      ).toBeTruthy();
-      expect(
-        within(dialog).getByTestId("host-environment-confirm-copy").textContent,
-      ).toBe(copy);
+        screen.getByTestId("host-environment-team-hosts-only").textContent,
+      ).toBe("A team's bots run on the team's machines.");
     },
   );
 
+  it("offers a sandbox every team, without the team-hosts-only line", () => {
+    mocks.state.hostKind = "sandbox";
+    renderSection();
+
+    expect(optionIds()).toEqual([
+      PERSONAL.environmentId,
+      TEAM.environmentId,
+      OTHER_TEAM.environmentId,
+    ]);
+    expect(screen.queryByTestId("host-environment-team-hosts-only")).toBeNull();
+  });
+
+  it("keeps the team a personal host currently reports, marked, and hides the other teams", () => {
+    mocks.state.hostKind = "personal";
+    mocks.state.binding = teamBinding(true);
+    renderSection();
+
+    expect(optionIds()).toEqual([PERSONAL.environmentId, TEAM.environmentId]);
+    expect(optionFor(TEAM.environmentId).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByTestId("host-environment-team-hosts-only")).toBeTruthy();
+  });
+});
+
+describe("HostEnvironmentSection bind confirmation", () => {
+  it("words a sandbox's confirmation for what binding does to it", async () => {
+    mocks.state.hostKind = "sandbox";
+    renderSection();
+
+    await userEvent.click(optionFor(TEAM.environmentId));
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText("Run Acme's bots on Mac mini?"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByTestId("host-environment-confirm-copy").textContent,
+    ).toBe(
+      "Mac mini becomes Acme's: every member sees it, and the team's bots and tasks can run on it.",
+    );
+  });
+
   it("binds the team only after Confirm, and not at all after Cancel", async () => {
+    mocks.state.hostKind = "sandbox";
     renderSection();
 
     await userEvent.click(optionFor(TEAM.environmentId));
