@@ -7,7 +7,7 @@
  * available hosts are nested sub-pages backed by transient clients, so cross-host creation remains
  * possible without changing the app-wide active host or opening a modal.
  */
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
@@ -19,7 +19,13 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
-import { groupHostOptions } from "@/components/settings/host-scope/host-option-model";
+import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
+  groupHostOptions,
+  isHostOptionSelectable,
+} from "@/components/settings/host-scope/host-option-model";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import {
@@ -342,14 +348,25 @@ function useHostTerminalWorkspaceItems(
   );
 }
 
-function makeHostWorkspaceSubpage(
-  hostId: string,
-  hostLabel: string,
-): CommandSubpage {
+/**
+ * Opening a host's sub-page is the pick, as in the new-terminal picker: a
+ * sleeping sandbox is woken, and its workspaces list once it answers.
+ */
+function useHostWorkspaceSubpageItems(
+  ctx: CommandContext,
+  host: HostScopeOption,
+): ReadonlyArray<CommandItem> {
+  useEffect(() => {
+    wakeSandboxOnPick(host);
+  }, [host]);
+  return useHostTerminalWorkspaceItems(ctx, host.hostId);
+}
+
+function makeHostWorkspaceSubpage(host: HostScopeOption): CommandSubpage {
   return {
-    id: `open:terminals:new:host:${hostId}`,
-    title: `Create terminal on ${hostLabel}`,
-    useItems: (ctx) => useHostTerminalWorkspaceItems(ctx, hostId),
+    id: `open:terminals:new:host:${host.hostId}`,
+    title: `Create terminal on ${host.name}`,
+    useItems: (ctx) => useHostWorkspaceSubpageItems(ctx, host),
   };
 }
 
@@ -382,14 +399,14 @@ function useNewTerminalWorkspaceItems(
     () => groupHostOptions(hostOptions, false, true, null),
     [hostOptions],
   );
-  const offeredHostIds = useMemo(
+  const offeredHosts = useMemo(
     () =>
-      new Set(
+      new Map(
         [
           ...groups.personal,
           ...groups.sandboxes,
           ...groups.teams.flatMap((team) => team.sandboxes),
-        ].map((host) => host.hostId),
+        ].map((host) => [host.hostId, host]),
       ),
     [groups],
   );
@@ -433,28 +450,27 @@ function useNewTerminalWorkspaceItems(
             },
             hostClient,
           );
-    const otherHosts = (directory.data ?? [])
-      // Coarse, through the canonical rule: a palette row here leads to a
-      // launch, so it is offered exactly when the launch gate above would
-      // accept it. That deliberately keeps an `indeterminate` host listed —
-      // the picker's stated rule — rather than hiding a machine because one
-      // liveness read came back blind.
-      .filter(
-        (entry) =>
-          entry.hostId !== resolvedHostId &&
-          offeredHostIds.has(entry.hostId) &&
-          dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
-            null,
-      )
-      .map((entry) => {
-        const label = entry.label.length > 0 ? entry.label : entry.hostId;
-        return openerSubpageLeaf({
-          id: `open:terminals:new:host:${entry.hostId}`,
-          label,
-          keywords: [entry.hostId, label, "host", "computer", "machine"],
-          subpage: makeHostWorkspaceSubpage(entry.hostId, label),
-        });
-      });
+    // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
+    // sleeping sandbox is offered and woken when its sub-page opens. Each
+    // workspace row's launch gate still dials before it opens a tile.
+    const otherHosts = (directory.data ?? []).flatMap((entry) => {
+      const host = offeredHosts.get(entry.hostId);
+      if (
+        entry.hostId === resolvedHostId ||
+        host === undefined ||
+        !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
+      ) {
+        return [];
+      }
+      return [
+        openerSubpageLeaf({
+          id: `open:terminals:new:host:${host.hostId}`,
+          label: host.name,
+          keywords: [host.hostId, host.name, "host", "computer", "machine"],
+          subpage: makeHostWorkspaceSubpage(host),
+        }),
+      ];
+    });
     const dialable = (hostId: string): boolean => {
       const entry =
         (directory.data ?? []).find((e) => e.hostId === hostId) ?? null;
@@ -466,9 +482,18 @@ function useNewTerminalWorkspaceItems(
     const podOpens = teamPodOpenRows(groups, podsByEnvironment, dialable).map(
       (row) =>
         openerActionLeaf({
-          id: `open:terminals:new:pod:${row.hostId}`,
+          id:
+            row.hostId === null
+              ? `open:terminals:new:team-pod:${row.target.environmentId}`
+              : `open:terminals:new:pod:${row.hostId}`,
           label: `Open ${row.label}`,
-          keywords: [row.hostId, row.label, "pod", "team", "host"],
+          keywords: [
+            ...(row.hostId === null ? [] : [row.hostId]),
+            row.label,
+            "pod",
+            "team",
+            "host",
+          ],
           run: () => {
             // A full team's refusal toasts its server message verbatim
             // (`sandboxFailureMessage`, `team_pods_full`).
@@ -488,7 +513,7 @@ function useNewTerminalWorkspaceItems(
     directory.data,
     hasReadySessionFor,
     hostClient,
-    offeredHostIds,
+    offeredHosts,
     groups,
     podsByEnvironment,
     openPod,

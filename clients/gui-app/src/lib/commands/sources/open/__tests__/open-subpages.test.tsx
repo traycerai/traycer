@@ -1010,6 +1010,51 @@ describe("Terminals opener sub-page", () => {
     expect(labels).not.toContain("Create terminal on Unanswered box");
   });
 
+  it("still offers Create terminal on a sleeping personal sandbox that has no dialable endpoint yet", () => {
+    extraHostsMock.directory = [
+      {
+        hostId: "sleeping-host",
+        label: "Sleeping box",
+        kind: "remote",
+        websocketUrl: null,
+        version: null,
+        transportDialability: "dialable",
+      },
+    ];
+    extraHostsMock.options = [
+      ...extraHostsMock.options,
+      hostScopeOptionFixture({
+        hostId: "sleeping-host",
+        name: "Sleeping box",
+        isLocalMachine: false,
+        isActive: false,
+        connectable: false,
+        kind: "sandbox",
+        sandbox: {
+          state: "suspended",
+          frozen: false,
+          summary: sandboxSummaryFixture({
+            hostId: "sleeping-host",
+            state: "suspended",
+            burst: false,
+          }),
+          teamOwned: false,
+        },
+      }),
+    ];
+
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const labels = renderItems(newTerminal.subpage.useItems).map(
+      (item) => item.subpage?.title ?? null,
+    );
+
+    expect(labels).toContain("Create terminal on Sleeping box");
+  });
+
   describe("a team's Automations pod", () => {
     const POD_HOST = "team-pod-host";
     const POD_ID = "sbx-team-pod";
@@ -1100,13 +1145,23 @@ describe("Terminals opener sub-page", () => {
       });
     });
 
-    it("opens with a null ordinal while the environment's pod list has not answered", () => {
+    it("offers the team's one generic row, opening with a null ordinal, while the environment's pod list has not answered", () => {
       extraHostsMock.options = [
         ...extraHostsMock.options,
         teamPodOption("env-team"),
       ];
 
-      runById(newTerminalItems(), `open:terminals:new:pod:${POD_HOST}`);
+      const rows = newTerminalItems();
+      // The named row would claim a pod the server may not pick.
+      expect(
+        rows.find((item) => item.id === `open:terminals:new:pod:${POD_HOST}`),
+      ).toBeUndefined();
+      const generic = rows.find(
+        (item) => item.id === "open:terminals:new:team-pod:env-team",
+      );
+      expect(generic?.label).toBe("Open a pod for Alpha");
+
+      runById(rows, "open:terminals:new:team-pod:env-team");
 
       expect(spies.openTeamPod).toHaveBeenCalledWith({
         environmentId: "env-team",

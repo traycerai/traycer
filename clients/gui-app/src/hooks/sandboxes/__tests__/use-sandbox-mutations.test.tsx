@@ -56,7 +56,10 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
-import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import {
+  useSandboxVerb,
+  type SandboxVerbOutcome,
+} from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 
 function setup() {
   const queryClient = new QueryClient({
@@ -853,6 +856,29 @@ describe("settling under another account", () => {
       expectNothingMoved(invalidate);
     });
 
+    it("runs no per-call onSuccess when a destroy started as A succeeds under B", async () => {
+      signInAs("user-a");
+      const { queryClient, wrapper } = setup();
+      const pending = deferred<{ kind: "ok"; settled: boolean }>();
+      state.binding?.auth.destroySandbox.mockImplementation(
+        () => pending.promise,
+      );
+      const view = renderHook(() => useSandboxDestroy("sbx_1"), { wrapper });
+      const onSuccess = vi.fn<(settled: boolean) => void>();
+      act(() => {
+        view.result.current.mutate(undefined, { onSuccess });
+      });
+      await waitFor(() => {
+        expect(state.binding?.auth.destroySandbox).toHaveBeenCalledTimes(1);
+      });
+
+      signInAs("user-b");
+      pending.resolve({ kind: "ok", settled: true });
+      await mutationEnded(queryClient);
+
+      expect(onSuccess).not.toHaveBeenCalled();
+    });
+
     it("control: with the same account throughout, a failed destroy toasts once", async () => {
       const { queryClient, pending } = startDestroy();
       await waitFor(() => {
@@ -908,6 +934,29 @@ describe("settling under another account", () => {
       await mutationEnded(queryClient);
 
       expectNothingMoved(invalidate);
+    });
+
+    it("runs no per-call onSuccess when a suspend started as A succeeds under B", async () => {
+      signInAs("user-a");
+      const { queryClient, wrapper } = setup();
+      const pending = deferred<{ kind: "ok"; settled: boolean }>();
+      state.binding?.auth.runSandboxVerb.mockImplementation(
+        () => pending.promise,
+      );
+      const view = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
+      const onSuccess = vi.fn<(outcome: SandboxVerbOutcome) => void>();
+      act(() => {
+        view.result.current.mutate("suspend", { onSuccess });
+      });
+      await waitFor(() => {
+        expect(state.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+      });
+
+      signInAs("user-b");
+      pending.resolve({ kind: "ok", settled: true });
+      await mutationEnded(queryClient);
+
+      expect(onSuccess).not.toHaveBeenCalled();
     });
 
     it("control: with the same account throughout, a failed suspend toasts under the verb's title and still runs the settled invalidations", async () => {

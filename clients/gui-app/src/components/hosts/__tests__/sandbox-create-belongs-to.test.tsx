@@ -727,6 +727,18 @@ describe("<SandboxCreateDialog /> belongs to", () => {
       ).toBe("You are not a member of acme.");
     });
 
+    it("keeps Create disabled after a definitive environment_not_found refusal", async () => {
+      teamAnswered();
+      refusedWith("environment_not_found", "env-acme", null);
+      await renderDialog(teamPreselect(ACME_ID));
+      type("sandbox-create-name", "build-box");
+
+      expect(
+        screen.getByTestId("sandbox-create-team-refusal").textContent,
+      ).toBe("You are not a member of acme.");
+      expect(submit().hasAttribute("disabled")).toBe(true);
+    });
+
     it("answers neither for a refusal of another code", async () => {
       teamAnswered();
       refusedWith("provider_unavailable", "env-acme", null);

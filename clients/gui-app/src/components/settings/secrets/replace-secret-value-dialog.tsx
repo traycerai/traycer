@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -36,9 +36,14 @@ export function ReplaceSecretValueDialog(props: {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Which open of the dialog a replace belongs to: one that settles after a
+  // close (the person cancelled and opened it again) leaves the form now
+  // showing alone.
+  const openGeneration = useRef(0);
 
   const close = (open: boolean): void => {
     if (open) return;
+    openGeneration.current += 1;
     setValue("");
     setNote(null);
     setBusy(false);
@@ -48,6 +53,7 @@ export function ReplaceSecretValueDialog(props: {
   const replace = async (): Promise<void> => {
     const expectedVersionId = secret.currentVersionId;
     if (expectedVersionId === null) return;
+    const sentFrom = openGeneration.current;
     setBusy(true);
     setNote(null);
     try {
@@ -56,21 +62,24 @@ export function ReplaceSecretValueDialog(props: {
         { secretId: secret.secretId, value, expectedVersionId },
       );
       const outcome = replaceOutcome(answer);
+      // The row and the list follow the server whichever open is showing.
+      if (outcome.kind === "accepted") props.onReplaced();
+      else if (outcome.reread) props.onStale();
+      if (openGeneration.current !== sentFrom) return;
       if (outcome.kind === "accepted") {
-        props.onReplaced();
         close(false);
         return;
       }
-      if (outcome.reread) props.onStale();
       setNote(outcome.text);
     } catch (error) {
+      if (openGeneration.current !== sentFrom) return;
       setNote(
         error instanceof Error && error.message.length > 0
           ? error.message
           : "Couldn't replace the value.",
       );
     } finally {
-      setBusy(false);
+      if (openGeneration.current === sentFrom) setBusy(false);
     }
   };
 

@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   EnvironmentSecret,
@@ -15,6 +16,8 @@ import type {
   EnvironmentSecretsUndoResponse,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { ReplaceSecretValueDialog } from "@/components/settings/secrets/replace-secret-value-dialog";
 import { SecretVersionsList } from "@/components/settings/secrets/secret-versions-list";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
@@ -200,6 +203,76 @@ describe("the Replace value dialog's answers", () => {
     expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
       SECRET_SAVED_OFFLINE,
     );
+  });
+});
+
+/** The parent that owns `open`, as the secret row does, with a way to reopen. */
+function ReopenableReplaceDialog(props: {
+  readonly secret: EnvironmentSecret;
+  readonly client: HostClient<HostRpcRegistry>;
+}): ReactNode {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="reopen-replace"
+      >
+        Reopen
+      </button>
+      <ReplaceSecretValueDialog
+        open={open}
+        secret={props.secret}
+        client={props.client}
+        onOpenChange={setOpen}
+        onReplaced={() => undefined}
+        onStale={() => undefined}
+      />
+    </>
+  );
+}
+
+describe("the Replace value dialog across a close and a reopen", () => {
+  it("a stale accepted completion of a cancelled replace does not close the reopened dialog", async () => {
+    let release: (
+      answer: EnvironmentSecretsReplaceValueResponse,
+    ) => void = () => undefined;
+    const requests: EnvironmentSecretsReplaceValueRequest[] = [];
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.secrets.replaceValue": (request) => {
+          requests.push(request);
+          return new Promise<EnvironmentSecretsReplaceValueResponse>(
+            (resolve) => {
+              release = resolve;
+            },
+          );
+        },
+      },
+    });
+    render(
+      <ReopenableReplaceDialog secret={secretFixture({})} client={client} />,
+    );
+    typeValue(TYPED);
+    fireEvent.click(replaceButton());
+    await waitFor(() => {
+      expect(requests).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByText("Cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+    fireEvent.click(screen.getByTestId("reopen-replace"));
+    await screen.findByTestId("replace-secret-dialog");
+
+    release({ outcome: "accepted", rotationId: "rot-1", versionId: "ver-4" });
+    // Let the held request's continuation run.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.getByTestId("replace-secret-dialog")).toBeTruthy();
   });
 });
 

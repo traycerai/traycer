@@ -204,9 +204,20 @@ describe("teamPodOpenRows", () => {
     ownRow("own-pod", "automation"),
   ]);
   const NONE_DIALABLE = (): boolean => false;
+  const ANSWERED: ReadonlyMap<string, readonly SandboxPod[]> = new Map([
+    [
+      ENV_A,
+      [
+        podOf("a-pod-0", 0, ENV_A),
+        podOf("a-pod-1", 3, ENV_A),
+        podOf("a-pod-2", 7, ENV_A),
+      ],
+    ],
+    [ENV_B, [podOf("b-pod-0", 1, ENV_B)]],
+  ]);
 
   it("offers every team pod that cannot be dialed, and nothing else", () => {
-    const rows = teamPodOpenRows(groups, new Map(), NONE_DIALABLE);
+    const rows = teamPodOpenRows(groups, ANSWERED, NONE_DIALABLE);
     expect(rows.map((row) => row.hostId)).toEqual([
       "a-pod-0",
       "a-pod-1",
@@ -219,7 +230,7 @@ describe("teamPodOpenRows", () => {
   it("skips a pod that can already be dialed", () => {
     const rows = teamPodOpenRows(
       groups,
-      new Map(),
+      ANSWERED,
       (hostId) => hostId === "a-pod-1" || hostId === "b-pod-0",
     );
     expect(rows.map((row) => row.hostId)).toEqual(["a-pod-0", "a-pod-2"]);
@@ -249,27 +260,32 @@ describe("teamPodOpenRows", () => {
     ]);
   });
 
-  it("uses a null ordinal for every pod when no pod list has answered", () => {
+  it("offers one generic row per team, which lets the server pick, while no pod list has answered", () => {
     const rows = teamPodOpenRows(groups, new Map(), NONE_DIALABLE);
-    expect(rows.map((row) => row.target)).toEqual([
-      { environmentId: ENV_A, ordinal: null },
-      { environmentId: ENV_A, ordinal: null },
-      { environmentId: ENV_A, ordinal: null },
-      { environmentId: ENV_B, ordinal: null },
+    expect(rows).toEqual([
+      {
+        hostId: null,
+        label: "a pod for Alpha",
+        target: { environmentId: ENV_A, ordinal: null },
+      },
+      {
+        hostId: null,
+        label: "a pod for Bravo",
+        target: { environmentId: ENV_B, ordinal: null },
+      },
     ]);
   });
 
-  it("uses a null ordinal for a pod its answered list does not hold, and the list's ordinal for the rest", () => {
+  it("folds the pods its answered list does not hold into the team's generic row, and names the rest with the list's ordinal", () => {
     const rows = teamPodOpenRows(
       groups,
       new Map([[ENV_A, [podOf("a-pod-2", 4, ENV_A)]]]),
       NONE_DIALABLE,
     );
-    expect(rows.map((row) => row.target)).toEqual([
-      { environmentId: ENV_A, ordinal: null },
-      { environmentId: ENV_A, ordinal: null },
-      { environmentId: ENV_A, ordinal: 4 },
-      { environmentId: ENV_B, ordinal: null },
+    expect(rows.map((row) => [row.hostId, row.target])).toEqual([
+      [null, { environmentId: ENV_A, ordinal: null }],
+      ["a-pod-2", { environmentId: ENV_A, ordinal: 4 }],
+      [null, { environmentId: ENV_B, ordinal: null }],
     ]);
   });
 
@@ -279,14 +295,32 @@ describe("teamPodOpenRows", () => {
       teamRow("a-pod-legacy", TEAM_A, null, "automation"),
     ]);
     expect(
-      teamPodOpenRows(withLegacy, new Map(), NONE_DIALABLE).map(
-        (row) => row.hostId,
-      ),
+      teamPodOpenRows(
+        withLegacy,
+        new Map([[ENV_A, [podOf("a-pod-0", 0, ENV_A)]]]),
+        NONE_DIALABLE,
+      ).map((row) => row.hostId),
     ).toEqual(["a-pod-0"]);
   });
 
   it("offers nothing when every pod can be dialed", () => {
     expect(teamPodOpenRows(groups, new Map(), () => true)).toEqual([]);
+  });
+
+  it("names no specific pod on a row whose ordinal is unknown while the pod list is pending", () => {
+    const twoPods = pickerGroups([
+      teamRow("a-pod-0", TEAM_A, ENV_A, "automation"),
+      teamRow("a-pod-1", TEAM_A, ENV_A, "automation"),
+    ]);
+    const rows = teamPodOpenRows(twoPods, new Map(), NONE_DIALABLE);
+    // Either the rows are omitted, or one generic row stands in; a row that
+    // names a specific pod must carry a known ordinal.
+    const namedWithoutOrdinal = rows.filter(
+      (row) =>
+        row.target.ordinal === null &&
+        (row.hostId === "a-pod-0" || row.hostId === "a-pod-1"),
+    );
+    expect(namedWithoutOrdinal).toEqual([]);
   });
 });
 

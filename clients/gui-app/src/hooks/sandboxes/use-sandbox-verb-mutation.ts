@@ -17,6 +17,7 @@ import {
   sandboxQueryKeys,
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
@@ -54,7 +55,8 @@ const VERB_FAILURE_TITLE: Record<SandboxLifecycleVerb, string> = {
  * server's deadline) and a `404` for a row destroyed meanwhile are success
  * too: the list's next read shows where it landed. Success refreshes the
  * host list, the sandbox list, the fleet and the cost view (the burn moved),
- * as a destroy does.
+ * as a destroy does. A caller's per-call callbacks run only for the account
+ * that started the verb, as the hook's own do.
  */
 export function useSandboxVerb(
   sandboxId: string,
@@ -67,7 +69,7 @@ export function useSandboxVerb(
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
-  return useMutation({
+  const mutation = useMutation({
     mutationKey: sandboxMutationKeys.verb(sandboxId),
     onMutate: (): SandboxVerbContext => ({
       directory: binding === null ? null : binding.directory,
@@ -112,4 +114,5 @@ export function useSandboxVerb(
       toastFromAuthError(error, VERB_FAILURE_TITLE[verb]);
     },
   });
+  return useAccountFencedMutation(mutation);
 }

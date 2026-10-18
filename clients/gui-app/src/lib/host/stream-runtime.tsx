@@ -16,6 +16,10 @@ import { useHostBinding } from "@/lib/host/runtime";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
+  useFrozenSandboxRebuildPark,
+  useRegistrySandboxFreeze,
+} from "@/lib/host/frozen-sandbox-rebuild-park";
+import {
   hostTransportKey,
   remoteAwareOwnerIdentity,
 } from "@/lib/host/transport-key";
@@ -114,6 +118,10 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // closed (see the guard effect below), forcing the build effect to mint a
   // fresh client even though the identity never changed.
   const [rebuildNonce, setRebuildNonce] = useState(0);
+  // The same hold `useHostStreamClientBindingFor` puts on a frozen sandbox's
+  // close: every fresh session's grant would be refused until it thaws.
+  const { parkIfFrozen, releases: frozenParkReleases } =
+    useFrozenSandboxRebuildPark(useRegistrySandboxFreeze(effectiveHostId));
   // Set while the build effect's cleanup is intentionally closing the client
   // to rebuild it, so the liveness guard's `onClosed` handler can tell that
   // teardown-close apart from a genuine underneath-close and skip a redundant
@@ -262,6 +270,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     readiness.hostId,
     rebuildBackoff,
     rebuildNonce,
+    frozenParkReleases,
   ]);
   // Liveness guard: a CLOSED client must be replaced, not left unavailable
   // until the window reloads. Legitimate closes (identity change / unmount)
@@ -277,6 +286,13 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     let backoffTimer: number | null = null;
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      if (parkIfFrozen(client.getClosedReason())) {
+        appLogger.info(
+          "[stream] app stream client closed on a frozen sandbox - rebuild held until it thaws",
+          { client: client.instanceId },
+        );
+        return;
+      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] app stream client closed underneath the provider - rebuilding",
@@ -311,7 +327,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         window.clearTimeout(backoffTimer);
       }
     };
-  }, [value, rebuildBackoff]);
+  }, [value, rebuildBackoff, parkIfFrozen]);
   // Same wake as `useHostStreamClientBindingFor`'s, and here for the same
   // reason: this provider holds its own pacer over its own client, so a
   // demotion walks THIS streak to the ceiling too and the promotion back moves

@@ -185,7 +185,7 @@ function SecretGrantOutcomeLine(props: {
       >
         <p className="min-w-0">
           There is no secret stored for this destination yet, so there is
-          nothing to grant. Store one, then approve.
+          nothing to grant.
         </p>
         <SecretsDashboardLink
           testId="secret-grant-request-open-secrets"

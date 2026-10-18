@@ -799,8 +799,10 @@ function useTeamTarget(
     environmentId,
     teamName: team.name,
     teamId: team.teamId,
-    // Without its environment the create would be the person's own.
-    ready: environmentId !== null,
+    // Without its environment the create would be the person's own; after
+    // the server said the person is not a member, a resend is refused again
+    // (the environment is read again to say why).
+    ready: environmentId !== null && !refusedAsNotAMember(refusal),
     askAdmin:
       teamCannotCoverAnHour(
         teamSandboxBalanceMc(user, team.teamId),
@@ -828,6 +830,14 @@ function refusalFor(
   return last.variables?.request.environmentId === environmentId
     ? last.error
     : null;
+}
+
+/** Whether a refused create was the server saying the person left the team. */
+function refusedAsNotAMember(refusal: SandboxCreateError | null): boolean {
+  return (
+    refusal !== null &&
+    refusal.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND
+  );
 }
 
 /**

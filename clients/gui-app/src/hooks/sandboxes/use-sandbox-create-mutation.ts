@@ -4,13 +4,18 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type {
-  SandboxCreateAccepted,
-  SandboxCreateRequest,
+import {
+  SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
+  type SandboxCreateAccepted,
+  type SandboxCreateRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
-import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
+import {
+  authQueryKeys,
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
@@ -123,12 +128,23 @@ export function useSandboxCreate(): UseMutationResult<
     },
     // Settled, not only success: a `502 provider_failed` leaves a `failed`
     // row behind, which the lists must show so it can be destroyed.
-    onSettled: (_data, _error, _variables, context) => {
+    onSettled: (_data, error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;
       void context.directory?.refresh();
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
+      // The server says the person is no longer in the team: the team's
+      // environment, read once per session, is read again so the form
+      // answers from membership rather than from the stale id.
+      if (
+        error instanceof SandboxCreateError &&
+        error.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: sandboxQueryKeys.teamEnvironmentAll(),
+        });
+      }
     },
     // The open that sent it says it, beside the values that were sent (F46);
     // a create that outlived its open, closed or replaced by a new one, toasts.

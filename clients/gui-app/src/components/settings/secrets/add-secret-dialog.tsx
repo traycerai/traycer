@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
@@ -196,9 +196,14 @@ export function AddSecretDialog(props: {
   const [busy, setBusy] = useState<"verify" | "save" | null>(null);
   const [verifyNote, setVerifyNote] = useState<SecretVerifyLine | null>(null);
   const [saveNote, setSaveNote] = useState<SecretVerifyLine | null>(null);
+  // Which open of the dialog a check or save belongs to. A close ends the
+  // open, so a request that settles after it (the person closed and opened
+  // the dialog again) neither closes nor writes into the form now showing.
+  const openGeneration = useRef(0);
 
   const close = (open: boolean): void => {
     if (open) return;
+    openGeneration.current += 1;
     // Closing drops the typed value with the rest of the form.
     setStep(PICK);
     setVerifyNote(null);
@@ -222,6 +227,7 @@ export function AddSecretDialog(props: {
   };
 
   const verify = async (form: SecretFormState): Promise<void> => {
+    const sentFrom = openGeneration.current;
     setBusy("verify");
     setVerifyNote(null);
     try {
@@ -229,18 +235,21 @@ export function AddSecretDialog(props: {
         "environment.secrets.verify",
         secretVerifyCandidateRequest(form),
       );
+      if (openGeneration.current !== sentFrom) return;
       setVerifyNote(secretVerifyLine(result, form.protocol, "dialog"));
     } catch (error) {
+      if (openGeneration.current !== sentFrom) return;
       setVerifyNote({
         tone: "warning",
         text: errorText(error, "Couldn't check."),
       });
     } finally {
-      setBusy(null);
+      if (openGeneration.current === sentFrom) setBusy(null);
     }
   };
 
   const save = async (form: SecretFormState): Promise<void> => {
+    const sentFrom = openGeneration.current;
     setBusy("save");
     setSaveNote(null);
     try {
@@ -249,19 +258,22 @@ export function AddSecretDialog(props: {
         secretCreateRequest(form),
       );
       const note = createOutcomeNote(outcome);
+      // The list is re-read whichever open is showing: the secret is saved.
       if (outcome.outcome !== "refused") props.onSaved();
+      if (openGeneration.current !== sentFrom) return;
       if (note === null) {
         close(false);
         return;
       }
       setSaveNote(note);
     } catch (error) {
+      if (openGeneration.current !== sentFrom) return;
       setSaveNote({
         tone: "warning",
         text: errorText(error, "Couldn't save this secret."),
       });
     } finally {
-      setBusy(null);
+      if (openGeneration.current === sentFrom) setBusy(null);
     }
   };
 

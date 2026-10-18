@@ -4,6 +4,8 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { useFrozenSandboxRebuildPark } from "@/lib/host/frozen-sandbox-rebuild-park";
+import { sandboxFreezeOf } from "@/lib/host/host-messenger";
 import {
   isRemoteHostDirectoryEntry,
   type RemoteHostDirectoryEntry,
@@ -462,6 +464,10 @@ export function useHostStreamClientBindingFor(
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
   const [rebuildNonce, setRebuildNonce] = useState(0);
+  // A frozen sandbox refuses every fresh session's grant, so its close parks
+  // the rebuild until the list shows the sandbox thawed or gone.
+  const { parkIfFrozen, releases: frozenParkReleases } =
+    useFrozenSandboxRebuildPark(sandboxFreezeOf(target));
   const teardownInProgressRef = useRef(false);
   // Same rebuild pacing the app-wide `HostStreamProvider` runs, and needed here
   // MORE than there: that provider follows the active host, while this hook
@@ -633,6 +639,7 @@ export function useHostStreamClientBindingFor(
     globalClient,
     rebuildBackoff,
     rebuildNonce,
+    frozenParkReleases,
     transportKey,
     userId,
   ]);
@@ -676,6 +683,13 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      if (parkIfFrozen(client.getClosedReason())) {
+        appLogger.info(
+          "[stream] host stream client closed on a frozen sandbox - rebuild held until it thaws",
+          { client: client.instanceId },
+        );
+        return;
+      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] transient host stream client closed underneath its binding - rebuilding",
@@ -703,7 +717,7 @@ export function useHostStreamClientBindingFor(
       unsubscribe();
       clearBackoffTimer();
     };
-  }, [client, rebuildBackoff]);
+  }, [client, rebuildBackoff, parkIfFrozen]);
 
   // Wake a binding whose backoff was earned entirely under a cloud capability
   // that has since come back. Both halves are needed and neither is sufficient:

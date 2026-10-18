@@ -9,6 +9,7 @@ import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
@@ -33,7 +34,8 @@ interface SandboxDestroyContext {
  *
  * Success refreshes the host list, the sandbox list and the selection fleet,
  * for the reason `useDeregisterHostFromAccount` refreshes all three: the whole
- * visible effect is the row's absence.
+ * visible effect is the row's absence. A caller's per-call callbacks run only
+ * for the account that started the destroy, as the hook's own do.
  */
 export function useSandboxDestroy(
   sandboxId: string,
@@ -41,7 +43,7 @@ export function useSandboxDestroy(
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
-  return useMutation({
+  const mutation = useMutation({
     mutationKey: sandboxMutationKeys.destroy(sandboxId),
     onMutate: (): SandboxDestroyContext => ({
       directory: binding === null ? null : binding.directory,
@@ -77,4 +79,5 @@ export function useSandboxDestroy(
       toastFromAuthError(error, "Couldn't destroy the sandbox.");
     },
   });
+  return useAccountFencedMutation(mutation);
 }

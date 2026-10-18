@@ -58,7 +58,7 @@ const TRANSPORT_KEY_SEPARATOR = "\u0000";
  * drive a mint+dial loop at the query layer's pace - while short enough that
  * a host the user just updated connects on the next natural refetch.
  */
-const TERMINAL_VERDICT_TTL_MS = 30_000;
+export const TERMINAL_VERDICT_TTL_MS = 30_000;
 
 const browserWebSocketFactory = createWhatwgWebSocketFactory();
 const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
@@ -261,7 +261,7 @@ export function buildRuntimeHostMessenger<
  * while the sandbox is listed frozen; `thawed` when it is listed and not
  * frozen; `gone` when the host or its sandbox is no longer listed.
  */
-function sandboxFreezeOf(
+export function sandboxFreezeOf(
   entry: HostDirectoryEntry | null,
 ): "frozen" | "thawed" | "gone" {
   if (

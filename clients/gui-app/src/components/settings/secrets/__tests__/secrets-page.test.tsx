@@ -50,6 +50,8 @@ interface SecretsHostState {
   createAnswer: EnvironmentSecretsCreateResponse;
   /** The create rejects with this. */
   createError: Error | null;
+  /** The create waits for this to settle before it answers. */
+  createHold: Promise<void> | null;
 }
 
 interface SecretsHost {
@@ -88,6 +90,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       secret: secretFixture({ secretId: "sec-new" }),
     },
     createError: null,
+    createHold: null,
     ...overrides,
   };
   const reads = { list: 0 };
@@ -105,8 +108,9 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
         verifyRequests.push(request);
         return state.verifyAnswer;
       },
-      "environment.secrets.create": (request) => {
+      "environment.secrets.create": async (request) => {
         createRequests.push(request);
+        if (state.createHold !== null) await state.createHold;
         if (state.createError !== null) throw state.createError;
         return state.createAnswer;
       },
@@ -458,6 +462,33 @@ describe("saving a secret", () => {
     fireEvent.click(await screen.findByTestId("secrets-add"));
     expect(await screen.findByTestId("secret-kind-picker")).toBeTruthy();
     expect(screen.queryByTestId("secret-form-value")).toBeNull();
+  });
+
+  it("a stale completion of a closed save does not close the reopened form", async () => {
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const host = buildSecretsHost({ secrets: [], createHold: hold });
+    renderPage(host);
+    await saveApiKey();
+    await waitFor(() => {
+      expect(host.createRequests).toHaveLength(1);
+    });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
+    });
+    await openApiKeyForm();
+    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
+
+    release();
+    await waitFor(() => {
+      expect(host.reads.list).toBe(2);
+    });
+
+    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
   });
 
   it("shows the host's own words when the create is rejected, and keeps the dialog", async () => {

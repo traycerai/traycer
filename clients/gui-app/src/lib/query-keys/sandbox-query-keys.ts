@@ -94,6 +94,7 @@ export const sandboxQueryKeys = {
     userId,
     teamId,
   ],
+  teamEnvironmentAll: (): readonly unknown[] => ["auth", "team-environment"],
   teamEnvironmentMissing: (): readonly unknown[] => [
     "auth",
     "team-environment",
