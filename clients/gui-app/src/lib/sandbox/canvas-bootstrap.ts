@@ -1,4 +1,5 @@
 import { CANVAS_STYLE_PROPERTIES } from "./canvas-bridge";
+import type { CanvasLayoutNode, CanvasSiblingLayout } from "./canvas-layout-bridge";
 import type {
   CanvasBox,
   CanvasElement,
@@ -133,6 +134,48 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     const elements = document.querySelectorAll(selector);
     return elements.length === 1 ? elements.item(0) : null;
   };
+  const px = (value: string): number | null => /^-?(?:\d+\.?\d*|\.\d+)px$/.test(value) ? Number.parseFloat(value) : null;
+  const transformed = (element: Element): boolean => {
+    for (let node: Element | null = element; node !== null; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.transform !== "none" && style.transform !== "") return true;
+      if (style.zoom !== "1" && style.zoom !== "normal" && style.zoom !== "") return true;
+    }
+    return false;
+  };
+  const layoutNode = (element: Element): CanvasLayoutNode => {
+    const raw = element.getAttribute("data-traycer-pos");
+    const marker = raw !== null && /^\d+$/.test(raw) ? Number(raw) : NaN;
+    const style = getComputedStyle(element);
+    const relative = style.position === "relative";
+    return {
+      marker: Number.isSafeInteger(marker) ? marker : null,
+      tid: element.getAttribute("data-tid")?.slice(0, 300) ?? null,
+      tagName: element.tagName.toLowerCase().slice(0, 40),
+      box: boxOf(element.getBoundingClientRect()),
+      position: style.position,
+      left: px(style.left) ?? (relative ? -(px(style.right) ?? 0) : null),
+      top: px(style.top) ?? (relative ? -(px(style.bottom) ?? 0) : null),
+      cssWidth: px(style.width), cssHeight: px(style.height),
+      transformed: transformed(element),
+    };
+  };
+  const siblingLayout = (params: Record<string, unknown>): CanvasSiblingLayout | null => {
+    const element = locate(params);
+    const parent = element?.parentElement;
+    if (parent === null || parent === undefined) return null;
+    const style = getComputedStyle(parent);
+    const row = style.display.includes("flex") && style.flexDirection.startsWith("row");
+    const horizontal = row || (style.display.includes("grid") && !style.gridAutoFlow.startsWith("column"));
+    const layout: CanvasSiblingLayout = {
+      parent: layoutNode(parent),
+      siblings: Array.from(parent.children).slice(0, 256).map(layoutNode),
+      axis: horizontal ? "x" : "y",
+      reverse: style.flexDirection.endsWith("reverse") !== (horizontal && style.direction === "rtl"),
+      truncated: parent.children.length > 256,
+    };
+    return new TextEncoder().encode(JSON.stringify(layout)).length <= 240_000 ? layout : null;
+  };
   const textSnapshot = (element: Element): CanvasTextSnapshot | null => {
     const content = element.textContent;
     if (content.length > 65_536) return null;
@@ -170,6 +213,8 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     params: Record<string, unknown>,
   ): Record<string, unknown> | null => {
     switch (method) {
+      case "traycer/canvas/sibling-layout":
+        return { layout: siblingLayout(params) };
       case "traycer/canvas/hit-test":
         return hitTest(params);
       case "traycer/canvas/set-text-selection-target": {

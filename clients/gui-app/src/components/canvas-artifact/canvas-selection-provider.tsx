@@ -111,6 +111,7 @@ export function CanvasSelectionProvider(
         parent?.onSource?.(path, source);
       },
       onDoubleClick: (path, element) => {
+        if (useCanvasSelectionStore.getState().additionalElements.length > 0) return;
         const entry = registry.get(path);
         if (entry.bridge === null) return;
         registry.update(path, {
@@ -214,6 +215,7 @@ export function CanvasSelectionProvider(
       },
       onEditPointer: pick,
       onTextSelection: (path, range) => {
+        if (useCanvasSelectionStore.getState().additionalElements.length > 0) return;
         useCanvasSelectionStore
           .getState()
           .setTextRange(artifactId, path, range);
@@ -247,7 +249,9 @@ export function CanvasSelectionProvider(
     let previousPath: string | null = null;
     let previousKey: string | null = null;
     const syncTextTarget = (): void => {
-      const selected = useCanvasSelectionStore.getState().selection;
+      const state = useCanvasSelectionStore.getState();
+      const selected = state.selection;
+      const multiple = state.additionalElements.length > 0;
       if (
         previousPath !== null &&
         (selected?.artifactId !== artifactId ||
@@ -259,14 +263,15 @@ export function CanvasSelectionProvider(
       }
       if (selected?.artifactId !== artifactId) return;
       const mounted = registry.get(selected.boardPath);
-      const key = `${selected.boardPath}:${mounted.sha256}:${selected.element.marker}:${selected.element.tid}`;
+      const key = `${selected.boardPath}:${mounted.sha256}:${selected.element.marker}:${selected.element.tid}:${multiple}`;
       if (previousKey === key) return;
       previousPath = selected.boardPath;
       previousKey = key;
       let target: CanvasElementLocator | null = null;
-      if (selected.element.tid !== null) target = { tid: selected.element.tid };
-      else if (selected.element.marker !== null)
-        target = { marker: selected.element.marker };
+      if (!multiple) {
+        if (selected.element.tid !== null) target = { tid: selected.element.tid };
+        else if (selected.element.marker !== null) target = { marker: selected.element.marker };
+      }
       void mounted.bridge
         ?.setTextSelectionTarget(target)
         .then((accepted) => {
