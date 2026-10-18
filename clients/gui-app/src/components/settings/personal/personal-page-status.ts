@@ -2,6 +2,7 @@ import type {
   EnvironmentItemStatus,
   EnvironmentStatusResponse,
 } from "@traycer/protocol/host/environment-schemas";
+import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 
 /**
@@ -83,6 +84,13 @@ const FAILURE_CASES: Readonly<
   unsupported_kind: {
     headers_in_sandbox: "Use a token for this server in sandboxes.",
   },
+  // The host names the provider by its id with each `-` as `_`.
+  native_write_failed: Object.fromEntries(
+    Object.entries(PROVIDER_DISPLAY_NAMES).map(([providerId, name]) => [
+      providerId.replaceAll("-", "_"),
+      `It couldn't be written for ${name}.`,
+    ]),
+  ),
 };
 
 const SINGLETON_LABELS: Readonly<Partial<Record<string, string>>> = {

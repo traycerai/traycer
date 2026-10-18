@@ -176,6 +176,43 @@ describe("personalPageStatusLine", () => {
         )?.text,
       ).toBe("github-mcp didn't apply on dev-box: it timed out.");
     });
+
+    it("names the provider a native setting couldn't be written for", () => {
+      expect(
+        personalPageStatusLine(
+          mcpServer("native_write_failed", "claude_code"),
+          MCP_KINDS,
+          HOST,
+        ),
+      ).toEqual({
+        tone: "warning",
+        text: "github-mcp didn't apply on dev-box. It couldn't be written for Claude Code.",
+      });
+    });
+
+    it("names Codex when the native write failed for codex", () => {
+      expect(
+        personalPageStatusLine(
+          mcpServer("native_write_failed", "codex"),
+          MCP_KINDS,
+          HOST,
+        )?.text,
+      ).toBe(
+        "github-mcp didn't apply on dev-box. It couldn't be written for Codex.",
+      );
+    });
+
+    it("keeps the generic reason for a kind it does not know", () => {
+      expect(
+        personalPageStatusLine(
+          mcpServer("native_write_failed", "not_a_provider"),
+          MCP_KINDS,
+          HOST,
+        )?.text,
+      ).toBe(
+        "github-mcp didn't apply on dev-box: the setting couldn't be written.",
+      );
+    });
   });
 
   it("names the shell by its page label, not a key, when the shell item failed", () => {
