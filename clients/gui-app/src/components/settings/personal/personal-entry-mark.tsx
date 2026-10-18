@@ -60,11 +60,14 @@ export function PersonalEntryMark(props: {
       data-testid="local-entry-mark"
     >
       On {hostName ?? "this host"} only
-      <AddToPersonalButton
-        entryKind={props.target.entryKind}
-        providerId={props.target.providerId}
-        name={props.name}
-      />
+      {/* A host refuses to promote a skill, so only an MCP server offers it. */}
+      {props.target.entryKind === "mcp" ? (
+        <AddToPersonalButton
+          entryKind={props.target.entryKind}
+          providerId={props.target.providerId}
+          name={props.name}
+        />
+      ) : null}
     </span>
   );
 }

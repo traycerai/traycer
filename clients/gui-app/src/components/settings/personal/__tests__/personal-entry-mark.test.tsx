@@ -469,6 +469,17 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
     expect(rig.sent).toHaveLength(1);
   });
 
+  it("control: an MCP server row on the same ready host keeps its Add to Personal button", async () => {
+    listMock.servers = [mcpServer("github")];
+    renderPage("mcp-servers", mcpPage(), READY_HOST);
+
+    const mark = await within(mcpRow("github")).findByTestId(MARK);
+    expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
+    expect(
+      within(mark).getByRole("button", { name: "Add to Personal" }),
+    ).toBeTruthy();
+  });
+
   it("marks only the entries the host applied, matched on kind and name", async () => {
     listMock.servers = [mcpServer("github"), mcpServer("linear")];
     // `github` applied as an MCP server; a SKILL called `linear` applied too,
@@ -594,33 +605,20 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
 });
 
 describe("A skill on the Skills page", () => {
-  it("shows as local and becomes Personal only on the click", async () => {
+  it("says where the skill is, with no Add to Personal button: skills cannot be added to Personal", async () => {
     listMock.skills = [skill("deploy")];
     const rig = renderPage("skills", skillsPage(), READY_HOST);
 
     const row = skillRow("deploy");
     const mark = await within(row).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
+    expect(
+      within(mark).queryByRole("button", { name: "Add to Personal" }),
+    ).toBeNull();
+    expect(within(row).queryByTestId("add-to-personal")).toBeNull();
+
     await settle();
     expect(rig.sent).toEqual([]);
-
-    fireEvent.click(
-      within(mark).getByRole("button", { name: "Add to Personal" }),
-    );
-    await within(row).findByTestId(PERSONAL);
-
-    expect(rig.sent).toHaveLength(1);
-    expect(rig.sent[0]).toMatchObject({
-      providerId: "claude-code",
-      mutation: {
-        kind: "promoteToPersonal",
-        entryKind: "skills",
-        scope: "global",
-        workspaceRoot: null,
-        name: "deploy",
-      },
-    });
-    expect(within(row).queryByTestId(MARK)).toBeNull();
   });
 
   it("sits beside the open button, not inside it", async () => {

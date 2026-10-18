@@ -872,10 +872,11 @@ Providers stops showing those two tabs. The host's `supportedTabs` wire is
 unchanged. On both pages a global-scope entry carries whether it is one of the
 person's settings (`PersonalEntryMark`): "Personal" when the host applied one
 of their items as that entry (`environment.status` `appliedAs`), otherwise "On
-<host> only" with "Add to Personal" (`providers.nativeMutate@1.2`
-`promoteToPersonal`, shown only on a host that negotiated 1.2). A project's
-entries stay with the project and carry no mark. A new entry added, created or
-imported here stays on this host ("On <host> only") until "Add to Personal".
+<host> only". An MCP server offers "Add to Personal"; a skill does not
+(`providers.nativeMutate@1.2` `promoteToPersonal`, shown only on a host that
+negotiated 1.2). A project's entries stay with the project and carry no mark. A
+new entry added, created or imported here stays on this host ("On <host>
+only"); an MCP server until "Add to Personal".
 On a Personal entry the host passes on only Remove and an MCP server's tool
 switches; everything else is changed in the dashboard, so the MCP server switch
 and a skill's edit and update are held off with "Change this in the dashboard."
