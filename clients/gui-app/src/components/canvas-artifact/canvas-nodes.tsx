@@ -1,8 +1,11 @@
+import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
+import { CanvasErrorPill } from "./canvas-error-pill";
 import {
   memo,
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
 } from "react";
 import { NodeResizer, type NodeProps, type OnResizeEnd } from "@xyflow/react";
@@ -36,6 +39,76 @@ function useResizeEnd(
   };
 }
 
+function CanvasEditShield({
+  path,
+  width,
+  height,
+  actions,
+}: {
+  readonly path: string;
+  readonly width: number;
+  readonly height: number;
+  readonly actions: CanvasNodeActions;
+}) {
+  if (
+    actions.selectionEnabled &&
+    actions.frameEvents?.renderOverlay !== undefined
+  )
+    return actions.frameEvents.renderOverlay(path);
+  return (
+    <div
+      data-canvas-frame-overlay=""
+      className="absolute inset-0 [&]:pointer-events-auto"
+      onPointerDown={(event) => {
+        if (!actions.selectionEnabled) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        actions.frameEvents?.onEditPointer(path, {
+          x: ((event.clientX - bounds.left) * width) / bounds.width,
+          y: ((event.clientY - bounds.top) * height) / bounds.height,
+        });
+      }}
+    />
+  );
+}
+
+function CanvasBoardButtons({
+  path,
+  title,
+  interactive,
+  actions,
+}: {
+  readonly path: string;
+  readonly title: string;
+  readonly interactive: boolean;
+  readonly actions: CanvasNodeActions;
+}) {
+  return (
+    <div className="touch-auto flex items-center gap-0.5">
+      {actions.viewOnly ? null : (
+        <Button
+          type="button"
+          size="icon-xs"
+          variant={interactive ? "secondary" : "ghost"}
+          aria-label={`Play ${title} on canvas`}
+          aria-pressed={interactive}
+          onClick={() => actions.toggleInteractive(path)}
+        >
+          {interactive ? <Play /> : <MousePointer2 />}
+        </Button>
+      )}
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
+        aria-label={`Open ${title} full screen`}
+        onClick={() => actions.fullscreen(path)}
+      >
+        <Expand />
+      </Button>
+    </div>
+  );
+}
+
 export const CanvasBoardNode = memo(function CanvasBoardNode({
   id,
   data,
@@ -44,6 +117,7 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
   const actions = useCanvasNodeActions();
   const onResizeEnd = useResizeEnd(id, actions.resize);
   const { sourceForBoard } = actions;
+  const [error, setError] = useState<CanvasPageError | null>(null);
   const board = data.board;
   const source = useMemo(
     () => (data.live ? sourceForBoard(data.path) : null),
@@ -68,7 +142,7 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
       <NodeResizer
         handleClassName="z-10"
         lineClassName="z-10"
-        isVisible={selected ? !data.play : false}
+        isVisible={!actions.viewOnly && selected ? !data.play : false}
         minWidth={80}
         minHeight={60}
         onResizeEnd={onResizeEnd}
@@ -78,35 +152,36 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
         className="absolute inset-x-0 bottom-full flex cursor-grab items-center gap-1 rounded-t-md border border-b-0 bg-card px-2 text-card-foreground"
         style={{ height: BOARD_HEADER_HEIGHT }}
       >
-        <GripHorizontal className="size-3.5 shrink-0 text-muted-foreground" />
+        {actions.viewOnly ? null : (
+          <GripHorizontal className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
         <div className="min-w-0 flex-1">
-          <CanvasInlineName
-            value={title}
-            label={`Rename ${title}`}
-            onCommit={(name) => actions.renameBoard(data.path, name)}
-          />
+          {actions.viewOnly ? (
+            <span className="block truncate text-ui-xs">{title}</span>
+          ) : (
+            <CanvasInlineName
+              value={title}
+              label={`Rename ${title}`}
+              onCommit={(name) => actions.renameBoard(data.path, name)}
+            />
+          )}
         </div>
-        <div className="touch-auto flex items-center gap-0.5">
-          <Button
-            type="button"
-            size="icon-xs"
-            variant={board.is_interactive ? "secondary" : "ghost"}
-            aria-label={`Play ${title} on canvas`}
-            aria-pressed={board.is_interactive === true}
-            onClick={() => actions.toggleInteractive(data.path)}
-          >
-            {board.is_interactive ? <Play /> : <MousePointer2 />}
-          </Button>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`Open ${title} full screen`}
-            onClick={() => actions.fullscreen(data.path)}
-          >
-            <Expand />
-          </Button>
-        </div>
+        <CanvasErrorPill
+          error={error}
+          onAdd={
+            actions.viewOnly
+              ? null
+              : () => {
+                  if (error !== null) actions.onAddError(data.path, error);
+                }
+          }
+        />
+        <CanvasBoardButtons
+          path={data.path}
+          title={title}
+          interactive={board.is_interactive === true}
+          actions={actions}
+        />
       </div>
       <div className="relative h-full w-full overflow-hidden rounded-(--canvas-radius)">
         {source === null ? (
@@ -128,23 +203,20 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
               source={source}
               events={actions.frameEvents}
               fullscreen={false}
+              mode={interactive ? "play" : "edit"}
+              onError={setError}
             />
           </div>
         )}
         {/* The self variant enables hits without adding xyflow's no-pan marker. */}
-        {!interactive ? (
-          <div
-            data-canvas-frame-overlay=""
-            className="absolute inset-0 [&]:pointer-events-auto"
-            onPointerDown={(event) => {
-              const bounds = event.currentTarget.getBoundingClientRect();
-              actions.frameEvents?.onEditPointer(data.path, {
-                x: ((event.clientX - bounds.left) * frame.w) / bounds.width,
-                y: ((event.clientY - bounds.top) * frame.h) / bounds.height,
-              });
-            }}
+        {!interactive && (
+          <CanvasEditShield
+            path={data.path}
+            width={frame.w}
+            height={frame.h}
+            actions={actions}
           />
-        ) : null}
+        )}
       </div>
     </div>
   );
@@ -179,7 +251,7 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
       <NodeResizer
         handleClassName="z-10"
         lineClassName="z-10"
-        isVisible={selected ? !data.play : false}
+        isVisible={!actions.viewOnly && selected ? !data.play : false}
         minWidth={12}
         minHeight={12}
         onResizeEnd={onResizeEnd}
@@ -187,6 +259,7 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
       <CanvasNoteContent
         note={note}
         imageSource={imageSource}
+        viewOnly={actions.viewOnly}
         onCommit={(text) => actions.setNoteText(data.path, text)}
       />
     </div>

@@ -7,6 +7,7 @@ import type {
   ArtifactsSlice,
 } from "@/stores/epics/open-epic/types";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ObjectArtifactTile } from "@/components/epic-canvas/renderers/object-artifact-tile";
 
 const EPIC_ID = "epic-1";
@@ -18,6 +19,28 @@ const mocks = vi.hoisted(() => ({
     requestWithSignal: (...args: unknown[]) => Promise<unknown>;
   } | null,
   sandboxProps: [] as Array<{ readonly source: SandboxSource }>,
+  mobile: false,
+  surfaceProps: [] as Array<{
+    readonly artifactId: string;
+    readonly viewOnly?: boolean;
+  }>,
+}));
+
+vi.mock("@/lib/mobile-app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/mobile-app")>()),
+  isMobileApp: () => mocks.mobile,
+}));
+
+// The surface itself is covered by its own tests. What the tile owns is
+// whether to mount it and what to tell it.
+vi.mock("@/components/canvas-artifact/canvas-artifact-surface", () => ({
+  CanvasArtifactSurface: (props: {
+    readonly artifactId: string;
+    readonly viewOnly?: boolean;
+  }) => {
+    mocks.surfaceProps.push(props);
+    return <div data-testid="canvas-surface" />;
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -91,6 +114,8 @@ afterEach(() => {
   mocks.artifacts = { byId: {}, allIds: [] };
   mocks.tabHostClient = null;
   mocks.sandboxProps = [];
+  mocks.mobile = false;
+  mocks.surfaceProps = [];
 });
 
 describe("<ObjectArtifactTile />", () => {
@@ -172,30 +197,61 @@ describe("<ObjectArtifactTile />", () => {
     });
   });
 
-  it("never mounts a SandboxFrame for a canvas artifact, even with a head", () => {
-    setArtifacts([
-      artifact({
+  describe("a canvas artifact", () => {
+    const CANVAS_HEAD = {
+      files: {
+        "index.html": {
+          sha256: SHA,
+          byteLength: 10,
+          mediaType: "text/html",
+          status: "published",
+        },
+      },
+      capturedAt: 1,
+    } as const;
+
+    function canvasArtifact(): ArtifactProjection {
+      return artifact({
         id: "board",
         kind: "canvas",
         folderName: "board",
-        head: {
-          files: {
-            "index.html": {
-              sha256: SHA,
-              byteLength: 10,
-              mediaType: "text/html",
-              status: "published",
-            },
-          },
-          capturedAt: 1,
-        },
-      }),
-    ]);
+        head: CANVAS_HEAD,
+      });
+    }
 
-    render(tile("board"));
+    it("never mounts a SandboxFrame, and a browser is sent to the apps", () => {
+      setArtifacts([canvasArtifact()]);
 
-    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
-    expect(screen.getByText("Canvas · 10 bytes")).toBeTruthy();
+      render(tile("board"));
+
+      expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+      expect(screen.queryByTestId("canvas-surface")).toBeNull();
+      expect(mocks.surfaceProps).toEqual([]);
+      expect(
+        screen.getByText("Open this canvas in the desktop or mobile app."),
+      ).toBeTruthy();
+    });
+
+    it("opens the canvas view-only in the mobile app", () => {
+      mocks.mobile = true;
+      setArtifacts([canvasArtifact()]);
+
+      render(
+        <TabHostContext.Provider value="host-1">
+          {tile("board")}
+        </TabHostContext.Provider>,
+      );
+
+      expect(screen.getByTestId("canvas-surface")).toBeTruthy();
+      expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+      expect(
+        screen.queryByText("Open this canvas in the desktop or mobile app."),
+      ).toBeNull();
+      expect(mocks.surfaceProps.at(-1)).toMatchObject({
+        artifactId: "board",
+        viewOnly: true,
+      });
+    });
   });
 
   it("shows the plain summary card with the byte count for a file artifact", () => {

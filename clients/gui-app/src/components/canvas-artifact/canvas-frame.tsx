@@ -1,14 +1,21 @@
-import { useCallback } from "react";
+import type { CanvasLayoutStore } from "./canvas-layout-store";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
   SandboxFrame,
   type SandboxSource,
 } from "@/components/sandbox/sandbox-frame";
 import type {
   SandboxBridgeHost,
+  SandboxSize,
   SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
+import type {
+  CanvasMode,
+  CanvasPageError,
+  CanvasTextSelection,
+} from "@/lib/sandbox/canvas-bridge";
 
-/** Frame messages are installed here by the element-selection/link track. */
+/** Selection and editing compose through these seams outside the opaque frame. */
 export interface CanvasFrameEvents {
   readonly onBridge: (path: string, bridge: SandboxBridgeHost | null) => void;
   readonly onStatus: (path: string, status: SandboxStatus) => void;
@@ -16,6 +23,21 @@ export interface CanvasFrameEvents {
     path: string,
     point: { readonly x: number; readonly y: number },
   ) => void;
+  readonly onBoardPage?: (path: string, page: string | null) => void;
+  readonly onBoardSelect?: (path: string | null) => void;
+  readonly onServedSource?: (path: string, sha256: string | null) => void;
+  readonly onFrame?: (path: string, iframe: HTMLIFrameElement | null) => void;
+  readonly onSize?: (path: string, size: SandboxSize) => void;
+  readonly onTextSelection?: (
+    path: string,
+    selection: CanvasTextSelection | null,
+  ) => void;
+  readonly onPageError?: (path: string, error: CanvasPageError) => void;
+  readonly onRelativeLink?: (path: string, href: string) => void;
+  readonly onAddError?: (path: string, error: CanvasPageError) => void;
+  /** Replaces the edit shield; must shield everything except the selected text. */
+  readonly renderOverlay?: (path: string) => ReactNode;
+  readonly renderPanel?: (store: CanvasLayoutStore) => ReactNode;
 }
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
@@ -25,21 +47,48 @@ export function CanvasBoardFrame({
   source,
   events,
   fullscreen,
+  mode,
+  onError,
 }: {
   readonly path: string;
   readonly title: string;
   readonly source: SandboxSource;
   readonly events: CanvasFrameEvents | null;
   readonly fullscreen: boolean;
+  readonly mode: CanvasMode;
+  readonly onError?: (error: CanvasPageError | null) => void;
 }) {
+  const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const onBridge = useCallback(
-    (bridge: SandboxBridgeHost | null) => events?.onBridge(path, bridge),
-    [events, path],
+    (bridge: SandboxBridgeHost | null) => {
+      bridgeRef.current = bridge;
+      onError?.(null);
+      let sha256: string | null = null;
+      if (
+        bridge !== null &&
+        source.kind === "artifact" &&
+        Object.hasOwn(source.manifest.files, path)
+      )
+        sha256 = source.manifest.files[path].sha256;
+      events?.onServedSource?.(path, sha256);
+      events?.onBridge(path, bridge);
+    },
+    [events, path, onError, source],
   );
   const onStatus = useCallback(
-    (status: SandboxStatus) => events?.onStatus(path, status),
+    (status: SandboxStatus) => {
+      if (status === "ready") void bridgeRef.current?.setMode(mode);
+      events?.onStatus(path, status);
+    },
+    [events, path, mode],
+  );
+  const onFrame = useCallback(
+    (iframe: HTMLIFrameElement | null) => events?.onFrame?.(path, iframe),
     [events, path],
   );
+  useEffect(() => {
+    void bridgeRef.current?.setMode(mode);
+  }, [mode]);
   return (
     <SandboxFrame
       source={source}
@@ -52,12 +101,20 @@ export function CanvasBoardFrame({
       appRequests={null}
       className="h-full w-full"
       height={null}
-      onSize={noop}
+      onSize={(size) => events?.onSize?.(path, size)}
       onStatus={onStatus}
       onRequestTeardown={noop}
       displayMode={fullscreen ? "fullscreen" : "inline"}
       onBridge={onBridge}
-      ref={null}
+      onTextSelection={(selection) =>
+        events?.onTextSelection?.(path, selection)
+      }
+      onPageError={(error) => {
+        onError?.(error);
+        events?.onPageError?.(path, error);
+      }}
+      onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
+      ref={onFrame}
     />
   );
 }

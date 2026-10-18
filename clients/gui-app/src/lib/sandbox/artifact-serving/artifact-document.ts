@@ -1,3 +1,5 @@
+import { buildCanvasPrelude } from "../canvas-bootstrap";
+import { stampPositions } from "@traycer/html-source";
 import type { ForwardedShortcut } from "../forwarded-shortcuts";
 import { buildDocument } from "../sandbox-document";
 import type { SandboxTheme } from "../theme-map";
@@ -15,6 +17,7 @@ export function artifactBasePolicy(policySource: string | null): string {
 }
 
 export interface ArtifactDocumentOptions {
+  readonly canvas?: boolean;
   readonly policySource: string | null;
   readonly csp: string | null;
   readonly theme: SandboxTheme;
@@ -27,8 +30,13 @@ export function buildArtifactDocument(
   options: ArtifactDocumentOptions,
 ): string {
   const document = buildDocument({
-    html,
+    html:
+      options.canvas === true
+        ? stampPositions(html, { attributeName: "data-traycer-pos" }).text
+        : html,
     ...options,
+    extraScript:
+      options.canvas === true ? buildCanvasPrelude(options.nonce) : undefined,
     theme: {
       ...options.theme,
       variables: Object.entries(options.theme.variables),

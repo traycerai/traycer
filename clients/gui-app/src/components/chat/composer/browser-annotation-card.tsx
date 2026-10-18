@@ -1,4 +1,6 @@
-import { X } from "lucide-react";
+import { ImageOff, X } from "lucide-react";
+import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -15,17 +17,35 @@ import {
 } from "@/lib/browser-view/annotation/browser-annotation-staleness";
 import { cn } from "@/lib/utils";
 
-export function BrowserAnnotationCard(props: {
+interface AnnotationCardProps {
   readonly record: BrowserAnnotationRecord;
   readonly onRemove: ((annotationId: string) => void) | null;
   readonly imageFetcher: ScopedImageBytesFetcher;
   readonly sessionObjectUrl: (hash: string) => string | null;
-}) {
+  readonly targetControl?: ReactNode;
+}
+
+export function BrowserAnnotationCard(props: AnnotationCardProps) {
+  return "tabId" in props.record ? (
+    <BrowserSourceAnnotationCard {...props} record={props.record} />
+  ) : (
+    <CanvasAnnotationCard {...props} record={props.record} />
+  );
+}
+
+function BrowserSourceAnnotationCard(
+  props: Omit<AnnotationCardProps, "record"> & {
+    readonly record: Extract<
+      BrowserAnnotationRecord,
+      { source: { kind: "browser" } }
+    >;
+  },
+) {
   const { record, onRemove, imageFetcher } = props;
   // Resolved across every open coordinator, not the surrounding sessions
   // context: an annotation taken on one host is attached to a chat that may be
   // pinned to another (see `browserSessionAcrossCoordinators`).
-  const session = useLiveBrowserSession(record.sessionId);
+  const session = useLiveBrowserSession(record.source.sessionId);
   const sessionUrl = props.sessionObjectUrl(record.imageHash);
   const blobUrl = useImageBlobUrl(record.imageHash, "image/png", imageFetcher);
   const src = sessionUrl ?? blobUrl;
@@ -55,7 +75,7 @@ export function BrowserAnnotationCard(props: {
       <div
         data-testid="browser-annotation-card"
         data-annotation-id={record.annotationId}
-        data-annotation-tab={record.tabId}
+        data-annotation-tab={record.source.tabId}
         className="group flex h-10 max-w-[min(70vw,16rem)] shrink-0 items-center gap-2 rounded-lg bg-foreground/5 p-1 pe-1.5"
       >
         <div
@@ -109,5 +129,67 @@ export function BrowserAnnotationCard(props: {
         )}
       </div>
     </TooltipWrapper>
+  );
+}
+
+function CanvasAnnotationCard(
+  props: Omit<AnnotationCardProps, "record"> & {
+    readonly record: CanvasAnnotationRecord;
+  },
+) {
+  const { record } = props;
+  const blobUrl = useImageBlobUrl(
+    record.imageHash,
+    "image/png",
+    props.imageFetcher,
+  );
+  const src =
+    (record.imageHash === null
+      ? null
+      : props.sessionObjectUrl(record.imageHash)) ?? blobUrl;
+  const source = record.source;
+  const element = record.elements.at(0);
+  const quote = element?.textRange?.quote;
+  const label =
+    quote ?? element?.accessibleName ?? element?.textPreview ?? record.comment;
+  const board = source.boardPath.split("/").at(-1) ?? source.boardPath;
+  return (
+    <div
+      data-testid="browser-annotation-card"
+      data-annotation-id={record.annotationId}
+      data-annotation-source="canvas"
+      className="group flex max-w-sm shrink-0 items-center gap-2 rounded-lg bg-foreground/5 p-1 pe-1.5"
+    >
+      <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-foreground/8">
+        {src === null ? (
+          <ImageOff className="size-4 text-muted-foreground" />
+        ) : (
+          <img src={src} alt="" className="size-full object-cover" />
+        )}
+      </div>
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate text-ui-sm font-medium">
+          {board}
+          {element === undefined ? "" : ` · ${element.tagName}`}
+        </span>
+        <TooltipWrapper label={label} side="top" sideOffset={6} align="start">
+          <span className="max-w-64 truncate text-ui-xs text-muted-foreground">
+            {label}
+          </span>
+        </TooltipWrapper>
+        {props.targetControl}
+      </div>
+      {props.onRemove === null ? null : (
+        <Button
+          type="button"
+          variant="muted"
+          size="icon-xs"
+          aria-label="Remove annotation"
+          onClick={() => props.onRemove?.(record.annotationId)}
+        >
+          <X />
+        </Button>
+      )}
+    </div>
   );
 }

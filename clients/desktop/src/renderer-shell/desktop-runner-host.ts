@@ -1,3 +1,4 @@
+import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { DesktopMenuSnapshot } from "../ipc-contracts/window-types";
@@ -453,6 +454,7 @@ export interface DesktopPlatformBridge {
     add(path: string): Promise<void>;
   };
   window: {
+    captureRegion(rect: WindowCaptureRect): Promise<ArrayBuffer | null>;
     flashFrame(shouldFlash: boolean): Promise<void>;
     setProgressBar(value: number): Promise<void>;
     setRepresentedFilename(path: string): Promise<void>;

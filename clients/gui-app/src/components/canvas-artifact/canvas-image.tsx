@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { EPIC_READ_FILE_RANGE_MAX_BYTES } from "@traycer/protocol/host/epic/files";
+import { EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES } from "@traycer/protocol/host/epic/artifact-objects";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 /** Image notes use the same authorised object byte port as boards. */
 export function CanvasImage({
@@ -32,7 +32,10 @@ export function CanvasImage({
         const span = await source.readSpan(
           entry.sha256,
           offset,
-          Math.min(EPIC_READ_FILE_RANGE_MAX_BYTES, entry.byteLength - offset),
+          Math.min(
+            EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
+            entry.byteLength - offset,
+          ),
           abort.signal,
         );
         abort.signal.throwIfAborted();

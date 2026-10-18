@@ -236,8 +236,9 @@ export const chatSchemaPreInReplyTo = lazySchema(() =>
  * (see `chat-sync/version.ts`).
  *
  * Derived from `chatSchema` rather than hand-frozen, deliberately: only this
- * event enum and the pre-HTML artifact-operation block are pinned; other
- * chat fields keep following the live shape.
+ * event enum, the pre-HTML artifact-operation block and browser-only
+ * annotations are pinned; other chat fields keep following the live shape.
+ * Canvas annotations live in chat.db/chat-sync, never in this legacy Yjs map.
  */
 export const chatSchemaPreImported = lazySchema(() =>
   chatSchema.extend({

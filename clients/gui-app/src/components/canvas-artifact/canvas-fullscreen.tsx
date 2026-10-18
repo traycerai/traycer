@@ -1,3 +1,6 @@
+import { useState } from "react";
+import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
+import { CanvasErrorPill } from "./canvas-error-pill";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
@@ -7,12 +10,14 @@ import { CanvasBoardFrame, type CanvasFrameEvents } from "./canvas-frame";
 import { boardFrame } from "./canvas-model";
 export function CanvasFullscreen({
   path,
+  viewOnly,
   snapshot,
   sourceForBoard,
   events,
   onSelect,
   onClose,
 }: {
+  readonly viewOnly: boolean;
   readonly path: string;
   readonly snapshot: CanvasLayoutSnapshot;
   readonly sourceForBoard: (path: string) => SandboxSource | null;
@@ -20,6 +25,7 @@ export function CanvasFullscreen({
   readonly onSelect: (path: string) => void;
   readonly onClose: () => void;
 }) {
+  const [error, setError] = useState<CanvasPageError | null>(null);
   const board = snapshot.boards[path];
   if (!Object.hasOwn(snapshot.boards, path)) return null;
   const frame = boardFrame(board);
@@ -48,6 +54,19 @@ export function CanvasFullscreen({
           <DialogTitle size="sm" className="min-w-0 flex-1">
             {board.title || path}
           </DialogTitle>
+          <CanvasErrorPill
+            error={error}
+            onAdd={
+              viewOnly
+                ? null
+                : () => {
+                    if (error !== null) {
+                      onClose();
+                      events?.onAddError?.(path, error);
+                    }
+                  }
+            }
+          />
           <Button
             variant="ghost"
             size="icon-sm"
@@ -82,6 +101,9 @@ export function CanvasFullscreen({
               </div>
             ) : (
               <CanvasBoardFrame
+                key={path}
+                mode="play"
+                onError={setError}
                 path={path}
                 title={board.title || path}
                 source={source}

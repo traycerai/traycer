@@ -522,6 +522,28 @@ set-shaped delta could not express a reorder. Domain-level sharding is what make
 "dumb whole-file sync" applicable where byte-level chunking of a canonical JSON
 document could not be.
 
+### Canvas annotations at chat-sync 1.10
+
+The `browserAnnotations` carrier now accepts a canvas source with artifact,
+board and page identity. Canvas records may have no crop; browser records
+retain required image fields and infer an absent source from their legacy
+browser identity. Source ranges and text ranges are defaulted only on canvas
+elements. No fake tab or session identity is written for a canvas selection.
+
+This is nested-union growth inside a known user message, outside §2's
+unknown-role passthrough. Pre-1.10 readers cannot interpret it, even when a
+crop exists; the missing browser identity already fails their schema. Every
+publication containing a canvas annotation (including a prompt carried only
+by queue-event metadata before acceptance) therefore takes the 1.10 reader
+floor. The head gate refuses it before shard fetch, so an older reader neither
+partially reads nor re-publishes it. Browser-only publications are unchanged.
+
+Legacy epic Yjs chats and draft-head 1.0 keep the frozen browser-only annotation
+leaf. Canvas evidence lives in chat.db and chat-sync. Canvas draft cards remain
+window-local and are omitted before a stash is mirrored; their local draft and
+send records retain the complete annotation. Growing mirrored drafts requires
+its own versioned change. The epic and draft fixtures must remain unchanged.
+
 ### 7. The coupled bump ritual
 
 A change to any schema reachable from either record is not done until every
@@ -530,7 +552,7 @@ coupled surface moves with it. Work the list top to bottom:
 | Change                                                                                     | What else has to move                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add a field to `core` (or to any captured level)                                           | record minor bump; regenerate the chat-sync fixture; confirm the input schema accepts absence (`.default(...)` / `.optional()`). Older readers preserve it mechanically (§3) — there is nothing to justify and no loss to document                                                                                                                                                                                                                                                                                                                                          |
-| Add a field older readers cannot safely INTERPRET                                          | the row above, **plus** `minReaderVersion` on every head that carries it, with the justification recorded. Reserve this for changes that would make an old reader act on a chat wrongly — never merely for preservation                                                                                                                                                                                                                                                                                                                                                     |
+| Add a field older readers cannot safely INTERPRET                                          | the row above, **plus** `minReaderVersion` on every head that carries it, with the justification recorded. Reserve this for changes that would make an old reader act on a chat wrongly — never merely for preservation. **Canvas annotation exception (1.10):** the new nested source union has no older-reader passthrough; every head containing canvas evidence stamps `minReaderVersion: { major: 1, minor: 10 }`, refusing older readers at the head before any shard fetch. Browser-only publications retain their existing floor                                    |
 | Add a field to `hostPrivate.data`                                                          | nothing in protocol — that is the point of the opaque section                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Promote `hostPrivate` → `core`                                                             | this IS a core-field addition: take the first row (and the second only if interpretation is required for correctness). Plus: regenerate the fixture, and note the field is now permanent (one-way door). If the value stays authoritative for old readers, keep dual-writing the `hostPrivate` copy until they are out of support                                                                                                                                                                                                                                           |
 | Add a content-block type / message role / chat-event type                                  | add it to `KNOWN_CONTENT_BLOCK_TYPES` / `KNOWN_CHAT_MESSAGE_ROLES` / the event enum, or every entry of that variant silently degrades to unknown; record minor bump; regenerate **both** the chat-sync and epic fixtures (the leaves are shared); confirm the passthrough round-trip test still re-emits the new variant losslessly                                                                                                                                                                                                                                         |

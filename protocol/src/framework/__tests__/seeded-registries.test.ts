@@ -9,14 +9,14 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
-  chatHeadRecordV190,
-  chatShardRecordV190,
+  chatHeadRecordV1100,
+  chatShardRecordV1100,
   type Epic,
   persistenceRecordRegistry,
 } from "@traycer/protocol/persistence/registry";
 import {
-  chatHeadRecordV190 as chatSyncHeadContract,
-  chatShardRecordV190 as chatSyncShardContract,
+  chatHeadRecordV1100 as chatSyncHeadContract,
+  chatShardRecordV1100 as chatSyncShardContract,
   chatSyncRecordRegistry,
 } from "@traycer/protocol/persistence/chat-sync-registry";
 import {
@@ -68,8 +68,8 @@ describe("seeded protocol registries", () => {
     expect(
       getRecordSchema(chatSyncRecordRegistry, "chat-shard", "latest"),
     ).toBe(getRecordSchema(persistenceRecordRegistry, "chat-shard", "latest"));
-    expect(chatHeadRecordV190).toBe(chatSyncHeadContract);
-    expect(chatShardRecordV190).toBe(chatSyncShardContract);
+    expect(chatHeadRecordV1100).toBe(chatSyncHeadContract);
+    expect(chatShardRecordV1100).toBe(chatSyncShardContract);
   });
 
   it("chat-sync record registry has only the two publication records", () => {

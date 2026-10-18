@@ -54,6 +54,7 @@ import {
 import {
   assistantMessageSchema,
   userMessageSchema,
+  userMessageSchemaPreCanvas,
   userMessageSchemaPreConversation,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
@@ -212,6 +213,21 @@ export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 // A spread of the live shape with the `sender.type === message.kind` check
 // re-applied, for the reason the notice gives. `sessionAnchor` is KEPT, closed:
 // see the module note.
+export const openUserMessageSchemaPreCanvas = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreCanvas.shape,
+      sender: openUserMessageSenderSchema,
+    })
+    .superRefine((message, ctx) => {
+      if (message.sender.type === message.message.kind) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["message", "kind"],
+        message: "User message sender.type must match message.kind.",
+      });
+    }),
+);
 export const openUserMessageSchema = lazySchema(() =>
   z
     .object({
@@ -263,6 +279,12 @@ export const openMessageSchema = lazySchema(() =>
     openAssistantMessageSchema,
   ]),
 );
+export const openMessageSchemaPreCanvas = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreCanvas,
+    openAssistantMessageSchema,
+  ]),
+);
 export type OpenMessage = z.infer<typeof openMessageSchema>;
 
 export const openAssistantMessageSchemaPreArtifact = lazySchema(() =>
@@ -272,7 +294,7 @@ export const openAssistantMessageSchemaPreArtifact = lazySchema(() =>
 );
 export const openMessageSchemaPreArtifact = lazySchema(() =>
   z.discriminatedUnion("role", [
-    openUserMessageSchema,
+    openUserMessageSchemaPreCanvas,
     openAssistantMessageSchemaPreArtifact,
   ]),
 );
@@ -284,7 +306,7 @@ export const openAssistantMessageSchemaPreHtml = lazySchema(() =>
 );
 export const openMessageSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("role", [
-    openUserMessageSchema,
+    openUserMessageSchemaPreCanvas,
     openAssistantMessageSchemaPreHtml,
   ]),
 );

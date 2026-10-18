@@ -4,12 +4,14 @@ import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/ca
 import { CanvasInlineName } from "./canvas-inline-name";
 export function CanvasPages({
   pages,
+  viewOnly,
   page,
   onSelect,
   onRename,
   onAdd,
   onRemove,
 }: {
+  readonly viewOnly?: boolean;
   readonly pages: CanvasLayoutSnapshot["pages"];
   readonly page: string;
   readonly onSelect: (id: string) => void;
@@ -57,30 +59,34 @@ export function CanvasPages({
           </Button>
         ))}
       </div>
-      {pages.find((item) => item.id === page) ? (
-        <CanvasInlineName
-          value={pages.find((item) => item.id === page)?.name ?? "Page"}
-          label="Rename page"
-          onCommit={(name) => onRename(page, name)}
-        />
-      ) : null}
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label="Add page"
-        onClick={onAdd}
-      >
-        <Plus />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label="Remove page"
-        disabled={pages.length <= 1}
-        onClick={() => onRemove(page)}
-      >
-        <Trash2 />
-      </Button>
+      {viewOnly ? null : (
+        <>
+          {pages.find((item) => item.id === page) ? (
+            <CanvasInlineName
+              value={pages.find((item) => item.id === page)?.name ?? "Page"}
+              label="Rename page"
+              onCommit={(name) => onRename(page, name)}
+            />
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Add page"
+            onClick={onAdd}
+          >
+            <Plus />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Remove page"
+            disabled={pages.length <= 1}
+            onClick={() => onRemove(page)}
+          >
+            <Trash2 />
+          </Button>
+        </>
+      )}
     </div>
   );
 }

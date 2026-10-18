@@ -145,7 +145,12 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // must not reject a whole shard; readers from this minor render no block for
 // a kind they do not know. No emission gate protects readers predating 1.8.
 // 1.9 adds the nullable artifact stamp. Older readers keep the plain tool row.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 9 } as const;
+// 1.10 adds canvas annotation sources and nullable crops. Legacy epic/draft
+// records stay browser-only. This nested union is not covered by message-role
+// passthrough: publishers MUST stamp a conditional 1.10 minReaderVersion when
+// any message carries canvas evidence. Older readers refuse at the head before
+// fetching a shard they cannot decode (no browser identity may be fabricated).
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 10 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

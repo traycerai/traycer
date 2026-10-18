@@ -6,6 +6,7 @@ import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events"
 import {
   openChatEventSchema,
   openMessageSchema,
+  openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
   openMessageSchemaPreArtifact,
   openMessageSchemaPreConversation,
@@ -809,6 +810,13 @@ export const openChatTranscriptWindowSchemaPreArtifact = lazySchema(() =>
   }),
 );
 
+export const openChatTranscriptWindowSchemaPreCanvas = lazySchema(() =>
+  chatTranscriptWindowSchema.extend({
+    messages: z.array(openMessageSchemaPreCanvas),
+    events: z.array(openChatEventSchema),
+  }),
+);
+
 export const openChatTranscriptWindowSchema = lazySchema(() =>
   chatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchema),
@@ -1184,6 +1192,13 @@ export const openChatRangeResponseSchemaPreHtml = lazySchema(() =>
 export const openChatRangeResponseSchemaPreArtifact = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchemaPreArtifact),
+    events: z.array(openChatEventSchema),
+  }),
+);
+
+export const openChatRangeResponseSchemaPreCanvas = lazySchema(() =>
+  chatRangeResponseSchema.extend({
+    messages: z.array(openMessageSchemaPreCanvas),
     events: z.array(openChatEventSchema),
   }),
 );

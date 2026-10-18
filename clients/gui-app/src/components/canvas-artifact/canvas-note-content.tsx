@@ -105,14 +105,16 @@ function CanvasShape({ note }: { readonly note: CanvasNote }) {
 }
 function CanvasTextNote({
   note,
+  viewOnly,
   onCommit,
 }: {
   readonly note: CanvasNote;
+  readonly viewOnly: boolean | undefined;
   readonly onCommit: (text: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const text = note.text ?? "";
-  if (editing)
+  if (editing && !viewOnly)
     return (
       <div className="touch-auto overscroll-contain h-full">
         <Textarea
@@ -133,38 +135,62 @@ function CanvasTextNote({
       </div>
     );
   return (
+    <CanvasTextNoteDisplay
+      note={note}
+      viewOnly={viewOnly}
+      onEdit={() => setEditing(true)}
+    />
+  );
+}
+function CanvasTextNoteDisplay({
+  note,
+  viewOnly,
+  onEdit,
+}: {
+  readonly note: CanvasNote;
+  readonly viewOnly: boolean | undefined;
+  readonly onEdit: () => void;
+}) {
+  const title = note.type === "title";
+  return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-label={`Edit ${note.type === "title" ? "title" : "sticky note"}`}
+      role={viewOnly ? undefined : "button"}
+      tabIndex={viewOnly ? undefined : 0}
+      aria-label={
+        viewOnly ? undefined : `Edit ${title ? "title" : "sticky note"}`
+      }
       className={cn(
         "h-full w-full whitespace-pre-wrap break-words text-(--canvas-note-color) text-(length:--canvas-note-size)",
-        note.type === "title" && "font-heading font-semibold",
+        title && "font-heading font-semibold",
       )}
       style={
         {
           "--canvas-note-color": note.color ?? "var(--foreground)",
-          "--canvas-note-size": `${note.size ?? (note.type === "title" ? 30 : 14)}px`,
+          "--canvas-note-size": `${note.size ?? (title ? 30 : 14)}px`,
         } as CSSProperties
       }
-      onDoubleClick={() => setEditing(true)}
+      onDoubleClick={() => {
+        if (!viewOnly) onEdit();
+      }}
       onKeyDown={(event) => {
-        if (event.code === "Enter") {
+        if (!viewOnly && event.code === "Enter") {
           event.stopPropagation();
-          setEditing(true);
+          onEdit();
         }
       }}
     >
-      {text || (note.type === "title" ? "Title" : "Write a note")}
+      {note.text || (title ? "Title" : "Write a note")}
     </div>
   );
 }
 export function CanvasNoteContent({
   note,
   imageSource,
+  viewOnly,
   onCommit,
 }: {
   readonly note: CanvasNote;
+  readonly viewOnly?: boolean;
   readonly imageSource: SandboxSource | null;
   readonly onCommit: (text: string) => void;
 }) {
@@ -177,6 +203,8 @@ export function CanvasNoteContent({
     note.type === "sticky" ||
     note.type === "title"
   )
-    return <CanvasTextNote note={note} onCommit={onCommit} />;
+    return (
+      <CanvasTextNote viewOnly={viewOnly} note={note} onCommit={onCommit} />
+    );
   return <CanvasShape note={note} />;
 }

@@ -20,6 +20,8 @@ export interface LoaderTheme {
 }
 
 export interface LoaderResource {
+  /** Trusted served-document extension; the standalone loader supplies none. */
+  readonly extraScript?: string;
   readonly html: string;
   readonly csp: string | null;
   readonly nonce: string;
@@ -373,6 +375,7 @@ export const buildDocument = (resource: LoaderResource): string => {
     `<style>${themeStyle(resource.theme)}</style>` +
     `<script>(${bootstrapMain.toString()})(${escapeScriptJson(JSON.stringify(config))});</` +
     "script>" +
+    (resource.extraScript ?? "") +
     body
   );
 };

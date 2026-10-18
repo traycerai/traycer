@@ -482,6 +482,7 @@ function buildFakeBridge(
       },
       recentDocuments: { add: async () => undefined },
       window: {
+        captureRegion: async () => null,
         flashFrame: async () => undefined,
         setProgressBar: async () => undefined,
         setRepresentedFilename: async () => undefined,

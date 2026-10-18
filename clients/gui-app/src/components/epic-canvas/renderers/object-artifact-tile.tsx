@@ -1,3 +1,11 @@
+import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
+import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
+import { isMobileApp } from "@/lib/mobile-app";
+import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useMemo } from "react";
 import {
   SandboxFrame,
@@ -19,6 +27,7 @@ export function ObjectArtifactTile(props: {
   readonly node: EpicArtifactRef;
   readonly epicId: string;
 }) {
+  const runnerHost = useRunnerHostOrNull();
   const artifact = useArtifactById(props.node.id);
   const artifacts = useEpicStore((state) => state.artifacts);
   const client = useTabHostClient();
@@ -51,6 +60,25 @@ export function ObjectArtifactTile(props: {
     return (
       <div className="p-4 text-muted-foreground">Artifact unavailable.</div>
     );
+  if (artifact.kind === "canvas") {
+    const mobile = isMobileApp();
+    if (
+      !mobile &&
+      (runnerHost === null || resolveDesktopPlatform(runnerHost) === null)
+    )
+      return (
+        <div className="p-4 text-muted-foreground">
+          Open this canvas in the desktop or mobile app.
+        </div>
+      );
+    return (
+      <CanvasTileSurface
+        epicId={props.epicId}
+        artifact={artifact}
+        viewOnly={mobile}
+      />
+    );
+  }
   if (source !== null) {
     return (
       <SandboxFrame
@@ -91,5 +119,38 @@ export function ObjectArtifactTile(props: {
         {byteLength === null ? "" : ` · ${byteLength.toLocaleString()} bytes`}
       </div>
     </div>
+  );
+}
+
+function CanvasTileSurface({
+  epicId,
+  artifact,
+  viewOnly,
+}: {
+  readonly epicId: string;
+  readonly artifact: ArtifactProjection;
+  readonly viewOnly: boolean;
+}) {
+  const hostId = useTabHostId();
+  const viewTabId = useEpicViewTabId();
+  const surface = (
+    <CanvasArtifactSurface
+      epicId={epicId}
+      artifactId={artifact.id}
+      artifact={artifact}
+      viewOnly={viewOnly}
+    />
+  );
+  if (viewOnly || viewTabId === null) return surface;
+  return (
+    <CanvasSelectionProvider
+      epicId={epicId}
+      artifactId={artifact.id}
+      artifactTitle={artifact.title}
+      hostId={hostId}
+      viewTabId={viewTabId}
+    >
+      {surface}
+    </CanvasSelectionProvider>
   );
 }

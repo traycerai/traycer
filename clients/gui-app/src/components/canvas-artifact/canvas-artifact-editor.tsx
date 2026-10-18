@@ -1,3 +1,5 @@
+import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
+import { resolveCanvasBoardLink } from "./canvas-links";
 import {
   useCallback,
   useEffect,
@@ -6,6 +8,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type KeyboardEvent,
 } from "react";
 import {
   Background,
@@ -85,6 +88,8 @@ interface NodeInteraction {
   readonly selected?: boolean;
 }
 export interface CanvasArtifactEditorProps {
+  readonly viewOnly?: boolean;
+  readonly onAddError?: (path: string, error: CanvasPageError) => void;
   readonly artifactId: string;
   readonly store: CanvasLayoutStore;
   readonly awareness: Awareness | null;
@@ -92,6 +97,31 @@ export interface CanvasArtifactEditorProps {
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly frameEvents: CanvasFrameEvents | null;
   readonly liveFrameLimit: number;
+}
+function canvasDrawingEnabled(
+  readOnly: boolean,
+  play: boolean,
+  tool: CanvasTool,
+): tool is Exclude<CanvasTool, "select" | "hand"> {
+  return !readOnly && !play && tool !== "select" && tool !== "hand";
+}
+function canvasSelectionEnabled(
+  readOnly: boolean,
+  play: boolean,
+  tool: CanvasTool,
+): boolean {
+  return !readOnly && !play && tool === "select";
+}
+function handleCanvasUndo(
+  event: KeyboardEvent,
+  store: CanvasLayoutStore,
+): boolean {
+  if (!(event.metaKey || event.ctrlKey) || event.code !== "KeyZ") return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.shiftKey) store.redo();
+  else store.undo();
+  return true;
 }
 function currentFullscreen(
   boards: Readonly<Record<string, unknown>>,
@@ -113,7 +143,10 @@ export function CanvasArtifactEditor({
   sourceForBoard,
   frameEvents,
   liveFrameLimit,
+  viewOnly,
+  onAddError,
 }: CanvasArtifactEditorProps) {
+  const readOnly = viewOnly === true;
   const activeStore = useRef<CanvasLayoutStore | null>(null);
   useLayoutEffect(() => {
     activeStore.current = store;
@@ -176,6 +209,7 @@ export function CanvasArtifactEditor({
       ),
     [snapshot, page, size, settledViewport, liveFrameLimit, activeFullscreen],
   );
+  const selectEnabled = canvasSelectionEnabled(readOnly, play, tool);
   const nodes = useMemo<CanvasFlowNode[]>(
     () => [
       ...items.boards.map(([path, board], index): CanvasFlowNode => {
@@ -279,10 +313,60 @@ export function CanvasArtifactEditor({
     },
     [snapshot, flow, viewport.zoom],
   );
+  const boardEvents = useMemo<CanvasFrameEvents>(
+    () => ({
+      ...frameEvents,
+      onBridge: (path, bridge) => {
+        if (bridge !== null && Object.hasOwn(snapshot.boards, path))
+          frameEvents?.onBoardPage?.(
+            path,
+            snapshot.boards[path].page ?? snapshot.pages.at(0)?.id ?? null,
+          );
+        frameEvents?.onBridge(path, bridge);
+      },
+      onStatus: (path, status) => frameEvents?.onStatus(path, status),
+      onEditPointer: (path, point) => {
+        if (!readOnly) frameEvents?.onEditPointer(path, point);
+      },
+      onAddError: (path, error) => {
+        if (readOnly) return;
+        onAddError?.(path, error);
+        frameEvents?.onAddError?.(path, error);
+      },
+      onRelativeLink: (path, href) => {
+        const target = resolveCanvasBoardLink(
+          path,
+          href,
+          Object.keys(snapshot.boards),
+        );
+        if (target !== null) {
+          if (activeFullscreen !== null) setFullscreen(target);
+          else centerBoard(target);
+        }
+        frameEvents?.onRelativeLink?.(path, href);
+      },
+    }),
+    [
+      frameEvents,
+      readOnly,
+      onAddError,
+      snapshot.boards,
+      snapshot.pages,
+      activeFullscreen,
+      centerBoard,
+    ],
+  );
   const actions = useMemo<CanvasNodeActions>(
     () => ({
       sourceForBoard,
-      frameEvents,
+      viewOnly: readOnly,
+      selectionEnabled: selectEnabled,
+      onAddError: (path, error) => {
+        if (readOnly) return;
+        onAddError?.(path, error);
+        frameEvents?.onAddError?.(path, error);
+      },
+      frameEvents: boardEvents,
       fullscreen: setFullscreen,
       renameBoard: (path, title) =>
         store.transact((layout) =>
@@ -336,7 +420,16 @@ export function CanvasArtifactEditor({
         }));
       },
     }),
-    [sourceForBoard, frameEvents, store, snapshot],
+    [
+      sourceForBoard,
+      selectEnabled,
+      frameEvents,
+      boardEvents,
+      readOnly,
+      onAddError,
+      store,
+      snapshot,
+    ],
   );
   const setPage = (id: string): void => {
     pointer.clear();
@@ -357,15 +450,9 @@ export function CanvasArtifactEditor({
             event.currentTarget.focus({ preventScroll: true });
         }}
         onKeyDownCapture={(event) => {
-          if (activeFullscreen !== null) return;
+          if (readOnly || activeFullscreen !== null) return;
           if (isCanvasTextInput(event.target, event.currentTarget)) return;
-          if ((event.metaKey || event.ctrlKey) && event.code === "KeyZ") {
-            event.preventDefault();
-            event.stopPropagation();
-            if (event.shiftKey) store.redo();
-            else store.undo();
-            return;
-          }
+          if (handleCanvasUndo(event, store)) return;
           if (event.metaKey || event.ctrlKey || event.altKey) return;
           if (
             !play &&
@@ -395,6 +482,7 @@ export function CanvasArtifactEditor({
         }}
       >
         <CanvasPages
+          viewOnly={readOnly}
           pages={snapshot.pages}
           page={page}
           onSelect={setPage}
@@ -411,6 +499,7 @@ export function CanvasArtifactEditor({
           onRemove={(id) => store.transact((layout) => removePage(layout, id))}
         />
         <CanvasToolbar
+          viewOnly={readOnly}
           onZoom={(zoom) => {
             void flow?.zoomTo(zoom);
           }}
@@ -449,6 +538,7 @@ export function CanvasArtifactEditor({
         <div className="flex min-h-0 flex-1">
           {orderOpen ? (
             <CanvasReadingOrder
+              viewOnly={readOnly}
               boards={items.boards}
               onCenter={centerBoard}
               onMove={moveOrder}
@@ -467,6 +557,10 @@ export function CanvasArtifactEditor({
               edges={[]}
               nodeTypes={NODE_TYPES}
               onNodesChange={changeNodes}
+              onNodeClick={(_event, node) => {
+                if (!readOnly && node.data.board !== null)
+                  frameEvents?.onBoardSelect?.(node.data.path);
+              }}
               onInit={setFlow}
               defaultViewport={INITIAL_VIEW}
               minZoom={0.05}
@@ -477,10 +571,10 @@ export function CanvasArtifactEditor({
               noPanClassName="pointer-events-auto"
               noWheelClassName="overscroll-contain"
               nodesConnectable={false}
-              nodesDraggable={!play && tool === "select"}
-              elementsSelectable={!play && tool === "select"}
-              selectionOnDrag={!play && tool === "select"}
-              panOnDrag={play || tool === "hand" ? true : [1, 2]}
+              nodesDraggable={selectEnabled}
+              elementsSelectable={selectEnabled}
+              selectionOnDrag={selectEnabled}
+              panOnDrag={readOnly || play || tool === "hand" ? true : [1, 2]}
               panOnScroll
               zoomOnScroll={false}
               deleteKeyCode={null}
@@ -490,6 +584,7 @@ export function CanvasArtifactEditor({
                 setSettledViewport(value);
               }}
               onNodeDragStop={(_event, node, dragged) =>
+                !readOnly &&
                 store.transact((layout) => {
                   for (const moved of dragged.length === 0 ? [node] : dragged) {
                     if (
@@ -537,7 +632,7 @@ export function CanvasArtifactEditor({
                 maskStrokeColor="var(--border)"
               />
             </ReactFlow>
-            {!play && tool !== "select" && tool !== "hand" ? (
+            {canvasDrawingEnabled(readOnly, play, tool) ? (
               <CanvasDrawingLayer
                 key={tool}
                 tool={tool}
@@ -558,13 +653,16 @@ export function CanvasArtifactEditor({
               viewport={viewport}
             />
           </div>
+          {readOnly ? null : frameEvents?.renderPanel?.(store)}
         </div>
         {activeFullscreen === null ? null : (
           <CanvasFullscreen
+            key={activeFullscreen}
             path={activeFullscreen}
             snapshot={snapshot}
             sourceForBoard={sourceForBoard}
-            events={frameEvents}
+            events={boardEvents}
+            viewOnly={readOnly}
             onSelect={setFullscreen}
             onClose={() => setFullscreen(null)}
           />

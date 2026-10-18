@@ -132,6 +132,7 @@ export {
   openContentBlockSchema,
   openHarnessIdSchema,
   openMessageSchema,
+  openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
   openMessageSchemaPreArtifact,
   openMessageSchemaPreConversation,
@@ -141,6 +142,7 @@ export {
   openSteerBlockSchema,
   openTextBlockSchema,
   openUserMessageSchema,
+  openUserMessageSchemaPreCanvas,
   openUserMessageSchemaPreConversation,
   openUserMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/open-harness-records";

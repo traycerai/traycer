@@ -354,6 +354,7 @@ import {
   chatSubscribeV127,
   chatSubscribeV128,
   chatSubscribeV129,
+  chatSubscribeV130,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -638,6 +639,7 @@ import {
   providersRefreshProfileStatusUpgradeV10ToV20,
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
+import { epicEditArtboardV10 } from "@traycer/protocol/host/epic/artboard-edit";
 import { epicReadArtifactObjectV10 } from "@traycer/protocol/host/epic/artifact-objects";
 import {
   chatMcpAppCallToolV10,
@@ -9159,6 +9161,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   // A peer without this method has no sha-addressed artifact read. Clients
   // treat its bytes as unavailable; a path-based read is not a substitute.
+  "epic.editArtboard": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: epicEditArtboardV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "epic.readArtifactObject": {
     1: {
       latestMinor: 0,
@@ -13775,7 +13787,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 29,
+      latestMinor: 30,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13952,6 +13964,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // New artifact kinds require 1.28; the host omits their blocks/events below it.
         28: { contract: chatSubscribeV128 },
         29: { contract: chatSubscribeV129 },
+        30: { contract: chatSubscribeV130 },
       },
     },
   },

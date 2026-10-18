@@ -33,6 +33,7 @@ const TOOLS = [
   { tool: "title", label: "Title", key: "T", icon: Type },
 ] as const;
 export function CanvasToolbar(props: {
+  readonly viewOnly?: boolean;
   readonly tool: CanvasTool;
   readonly setTool: (tool: CanvasTool) => void;
   readonly play: boolean;
@@ -46,6 +47,8 @@ export function CanvasToolbar(props: {
   readonly zoom: ZoomControlsModel;
   readonly onZoom: (zoom: number) => void;
 }) {
+  const stopLabel = props.viewOnly ? "Pan" : "Edit";
+  const StopIcon = props.viewOnly ? Hand : MousePointer2;
   return (
     <div
       role="toolbar"
@@ -62,47 +65,53 @@ export function CanvasToolbar(props: {
         <ListOrdered className="size-4" />
       </Button>
       <div className="mx-1 h-4 w-px bg-border" />
-      {TOOLS.map(({ tool, label, key, icon: Icon }) => (
-        <TooltipWrapper
-          key={tool}
-          label={`${label} (${key})`}
-          side="bottom"
-          sideOffset={undefined}
-          align={undefined}
-        >
+      {props.viewOnly ? null : (
+        <>
+          {TOOLS.map(({ tool, label, key, icon: Icon }) => (
+            <TooltipWrapper
+              key={tool}
+              label={`${label} (${key})`}
+              side="bottom"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Button
+                variant={
+                  props.tool === tool && !props.play ? "secondary" : "ghost"
+                }
+                size="icon-sm"
+                aria-label={`${label} (${key})`}
+                aria-pressed={props.tool === tool && !props.play}
+                onClick={() => {
+                  props.setPlay(false);
+                  props.setTool(tool);
+                }}
+              >
+                <Icon className="size-4" />
+              </Button>
+            </TooltipWrapper>
+          ))}
+          <div className="mx-1 h-4 w-px bg-border" />
           <Button
-            variant={props.tool === tool && !props.play ? "secondary" : "ghost"}
+            variant="ghost"
             size="icon-sm"
-            aria-label={`${label} (${key})`}
-            aria-pressed={props.tool === tool && !props.play}
-            onClick={() => {
-              props.setPlay(false);
-              props.setTool(tool);
-            }}
+            aria-label="Undo"
+            disabled={!props.canUndo}
+            onClick={props.undo}
           >
-            <Icon className="size-4" />
+            <Undo2 className="size-4" />
           </Button>
-        </TooltipWrapper>
-      ))}
-      <div className="mx-1 h-4 w-px bg-border" />
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Undo"
-        disabled={!props.canUndo}
-        onClick={props.undo}
-      >
-        <Undo2 className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Redo"
-        disabled={!props.canRedo}
-        onClick={props.redo}
-      >
-        <Redo2 className="size-4" />
-      </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Redo"
+            disabled={!props.canRedo}
+            onClick={props.redo}
+          >
+            <Redo2 className="size-4" />
+          </Button>
+        </>
+      )}
       <div className="min-w-0 flex-1" />
       <ZoomControls
         {...props.zoom}
@@ -113,12 +122,12 @@ export function CanvasToolbar(props: {
       <Button
         variant={props.play ? "secondary" : "ghost"}
         size="sm"
-        aria-label={props.play ? "Edit canvas" : "Play canvas"}
+        aria-label={`${props.play ? stopLabel : "Play"} canvas`}
         aria-pressed={props.play}
         onClick={() => props.setPlay(!props.play)}
       >
-        {props.play ? <MousePointer2 /> : <Play />}
-        {props.play ? "Edit" : "Play"}
+        {props.play ? <StopIcon /> : <Play />}
+        {props.play ? stopLabel : "Play"}
       </Button>
     </div>
   );

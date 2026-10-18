@@ -1,3 +1,4 @@
+import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import { useCallback, useContext, useMemo } from "react";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { deriveCollabUser } from "@/editor-core/awareness/derive-collab-user";
@@ -22,7 +23,13 @@ import {
 import { LIVE_BOARD_LIMIT } from "./canvas-model";
 import { useCanvasLayout, useCanvasLayoutDocument } from "./use-canvas-layout";
 
+export interface CanvasErrorAttachment extends CanvasPageError {
+  readonly artifact: ArtifactProjection;
+  readonly boardPath: string;
+}
 interface CanvasArtifactSurfaceProps {
+  readonly viewOnly?: boolean;
+  readonly onAddError?: (error: CanvasErrorAttachment) => void;
   readonly epicId: string;
   readonly artifactId: string;
   readonly artifact: ArtifactProjection;
@@ -39,6 +46,7 @@ function useBoardSource(
         ? null
         : {
             kind: "artifact",
+            canvas: true,
             artifactId: artifact.id,
             treePath,
             entryPath: path,
@@ -53,6 +61,8 @@ function LiveCanvasSurface({
   epicId,
   artifactId,
   artifact,
+  viewOnly,
+  onAddError,
 }: CanvasArtifactSurfaceProps) {
   const store = useCanvasLayout(artifactId);
   const awareness = useEpicArtifactBodyAwareness(artifactId);
@@ -90,6 +100,10 @@ function LiveCanvasSurface({
     <CanvasArtifactEditor
       key={artifactId}
       artifactId={artifactId}
+      viewOnly={viewOnly}
+      onAddError={(path, error) =>
+        onAddError?.({ artifact, boardPath: path, ...error })
+      }
       store={store}
       awareness={awareness}
       user={user}
@@ -103,7 +117,11 @@ function FixtureCanvasSurface({
   artifactId,
   artifact,
   fixture,
+  viewOnly,
+  onAddError,
 }: {
+  readonly viewOnly: boolean | undefined;
+  readonly onAddError: ((error: CanvasErrorAttachment) => void) | undefined;
   readonly artifactId: string;
   readonly artifact: ArtifactProjection;
   readonly fixture: CanvasArtifactFixture;
@@ -120,6 +138,10 @@ function FixtureCanvasSurface({
     <CanvasArtifactEditor
       key={artifactId}
       artifactId={artifactId}
+      viewOnly={viewOnly}
+      onAddError={(path, error) =>
+        onAddError?.({ artifact, boardPath: path, ...error })
+      }
       store={store}
       awareness={fixture.awareness}
       user={fixture.user}
@@ -130,7 +152,6 @@ function FixtureCanvasSurface({
   );
 }
 export function CanvasArtifactSurface(props: CanvasArtifactSurfaceProps) {
-  // TODO: tile wiring must enforce the mobile view-only gate (decision 22a).
   const fixture = useContext(FixtureContext);
   return fixture === null ? (
     <LiveCanvasSurface {...props} />
@@ -139,6 +160,8 @@ export function CanvasArtifactSurface(props: CanvasArtifactSurfaceProps) {
       artifactId={props.artifactId}
       artifact={props.artifact}
       fixture={fixture}
+      viewOnly={props.viewOnly}
+      onAddError={props.onAddError}
     />
   );
 }

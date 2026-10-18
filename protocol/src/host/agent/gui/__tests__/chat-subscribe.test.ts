@@ -36,6 +36,7 @@ import {
   chatSubscribeV127,
   chatSubscribeV128,
   chatSubscribeV129,
+  chatSubscribeV130,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2296,7 +2297,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 29 as chatSubscribeV129", () => {
+  it("registers chat.subscribe major 1 latestMinor 30 as chatSubscribeV130", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2367,8 +2368,9 @@ describe("chat.subscribe registry membership", () => {
     // canvas and file kinds (omitted for every `<=1.27` peer). `29` adds the
     // tool-call `artifact` stamp: the manifest an inline
     // `traycer_render_inline` artifact showed, projected away for every
-    // `<=1.28` peer.
-    expect(entry[1].latestMinor).toBe(29);
+    // `<=1.28` peer. `30` grows the browser annotation record with the canvas
+    // arm, projected away for every `<=1.29` peer.
+    expect(entry[1].latestMinor).toBe(30);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2393,6 +2395,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[27].contract).toBe(chatSubscribeV127);
     expect(entry[1].versions[28].contract).toBe(chatSubscribeV128);
     expect(entry[1].versions[29].contract).toBe(chatSubscribeV129);
+    expect(entry[1].versions[30].contract).toBe(chatSubscribeV130);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });

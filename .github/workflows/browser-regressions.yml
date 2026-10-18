@@ -75,8 +75,8 @@ jobs:
           base="$(scripts/ci-last-green-sha.sh browser-regressions.yml "$BRANCH" "$BEFORE")"
           echo "sha=${base}" >> "$GITHUB_OUTPUT"
       # What the suite depends on: the GUI app (its code, fixtures, specs and
-      # configs), the two workspace packages it imports throughout
-      # (`@traycer-clients/shared`, `@traycer/protocol`), the dependency set
+      # configs), the workspace packages it imports
+      # (`@traycer-clients/shared`, `@traycer/protocol`, `@traycer/html-source`), the dependency set
       # and its patches (`@pierre/diffs`), the desktop package's Electron
       # (the tree-zoom spec launches it) and this workflow. A package is
       # listed whole, never by subdirectory: its exports reach past `src/`
@@ -108,6 +108,7 @@ jobs:
           relevant=$(git diff --name-only "$range" | awk '
             /\.md$/ || /\.test\.tsx?$/ { next }
             /^clients\/gui-app\// || /^clients\/shared\// || /^protocol\// ||
+            /^packages\/html-source\// ||
             /^patches\// || /^package\.json$/ || /^bun\.lock$/ ||
             /^clients\/desktop\/package\.json$/ ||
             /^clients\/desktop\/scripts\/dev\/electron-binary\.cjs$/ ||

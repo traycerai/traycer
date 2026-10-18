@@ -25,6 +25,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  browserAnnotationRecordSchemaPreCanvas,
   browserAnnotationRecordSchema,
   chatEventSchema,
   chatEventSchemaPreInReplyTo,
@@ -40,6 +41,7 @@ import {
   chatSchemaV15,
   chatSchemaV16,
   interviewDeliveryProjectionSchema,
+  userMessagePayloadSchemaPreCanvas,
   userMessagePayloadSchema,
   userMessagePayloadSchemaPreAnnotation,
   userMessageSchema,
@@ -112,6 +114,7 @@ import {
   openRuntimeEventSchemaPreHtml,
   openRuntimeEventSchemaPreArtifact,
   openRuntimeEventSchemaPreMcpApp,
+  openUserMessageSchemaPreCanvas,
   openUserMessageSchema,
   openUserMessageSchemaPreConversation,
   openUserMessageSenderSchema,
@@ -149,6 +152,7 @@ import {
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreCanvas,
   openChatRangeResponseSchemaPreHtml,
   openChatRangeResponseSchemaPreArtifact,
   openChatRangeResponseSchemaPreConversation,
@@ -156,6 +160,7 @@ import {
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreCanvas,
   openChatTranscriptWindowSchemaPreHtml,
   openChatTranscriptWindowSchemaPreArtifact,
   chatTranscriptWindowSchemaPreBrowser,
@@ -700,7 +705,7 @@ export type ChatQueueSteerRequest = z.infer<typeof chatQueueSteerRequestSchema>;
  * from another agent (the `sender` discriminates). Carries the message content
  * and the settings tuple its turn will run under.
  */
-export const chatQueuedPromptItemSchema = lazySchema(() =>
+export const chatQueuedPromptItemSchemaPreCanvas = lazySchema(() =>
   z.object({
     // Defaulted so every pre-`1.6` payload parses as a prompt item with no
     // migration: persisted `queue.added` metadata written by older hosts, and
@@ -708,7 +713,7 @@ export const chatQueuedPromptItemSchema = lazySchema(() =>
     kind: z.literal("prompt").default("prompt"),
     queueItemId: z.string(),
     messageId: z.string(),
-    message: userMessagePayloadSchema,
+    message: userMessagePayloadSchemaPreCanvas,
     sender: userMessageSenderSchema,
     settings: chatRunSettingsSchema,
     // Billing/account context the queued turn runs under. Global app-wide
@@ -958,14 +963,14 @@ export type ChatQueuedTaskOverdueItem = z.infer<
 // discriminant in. The prompt arm must therefore stay LAST. The inferred TS
 // type is still a proper discriminated union on `kind`, so `switch`/narrowing
 // stay exhaustive for consumers.
-export const chatQueuedItemSchema = lazySchema(() =>
+export const chatQueuedItemSchemaPreCanvas = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
     chatQueuedPortForwardItemSchema,
     chatQueuedConversationMessageItemSchema,
     chatQueuedTaskCheckinItemSchema,
     chatQueuedTaskOverdueItemSchema,
-    chatQueuedPromptItemSchema,
+    chatQueuedPromptItemSchemaPreCanvas,
   ]),
 );
 export type ChatQueuedItem = z.infer<typeof chatQueuedItemSchema>;
@@ -980,14 +985,14 @@ const chatQueuedItemSchemaPreConversation = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
     chatQueuedPortForwardItemSchema,
-    chatQueuedPromptItemSchema,
+    chatQueuedPromptItemSchemaPreCanvas,
   ]),
 );
 
-export const chatQueueStateSchema = lazySchema(() =>
+export const chatQueueStateSchemaPreCanvas = lazySchema(() =>
   z.object({
     status: z.enum(["idle", "running", "paused"]),
-    items: z.array(chatQueuedItemSchema),
+    items: z.array(chatQueuedItemSchemaPreCanvas),
     // Why the queue is paused, as the host knows it (`chat.subscribe@1.18`):
     // `"turn_error"`, `"routing"`, `"queued_prompt"`, `"managed_command"`,
     // `"user"`, and whatever the host adds later. An OPEN string, not an enum:
@@ -1036,15 +1041,63 @@ const chatQueueStateSchemaPreConversation = lazySchema(() =>
 // `open-harness-wire.ts` for the heard / drive line). Derived from the live
 // item, not hand-copied: a field added to the live prompt item must reach this
 // line, and the plain `z.union` keeps the prompt arm LAST for the reason
-// `chatQueuedItemSchema` gives.
-export const openChatQueuedPromptItemSchema = lazySchema(() =>
-  chatQueuedPromptItemSchema.extend({
+// `chatQueuedItemSchemaPreCanvas` gives.
+export const openChatQueuedPromptItemSchemaPreCanvas = lazySchema(() =>
+  chatQueuedPromptItemSchemaPreCanvas.extend({
     sender: openUserMessageSenderSchema,
   }),
 );
 export type OpenChatQueuedPromptItem = z.infer<
   typeof openChatQueuedPromptItemSchema
 >;
+export const openChatQueuedItemSchemaPreCanvas = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    openChatQueuedPromptItemSchemaPreCanvas,
+  ]),
+);
+export type OpenChatQueuedItem = z.infer<typeof openChatQueuedItemSchema>;
+export const openChatQueueStateSchemaPreCanvas = lazySchema(() =>
+  chatQueueStateSchemaPreCanvas.extend({
+    items: z.array(openChatQueuedItemSchemaPreCanvas),
+  }),
+);
+export type OpenChatQueueState = z.infer<typeof openChatQueueStateSchema>;
+
+// Live 1.30 queue: the prompt payload carries canvas annotations.
+export const chatQueuedPromptItemSchema = lazySchema(() =>
+  chatQueuedPromptItemSchemaPreCanvas.extend({
+    message: userMessagePayloadSchema,
+  }),
+);
+
+export const chatQueuedItemSchema = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    chatQueuedPromptItemSchema,
+  ]),
+);
+
+export const chatQueueStateSchema = lazySchema(() =>
+  chatQueueStateSchemaPreCanvas.extend({
+    items: z.array(chatQueuedItemSchema),
+  }),
+);
+
+export const openChatQueuedPromptItemSchema = lazySchema(() =>
+  chatQueuedPromptItemSchema.extend({
+    sender: openUserMessageSenderSchema,
+  }),
+);
+
 export const openChatQueuedItemSchema = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
@@ -1055,25 +1108,25 @@ export const openChatQueuedItemSchema = lazySchema(() =>
     openChatQueuedPromptItemSchema,
   ]),
 );
-export type OpenChatQueuedItem = z.infer<typeof openChatQueuedItemSchema>;
+
 export const openChatQueueStateSchema = lazySchema(() =>
   chatQueueStateSchema.extend({
     items: z.array(openChatQueuedItemSchema),
   }),
 );
-export type OpenChatQueueState = z.infer<typeof openChatQueueStateSchema>;
 
 // Wire-freeze of the open queue as `chat.subscribe@1.25` ships it: the four
 // arms that existed before `1.26` added the task-checkin item, with the
 // prompt item's sender reopened. Its own union, NOT derived from the live open
 // one, so a later arm cannot reach that line through it. Bound to `1.25`'s
 // snapshot and `queueChanged` frames.
+
 const openChatQueuedItemSchemaPreTaskCheckin = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
     chatQueuedPortForwardItemSchema,
     chatQueuedConversationMessageItemSchema,
-    openChatQueuedPromptItemSchema,
+    openChatQueuedPromptItemSchemaPreCanvas,
   ]),
 );
 const openChatQueueStateSchemaPreTaskCheckin = lazySchema(() =>
@@ -1095,7 +1148,7 @@ const openChatQueuedItemSchemaPreTaskOverdue = lazySchema(() =>
     chatQueuedPortForwardItemSchema,
     chatQueuedConversationMessageItemSchema,
     chatQueuedTaskCheckinItemSchema,
-    openChatQueuedPromptItemSchema,
+    openChatQueuedPromptItemSchemaPreCanvas,
   ]),
 );
 const openChatQueueStateSchemaPreTaskOverdue = lazySchema(() =>
@@ -1115,7 +1168,7 @@ const openChatQueuedItemSchemaPreConversation = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
     chatQueuedPortForwardItemSchema,
-    openChatQueuedPromptItemSchema,
+    openChatQueuedPromptItemSchemaPreCanvas,
   ]),
 );
 const openChatQueueStateSchemaPreConversation = lazySchema(() =>
@@ -1152,7 +1205,7 @@ const chatQueuedPromptItemSchemaPreSentFromHost = lazySchema(() =>
     kind: z.literal("prompt").default("prompt"),
     queueItemId: z.string(),
     messageId: z.string(),
-    message: userMessagePayloadSchema,
+    message: userMessagePayloadSchemaPreCanvas,
     sender: userMessageSenderSchema,
     settings: chatRunSettingsSchema,
     accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
@@ -1252,7 +1305,7 @@ const chatQueuedPromptItemSchemaPreAuto = lazySchema(() =>
     kind: z.literal("prompt").default("prompt"),
     queueItemId: z.string(),
     messageId: z.string(),
-    message: userMessagePayloadSchema,
+    message: userMessagePayloadSchemaPreCanvas,
     sender: userMessageSenderSchema,
     settings: chatRunSettingsSchemaPreAuto,
     accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
@@ -1266,7 +1319,7 @@ const chatQueuedPromptItemSchemaPreAuto = lazySchema(() =>
   }),
 );
 // A plain `z.union`, managed-command arm FIRST - mirroring
-// `chatQueuedItemSchema` exactly. A `z.discriminatedUnion` here rejects the
+// `chatQueuedItemSchemaPreCanvas` exactly. A `z.discriminatedUnion` here rejects the
 // legacy payload that carries no `kind` (see that schema's comment), and it
 // renders as `oneOf` rather than `anyOf`, which moves every field path the
 // released-line narrowing guard compares against the baseline.
@@ -1304,7 +1357,7 @@ const chatQueueStateSchemaPreShellHostPreAuto = lazySchema(() =>
 // Wire-freeze copies with the queue item's `sender` swapped for its
 // pre-`inReplyTo` freeze. Bound to the released `chat.subscribe@1.0–1.3`
 // snapshot + `queueChanged` serverFrames. `message` reuses the live
-// `userMessagePayloadSchema` (unaffected — `inReplyTo` lives on the sender, not
+// `userMessagePayloadSchemaPreCanvas` (unaffected — `inReplyTo` lives on the sender, not
 // the message payload). Hand-frozen, not derived from the live shape.
 const chatQueuedItemSchemaPreInReplyTo = lazySchema(() =>
   z.object({
@@ -2942,7 +2995,7 @@ const interviewAnsweredServerFrameSchema = lazySchema(() =>
 // narrow before reading `reason`, a field whose meaning does not vary. That
 // trades real ergonomic cost across the client for no additional safety: the
 // refinement rejects the same payloads at the same boundary. This file's
-// `chatQueuedItemSchema` records the mirror-image tradeoff for a case where
+// `chatQueuedItemSchemaPreCanvas` records the mirror-image tradeoff for a case where
 // the union genuinely was worth it.
 const interviewErroredServerFrameSchema = lazySchema(() =>
   z
@@ -3451,6 +3504,21 @@ const chatSubscribeCommonServerFrameSchemas =
       ...draftImageAckCauseFields,
     },
   });
+const chatSubscribeCommonServerFrameSchemasOpenHarness =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchema,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
 
 // The common frames as `chat.subscribe@1.22` through `@1.24` ship them:
 // `1.21`'s with the three sender-bearing frames - `messageAccepted`,
@@ -3477,7 +3545,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation =
 // frozen at its four pre-task-checkin arms.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreTaskCheckin,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -3496,7 +3564,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin =
 // frozen at its five pre-task-overdue arms.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreTaskOverdue,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -3513,10 +3581,10 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue =
 // The live common frames (`chat.subscribe@1.27`): the open-harness set over
 // the user row that may carry a bot-conversation request and the queue that
 // may carry a conversation-message, a task-checkin or a task-overdue item.
-const chatSubscribeCommonServerFrameSchemasOpenHarness =
+const chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
-    queue: openChatQueueStateSchema,
+    message: openUserMessageSchemaPreCanvas,
+    queue: openChatQueueStateSchemaPreCanvas,
     event: openChatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
@@ -3816,7 +3884,7 @@ const activeProfileUpdateClientFrameSchema = lazySchema(() =>
 // harness id, a mode accepted on one of these lines mints durable state the
 // SAME line cannot then be served (`chatSubscribeSupportsPermissionMode`
 // refuses an `auto` chat below `1.13`). So the mode axis is pinned here and
-// only `1.13` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
+// only `1.13` re-widens it, in `chatSubscribeClientFrameSchemaOptionsPreCanvas` below.
 // `1.11` does NOT: main's shell-host tier widened the server direction only.
 const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   lazySchema(() =>
@@ -4309,7 +4377,9 @@ const chatSubscribeClientFrameSchemaV17ToV19Options = [
       worktreeIntent: worktreeIntentSchema.nullable().default(null),
       // Browser annotations entered on the `1.7` line. Every released 1.0–1.6
       // union above stays frozen without this field.
-      browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
+      browserAnnotations: z
+        .array(browserAnnotationRecordSchemaPreCanvas)
+        .default([]),
     }),
   ),
   deleteMessageSuffixClientFrameSchema,
@@ -4437,7 +4507,7 @@ const chatSubscribeClientFrameSchemaOptionsPreSentFromHost = [
 // Live client frames (`chat.subscribe@1.17`): `1.16`'s with `send` and
 // `editUserMessage` naming the machine they were sent from. Same frames in
 // the same order.
-const chatSubscribeClientFrameSchemaOptions = [
+const chatSubscribeClientFrameSchemaOptionsPreCanvas = [
   lazySchema(() =>
     sendClientFrameSchemaPreSentFromHost.extend(sentFromHostIdFrameField),
   ),
@@ -4449,6 +4519,17 @@ const chatSubscribeClientFrameSchemaOptions = [
   ),
   ...chatSubscribeClientFrameSchemaTailOptionsLive,
   messageDeliveryRestoredClientFrameSchema,
+] as const;
+
+const [sendClientFrameSchemaPreCanvas, ...clientFrameOptionsAfterSend] =
+  chatSubscribeClientFrameSchemaOptionsPreCanvas;
+const chatSubscribeClientFrameSchemaOptions = [
+  lazySchema(() =>
+    sendClientFrameSchemaPreCanvas.extend({
+      browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
+    }),
+  ),
+  ...clientFrameOptionsAfterSend,
 ] as const;
 
 export const chatSubscribeClientFrameSchema = lazySchema(() =>
@@ -5265,7 +5346,7 @@ const chatQueuedPromptItemSchemaV16 = lazySchema(() =>
 );
 
 // Same `z.union` (not `discriminatedUnion`) ordering rationale as the live
-// `chatQueuedItemSchema`: managed-command arm first, legacy no-`kind` payloads
+// `chatQueuedItemSchemaPreCanvas`: managed-command arm first, legacy no-`kind` payloads
 // fall through to the defaulted prompt arm.
 const chatQueuedItemSchemaV16 = lazySchema(() =>
   z.union([
@@ -5362,7 +5443,7 @@ const chatSubscribeServerFrameSchemaV16 = lazySchema(() =>
 //
 // It is not free, though, and the compat checker cannot catch the regression:
 // its oracle only guards host→client additions, so a new action appended to
-// `chatSubscribeClientFrameSchemaOptions` would silently join this released
+// `chatSubscribeClientFrameSchemaOptionsPreCanvas` would silently join this released
 // line and let a stale or crafted `1.6` peer dispatch it. That is exactly why
 // `chatSubscribeClientFrameSchemaV14ToV15` exists below.
 //
@@ -6467,7 +6548,7 @@ const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
-        queue: openChatQueueStateSchema,
+        queue: openChatQueueStateSchemaPreCanvas,
         tail: openChatTranscriptWindowSchemaPreHtml,
       }),
     }),
@@ -6483,7 +6564,7 @@ const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchema,
-    ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas,
     blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
   ]),
 );
@@ -6493,7 +6574,7 @@ const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
-        queue: openChatQueueStateSchema,
+        queue: openChatQueueStateSchemaPreCanvas,
         tail: openChatTranscriptWindowSchemaPreArtifact,
       }),
     }),
@@ -6509,13 +6590,13 @@ const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchema,
-    ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas,
     blockDeltaServerFrameSchema(openRuntimeEventSchemaPreArtifact),
   ]),
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.29`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.30`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -6523,6 +6604,31 @@ const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
  * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
  * is assignable to this type; the client parses with this schema.
  */
+const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV124.extend({
+        queue: openChatQueueStateSchemaPreCanvas,
+        tail: openChatTranscriptWindowSchemaPreCanvas,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPreCanvas,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchema,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas,
+    blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  ]),
+);
+
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness,
@@ -6790,6 +6896,14 @@ export const chatSubscribeWindowedClientFrameSchemaV113ToV114 = lazySchema(() =>
 export const chatSubscribeWindowedClientFrameSchemaV115ToV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...chatSubscribeClientFrameSchemaOptionsPreSentFromHost,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]),
+);
+
+export const chatSubscribeWindowedClientFrameSchemaPreCanvas = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsPreCanvas,
     loadRangeClientFrameSchema,
     resnapshotClientFrameSchema,
   ]),
@@ -7189,7 +7303,7 @@ export const chatSubscribeV117 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 17 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV117,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7204,7 +7318,7 @@ export const chatSubscribeV117 = defineStreamRpcContract({
  *     `fallback_settled` notice carries `null` and every other notice `null`
  *     or nothing, which is what lets the settled card key on the receipt
  *     rather than the kind;
- *   - `pausedReason` on the queue (`chatQueueStateSchema`): why the host paused
+ *   - `pausedReason` on the queue (`chatQueueStateSchemaPreCanvas`): why the host paused
  *     it, as an open string, so a client stops inferring "paused after an
  *     error" from state that cannot tell it from a hand pause;
  *   - `waitResumesAt` on the failed attempt (`lastFailedAttemptSchema`): when
@@ -7247,7 +7361,7 @@ export const chatSubscribeV118 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV118,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7261,7 +7375,7 @@ export const chatSubscribeV119 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 19 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV119,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7310,7 +7424,7 @@ export const chatSubscribeV120 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 20 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV120,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7339,7 +7453,7 @@ export const chatSubscribeV121 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 21 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV121,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7369,7 +7483,7 @@ export const chatSubscribeV122 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 22 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV122,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7389,7 +7503,7 @@ export const chatSubscribeV123 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 23 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV123,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7404,7 +7518,7 @@ export const chatSubscribeV124 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 24 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV124,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7440,7 +7554,7 @@ export const chatSubscribeV125 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 25 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV125,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7467,7 +7581,7 @@ export const chatSubscribeV126 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 26 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV126,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /**
@@ -7494,7 +7608,7 @@ export const chatSubscribeV127 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 27 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV127,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /** 1.28 carries HTML, canvas and file operation kinds; 1.27 stays frozen. */
@@ -7503,13 +7617,22 @@ export const chatSubscribeV128 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 28 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV128,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
 /** 1.29 stamps the manifest rendered by an inline HTML artifact. */
 export const chatSubscribeV129 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 29 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV129,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
+});
+
+/** 1.30 carries canvas annotations, including selections with no crop. */
+export const chatSubscribeV130 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 30 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

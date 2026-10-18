@@ -30,6 +30,13 @@ import {
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { BrowserAnnotationSource } from "@traycer/protocol/persistence/epic/schemas";
+
+/** Flat test overrides: the browser source's fields sit beside the record's own. */
+type BrowserRecordOverrides = Partial<
+  Omit<BrowserAnnotationSource, "kind"> &
+    Omit<BrowserAnnotationRecord, "source">
+>;
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
@@ -82,19 +89,28 @@ const createObjectURL = vi.fn(
 const revokeObjectURL = vi.fn((_url: string) => undefined);
 
 function makeRecord(
-  overrides: Partial<BrowserAnnotationRecord> & {
+  overrides: BrowserRecordOverrides & {
     readonly annotationId: string;
     readonly tabId: string;
   },
 ): BrowserAnnotationRecord {
-  return {
-    kind: "browser-annotation",
-    annotationId: overrides.annotationId,
+  const source: BrowserAnnotationSource = {
+    kind: "browser",
     tabId: overrides.tabId,
     sessionId: overrides.sessionId ?? "session-card",
     origin: overrides.origin ?? "https://example.com",
     pageUrl: overrides.pageUrl ?? "https://example.com/",
     pageTitle: overrides.pageTitle ?? "Example Domain",
+  };
+  return {
+    kind: "browser-annotation",
+    annotationId: overrides.annotationId,
+    tabId: source.tabId,
+    sessionId: source.sessionId,
+    origin: source.origin,
+    pageUrl: source.pageUrl,
+    pageTitle: source.pageTitle,
+    source,
     capturedAt: overrides.capturedAt ?? 1_700_000_000_000,
     comment: overrides.comment ?? LONG_COMMENT,
     counts: overrides.counts ?? { elements: 2, regions: 0, strokes: 1 },

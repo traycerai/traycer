@@ -107,6 +107,7 @@ export type AnalyticsSettingsSection =
   | "appearance"
   | "delete-account"
   | "dev-artifact-proof"
+  | "dev-canvas-proof"
   | "devices"
   | "diagnostics"
   | "fallback"
@@ -1386,6 +1387,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     appearance: true,
     "delete-account": true,
     "dev-artifact-proof": true,
+    "dev-canvas-proof": true,
     devices: true,
     diagnostics: true,
     fallback: true,

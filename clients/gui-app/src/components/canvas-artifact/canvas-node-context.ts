@@ -1,3 +1,4 @@
+import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import { createContext, useContext } from "react";
 import type {
   CanvasBoard,
@@ -15,6 +16,9 @@ export interface CanvasNodeData extends Record<string, unknown> {
 }
 export type CanvasFlowNode = Node<CanvasNodeData>;
 export interface CanvasNodeActions {
+  readonly viewOnly: boolean;
+  readonly selectionEnabled: boolean;
+  readonly onAddError: (path: string, error: CanvasPageError) => void;
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly frameEvents: CanvasFrameEvents | null;
   readonly renameBoard: (path: string, title: string) => void;

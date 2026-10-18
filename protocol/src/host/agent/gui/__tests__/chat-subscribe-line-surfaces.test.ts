@@ -95,19 +95,25 @@ const CLAUDE_PARITY_MINOR = 20;
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
 // queue item (pinned below). `1.28` lets an `artifact_operation` block and
 // event name the html, canvas and file artifact kinds (pinned below). `1.29`
-// adds the tool-call `artifact` stamp (pinned below). Every threshold above
+// adds the tool-call `artifact` stamp (pinned below). `1.30` grows the browser
+// annotation record with the canvas arm (pinned by
+// `chat-subscribe-canvas-annotations-v130.test.ts`). Every threshold above
 // still reads `>=` against the live line.
-const LIVE_MINOR = 29;
+const LIVE_MINOR = 30;
 // `1.29`: the tool-call `artifact` stamp - the manifest an inline
 // `traycer_render_inline` artifact showed. Found structurally
 // (`toolCallArtifactStampPresent`, defined below), not by a substring
 // needle: `'"artifact":'` already appears on every line via the unrelated
 // `checkpointArtifactTagSchema` field.
 const ARTIFACT_STAMP_MINOR = 29;
-// `1.28`: the html-artifacts surface. `"canvas"` appears in no other shape the
-// line carries, so it is the one needle for the grown kind enum.
+// `1.28`: the html-artifacts surface - the artifact kinds an `artifact_operation`
+// block and event may name. Found structurally (`artifactOperationKinds`,
+// defined below), not by a `'"canvas"'` needle: from `1.30` a browser
+// annotation's `source` is the literal `"canvas"` too, which is a different
+// fact (where an annotation was captured, not which artifact kind an
+// operation touched) and must not read as the kind enum having grown.
 const HTML_ARTIFACTS_MINOR = 28;
-const HTML_ARTIFACTS_NEEDLES = ['"canvas"'];
+const HTML_ARTIFACT_KINDS = ["html", "canvas", "file"];
 // `1.27`: the task-overdue surface - the queue item's discriminant, its one
 // needle for the same reason as the check-in's.
 const TASK_OVERDUE_MINOR = 27;
@@ -279,6 +285,52 @@ function toolCallArtifactStampPresent(schema: z.ZodType): boolean {
   return found;
 }
 
+function collectStrings(node: unknown, into: Set<string>): void {
+  if (typeof node === "string") {
+    into.add(node);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectStrings(item, into);
+    return;
+  }
+  const record = node as Record<string, unknown>;
+  if (Array.isArray(record.enum)) collectStrings(record.enum, into);
+  if (typeof record.const === "string") into.add(record.const);
+  for (const [key, value] of Object.entries(record)) {
+    if (key !== "enum" && key !== "const") collectStrings(value, into);
+  }
+}
+
+// Every kind an `artifact_operation` block or event can name, read off the
+// `kind` property of the shapes whose `type` is that literal. Nothing else on
+// a frame, a browser annotation's `source` included, is looked at.
+function artifactOperationKinds(schema: z.ZodType): string[] {
+  const kinds = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties !== null && typeof properties === "object") {
+      const propertyKeys = properties as Record<string, unknown>;
+      const typeConst = literalSchema.safeParse(propertyKeys.type).data?.const;
+      if (typeConst === "artifact_operation") {
+        collectStrings(propertyKeys.kind, kinds);
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  for (const io of ["input", "output"] as const) {
+    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+  }
+  return [...kinds];
+}
+
 const unionArmsSchema = z.object({
   oneOf: z
     .array(z.object({ properties: z.record(z.string(), z.unknown()) }))
@@ -307,13 +359,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.29 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.30 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28, 29,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -373,19 +425,17 @@ describe("chat.subscribe line surfaces", () => {
       const carriesHtmlArtifacts = minor >= HTML_ARTIFACTS_MINOR;
 
       it(`server frames ${carriesHtmlArtifacts ? "carry" : "hold back"} the html, canvas and file artifact kinds`, () => {
-        const text = schemaText(contract.serverFrameSchema);
-        const found = HTML_ARTIFACTS_NEEDLES.filter((needle) =>
-          text.includes(needle),
+        const kinds = artifactOperationKinds(contract.serverFrameSchema);
+        const found = HTML_ARTIFACT_KINDS.filter((kind) =>
+          kinds.includes(kind),
         );
-        expect(found).toEqual(
-          carriesHtmlArtifacts ? HTML_ARTIFACTS_NEEDLES : [],
-        );
+        expect(found).toEqual(carriesHtmlArtifacts ? HTML_ARTIFACT_KINDS : []);
       });
 
       it("client frames hold back the html, canvas and file artifact kinds on every line", () => {
-        const text = schemaText(contract.clientFrameSchema);
+        const kinds = artifactOperationKinds(contract.clientFrameSchema);
         expect(
-          HTML_ARTIFACTS_NEEDLES.filter((needle) => text.includes(needle)),
+          HTML_ARTIFACT_KINDS.filter((kind) => kinds.includes(kind)),
         ).toEqual([]);
       });
 

@@ -37,8 +37,8 @@ export interface BrowserAnnotationStartInput extends BrowserViewTileKey {
 export type BrowserAnnotationMode = "select" | "region" | "draw" | "erase";
 
 export type BrowserAnnotationAttachPayload = Omit<
-  BrowserAnnotationRecord,
-  "kind" | "imageFileName" | "imageHash"
+  Extract<BrowserAnnotationRecord, { source: { kind: "browser" } }>,
+  "kind" | "imageFileName" | "imageHash" | "source"
 >;
 
 export interface BrowserAnnotationAttachedIpcEvent extends BrowserViewTileKey {

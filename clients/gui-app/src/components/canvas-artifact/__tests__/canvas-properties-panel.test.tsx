@@ -1,0 +1,390 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EpicEditArtboardResponse } from "@traycer/protocol/host/epic/artboard-edit";
+import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
+import { CanvasPropertiesPanel } from "../canvas-properties-panel";
+import {
+  useCanvasSelectionStore,
+  type CanvasSelection,
+} from "../canvas-selection-store";
+import type { CanvasEditVariables } from "../use-artboard-edit";
+
+const ARTIFACT_ID = "canvas-1";
+const DEBOUNCE_MS = 450;
+
+interface PendingSave {
+  readonly variables: CanvasEditVariables;
+  readonly settle: (response: EpicEditArtboardResponse) => void;
+  readonly fail: (error: Error) => void;
+}
+
+// Each save is a promise the test settles by hand, so the panel can be
+// observed while the host is still answering.
+const pendingSaves = vi.hoisted((): PendingSave[] => []);
+
+vi.mock("../use-artboard-edit", async () => {
+  const { useState } = await import("react");
+  return {
+    useArtboardEdit: () => {
+      const [inFlight, setInFlight] = useState(0);
+      return {
+        isPending: inFlight > 0,
+        mutateAsync: (variables: CanvasEditVariables) => {
+          setInFlight((count) => count + 1);
+          return new Promise<EpicEditArtboardResponse>((resolve, reject) => {
+            pendingSaves.push({
+              variables,
+              settle: (response) => {
+                setInFlight((count) => count - 1);
+                resolve(response);
+              },
+              fail: (error) => {
+                setInFlight((count) => count - 1);
+                reject(error);
+              },
+            });
+          });
+        },
+      };
+    },
+  };
+});
+
+// What the browser accepts is injected: only "banana" is not a value.
+vi.mock("../artboard-css-validation", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../artboard-css-validation")>();
+  return {
+    ...original,
+    browserSupportsCss: (_property: string, value: string): boolean =>
+      value !== "banana",
+  };
+});
+
+vi.mock("@/components/ui/agent-spinning-dots", () => ({
+  AgentSpinningDots: () => <span data-testid="saving-spinner" />,
+}));
+
+function element(overrides: Partial<CanvasElement>): CanvasElement {
+  return {
+    marker: 12,
+    tid: "t1",
+    tagName: "div",
+    selector: "div.hero",
+    elementId: null,
+    classNames: [],
+    textPreview: "Hello",
+    inlineStyle: "",
+    ariaRole: null,
+    accessibleName: null,
+    box: { x: 0, y: 0, width: 100, height: 40 },
+    computedStyles: [{ property: "width", value: "100px" }],
+    generated: false,
+    ...overrides,
+  };
+}
+
+function selectionOf(
+  elementOverrides: Partial<CanvasElement>,
+  servedSha256: string,
+): CanvasSelection {
+  return {
+    artifactId: ARTIFACT_ID,
+    boardPath: "boards/home.html",
+    page: null,
+    servedSha256,
+    element: element(elementOverrides),
+    textRange: null,
+  };
+}
+
+function inputLabelled(label: string): HTMLInputElement {
+  const found = screen.getByLabelText(label);
+  if (!(found instanceof HTMLInputElement)) throw new Error("not an input");
+  return found;
+}
+
+function panel(): HTMLElement {
+  return screen.getByRole("region", { name: "Element properties" });
+}
+
+function advance(ms: number): void {
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+}
+
+async function settleSave(
+  index: number,
+  response: EpicEditArtboardResponse,
+): Promise<void> {
+  await act(async () => {
+    pendingSaves[index].settle(response);
+    await Promise.resolve();
+  });
+}
+
+async function failSave(index: number): Promise<void> {
+  await act(async () => {
+    pendingSaves[index].fail(new Error("host unreachable"));
+    await Promise.resolve();
+  });
+}
+
+const REFUSED: EpicEditArtboardResponse = {
+  ok: false,
+  reason: "stale",
+  detail: "The artboard changed. Select the element again and retry.",
+};
+
+const SAVED: EpicEditArtboardResponse = {
+  ok: true,
+  tid: "t1",
+  sha256After: "a".repeat(64),
+  splices: [],
+};
+
+describe("CanvasPropertiesPanel while a save is pending", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    pendingSaves.length = 0;
+    act(() => {
+      useCanvasSelectionStore.getState().select(selectionOf({}, "sha-old"));
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    act(() => {
+      useCanvasSelectionStore.getState().clear();
+    });
+    vi.useRealTimers();
+  });
+
+  it("keeps the edited field enabled and focused from typing through the save to the refreshed frame", async () => {
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const width = inputLabelled("Width");
+    width.focus();
+    expect(document.activeElement).toBe(width);
+
+    fireEvent.change(width, { target: { value: "200px" } });
+    advance(DEBOUNCE_MS);
+
+    // The debounced edit went out once, against the revision that was served.
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-style",
+      property: "width",
+      value: "200px",
+    });
+    expect(pendingSaves[0].variables.selection.servedSha256).toBe("sha-old");
+
+    // Pending: the host has not answered, yet the person can keep typing.
+    expect(panel().getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByTestId("saving-spinner")).not.toBeNull();
+    expect(width.disabled).toBe(false);
+    expect(inputLabelled("Height").disabled).toBe(false);
+    expect(document.activeElement).toBe(width);
+
+    await settleSave(0, SAVED);
+    expect(width.disabled).toBe(false);
+    expect(document.activeElement).toBe(width);
+
+    // The replacement frame reports the new style and revision.
+    act(() => {
+      useCanvasSelectionStore
+        .getState()
+        .select(
+          selectionOf(
+            { computedStyles: [{ property: "width", value: "200px" }] },
+            "sha-new",
+          ),
+        );
+    });
+
+    expect(inputLabelled("Width")).toBe(width);
+    expect(document.activeElement).toBe(width);
+    expect(width.value).toBe("200px");
+    expect(width.disabled).toBe(false);
+    expect(panel().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.queryByTestId("saving-spinner")).toBeNull();
+    // Nothing re-sent the committed value on the way.
+    advance(DEBOUNCE_MS * 2);
+    expect(pendingSaves).toHaveLength(1);
+  });
+
+  it("accepts the next edit while the first save is still pending", async () => {
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const width = inputLabelled("Width");
+    width.focus();
+
+    fireEvent.change(width, { target: { value: "200px" } });
+    advance(DEBOUNCE_MS);
+    expect(pendingSaves).toHaveLength(1);
+
+    fireEvent.change(width, { target: { value: "300px" } });
+    advance(DEBOUNCE_MS);
+
+    expect(pendingSaves).toHaveLength(2);
+    expect(pendingSaves[1].variables.edit).toEqual({
+      kind: "set-style",
+      property: "width",
+      value: "300px",
+    });
+    expect(width.value).toBe("300px");
+    expect(document.activeElement).toBe(width);
+
+    await settleSave(0, SAVED);
+    expect(panel().getAttribute("aria-busy")).toBe("true");
+    await settleSave(1, SAVED);
+    expect(panel().getAttribute("aria-busy")).not.toBe("true");
+    expect(document.activeElement).toBe(width);
+  });
+
+  it("keeps focus and shows the refusal when the host turns the edit down", async () => {
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const width = inputLabelled("Width");
+    width.focus();
+
+    fireEvent.change(width, { target: { value: "200px" } });
+    advance(DEBOUNCE_MS);
+    await settleSave(0, {
+      ok: false,
+      reason: "stale",
+      detail: "The artboard changed. Select the element again and retry.",
+    });
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "The artboard changed. Select the element again and retry.",
+    );
+    expect(document.activeElement).toBe(width);
+    expect(width.disabled).toBe(false);
+    expect(panel().getAttribute("aria-busy")).not.toBe("true");
+  });
+
+  it("disables the fields only for an element with no editable source", () => {
+    act(() => {
+      useCanvasSelectionStore
+        .getState()
+        .select(selectionOf({ marker: null, tid: null }, "sha-old"));
+    });
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+
+    expect(inputLabelled("Width").disabled).toBe(true);
+    expect(
+      screen.queryByText("Ask the agent to change this element."),
+    ).not.toBeNull();
+  });
+  // A field is "saved" only once the host accepted it. A refusal or a failed
+  // request leaves the person's text retryable instead of treating it as sent.
+  for (const failure of ["refused", "failed"] as const) {
+    const fail = (index: number): Promise<void> =>
+      failure === "refused" ? settleSave(index, REFUSED) : failSave(index);
+    const message =
+      failure === "refused"
+        ? REFUSED.detail
+        : "The change could not be saved. Try again.";
+
+    it(`shows the ${failure} save and sends the same value again on Enter`, async () => {
+      render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+      const width = inputLabelled("Width");
+      width.focus();
+
+      fireEvent.change(width, { target: { value: "200px" } });
+      advance(DEBOUNCE_MS);
+      expect(pendingSaves).toHaveLength(1);
+
+      await fail(0);
+      expect(screen.getByRole("status").textContent).toBe(message);
+      expect(width.value).toBe("200px");
+
+      fireEvent.keyDown(width, { key: "Enter" });
+      expect(pendingSaves).toHaveLength(2);
+      expect(pendingSaves[1].variables.edit).toEqual(
+        pendingSaves[0].variables.edit,
+      );
+      expect(document.activeElement).toBe(width);
+
+      await settleSave(1, SAVED);
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it(`sends the same value again on blur after a ${failure} save`, async () => {
+      render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+      const width = inputLabelled("Width");
+
+      fireEvent.change(width, { target: { value: "200px" } });
+      advance(DEBOUNCE_MS);
+      await fail(0);
+
+      fireEvent.blur(width);
+      expect(pendingSaves).toHaveLength(2);
+      expect(pendingSaves[1].variables.edit).toEqual({
+        kind: "set-style",
+        property: "width",
+        value: "200px",
+      });
+    });
+
+    it(`keeps text typed after a ${failure} save, and Escape returns to the saved value without a phantom edit`, async () => {
+      render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+      const width = inputLabelled("Width");
+      width.focus();
+
+      fireEvent.change(width, { target: { value: "200px" } });
+      fireEvent.keyDown(width, { key: "Enter" });
+      expect(pendingSaves).toHaveLength(1);
+      // Newer text, typed while the first save is still being answered.
+      fireEvent.change(width, { target: { value: "300px" } });
+      advance(100);
+
+      await fail(0);
+      expect(width.value).toBe("300px");
+
+      fireEvent.keyDown(width, { key: "Escape" });
+      // The saved width, not the 200px that never was.
+      expect(width.value).toBe("100px");
+      fireEvent.blur(width);
+      advance(DEBOUNCE_MS * 2);
+      expect(pendingSaves).toHaveLength(1);
+      expect(width.value).toBe("100px");
+    });
+  }
+
+  it("refuses a locally invalid value without a save, keeps it, and sends it once it is fixed", () => {
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const width = inputLabelled("Width");
+    width.focus();
+
+    fireEvent.change(width, { target: { value: "banana" } });
+    fireEvent.keyDown(width, { key: "Enter" });
+
+    expect(pendingSaves).toHaveLength(0);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Invalid value for width.",
+    );
+    expect(width.value).toBe("banana");
+
+    // The same refused value is refused again, not remembered as sent.
+    fireEvent.keyDown(width, { key: "Enter" });
+    expect(pendingSaves).toHaveLength(0);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Invalid value for width.",
+    );
+
+    fireEvent.change(width, { target: { value: "200px" } });
+    fireEvent.keyDown(width, { key: "Enter" });
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-style",
+      property: "width",
+      value: "200px",
+    });
+  });
+});

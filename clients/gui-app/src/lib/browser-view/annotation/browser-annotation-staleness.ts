@@ -19,15 +19,16 @@ export function annotationStalenessHint(
   record: BrowserAnnotationRecord,
   sessions: ReadonlyArray<BrowserSessionInfo> | null,
 ): AnnotationStalenessHint {
-  if (sessions === null) return null;
+  const source = record.source;
+  if (sessions === null || source.kind === "canvas") return null;
   for (const session of sessions) {
-    if (session.sessionId !== record.sessionId) continue;
+    if (session.sessionId !== source.sessionId) continue;
     for (const tab of session.tabs) {
-      if (tab.tabId !== record.tabId) continue;
+      if (tab.tabId !== source.tabId) continue;
       if (tab.status === "closing" || tab.status === "crashed") {
         return "closed";
       }
-      return tab.url === record.pageUrl ? null : "navigated";
+      return tab.url === source.pageUrl ? null : "navigated";
     }
     return null;
   }

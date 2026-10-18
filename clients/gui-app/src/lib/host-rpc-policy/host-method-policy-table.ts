@@ -1127,6 +1127,11 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
   "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
   // An on-demand object copy can outlast the host's read deadline.
+  "epic.editArtboard": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "epic.readArtifactObject": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("epic.readArtifactObject", {

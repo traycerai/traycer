@@ -194,6 +194,7 @@ export const RunnerHostInvoke = {
   traycerConfigEnvSet: "runnerHost:traycer:config:env:set",
   traycerConfigEnvDelete: "runnerHost:traycer:config:env:delete",
   recentDocumentAdd: "runnerHost:recentDocuments:add",
+  windowCaptureRegion: "runnerHost:window:captureRegion",
   windowFlashFrame: "runnerHost:window:flashFrame",
   windowSetProgressBar: "runnerHost:window:setProgressBar",
   windowSetBadge: "runnerHost:app:setBadge",

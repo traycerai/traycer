@@ -1,3 +1,7 @@
+import type {
+  CanvasPageError,
+  CanvasTextSelection,
+} from "@/lib/sandbox/canvas-bridge";
 import {
   useEffectEvent,
   useLayoutEffect,
@@ -66,6 +70,7 @@ export type SandboxSource =
   | { readonly kind: "html"; readonly html: string }
   | {
       readonly kind: "artifact";
+      readonly canvas?: boolean;
       readonly artifactId: string;
       /** POSIX path from the artifacts tree root; empty for a top-level artifact. */
       readonly treePath: string;
@@ -84,6 +89,7 @@ function sameSource(previous: SandboxSource, next: SandboxSource): boolean {
     previous.artifactId === next.artifactId &&
     previous.treePath === next.treePath &&
     previous.entryPath === next.entryPath &&
+    previous.canvas === next.canvas &&
     previous.manifest === next.manifest &&
     previous.readSpan === next.readSpan &&
     previous.resolveOutsideReference === next.resolveOutsideReference
@@ -119,6 +125,9 @@ function artifactUnavailable(
 }
 
 export interface SandboxFrameProps {
+  readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
+  readonly onPageError?: (error: CanvasPageError) => void;
+  readonly onRelativeLink?: (href: string) => void;
   readonly source: SandboxSource;
   readonly kind: SandboxKind;
   readonly title: string;
@@ -315,6 +324,16 @@ export function SandboxFrame(props: SandboxFrameProps) {
     }
   };
 
+  const onTextSelection = useEffectEvent(
+    (selection: CanvasTextSelection | null) =>
+      props.onTextSelection?.(selection),
+  );
+  const onPageError = useEffectEvent((error: CanvasPageError) =>
+    props.onPageError?.(error),
+  );
+  const onRelativeLink = useEffectEvent((href: string) =>
+    props.onRelativeLink?.(href),
+  );
   const onSize = useEffectEvent((size: SandboxSize) => props.onSize(size));
   const onStatus = useEffectEvent((status: SandboxStatus) =>
     props.onStatus(status),
@@ -426,6 +445,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       readSpan: inputs.source.readSpan,
       resolveOutsideReference: inputs.source.resolveOutsideReference,
       document: {
+        canvas: inputs.source.canvas,
         policySource: inputs.runnerHost.sandboxArtifacts.policySource,
         csp: inputs.policy.csp,
         theme: inputs.theme,
@@ -488,6 +508,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
         inputs.source.kind === "artifact"
           ? {
               kind: "served",
+              canvas: inputs.source.canvas,
               nonce: served?.nonce ?? "",
               forwardedShortcuts: served?.forwardedShortcuts ?? [],
             }
@@ -515,6 +536,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
       hostVersion: getClientAppVersionLabel(),
       post: (message) => iframe.contentWindow?.postMessage(message, "*"),
       events: {
+        onTextSelection,
+        onPageError,
+        onRelativeLink,
         onStatus: onBridgeStatus,
         onSize,
         onOpenLink,

@@ -1,3 +1,17 @@
+import {
+  canvasRecord,
+  parseCanvasBox,
+  parseCanvasElement,
+  parseCanvasPageError,
+  parseCanvasRelativeLink,
+  parseCanvasTextSelection,
+  type CanvasBox,
+  type CanvasElement,
+  type CanvasElementLocator,
+  type CanvasMode,
+  type CanvasPageError,
+  type CanvasTextSelection,
+} from "./canvas-bridge";
 import type { ResolvedTheme } from "@/lib/theme-applier";
 import {
   isForwardedShortcut,
@@ -82,6 +96,9 @@ const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
+  readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
+  readonly onPageError?: (error: CanvasPageError) => void;
+  readonly onRelativeLink?: (href: string) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onSize: (size: SandboxSize) => void;
   /**
@@ -118,6 +135,7 @@ export interface SandboxBridgeHostOptions {
       }
     | {
         readonly kind: "served";
+        readonly canvas?: boolean;
         readonly nonce: string;
         readonly forwardedShortcuts: readonly ForwardedShortcut[];
       };
@@ -355,6 +373,131 @@ export class SandboxBridgeHost {
     (answered: boolean) => void
   >();
   private readonly timers = new Set<number>();
+  private readonly canvasResponses = new Map<
+    RequestId,
+    {
+      readonly timer: number;
+      readonly settle: (result: Record<string, unknown> | null) => void;
+    }
+  >();
+
+  hitTest(point: {
+    readonly x: number;
+    readonly y: number;
+  }): Promise<CanvasElement | null> {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y))
+      return Promise.resolve(null);
+    return this.canvasRequest("hit-test", point).then((result) =>
+      parseCanvasElement(result?.element),
+    );
+  }
+
+  setTextSelectionTarget(
+    locator: CanvasElementLocator | null,
+  ): Promise<boolean> {
+    return this.canvasRequest("set-text-selection-target", {
+      target: locator,
+    }).then((result) => result !== null);
+  }
+
+  describeElement(
+    locator: CanvasElementLocator,
+  ): Promise<CanvasElement | null> {
+    return this.canvasRequest("describe-element", locator).then((result) =>
+      parseCanvasElement(result?.element),
+    );
+  }
+
+  elementBox(locator: CanvasElementLocator): Promise<CanvasBox | null> {
+    return this.canvasRequest("element-box", locator).then((result) =>
+      parseCanvasBox(result?.box),
+    );
+  }
+
+  setMode(mode: CanvasMode): Promise<boolean> {
+    return this.canvasRequest("set-mode", { mode }).then(
+      (result) => result !== null,
+    );
+  }
+
+  private canvasDocumentProven(): boolean {
+    return (
+      this.options.document.kind === "served" &&
+      this.options.document.canvas === true &&
+      this.phase === "ready"
+    );
+  }
+
+  private canvasEnabled(): boolean {
+    return this.canvasDocumentProven() && !this.crashed;
+  }
+
+  private canvasRequest(
+    method: string,
+    params: object,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.canvasEnabled() || this.canvasResponses.size >= 32)
+      return Promise.resolve(null);
+    return new Promise((settle) => {
+      this.nextRequestId += 1;
+      const id = `traycer-canvas-${this.nextRequestId}`;
+      const timer = window.setTimeout(() => {
+        this.canvasResponses.delete(id);
+        settle(null);
+      }, PING_TIMEOUT_MS);
+      this.canvasResponses.set(id, { timer, settle });
+      this.post({
+        jsonrpc: "2.0",
+        id,
+        method: `traycer/canvas/${method}`,
+        params: { ...params, nonce: this.options.document.nonce },
+      });
+    });
+  }
+
+  private receiveCanvasResponse(data: unknown, id: RequestId): boolean {
+    const pending = this.canvasResponses.get(id);
+    if (pending === undefined) return false;
+    if (
+      !this.canvasEnabled() ||
+      !canvasRecord(data) ||
+      !canvasRecord(data.result) ||
+      data.result.nonce !== this.options.document.nonce
+    )
+      return true;
+    this.canvasResponses.delete(id);
+    window.clearTimeout(pending.timer);
+    pending.settle(data.result);
+    return true;
+  }
+
+  private receiveCanvasNotification(method: string, params: unknown): void {
+    if (
+      !this.canvasDocumentProven() ||
+      !canvasRecord(params) ||
+      params.nonce !== this.options.document.nonce
+    )
+      return;
+    // Startup/liveness failures can mark a proven page crashed before its
+    // buffered error arrives. Diagnostics still belong on that board's pill.
+    if (method === "traycer/canvas/page-error") {
+      const error = parseCanvasPageError(params);
+      if (error !== null) this.options.events.onPageError?.(error);
+      return;
+    }
+    if (!this.canvasEnabled()) return;
+    if (method === "traycer/canvas/text-selection") {
+      if (params.selection === null) {
+        this.options.events.onTextSelection?.(null);
+        return;
+      }
+      const selection = parseCanvasTextSelection(params);
+      if (selection !== null) this.options.events.onTextSelection?.(selection);
+    } else if (method === "traycer/canvas/relative-link") {
+      const href = parseCanvasRelativeLink(params);
+      if (href !== null) this.options.events.onRelativeLink?.(href);
+    }
+  }
 
   constructor(options: SandboxBridgeHostOptions) {
     this.options = options;
@@ -400,10 +543,7 @@ export class SandboxBridgeHost {
     const message = parseInbound(json.value);
     if (message === null) return;
     if (message.isResponse) {
-      if (message.id === null) return;
-      const settle = this.pendingResponses.get(message.id);
-      this.pendingResponses.delete(message.id);
-      settle?.(true);
+      this.settleResponse(message.id, json.value);
       return;
     }
     if (message.method === "ui/notifications/sandbox-proxy-ready") {
@@ -412,6 +552,13 @@ export class SandboxBridgeHost {
     }
     if (!this.canDispatch(message.method)) return;
     this.dispatch(message);
+  }
+
+  private settleResponse(id: RequestId | null, value: unknown): void {
+    if (id === null || this.receiveCanvasResponse(value, id)) return;
+    const settle = this.pendingResponses.get(id);
+    this.pendingResponses.delete(id);
+    settle?.(true);
   }
 
   private canDispatch(method: string | null): boolean {
@@ -484,6 +631,11 @@ export class SandboxBridgeHost {
     const unanswered = [...this.pendingResponses.values()];
     this.pendingResponses.clear();
     for (const settle of unanswered) settle(false);
+    for (const { timer, settle } of this.canvasResponses.values()) {
+      window.clearTimeout(timer);
+      settle(null);
+    }
+    this.canvasResponses.clear();
     this.queuedNotifications.length = 0;
     try {
       // The frame takes down a confirm it is showing on "disposed", so this
@@ -550,6 +702,29 @@ export class SandboxBridgeHost {
     }
   }
 
+  private relayShortcut(params: unknown): void {
+    const press = parseShortcutPress(params);
+    if (press === null) return;
+    const forwarded = documentShortcuts(this.options.document);
+    // Bare Escape leaves fullscreen or clears an inline canvas selection.
+    const exitsFullscreen =
+      this.phase === "ready" &&
+      this.hostContext.displayMode === "fullscreen" &&
+      isForwardedShortcut([FULLSCREEN_EXIT], press);
+    const clearsCanvasSelection =
+      this.canvasEnabled() &&
+      isRecord(params) &&
+      params.nonce === this.options.document.nonce &&
+      isForwardedShortcut([FULLSCREEN_EXIT], press);
+    if (
+      exitsFullscreen ||
+      clearsCanvasSelection ||
+      isForwardedShortcut(forwarded, press)
+    ) {
+      this.options.events.onShortcut(press);
+    }
+  }
+
   private dispatch(message: InboundMessage): void {
     const { method, id, params } = message;
     switch (method) {
@@ -559,20 +734,9 @@ export class SandboxBridgeHost {
       case "traycer/notifications/early-error":
         if (this.phase === "delivered") this.earlyError = true;
         return;
-      case "traycer/notifications/shortcut": {
-        const press = parseShortcutPress(params);
-        if (press === null) return;
-        const forwarded = documentShortcuts(this.options.document);
-        // Bare Escape only from the proven page, and only while fullscreen.
-        const exitsFullscreen =
-          this.phase === "ready" &&
-          this.hostContext.displayMode === "fullscreen" &&
-          isForwardedShortcut([FULLSCREEN_EXIT], press);
-        if (exitsFullscreen || isForwardedShortcut(forwarded, press)) {
-          this.options.events.onShortcut(press);
-        }
+      case "traycer/notifications/shortcut":
+        this.relayShortcut(params);
         return;
-      }
       case "ui/notifications/size-changed":
         if (isRecord(params)) {
           this.options.events.onSize({
@@ -592,6 +756,7 @@ export class SandboxBridgeHost {
     }
     if (method === null) return;
     if (id === null) {
+      this.receiveCanvasNotification(method, params);
       this.relayScroll(method, params);
       return;
     }
