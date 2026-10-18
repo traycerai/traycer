@@ -10,26 +10,29 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
 
-const mocks = vi.hoisted(() => ({
-  hostClient: { stub: "tab-host-client" },
-  send: vi.fn<
-    (variables: {
-      botId: string;
-      conversationId: string;
-      text: string;
-    }) => void
-  >(),
-  state: {
-    // `null` is an unanswered list (the query has no data yet); `[]` is an
-    // answered, empty one - the two states the view tells apart.
-    conversations: [] as Array<{
-      conversationId: string;
-      createdAt: number;
-    }> | null,
-    isError: false,
-    delivery: "written",
-  },
-}));
+const mocks = vi.hoisted(() => {
+  const initialDelivery = (): BotConversationSendDelivery => "written";
+  return {
+    hostClient: { stub: "tab-host-client" },
+    send: vi.fn<
+      (variables: {
+        botId: string;
+        conversationId: string;
+        text: string;
+      }) => void
+    >(),
+    state: {
+      // `null` is an unanswered list (the query has no data yet); `[]` is an
+      // answered, empty one - the two states the view tells apart.
+      conversations: [] as Array<{
+        conversationId: string;
+        createdAt: number;
+      }> | null,
+      isError: false,
+      delivery: initialDelivery(),
+    },
+  };
+});
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.hostClient,

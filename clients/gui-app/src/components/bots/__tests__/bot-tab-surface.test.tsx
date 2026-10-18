@@ -25,7 +25,12 @@ const mocks = vi.hoisted(() => ({
     directory: [] as Array<{ hostId: string; label: string }>,
     listedBotIds: undefined as string[] | undefined,
     claimPending: false,
+    support: null as boolean | null,
   },
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: () => mocks.state.support,
 }));
 
 vi.mock("@/components/epic-canvas/tab-host-provider", () => ({
@@ -121,7 +126,7 @@ const BOUND_HOST = "host-bound";
 const BOT: BotRecord = {
   botId: BOT_ID,
   environmentId: "env-personal",
-  ownerUserId: "user-1",
+  createdByUserId: "user-1",
   title: "Release Bot",
   harness: "claude",
   model: "opus",
@@ -135,7 +140,7 @@ const BOT: BotRecord = {
 };
 
 function snapshotBoundTo(
-  hostId: string,
+  hostId: string | null,
   isThisHost: boolean,
 ): BotSubscriptionSnapshot {
   return {
@@ -167,6 +172,7 @@ beforeEach(() => {
   ];
   mocks.state.listedBotIds = undefined;
   mocks.state.claimPending = false;
+  mocks.state.support = true;
   useBotTabsStore.setState({ tabs: {} });
   useBotTabsStore
     .getState()
@@ -177,6 +183,30 @@ afterEach(() => {
   cleanup();
 });
 
+describe("<BotTabSurface /> on a host without bots", () => {
+  it("shows the update notice naming the host and none of the tab's controls when the host lacks bot.list", () => {
+    mocks.state.support = false;
+    mocks.state.snapshot = snapshotBoundTo(BOUND_HOST, false);
+    render(surface());
+
+    expect(screen.getByTestId("bot-tab-unavailable").textContent).toContain(
+      "Bots aren't available on Laptop yet",
+    );
+    expect(screen.queryByTestId("bot-tab-bound-elsewhere")).toBeNull();
+    expect(screen.queryByTestId("bot-tab-move-here")).toBeNull();
+    expect(screen.queryByTestId("stub-conversation")).toBeNull();
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+  });
+
+  it("draws nothing until the handshake has answered either way", () => {
+    mocks.state.support = null;
+    const { container } = render(surface());
+
+    expect(container.textContent).toBe("");
+    expect(screen.queryByTestId("stub-conversation")).toBeNull();
+  });
+});
+
 describe("<BotTabSurface /> bound elsewhere", () => {
   it("offers View and Move it here, with no offline wording, while the bound host is dialable", () => {
     mocks.state.snapshot = snapshotBoundTo(BOUND_HOST, false);
@@ -184,12 +214,14 @@ describe("<BotTabSurface /> bound elsewhere", () => {
 
     const banner = screen.getByTestId("bot-tab-bound-elsewhere");
     expect(banner.getAttribute("data-offline")).toBe("false");
-    expect(screen.getByRole("button", { name: "View on Studio Mac" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "View on Studio Mac" }),
+    ).toBeTruthy();
     expect(screen.getByTestId("bot-tab-move-here")).toBeTruthy();
     expect(
-      screen.getByTestId("stub-conversation").getAttribute(
-        "data-offline-host-label",
-      ),
+      screen
+        .getByTestId("stub-conversation")
+        .getAttribute("data-offline-host-label"),
     ).toBe("none");
   });
 
@@ -214,10 +246,29 @@ describe("<BotTabSurface /> bound elsewhere", () => {
 
     await user.click(screen.getByTestId("bot-tab-view-under-the-hood"));
     expect(
-      screen.getByTestId("stub-under-the-hood").getAttribute(
-        "data-offline-host-label",
-      ),
+      screen
+        .getByTestId("stub-under-the-hood")
+        .getAttribute("data-offline-host-label"),
     ).toBe("Studio Mac");
+  });
+
+  it("says no host runs the bot and offers only Move it here when its bound host is null", () => {
+    mocks.state.snapshot = snapshotBoundTo(null, false);
+    // Even before the directory answers: a bot no host runs is never dialable.
+    mocks.state.connectable = { hostIds: [], resolved: false };
+    render(surface());
+
+    const banner = screen.getByTestId("bot-tab-bound-elsewhere");
+    expect(banner.getAttribute("data-offline")).toBe("true");
+    expect(banner.textContent).toContain("No host runs this bot");
+    expect(banner.textContent).not.toContain("delivered when it is back");
+    expect(screen.queryByRole("button", { name: /^View on/ })).toBeNull();
+    expect(screen.getByTestId("bot-tab-move-here")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("stub-conversation")
+        .getAttribute("data-offline-host-label"),
+    ).toBe("No host");
   });
 
   it("does not call the host offline before the directory has answered", () => {
@@ -226,12 +277,14 @@ describe("<BotTabSurface /> bound elsewhere", () => {
     render(surface());
 
     expect(
-      screen.getByTestId("bot-tab-bound-elsewhere").getAttribute("data-offline"),
+      screen
+        .getByTestId("bot-tab-bound-elsewhere")
+        .getAttribute("data-offline"),
     ).toBe("false");
     expect(
-      screen.getByTestId("stub-conversation").getAttribute(
-        "data-offline-host-label",
-      ),
+      screen
+        .getByTestId("stub-conversation")
+        .getAttribute("data-offline-host-label"),
     ).toBe("none");
   });
 
@@ -254,9 +307,9 @@ describe("<BotTabSurface /> bound elsewhere", () => {
 
     expect(screen.queryByTestId("bot-tab-bound-elsewhere")).toBeNull();
     expect(
-      screen.getByTestId("stub-conversation").getAttribute(
-        "data-offline-host-label",
-      ),
+      screen
+        .getByTestId("stub-conversation")
+        .getAttribute("data-offline-host-label"),
     ).toBe("none");
   });
 });
@@ -290,12 +343,16 @@ describe("<BotTabSurface /> tab lifetime", () => {
   it("keeps the tab while bot.list carries the bot or has not answered", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     const view = render(surface());
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).not.toBeNull();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
+    ).not.toBeNull();
 
     view.unmount();
     mocks.state.listedBotIds = undefined;
     render(surface());
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).not.toBeNull();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
+    ).not.toBeNull();
   });
 
   it("closes the tab on the stream's deleted frame", () => {

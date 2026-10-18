@@ -38,7 +38,7 @@ function bot(
   return {
     botId,
     environmentId,
-    ownerUserId: "user-1",
+    createdByUserId: "user-1",
     title,
     harness: "claude",
     model: "opus",
@@ -59,22 +59,24 @@ function trackingTask(
 ): BotTaskEntry {
   return {
     taskId,
-    cadence: nextAt === null ? { kind: "on-completion" } : { kind: "every", seconds: 60 },
+    cadence:
+      nextAt === null
+        ? { kind: "on-completion" }
+        : { kind: "every", seconds: 60 },
     lastCheckinAt,
+    lastCheckin: null,
     nextAt,
     state: "tracking",
     endedReason: null,
   };
 }
 
-function endedTask(
-  taskId: string,
-  lastCheckinAt: number | null,
-): BotTaskEntry {
+function endedTask(taskId: string, lastCheckinAt: number | null): BotTaskEntry {
   return {
     taskId,
     cadence: { kind: "none" },
     lastCheckinAt,
+    lastCheckin: null,
     nextAt: null,
     state: "ended",
     endedReason: "by-bot",
@@ -234,7 +236,11 @@ describe("buildHomeBotRow", () => {
   });
 
   it("takes the snapshot's host, request hint and folded tasks when one arrives", () => {
-    const fresher: BotRecord = { ...record, title: "Fresh title", model: "sonnet" };
+    const fresher: BotRecord = {
+      ...record,
+      title: "Fresh title",
+      model: "sonnet",
+    };
     const row = buildHomeBotRow(
       record,
       snapshot({

@@ -63,6 +63,56 @@ export const STDERR_FATAL_WINDOW_MAX_BYTES = 2048;
  */
 const FATAL_NEEDLES = ["FATAL ERROR", "# Fatal error"] as const;
 
+/**
+ * The closed set of fatal kinds a stderr capture can be sorted into, the only
+ * thing about the capture that leaves the machine (as the crash event's
+ * `host_fatal` tag). Never the text, a path or a number read from it.
+ *
+ * - `v8-heap-oom`: a `FATAL ERROR:` line naming heap exhaustion. Node's
+ *   `OOMErrorHandler` (src/node_errors.cc) prints
+ *   `FATAL ERROR: <location> Allocation failed - JavaScript heap out of
+ *   memory` when V8 reports `is_heap_oom`, where `<location>` is V8's own
+ *   (`Reached heap limit`, `Ineffective mark-compacts near heap limit`,
+ *   `CALL_AND_RETRY_LAST`, ...).
+ * - `v8-fatal`: any other `FATAL ERROR:` line (`OnFatalError`: a failed
+ *   `ToLocalChecked`, a native addon's `napi_fatal_error`, and
+ *   `Allocation failed - process out of memory`, the non-heap OOM).
+ * - `check-failed`: a `# Fatal error in ...` block, V8's own CHECK/FATAL
+ *   output (`V8_Fatal`).
+ * - `assertion`: a native assertion line, MSVC CRT / libuv on Windows
+ *   (`Assertion failed: <expr>, file src\win\..., line N`) or the glibc and
+ *   Node `CHECK` form (``Assertion `<expr>' failed.``).
+ * - `none`: the child wrote nothing to stderr.
+ * - `incomplete`: nothing recognised and the stderr stream had not ended when
+ *   the capture was read, so bytes may still have been unread.
+ * - `other`: it wrote, and nothing matched.
+ */
+export const STDERR_FATAL_KINDS = [
+  "v8-heap-oom",
+  "v8-fatal",
+  "check-failed",
+  "assertion",
+  "none",
+  "incomplete",
+  "other",
+] as const;
+
+export type StderrFatalKind = (typeof STDERR_FATAL_KINDS)[number];
+
+/** Heap-exhaustion wording in a `FATAL ERROR:` line (V8 and Node's own). */
+const HEAP_OOM_LINE = /heap out of memory|heap limit/;
+
+/**
+ * Node `CHECK` (`  #  Assertion failed: <expr>`), and the MSVC CRT / libuv on
+ * Windows and macOS `assert` (`Assertion failed: <expr>, [function f, ]file
+ * <path>, line N`). Never the bare phrase: `console.assert` writes
+ * `Assertion failed: <msg>` to stderr too, and so can any log line.
+ */
+const ASSERTION_FAILED_FORM =
+  /^[ \t]*#[ \t]*Assertion failed:|Assertion failed: [^\n]{0,512}, file [^\n]{1,512}, line \d+/m;
+/** glibc `assert` and Node's `CHECK`: ``Assertion `expr' failed.``. */
+const ASSERTION_QUOTED_FORM = /Assertion `[^\n]{0,512}' failed\./;
+
 /** Carried across chunk boundaries so a split needle is still detected. */
 const FATAL_BOUNDARY_CHARS = 16;
 
@@ -291,6 +341,48 @@ export class StderrCaptureBuffer {
 
   isEmpty(): boolean {
     return this.headBytes === 0 && this.tailBytes === 0;
+  }
+
+  /**
+   * Which kind of fatal the capture holds (see {@link StderrFatalKind}).
+   * Reads only what is already held: the FATAL-anchored window decides the
+   * `FATAL ERROR` and `# Fatal error` kinds from its first line, so a heap
+   * OOM block that arrived after kilobytes of earlier stderr is still seen;
+   * an assertion is looked for in the head and the tail, where its line
+   * lands. Bounded by the capture's own byte caps and never throws.
+   *
+   * `streamEnded` is whether the child's stderr had ended when the capture
+   * was read; a capture with nothing recognised that was read early is
+   * `incomplete`, not `none` or `other`.
+   */
+  classifyFatal(streamEnded: boolean): StderrFatalKind {
+    try {
+      if (this.fatalText !== null) {
+        const newline = this.fatalText.indexOf("\n");
+        const firstLine =
+          newline === -1 ? this.fatalText : this.fatalText.slice(0, newline);
+        if (firstLine.startsWith("# Fatal error")) return "check-failed";
+        return HEAP_OOM_LINE.test(firstLine) ? "v8-heap-oom" : "v8-fatal";
+      }
+      if (this.isEmpty()) {
+        return streamEnded ? "none" : "incomplete";
+      }
+      const held =
+        Buffer.concat(this.headChunks).toString("utf8") +
+        // Contiguous unless the middle was dropped; a separator inside an
+        // unbroken stream would split a line across the head/tail boundary.
+        (this.elidedBytes > 0 ? "\n" : "") +
+        Buffer.concat(this.tailChunks).toString("utf8");
+      if (
+        ASSERTION_FAILED_FORM.test(held) ||
+        ASSERTION_QUOTED_FORM.test(held)
+      ) {
+        return "assertion";
+      }
+      return streamEnded ? "other" : "incomplete";
+    } catch {
+      return "other";
+    }
   }
 
   /**

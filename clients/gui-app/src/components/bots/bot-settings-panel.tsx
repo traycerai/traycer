@@ -134,7 +134,12 @@ function BotRunSettingsForm(props: {
     null,
     fallbackSeedSource(botSeed, client),
     null,
-    { hostClient: client, hostId, tuiOnly: false, chatLineCarriesAutoMode: null },
+    {
+      hostClient: client,
+      hostId,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+    },
   );
   const selection = useStore(toolbarStore, (s) => s.selection);
   const reasoning = useStore(toolbarStore, (s) => s.reasoning);
@@ -145,7 +150,10 @@ function BotRunSettingsForm(props: {
     effort === bot.effort &&
     selection.profileId === bot.profile;
   const canApply =
-    canEdit && !unchanged && selection.modelSlug.length > 0 && !update.isPending;
+    canEdit &&
+    !unchanged &&
+    selection.modelSlug.length > 0 &&
+    !update.isPending;
   return (
     <section
       className="flex flex-col gap-2"

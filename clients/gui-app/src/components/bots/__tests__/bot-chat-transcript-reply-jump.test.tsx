@@ -8,16 +8,18 @@
  * the scroll request it was handed.
  */
 import { StrictMode, type ReactNode } from "react";
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   AgentSender,
@@ -84,9 +86,8 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
-  const { ChatExpansionTestProviders } = await import(
-    "@/components/chat/__tests__/chat-expansion-test-providers"
-  );
+  const { ChatExpansionTestProviders } =
+    await import("@/components/chat/__tests__/chat-expansion-test-providers");
   const { ChatMessage } = await import("@/components/chat/chat-message");
   const { TooltipProvider } = await import("@/components/ui/tooltip");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
@@ -335,9 +336,9 @@ describe("<BotChatTranscript /> See reply", () => {
     expect(rowId).not.toBeNull();
     expect(rowId).not.toBe("reply-first");
     expect(rowId?.startsWith("assistant:")).toBe(true);
-    const row = within(scrollStub()).getByText("First part").closest(
-      "[data-row-id]",
-    );
+    const row = within(scrollStub())
+      .getByText("First part")
+      .closest("[data-row-id]");
     expect(row?.getAttribute("data-row-id")).toBe(rowId);
   });
 

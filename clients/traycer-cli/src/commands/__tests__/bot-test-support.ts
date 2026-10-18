@@ -44,7 +44,7 @@ export function botRecord(overrides: Partial<BotRecord>): BotRecord {
   return {
     botId: BOT_ID_A,
     environmentId: "env-personal",
-    ownerUserId: "user-1",
+    createdByUserId: "user-1",
     title: "Tracy",
     harness: "claude",
     model: "opus",

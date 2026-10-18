@@ -172,7 +172,7 @@ function snapshotFrame(
     bot: {
       botId: "bot_01HZX5Y8K3M2N4P6Q7R8S9T0V1",
       environmentId: "env-1",
-      ownerUserId: "owner-1",
+      createdByUserId: "owner-1",
       title: "Nightly triage",
       harness: "claude",
       model: "claude-opus-5-5",
@@ -475,6 +475,7 @@ describe("botTaskEntrySchema lastCheckin", () => {
     it.each([
       ["running", "working"],
       ["running", "owed-release-work"],
+      ["running", "no-agent-yet"],
       ["running", "resumed-while-composing"],
       ["unknown", "check-failed"],
       ["idle", null],

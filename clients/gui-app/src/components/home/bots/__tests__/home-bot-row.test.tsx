@@ -50,7 +50,7 @@ const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const BOT: BotRecord = {
   botId: BOT_ID,
   environmentId: "env-personal",
-  ownerUserId: "user-1",
+  createdByUserId: "user-1",
   title: "Release Bot",
   harness: "claude",
   model: "opus",
@@ -136,5 +136,30 @@ describe("<HomeBotRow /> open host", () => {
     await user.click(screen.getByTestId("home-bot-row"));
 
     expect(useBotTabsStore.getState().tabs[BOT_ID].hostId).toBe("host-moved");
+  });
+
+  it("renders a bot no host runs as offline, labelled No host, and opens through the effective host", async () => {
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <HomeBotRow
+          bot={{ ...BOT, boundHostId: null }}
+          hostLabels={HOST_LABELS}
+          connectableHostIds={new Set(["host-effective", "host-bound"])}
+        />
+      </StrictMode>,
+    );
+
+    expect(screen.getByTestId("home-bot-host").textContent).toContain(
+      "No host",
+    );
+    expect(screen.getByTestId("home-bot-host").textContent).toContain(
+      "offline",
+    );
+    await user.click(screen.getByTestId("home-bot-row"));
+
+    expect(useBotTabsStore.getState().tabs[BOT_ID].hostId).toBe(
+      "host-effective",
+    );
   });
 });

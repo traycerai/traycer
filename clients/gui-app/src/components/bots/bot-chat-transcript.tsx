@@ -82,7 +82,11 @@ export function BotChatTranscript(props: {
         aria-busy="true"
         data-testid="bot-chat-transcript-connecting"
       >
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
       </div>
     );
   }
@@ -290,40 +294,40 @@ function BotChatTranscriptBody(props: {
 
   return (
     <ChatContainerContext.Provider value={botId}>
-    <ChatConversationRequestContext.Provider
-      value={linkRequests ? scrollToMessage : null}
-    >
-      <div
-        data-chat-keyboard-scroll-scope=""
-        data-active="true"
-        data-testid="bot-chat-transcript"
-        className="flex min-h-0 flex-1 flex-col"
+      <ChatConversationRequestContext.Provider
+        value={linkRequests ? scrollToMessage : null}
       >
-        <ChatMessages
-          taskTitle={title}
-          taskId={chatId}
-          epicId={botId}
-          hostId={hostId}
-          messages={messages}
-          transcriptWindow={transcriptWindow}
-          onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-          onFindReadOrdinalChange={state.requestFindReadOrdinal}
-          baselineEpoch={state.transcriptBaselineEpoch}
-          hydrationSequence={state.transcriptHydrationSequence}
-          coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-          backgroundItems={state.backgroundItems}
-          getMessageActions={getMessageActions}
-          nextStepActions={null}
-          instanceId={instanceId}
-          visible
-          systemOverlayActive={false}
-          scrollRequest={scrollRequest}
-          onScrollRequestSettled={onScrollRequestSettled}
-          composerOverlayHeight={0}
-          subagentDrillIn={subagentDrillIn}
-        />
-      </div>
-    </ChatConversationRequestContext.Provider>
+        <div
+          data-chat-keyboard-scroll-scope=""
+          data-active="true"
+          data-testid="bot-chat-transcript"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <ChatMessages
+            taskTitle={title}
+            taskId={chatId}
+            epicId={botId}
+            hostId={hostId}
+            messages={messages}
+            transcriptWindow={transcriptWindow}
+            onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+            onFindReadOrdinalChange={state.requestFindReadOrdinal}
+            baselineEpoch={state.transcriptBaselineEpoch}
+            hydrationSequence={state.transcriptHydrationSequence}
+            coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+            backgroundItems={state.backgroundItems}
+            getMessageActions={getMessageActions}
+            nextStepActions={null}
+            instanceId={instanceId}
+            visible
+            systemOverlayActive={false}
+            scrollRequest={scrollRequest}
+            onScrollRequestSettled={onScrollRequestSettled}
+            composerOverlayHeight={0}
+            subagentDrillIn={subagentDrillIn}
+          />
+        </div>
+      </ChatConversationRequestContext.Provider>
     </ChatContainerContext.Provider>
   );
 }

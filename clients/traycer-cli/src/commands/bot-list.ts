@@ -14,7 +14,8 @@ import type { CommandFn } from "../runner/runner";
 export interface BotListRow {
   readonly botId: string;
   readonly title: string;
-  readonly boundHostId: string;
+  /** Null when no host runs the bot until a member claims it onto one. */
+  readonly boundHostId: string | null;
   readonly boundToThisHost: boolean;
   /**
    * Null when this bot could not be read, or when the host it was read from
@@ -158,7 +159,7 @@ export function renderBotList(groups: readonly BotListGroup[]): string {
           ? ["  no bots"]
           : group.bots.map(
               (bot) =>
-                `  ${bot.title}  ${bot.botId}  host ${bot.boundHostId}${bot.boundToThisHost ? " (this host)" : ""}  ${describeOpenRequests(bot)}`,
+                `  ${bot.title}  ${bot.botId}  host ${bot.boundHostId ?? "none"}${bot.boundToThisHost ? " (this host)" : ""}  ${describeOpenRequests(bot)}`,
             );
       return [group.label, ...lines].join("\n");
     })

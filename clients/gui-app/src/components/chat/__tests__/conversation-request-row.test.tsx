@@ -79,7 +79,11 @@ describe("<ChatMessage /> conversation request line", () => {
   it("shows an Open badge and no reply link for an unresolved request", () => {
     const scroller = vi.fn();
     renderRow(
-      userRow({ requestId: "req-1", resolvedAt: null, resolvedByMessageId: null }),
+      userRow({
+        requestId: "req-1",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      }),
       scroller,
     );
 
@@ -133,14 +137,18 @@ describe("<ChatMessage /> conversation request line", () => {
 
   it("shows Resolved with no link when no reply row is named", () => {
     renderRow(
-      userRow({ requestId: "req-4", resolvedAt: 5_000, resolvedByMessageId: null }),
+      userRow({
+        requestId: "req-4",
+        resolvedAt: 5_000,
+        resolvedByMessageId: null,
+      }),
       vi.fn(),
     );
 
     expect(
-      screen.getByTestId("conversation-request").getAttribute(
-        "data-request-state",
-      ),
+      screen
+        .getByTestId("conversation-request")
+        .getAttribute("data-request-state"),
     ).toBe("resolved");
     expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
   });

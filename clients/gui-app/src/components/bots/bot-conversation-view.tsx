@@ -81,7 +81,11 @@ export function BotConversationView(props: {
         aria-busy="true"
         data-testid="bot-conversation-loading"
       >
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
       </div>
     );
   }
@@ -100,7 +104,10 @@ export function BotConversationView(props: {
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="bot-conversation">
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      data-testid="bot-conversation"
+    >
       {offlineHostLabel === null ? (
         <BotChatTranscript
           botId={botId}
@@ -173,7 +180,11 @@ function BotConversationComposer(props: {
     );
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    ) {
       return;
     }
     event.preventDefault();

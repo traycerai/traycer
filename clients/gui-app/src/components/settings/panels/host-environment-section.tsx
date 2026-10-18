@@ -63,8 +63,15 @@ export function HostEnvironmentSection(props: {
     );
   } else if (environments.data === undefined || binding.data === undefined) {
     body = (
-      <div aria-busy="true" className="flex items-center py-1 text-muted-foreground">
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+      <div
+        aria-busy="true"
+        className="flex items-center py-1 text-muted-foreground"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
       </div>
     );
   } else {
@@ -146,7 +153,9 @@ function HostEnvironmentPicker(props: {
                 ) : null}
                 <span>{environment.label}</span>
                 <Badge variant="muted" size="xs">
-                  {environment.ownerKind === "organization" ? "Team" : "Personal"}
+                  {environment.ownerKind === "organization"
+                    ? "Team"
+                    : "Personal"}
                 </Badge>
                 {pendingId === environment.environmentId ? (
                   <AgentSpinningDots

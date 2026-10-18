@@ -69,7 +69,12 @@ export function CreateBotForm(props: {
     null,
     // The per-host last-used buckets the store reads and writes are the
     // chosen host's, the machine the bot will run on.
-    { hostClient: client, hostId, tuiOnly: false, chatLineCarriesAutoMode: null },
+    {
+      hostClient: client,
+      hostId,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+    },
   );
   const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
   const create = useBotCreateMutation(client);
@@ -280,7 +285,11 @@ function CreateBotHostField(props: {
           variant="link"
           size="xs"
           onClick={() =>
-            navigateToTabIntent(navigate, settingsTabIntent("agents"), undefined)
+            navigateToTabIntent(
+              navigate,
+              settingsTabIntent("agents"),
+              undefined,
+            )
           }
         >
           Settings
@@ -291,7 +300,10 @@ function CreateBotHostField(props: {
   }
   if (boundHostIds.length === 1) {
     return (
-      <p className="text-ui-xs text-muted-foreground" data-testid="create-bot-host">
+      <p
+        className="text-ui-xs text-muted-foreground"
+        data-testid="create-bot-host"
+      >
         Runs on {hostLabels.get(hostId) ?? hostId}
       </p>
     );

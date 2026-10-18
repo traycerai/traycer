@@ -7,7 +7,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import {
   useBotSubscriptionForHost,
@@ -26,7 +28,9 @@ type BotTabView = "conversation" | "under-the-hood" | "settings";
 
 function isBotTabView(value: string): value is BotTabView {
   return (
-    value === "conversation" || value === "under-the-hood" || value === "settings"
+    value === "conversation" ||
+    value === "under-the-hood" ||
+    value === "settings"
   );
 }
 
@@ -50,6 +54,30 @@ export function BotTabSurface(props: {
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
+  // A tab is created only from Home's bots band, which draws nothing until
+  // the host advertises `bot.list`; a RESTORED tab (the store persists per
+  // window) meets whatever that host advertises now. The `bot.*` namespace
+  // ships as one block, so this one presence check stands for every write
+  // the tab offers; without it the tab shows the update notice and no
+  // control that would call a method the host lacks.
+  const support = useHostMethodSupport(hostId, "bot.list");
+  const directory = useHostDirectoryList();
+  if (support === null) return null;
+  if (!support) {
+    const hostLabel =
+      directory.data?.find((entry) => entry.hostId === hostId)?.label ?? hostId;
+    return (
+      <div
+        className="flex h-full flex-col justify-center"
+        data-testid="bot-tab"
+      >
+        <BotsUnavailableNotice
+          hostLabel={hostLabel}
+          testId="bot-tab-unavailable"
+        />
+      </div>
+    );
+  }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
       <BotTabBody botId={botId} hostId={hostId} />
@@ -129,7 +157,11 @@ function BotTabBody(props: {
         aria-busy="true"
         data-testid="bot-tab-connecting"
       >
-        <AgentSpinningDots className={undefined} testId={undefined} variant={undefined} />
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
       </div>
     );
   }
@@ -164,17 +196,20 @@ function BotTabContent(props: {
   const boundHostId = snapshot.boundHost.hostId;
   const boundHostLabel = useMemo(
     () =>
-      directory.data?.find((entry) => entry.hostId === boundHostId)?.label ??
-      boundHostId,
+      boundHostId === null
+        ? "No host"
+        : (directory.data?.find((entry) => entry.hostId === boundHostId)
+            ?.label ?? boundHostId),
     [boundHostId, directory.data],
   );
   // Offline means: not this host, and not dialable right now. Until the
   // directory has answered the host counts as reachable, so a tab does not
   // flash the offline state on every open.
+  // A bot no host runs (`boundHostId` null) is offline outright.
   const boundOffline =
     !boundHere &&
-    connectable.resolved &&
-    !connectable.hostIds.includes(boundHostId);
+    (boundHostId === null ||
+      (connectable.resolved && !connectable.hostIds.includes(boundHostId)));
   const offlineHostLabel = boundOffline ? boundHostLabel : null;
 
   return (
@@ -206,17 +241,26 @@ function BotTabContent(props: {
         className="flex min-h-0 flex-1 flex-col"
       >
         <TabsList aria-label="Bot view" className="mx-4 self-start">
-          <TabsTrigger value="conversation" data-testid="bot-tab-view-conversation">
+          <TabsTrigger
+            value="conversation"
+            data-testid="bot-tab-view-conversation"
+          >
             Conversation
           </TabsTrigger>
-          <TabsTrigger value="under-the-hood" data-testid="bot-tab-view-under-the-hood">
+          <TabsTrigger
+            value="under-the-hood"
+            data-testid="bot-tab-view-under-the-hood"
+          >
             Under the hood
           </TabsTrigger>
           <TabsTrigger value="settings" data-testid="bot-tab-view-settings">
             Settings
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="conversation" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent
+          value="conversation"
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <BotConversationView
             botId={botId}
             hostId={hostId}
@@ -224,7 +268,10 @@ function BotTabContent(props: {
             offlineHostLabel={offlineHostLabel}
           />
         </TabsContent>
-        <TabsContent value="under-the-hood" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent
+          value="under-the-hood"
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <BotUnderTheHoodPanel
             botId={botId}
             hostId={hostId}
@@ -275,8 +322,7 @@ function BotTabHeader(props: {
   const directory = useHostDirectoryList();
   const environmentLabel = useMemo(() => {
     const match = environments.data?.environments.find(
-      (environment) =>
-        environment.environmentId === snapshot.bot.environmentId,
+      (environment) => environment.environmentId === snapshot.bot.environmentId,
     );
     return match?.label ?? snapshot.bot.environmentId;
   }, [environments.data, snapshot.bot.environmentId]);
@@ -304,11 +350,27 @@ function BotTabHeader(props: {
       </div>
       {openRequests !== null && openRequests > 0 ? (
         <Badge variant="warning" size="sm" data-testid="bot-tab-open-requests">
-          {openRequests === 1 ? "1 open request" : `${openRequests} open requests`}
+          {openRequests === 1
+            ? "1 open request"
+            : `${openRequests} open requests`}
         </Badge>
       ) : null}
     </header>
   );
+}
+
+function boundElsewhereText(
+  boundHostId: string | null,
+  boundHostLabel: string,
+  offline: boolean,
+): string {
+  if (boundHostId === null) {
+    return "No host runs this bot. Move it here to message it.";
+  }
+  if (offline) {
+    return `This bot runs on ${boundHostLabel}, which is offline. A message you send now is saved and delivered when it is back.`;
+  }
+  return `This bot runs on ${boundHostLabel}. Its conversation is read there.`;
 }
 
 /**
@@ -316,11 +378,12 @@ function BotTabHeader(props: {
  * (the tab rebinds and remounts there), or move it here, which makes THIS
  * host the bound one and re-reads the stream. Offline: say so, say what a
  * send does meanwhile, and offer the move alone - there is nothing to view
- * through until the host is back.
+ * through until the host is back. No host (`boundHostId` null): nothing
+ * queues a send, so the move is the only way to message it.
  */
 function BoundElsewhereBanner(props: {
   readonly botId: string;
-  readonly boundHostId: string;
+  readonly boundHostId: string | null;
   readonly boundHostLabel: string;
   readonly offline: boolean;
   readonly onMoved: () => void;
@@ -336,13 +399,9 @@ function BoundElsewhereBanner(props: {
       data-offline={offline ? "true" : "false"}
       className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-ui-sm text-info-foreground"
     >
-      <span>
-        {offline
-          ? `This bot runs on ${boundHostLabel}, which is offline. A message you send now is saved and delivered when it is back.`
-          : `This bot runs on ${boundHostLabel}. Its conversation is read there.`}
-      </span>
+      <span>{boundElsewhereText(boundHostId, boundHostLabel, offline)}</span>
       <span className="flex items-center gap-2">
-        {offline ? null : (
+        {offline || boundHostId === null ? null : (
           <Button
             type="button"
             variant="outline"

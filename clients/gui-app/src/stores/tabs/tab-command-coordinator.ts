@@ -2165,8 +2165,7 @@ export class TabCommandCoordinator {
     const knownKeys = new Set(knownSources.map(tabRefKey));
     const removals = flattenLayoutRefs(layout).filter(
       (ref) =>
-        isSourceBackedTabKind(ref.kind) &&
-        !knownKeys.has(tabRefKey(ref)),
+        isSourceBackedTabKind(ref.kind) && !knownKeys.has(tabRefKey(ref)),
     );
     const withoutMissing = removals.reduce(layoutWithRemovedRef, layout);
     const additions = knownSources.filter(

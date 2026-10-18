@@ -5,11 +5,7 @@
  * `getHeaderTabs()` projection against the actual stores.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  botPathname,
-  botRoute,
-  readBotIdFromPath,
-} from "@/lib/routes";
+import { botPathname, botRoute, readBotIdFromPath } from "@/lib/routes";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import {
   botTabRecords,
@@ -26,7 +22,10 @@ import {
   tabResolveIntent,
   tabRouteOptions,
 } from "@/stores/tabs/registry";
-import { isSourceBackedTabKind, tabSourceRefs } from "@/stores/tabs/source-refs";
+import {
+  isSourceBackedTabKind,
+  tabSourceRefs,
+} from "@/stores/tabs/source-refs";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
@@ -34,11 +33,7 @@ import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 const BOT_A = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const BOT_B = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
-function record(
-  botId: string,
-  hostId: string,
-  title: string,
-): BotTabRecord {
+function record(botId: string, hostId: string, title: string): BotTabRecord {
   return { botId, hostId, title, openedAt: 1_000 };
 }
 

@@ -390,9 +390,7 @@ function sanitizeDesktopLayout(
 ): PersistedTabStripLayout {
   const sourceKeys = new Set(tabSourceRefs().map(refKey));
   const missing = flattenLayoutRefs(persisted).filter(
-    (ref) =>
-      isSourceBackedTabKind(ref.kind) &&
-      !sourceKeys.has(refKey(ref)),
+    (ref) => isSourceBackedTabKind(ref.kind) && !sourceKeys.has(refKey(ref)),
   );
   const withoutMissing = missing.reduce(removeMissingRef, persisted);
   const repaired = repairLayout(withoutMissing, isRegisteredTabKind);

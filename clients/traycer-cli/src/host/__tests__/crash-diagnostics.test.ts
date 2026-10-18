@@ -103,6 +103,104 @@ describe("StderrCaptureBuffer", () => {
     expect(buf.escapedForMarker()).toBe("helloworld");
   });
 
+  describe("classifyFatal", () => {
+    const capture = (
+      ...chunks: string[]
+    ): InstanceType<typeof StderrCaptureBuffer> => {
+      const buf = new StderrCaptureBuffer(2048, 2048);
+      for (const chunk of chunks) buf.append(Buffer.from(chunk));
+      return buf;
+    };
+
+    it.each([
+      [
+        "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n",
+        "v8-heap-oom",
+      ],
+      [
+        "FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n",
+        "v8-heap-oom",
+      ],
+      [
+        "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory\n",
+        "v8-heap-oom",
+      ],
+      ["FATAL ERROR: v8::FromJust Maybe value is Nothing.\n", "v8-fatal"],
+      [
+        "FATAL ERROR: Failed to reserve virtual memory for CodeRange Allocation failed - process out of memory\n",
+        "v8-fatal",
+      ],
+      ["#\n# Fatal error in , line 0\n# Check failed: x.\n", "check-failed"],
+      [
+        "  #  node: Foo at ../src/foo.cc:12\n  #  Assertion failed: x != nullptr\n\n",
+        "assertion",
+      ],
+      [
+        "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n",
+        "assertion",
+      ],
+      [
+        "node: ../deps/uv/src/unix/core.c:1066: uv__io_poll: Assertion `loop->watchers[w->fd] == w' failed.\n",
+        "assertion",
+      ],
+      ["Error: spawn EBUSY\n", "other"],
+      // `console.assert` writes this bare phrase; it is not a native abort.
+      ["Assertion failed: config ok\nError: boom\n", "other"],
+    ])("sorts %j as %s", (text, expected) => {
+      expect(capture(text).classifyFatal(true)).toBe(expected);
+    });
+
+    it("sees a heap OOM block that follows more stderr than the head holds", () => {
+      const prior = "(node:1) Warning: noisy\n".repeat(200);
+      const buf = capture(
+        prior,
+        "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n",
+        "x".repeat(8_000),
+      );
+      expect(buf.classifyFatal(true)).toBe("v8-heap-oom");
+    });
+
+    it("matches an assertion line that crosses the head/tail boundary when nothing was elided", () => {
+      // 2040 bytes of earlier output, then a line straddling byte 2048; the
+      // total is far below head + tail, so the two halves are contiguous.
+      const line =
+        "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n";
+      expect(capture("w".repeat(2040) + line).classifyFatal(true)).toBe(
+        "assertion",
+      );
+    });
+
+    it("sees a needle split across two chunks", () => {
+      expect(
+        capture(
+          "FATAL ER",
+          "ROR: Reached heap limit Allocation failed\n",
+        ).classifyFatal(true),
+      ).toBe("v8-heap-oom");
+    });
+
+    it("judges a FATAL ERROR window by its own first line, not by later text", () => {
+      expect(
+        capture(
+          "FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal\nnote: JavaScript heap out of memory elsewhere\n",
+        ).classifyFatal(true),
+      ).toBe("v8-fatal");
+    });
+
+    it("is none for no output, and incomplete when the stream had not ended and nothing matched", () => {
+      expect(capture().classifyFatal(true)).toBe("none");
+      expect(capture().classifyFatal(false)).toBe("incomplete");
+      expect(capture("partial\n").classifyFatal(false)).toBe("incomplete");
+      expect(capture("partial\n").classifyFatal(true)).toBe("other");
+    });
+
+    it("still names a fatal found before the stream ended", () => {
+      expect(
+        capture("FATAL ERROR: Reached heap limit\n").classifyFatal(false),
+      ).toBe("v8-heap-oom");
+    });
+  });
+
   it("empty buffer reports isEmpty and empty escaped form", () => {
     const buf = new StderrCaptureBuffer(64, 64);
     expect(buf.isEmpty()).toBe(true);

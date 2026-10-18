@@ -23,8 +23,9 @@ export interface HomeBotRowModel {
   readonly title: string;
   readonly environmentId: string;
   /** The host the bot's trunk runs on, from the cloud row; the snapshot's
-   * `boundHost` restates it and wins when present, being the fresher read. */
-  readonly boundHostId: string;
+   * `boundHost` restates it and wins when present, being the fresher read.
+   * `null` when no host runs the bot until a member claims it onto one. */
+  readonly boundHostId: string | null;
   readonly harness: string;
   readonly model: string;
   /**

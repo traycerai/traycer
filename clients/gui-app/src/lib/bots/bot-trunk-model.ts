@@ -1,6 +1,7 @@
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import type {
   ChatQueuedTaskCheckinItem,
+  ChatQueuedTaskOverdueItem,
   OpenChatQueuedItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
@@ -35,6 +36,16 @@ export function pendingTaskCheckins(
   return pending;
 }
 
+/** The overdue nudge waiting on the trunk's queue, if one is (one per trunk at a time). */
+export function pendingTaskOverdue(
+  items: ReadonlyArray<OpenChatQueuedItem>,
+): ChatQueuedTaskOverdueItem | null {
+  for (const item of items) {
+    if (item.kind === "task-overdue") return item;
+  }
+  return null;
+}
+
 /** Delivered check-in summaries in transcript order (oldest first). */
 export function deliveredTaskCheckins(
   messages: ReadonlyArray<OpenMessage>,
@@ -59,7 +70,10 @@ export function deliveredTaskCheckins(
 }
 
 function isTaskCheckinTrigger(title: string): boolean {
-  return title === TASK_CHECKIN_TRIGGER_TITLE || title.startsWith(`${TASK_CHECKIN_TRIGGER_TITLE}:`);
+  return (
+    title === TASK_CHECKIN_TRIGGER_TITLE ||
+    title.startsWith(`${TASK_CHECKIN_TRIGGER_TITLE}:`)
+  );
 }
 
 const MINUTE_S = 60;

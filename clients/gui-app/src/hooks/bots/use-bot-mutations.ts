@@ -38,9 +38,7 @@ import { toastFromHostError } from "@/lib/host-error-toast";
  */
 type BotMutationContext = { readonly hostId: string | null };
 
-function invalidateBotLists(
-  queryClient: QueryClient,
-): void {
+function invalidateBotLists(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({
     predicate: (query) =>
       hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),

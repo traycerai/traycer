@@ -13,6 +13,7 @@ import {
   deliveredTaskCheckins,
   describeCadence,
   pendingTaskCheckins,
+  pendingTaskOverdue,
   sortTasksForDisplay,
 } from "@/lib/bots/bot-trunk-model";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
@@ -132,7 +133,8 @@ function BotTasksList(props: {
               <BotTaskRow
                 task={task}
                 title={
-                  contexts.tasksById.get(task.taskId)?.epic?.light?.title ?? null
+                  contexts.tasksById.get(task.taskId)?.epic?.light?.title ??
+                  null
                 }
                 now={now}
               />
@@ -254,6 +256,10 @@ function BotTrunkStateBody(props: {
     () => pendingTaskCheckins(state.queueItems),
     [state.queueItems],
   );
+  const overdue = useMemo(
+    () => pendingTaskOverdue(state.queueItems),
+    [state.queueItems],
+  );
   const delivered = useMemo(
     () => deliveredTaskCheckins(state.messages),
     [state.messages],
@@ -277,8 +283,20 @@ function BotTrunkStateBody(props: {
               : `${openRequestCount} requests in the conversation are still open.`}
           </p>
         ) : null}
+        {overdue === null ? null : (
+          <p
+            className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs text-warning-foreground"
+            data-testid="bot-checkins-overdue"
+          >
+            <span className="font-medium">Overdue:</span> {overdue.description}.
+            The bot is told on its next turn.
+          </p>
+        )}
         {pending.length === 0 ? null : (
-          <ul className="flex flex-col gap-1" data-testid="bot-checkins-pending">
+          <ul
+            className="flex flex-col gap-1"
+            data-testid="bot-checkins-pending"
+          >
             {pending.map((item) => (
               <li
                 key={item.queueItemId}
@@ -290,13 +308,18 @@ function BotTrunkStateBody(props: {
             ))}
           </ul>
         )}
-        {recentDelivered.length === 0 && pending.length === 0 ? (
+        {recentDelivered.length === 0 &&
+        pending.length === 0 &&
+        overdue === null ? (
           <p className="py-1 text-ui-xs text-muted-foreground">
             No check-ins yet.
           </p>
         ) : null}
         {recentDelivered.length === 0 ? null : (
-          <ul className="flex flex-col gap-1" data-testid="bot-checkins-delivered">
+          <ul
+            className="flex flex-col gap-1"
+            data-testid="bot-checkins-delivered"
+          >
             {recentDelivered.map((entry) => (
               <li
                 key={entry.key}

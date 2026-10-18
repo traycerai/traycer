@@ -38,7 +38,8 @@ export interface BotSubscriptionSnapshot {
    * view has not published yet; the pin shipping today always sends a number. */
   readonly openRequestCount: number | null;
   readonly boundHost: {
-    readonly hostId: string;
+    /** `null` when no host runs the bot. */
+    readonly hostId: string | null;
     readonly epoch: number;
     readonly isThisHost: boolean;
   };
@@ -192,7 +193,8 @@ export function useBotSubscriptionForClient(args: {
     // path REPLACES it with a fresh one (and migrates every other consumer
     // onto it) instead of treating the refresh as a frame to send - this
     // stream has no refresh frame.
-    const current = sessionKey === null ? undefined : subscriptions.get(sessionKey);
+    const current =
+      sessionKey === null ? undefined : subscriptions.get(sessionKey);
     if (current !== undefined && !current.isTerminal) {
       current.isTerminal = true;
       current.unsubscribeFromStream();

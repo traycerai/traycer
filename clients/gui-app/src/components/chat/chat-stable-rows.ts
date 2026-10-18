@@ -139,7 +139,8 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
   // The row-level request state is carried by reference from the open
   // message, so a resolve arrives as a new object and identity is enough.
-  conversationRequest: (a, b) => a.conversationRequest === b.conversationRequest,
+  conversationRequest: (a, b) =>
+    a.conversationRequest === b.conversationRequest,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,
   agentSenderInfo: (a, b) => a.agentSenderInfo === b.agentSenderInfo,
