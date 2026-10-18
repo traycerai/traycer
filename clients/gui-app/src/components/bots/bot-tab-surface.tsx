@@ -27,6 +27,7 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
@@ -164,6 +165,9 @@ function BotTabBody(props: {
   // stream was down reaches the tab, and how a `bot.open` that found no bot
   // does (every open invalidates the list).
   const botList = useBotListQuery(client, true);
+  // A teammate's rename, claim or delete reaches the list (and so this tab)
+  // without waiting for focus, through the tab's own host.
+  useBotListChangedSubscriptionForHost(hostId, true);
   const listedBots = botList.data?.bots;
   const goneFromList =
     listedBots !== undefined && !listedBots.some((bot) => bot.botId === botId);

@@ -11,6 +11,7 @@ import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import {
@@ -44,6 +45,8 @@ export function HomeBotsSection(): ReactNode {
   const enabled = support === true;
   const environments = useEnvironmentListQuery(client, enabled);
   const bots = useBotListQuery(client, enabled);
+  // A teammate's change to the list refetches it without waiting for focus.
+  useBotListChangedSubscriptionForApp(enabled);
   const directory = useHostDirectoryList();
   const connectable = useConnectableHostIds();
   const bindings = useHostEnvironmentBindings(connectable.hostIds, enabled);
