@@ -8,7 +8,7 @@ import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dia
 /**
  * "On <host> only, link to use everywhere": a profile this host signed in on
  * its own, which no other host is offered until it is linked
- * (`providers.list@10.1` `onHostOnly`). Link opens the Link dialog, and only
+ * (`providers.list@10.3` `onHostOnly`). Link opens the Link dialog, and only
  * where the host can serve it (`providers.link`); without that the line still
  * says where the profile lives.
  *

@@ -1516,7 +1516,7 @@ interface ProviderProfileTabProps {
 
 /**
  * A sandbox host says its credentials live in the account
- * (`providers.list@10.1`). Its key and sign-in controls could only ever be
+ * (`providers.list@10.3`). Its key and sign-in controls could only ever be
  * refused, so the one line that says where they are managed stands in their
  * place; on every other host the controls (`children`) render as they did.
  * Reads the panel's own query key, so there is no second fetch.

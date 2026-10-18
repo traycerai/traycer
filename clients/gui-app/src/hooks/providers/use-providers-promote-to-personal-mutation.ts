@@ -12,7 +12,7 @@ import { providersMutationKeys } from "@/lib/query-keys";
 
 /**
  * "Add to Personal" on an MCP server or skill this host has and the person's
- * settings do not (`providers.nativeMutate@1.1`'s `promoteToPersonal`): the
+ * settings do not (`providers.nativeMutate@1.2`'s `promoteToPersonal`): the
  * entry is uploaded so every host gets it. Never sent without the click.
  * What it uploads can run on every host, so it carries the grant.
  */

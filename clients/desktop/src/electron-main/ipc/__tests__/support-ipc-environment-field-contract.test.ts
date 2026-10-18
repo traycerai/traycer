@@ -25,6 +25,8 @@ const UNAVAILABLE = { status: "unavailable" };
 const REGISTRY = {
   routeTemplate: KNOWN,
   hostId: KNOWN,
+  // As `support-ipc.test.ts` builds it.
+  tabHostId: { status: "known", value: "host-tab-1" },
   epicId: KNOWN,
   tabId: KNOWN,
   artifactId: UNAVAILABLE,

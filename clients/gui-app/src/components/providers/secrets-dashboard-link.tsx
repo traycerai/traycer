@@ -54,7 +54,7 @@ function SecretsDashboardButton(props: {
 
 /**
  * The one line a sandbox host's provider settings show in place of its
- * credential controls (`providers.list@10.1` `credentialsManagedInAccount`):
+ * credential controls (`providers.list@10.3` `credentialsManagedInAccount`):
  * sign-ins and keys for sandboxes are stored in the account, not sent to the
  * sandbox.
  */

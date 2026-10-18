@@ -88,6 +88,11 @@ vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
     mutateAsync: () => Promise.resolve(undefined),
     isPending: false,
   }),
+  useProvidersMcpApplyRemedy: () => ({
+    mutate: () => undefined,
+    mutateAsync: () => Promise.resolve(undefined),
+    isPending: false,
+  }),
 }));
 vi.mock("@/hooks/providers/use-providers-mcp-discover-mutation", () => ({
   useProvidersMcpDiscover: () => ({
@@ -284,7 +289,7 @@ interface Rig {
 }
 
 const READY_HOST: HostOptions = {
-  nativeMutate: { major: 1, minor: 1 },
+  nativeMutate: { major: 1, minor: 2 },
   principalReady: true,
   applied: [],
 };
@@ -497,6 +502,23 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
     const rig = renderPage("mcp-servers", mcpPage(), {
       ...READY_HOST,
       nativeMutate: { major: 1, minor: 0 },
+    });
+
+    const mark = await within(mcpRow("github")).findByTestId(MARK);
+    expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
+    expect(
+      within(mark).queryByRole("button", { name: "Add to Personal" }),
+    ).toBeNull();
+    await settle();
+    expect(rig.sent).toEqual([]);
+  });
+
+  // 1.1 is main's released line, which refuses `promoteToPersonal`.
+  it("says where the entry is, with no button, on a host at nativeMutate 1.1", async () => {
+    listMock.servers = [mcpServer("github")];
+    const rig = renderPage("mcp-servers", mcpPage(), {
+      ...READY_HOST,
+      nativeMutate: { major: 1, minor: 1 },
     });
 
     const mark = await within(mcpRow("github")).findByTestId(MARK);

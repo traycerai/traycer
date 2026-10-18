@@ -159,7 +159,7 @@ type CancelLoginVariables = RequestOfMethod<
 >;
 
 // The `providers.list` envelope as this harness serves it. The flag is the
-// `providers.list@10.1` key a sandbox host sets; every other host omits it.
+// `providers.list@10.3` key a sandbox host sets; every other host omits it.
 interface ProvidersListEnvelope {
   providers: ProviderCliState[];
   credentialsManagedInAccount?: boolean;

@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import { PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
+import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   usePersonalEntryApplied,
@@ -67,7 +69,11 @@ export function PersonalEntryMark(props: {
   );
 }
 
-/** Shown only where the host takes `promoteToPersonal` (nativeMutate 1.1). */
+/**
+ * Shown only where the host takes `promoteToPersonal`
+ * (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`, nativeMutate 1.2). A 1.1 host
+ * is main's released line, which refuses it.
+ */
 function AddToPersonalButton(props: {
   readonly entryKind: "mcp" | "skills";
   readonly providerId: ProviderId;
@@ -81,7 +87,10 @@ function AddToPersonalButton(props: {
   const supported =
     version !== null &&
     version !== false &&
-    (version.major > 1 || (version.major === 1 && version.minor >= 1));
+    negotiatedVersionMeetsRequirement(
+      version,
+      PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
+    );
   if (!supported) return null;
   return (
     <Button
