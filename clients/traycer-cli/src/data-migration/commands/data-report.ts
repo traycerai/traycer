@@ -6,6 +6,7 @@ import {
   type SessionImpact,
 } from "@traycer/protocol/config/data-migration-contracts";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { SOURCE_CHANGED_CODES } from "../engine/content-inventory";
 import type {
   EngineBlocker,
   EngineResult,
@@ -178,14 +179,25 @@ export function stoppedOutcome(
   }
   const journal = result.journal;
   if (journal !== null) {
+    // A changed source never matches the frozen inventory again, so
+    // continuing would stop the same way: rollback is the only way out.
+    const sourceChanged =
+      rollbackAllowedFrom(journal.phase) &&
+      result.blockers.some((blocker) => SOURCE_CHANGED_CODES.has(blocker.code));
     if (phaseHoldsStartupBarrier(journal.phase)) {
       lines.push(
-        "Traycer stays stopped until this move is continued or rolled back.",
+        sourceChanged
+          ? "Traycer stays stopped until this move is rolled back."
+          : "Traycer stays stopped until this move is continued or rolled back.",
       );
     } else if (phaseIsPostActivation(journal.phase)) {
       lines.push(`Traycer uses ${journal.destination.path}.`);
     }
-    const next = nextStepLines(journal);
+    const next = sourceChanged
+      ? [
+          `  traycer data recover --rollback   put everything back in ${journal.source.path}`,
+        ]
+      : nextStepLines(journal);
     if (next.length > 0) lines.push("Next:", ...next);
   }
   const message =

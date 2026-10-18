@@ -1485,6 +1485,13 @@ async function forwardSwitched(
   }
   await revalidate(deps, session);
   await verifyCopy(deps, session);
+  // Walked again after the last maintenance run: a write to the source while
+  // it ran would otherwise survive only in the backup, past rollback.
+  await assertSourceUnchanged({
+    sourceRoot: session.journal.source.path,
+    inventory: await loadInventory(session.journal),
+    signal: deps.signal,
+  });
   // Durable before anything may start at the destination.
   await session.advance({ phase: "activated" });
 }

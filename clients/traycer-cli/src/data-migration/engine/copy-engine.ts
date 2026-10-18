@@ -24,6 +24,7 @@ import {
   migrationEvidenceDir,
   RELOCATION_EVIDENCE_DIRNAME,
   sha256File,
+  SOURCE_CHANGED_GUIDANCE,
   underRoot,
   type ContentFileEntry,
   type ContentInventory,
@@ -154,13 +155,7 @@ function ioStop(error: unknown, object: string): EngineStop | null {
     case "ELOOP":
       return new EngineStop(
         "conflict",
-        [
-          engineBlocker(
-            "source-modified",
-            object,
-            "close the programs using the old Traycer folder, including any opened as administrator, then run `traycer data recover`",
-          ),
-        ],
+        [engineBlocker("source-modified", object, SOURCE_CHANGED_GUIDANCE)],
         null,
       );
     case "EIO":
@@ -295,13 +290,7 @@ function sameSourceFacts(stats: BigIntStats, entry: ContentFileEntry): boolean {
 function sourceChanged(path: string): EngineStop {
   return new EngineStop(
     "conflict",
-    [
-      engineBlocker(
-        "source-modified",
-        path,
-        "close the programs using the old Traycer folder, including any opened as administrator, then run `traycer data recover`",
-      ),
-    ],
+    [engineBlocker("source-modified", path, SOURCE_CHANGED_GUIDANCE)],
     null,
   );
 }

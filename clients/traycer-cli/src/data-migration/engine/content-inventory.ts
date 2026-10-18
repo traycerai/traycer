@@ -471,6 +471,22 @@ export async function loadContentInventory(input: {
   return { header, entries, digest: input.digest };
 }
 
+/**
+ * The stop codes for a source that no longer matches its frozen inventory.
+ * The frozen inventory never matches again, so the move cannot continue
+ * forward: rollback is the way out.
+ */
+export const SOURCE_CHANGED_CODES: ReadonlySet<string> = new Set([
+  "source-added",
+  "source-removed",
+  "source-modified",
+  "source-type-changed",
+]);
+
+/** What the person is told on a `SOURCE_CHANGED_CODES` stop. */
+export const SOURCE_CHANGED_GUIDANCE =
+  "the old Traycer folder changed during the move; close the programs using it, including any opened as administrator, then run `traycer data recover --rollback` and start the move again";
+
 export type SourceDifference = {
   readonly path: string;
   readonly change: "added" | "removed" | "modified" | "type-changed";
@@ -534,7 +550,7 @@ export async function assertSourceUnchanged(input: {
       engineBlocker(
         `source-${difference.change}`,
         difference.path,
-        "close the programs using the old Traycer folder, including any opened as administrator, then run `traycer data recover`",
+        SOURCE_CHANGED_GUIDANCE,
       ),
     ),
     null,
