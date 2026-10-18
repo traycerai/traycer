@@ -21,6 +21,7 @@ import type {
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
   LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   RegisteredHostsChange,
   StoredAuthTokens,
   SystemResumeEvent,
@@ -817,9 +818,12 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   async forceRestartUnresponsiveHost(
-    pid: number,
+    offer: LocalHostUnresponsiveOffer,
   ): Promise<HostRestartRequestResult> {
-    if (this.localHostUnresponsive?.pid !== pid) {
+    if (
+      this.localHostUnresponsive?.pid !== offer.pid ||
+      this.localHostUnresponsive.offerId !== offer.offerId
+    ) {
       return {
         kind: "declined",
         message: "The host is no longer unresponsive.",

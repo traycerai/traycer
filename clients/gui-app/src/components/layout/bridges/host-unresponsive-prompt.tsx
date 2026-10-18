@@ -1,6 +1,9 @@
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
-import type { LocalHostUnresponsive } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
+} from "@traycer-clients/shared/platform/runner-host";
 import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import { useRunnerForceRestartUnresponsiveHost } from "@/hooks/runner/use-runner-force-restart-unresponsive-host-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -23,8 +26,8 @@ function hostUnresponsiveDescription(state: LocalHostUnresponsive): string {
  *
  * The shell kills nothing on that verdict - a host that is merely busy must
  * not be restarted from under its work - so this offer is the only way the
- * verdict turns into a restart. It carries the pid the offer was made for, so
- * a host that answered again or was replaced since is not restarted.
+ * verdict turns into a restart. It names the offer it was made from, so a host
+ * that answered again or was replaced since is not restarted.
  */
 export function HostUnresponsivePrompt() {
   const runnerHost = useRunnerHost();
@@ -32,8 +35,8 @@ export function HostUnresponsivePrompt() {
   // down (dismissing an open offer) each time the mutation's state changes.
   const { mutate: restartHost } = useRunnerForceRestartUnresponsiveHost();
   const forceRestart = useCallback(
-    (pid: number) => {
-      restartHost(pid);
+    (offer: LocalHostUnresponsiveOffer) => {
+      restartHost(offer);
     },
     [restartHost],
   );
@@ -52,7 +55,7 @@ export function HostUnresponsivePrompt() {
           description={hostUnresponsiveDescription(state)}
           actionLabel="Force restart"
           onAction={() => {
-            forceRestart(state.pid);
+            forceRestart({ pid: state.pid, offerId: state.offerId });
           }}
           onLater={null}
         />,

@@ -69,6 +69,7 @@ describe("<HostUnresponsivePrompt />", () => {
     act(() => {
       host.setLocalHostUnresponsive({
         pid: 4242,
+        offerId: 7,
         unreachableForMs: 12 * 60_000,
       });
     });
@@ -82,7 +83,7 @@ describe("<HostUnresponsivePrompt />", () => {
     ).not.toBeNull();
   });
 
-  it("force-restarts the offered host by its pid, not by a bare respawn request", async () => {
+  it("force-restarts the offered host by its pid and offer id, not by a bare respawn request", async () => {
     const host = createRunnerHost();
     const forceRestart = vi
       .spyOn(host, "forceRestartUnresponsiveHost")
@@ -91,6 +92,7 @@ describe("<HostUnresponsivePrompt />", () => {
     act(() => {
       host.setLocalHostUnresponsive({
         pid: 4242,
+        offerId: 7,
         unreachableForMs: 12 * 60_000,
       });
     });
@@ -102,7 +104,7 @@ describe("<HostUnresponsivePrompt />", () => {
     await waitFor(() => {
       expect(forceRestart).toHaveBeenCalledTimes(1);
     });
-    expect(forceRestart).toHaveBeenCalledWith(4242);
+    expect(forceRestart).toHaveBeenCalledWith({ pid: 4242, offerId: 7 });
     expect(host.requestHostRespawnCalls).toBe(0);
   });
 
@@ -117,6 +119,7 @@ describe("<HostUnresponsivePrompt />", () => {
     act(() => {
       host.setLocalHostUnresponsive({
         pid: 4242,
+        offerId: 7,
         unreachableForMs: 12 * 60_000,
       });
     });
@@ -139,6 +142,7 @@ describe("<HostUnresponsivePrompt />", () => {
     act(() => {
       host.setLocalHostUnresponsive({
         pid: 4242,
+        offerId: 7,
         unreachableForMs: 12 * 60_000,
       });
     });
@@ -156,7 +160,7 @@ describe("<HostUnresponsivePrompt />", () => {
     });
   });
 
-  it("keeps an open offer through a re-render, and Force restart still force-restarts the offered pid once", async () => {
+  it("keeps an open offer through a re-render, and Force restart still force-restarts the offered host once", async () => {
     const host = createRunnerHost();
     const forceRestart = vi
       .spyOn(host, "forceRestartUnresponsiveHost")
@@ -165,6 +169,7 @@ describe("<HostUnresponsivePrompt />", () => {
     act(() => {
       host.setLocalHostUnresponsive({
         pid: 4242,
+        offerId: 7,
         unreachableForMs: 12 * 60_000,
       });
     });
@@ -181,6 +186,43 @@ describe("<HostUnresponsivePrompt />", () => {
     await waitFor(() => {
       expect(forceRestart).toHaveBeenCalledTimes(1);
     });
-    expect(forceRestart).toHaveBeenCalledWith(4242);
+    expect(forceRestart).toHaveBeenCalledWith({ pid: 4242, offerId: 7 });
+  });
+
+  it("force-restarts with the offer id of the offer on screen, after a later offer replaced an earlier one for the same pid", async () => {
+    const host = createRunnerHost();
+    const forceRestart = vi
+      .spyOn(host, "forceRestartUnresponsiveHost")
+      .mockResolvedValue({ kind: "restarted" });
+    renderPrompt(host);
+    act(() => {
+      host.setLocalHostUnresponsive({
+        pid: 4242,
+        offerId: 7,
+        unreachableForMs: 12 * 60_000,
+      });
+    });
+    expect(await screen.findByText(TITLE)).not.toBeNull();
+    act(() => {
+      host.setLocalHostUnresponsive(null);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(TITLE)).toBeNull();
+    });
+    act(() => {
+      host.setLocalHostUnresponsive({
+        pid: 4242,
+        offerId: 8,
+        unreachableForMs: 13 * 60_000,
+      });
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+    await waitFor(() => {
+      expect(forceRestart).toHaveBeenCalledTimes(1);
+    });
+    expect(forceRestart).toHaveBeenCalledWith({ pid: 4242, offerId: 8 });
   });
 });

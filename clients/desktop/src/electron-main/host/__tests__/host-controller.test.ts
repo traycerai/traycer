@@ -5382,18 +5382,22 @@ describe("platform matrix", () => {
       "keep-installed",
     );
 
-    // The verdict names pid 4242 when the restart is submitted; the monitor's
-    // fresh look is asked only once the job owns the lane.
-    const asked: number[] = [];
+    // The verdict names offer 3 for pid 4242 when the restart is submitted;
+    // the monitor's fresh look is asked only once the job owns the lane.
+    const asked: Array<{ pid: number; offerId: number }> = [];
     let answers = false;
-    setLocalHostStillUnresponsiveCheck(async (pid) => {
-      asked.push(pid);
+    setLocalHostStillUnresponsiveCheck(async (offer) => {
+      asked.push(offer);
       return !answers;
     });
-    publishLocalHostUnresponsive({ pid: 4242, unreachableForMs: 600_000 });
+    publishLocalHostUnresponsive({
+      pid: 4242,
+      offerId: 3,
+      unreachableForMs: 600_000,
+    });
     try {
       const restart = controller.respawn(
-        unresponsiveHostRestartIntent(4242),
+        unresponsiveHostRestartIntent({ pid: 4242, offerId: 3 }),
         "force",
       );
       await vi.waitFor(() => {
@@ -5411,7 +5415,7 @@ describe("platform matrix", () => {
         message:
           "The host started responding again or was replaced, so it was not restarted.",
       });
-      expect(asked).toEqual([4242]);
+      expect(asked).toEqual([{ pid: 4242, offerId: 3 }]);
       const restartCalls = vi
         .mocked(streamBundledTraycerCliJson)
         .mock.calls.filter((call) => call[0].args.includes("restart"));

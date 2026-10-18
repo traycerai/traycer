@@ -574,28 +574,31 @@ type PlainStopConfirmation =
   | { readonly kind: "unconfirmed" };
 
 // Whether a plain stop took effect. Fails closed: only "nothing published"
-// or a published process proven gone counts as stopped. An unreadable record
-// may belong to a live host mid-write, so it is not evidence either way.
+// or a published process proven gone counts as stopped, and that is judged by
+// what is published AFTER the stop, whatever was published before it. An
+// unreadable record may belong to a live host mid-write, so it is not
+// evidence either way.
 async function confirmPlainStop(
   before: HostPidMetadataEvidence,
   environment: ServiceLabel["environment"],
 ): Promise<PlainStopConfirmation> {
-  if (before.kind === "absent") return { kind: "stopped" };
   if (before.kind === "read") {
-    if (publishedHostProcessGone(before.metadata)) return { kind: "stopped" };
     if (
+      !publishedHostProcessGone(before.metadata) &&
       !(await waitForSignalledHostGone(before, restartStopGraces().sigtermMs))
     ) {
       return { kind: "running", pid: before.metadata.pid };
     }
-  } else {
+  } else if (before.kind === "unreadable") {
     // No identity to wait on: give it the same grace a live record gets,
     // then look again.
     await waitForSignalledHostGone(before, restartStopGraces().sigtermMs);
   }
-  // The old process being gone is not the host being gone: a stop job that
-  // timed out leaves the unit failed, and `Restart=on-failure` starts a
-  // replacement. Ask what is published now.
+  // What was published before the stop - nothing, a process already gone, or
+  // one that has exited since - is not the host being gone. A host can
+  // publish while `systemctl stop` is awaited (a unit still starting, a
+  // terminal run), and a stop job that timed out leaves the unit failed, so
+  // `Restart=on-failure` starts a replacement. Ask what is published now.
   const after = await readHostPidMetadataEvidence(environment);
   if (after.kind === "absent") return { kind: "stopped" };
   if (after.kind === "unreadable") return { kind: "unconfirmed" };

@@ -9,7 +9,11 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
-import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
+} from "../../../ipc-contracts/host-types";
 import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
   IpcHostLifecycle,
@@ -4148,7 +4152,12 @@ describe("RunnerIpcBridge", () => {
   // that host, and still silent?" is the intent's guard, asked by the lane once
   // the job owns it - never by this handler beforehand (traycer#1563 D3a).
   describe("forceRestartUnresponsiveHost", () => {
-    const UNRESPONSIVE = { pid: 4242, unreachableForMs: 12 * 60_000 };
+    const UNRESPONSIVE = {
+      pid: 4242,
+      offerId: 1,
+      unreachableForMs: 12 * 60_000,
+    };
+    const OFFER = { pid: 4242, offerId: 1 };
     const STILL_RUNNING_MESSAGE =
       "The host started responding again or was replaced, so it was not restarted.";
 
@@ -4193,8 +4202,8 @@ describe("RunnerIpcBridge", () => {
     }
 
     async function installBridge(
-      confirm: ((pid: number) => Promise<boolean>) | null,
-      verdict: { pid: number; unreachableForMs: number } | null,
+      confirm: ((offer: LocalHostUnresponsiveOffer) => Promise<boolean>) | null,
+      verdict: LocalHostUnresponsive | null,
     ) {
       const mod = await import("../register-runner-ipc");
       const unresponsive = await import("../../host/local-host-unresponsive");
@@ -4220,7 +4229,7 @@ describe("RunnerIpcBridge", () => {
       }
       return {
         hostController,
-        invoke: (pid: unknown) => handler(bareEvent(), pid),
+        invoke: (offer: unknown) => handler(bareEvent(), offer),
         dispose: () => {
           bridge.dispose();
           unresponsive.setLocalHostStillUnresponsiveCheck(null);
@@ -4229,11 +4238,11 @@ describe("RunnerIpcBridge", () => {
       };
     }
 
-    it("hands the lane a forced user-repair intent keyed by the pid, and asks nothing itself", async () => {
+    it("hands the lane a forced user-repair intent keyed by the offer, and asks nothing itself", async () => {
       const confirm = vi.fn(async () => true);
       const harness = await installBridge(confirm, UNRESPONSIVE);
 
-      const result = harness.invoke(4242);
+      const result = harness.invoke(OFFER);
       await vi.waitFor(() => {
         expect(harness.hostController.respawnCalls).toBe(1);
       });
@@ -4242,14 +4251,14 @@ describe("RunnerIpcBridge", () => {
       expect(call?.mode).toBe("force");
       expect(call?.intent).toMatchObject({
         kind: "user-repair",
-        targetHostId: "unresponsive-pid:4242",
+        targetHostId: "unresponsive-offer:1:4242",
       });
       // The handler is not the one who asks: the lane does, at its head.
       expect(confirm).not.toHaveBeenCalled();
 
       await harness.hostController.runQueued();
       await expect(result).resolves.toEqual({ kind: "restarted" });
-      expect(confirm).toHaveBeenCalledWith(4242);
+      expect(confirm).toHaveBeenCalledWith(OFFER);
       expect(harness.hostController.killed).toBe(1);
       harness.dispose();
     });
@@ -4261,7 +4270,7 @@ describe("RunnerIpcBridge", () => {
         UNRESPONSIVE,
       );
 
-      const result = harness.invoke(4242);
+      const result = harness.invoke(OFFER);
       await vi.waitFor(() => {
         expect(harness.hostController.queued).toHaveLength(1);
       });
@@ -4280,8 +4289,8 @@ describe("RunnerIpcBridge", () => {
     it("keys two pids apart, so one restart never joins the other's", async () => {
       const harness = await installBridge(async () => true, UNRESPONSIVE);
 
-      void harness.invoke(1);
-      void harness.invoke(2);
+      void harness.invoke({ pid: 1, offerId: 1 });
+      void harness.invoke({ pid: 2, offerId: 1 });
       await vi.waitFor(() => {
         expect(harness.hostController.respawnCalls).toBe(2);
       });
@@ -4290,32 +4299,111 @@ describe("RunnerIpcBridge", () => {
         harness.hostController.respawnCallArgs.map((call) =>
           call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
         ),
-      ).toEqual(["unresponsive-pid:1", "unresponsive-pid:2"]);
+      ).toEqual(["unresponsive-offer:1:1", "unresponsive-offer:1:2"]);
+      harness.dispose();
+    });
+
+    it("keys two offers for the same pid apart, so a restart for a later host never joins the earlier one's", async () => {
+      const harness = await installBridge(async () => true, UNRESPONSIVE);
+
+      void harness.invoke({ pid: 7, offerId: 1 });
+      void harness.invoke({ pid: 7, offerId: 2 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(2);
+      });
+
+      const keys = harness.hostController.respawnCallArgs.map((call) =>
+        call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
+      );
+      expect(keys).toEqual([
+        "unresponsive-offer:1:7",
+        "unresponsive-offer:2:7",
+      ]);
+      expect(new Set(keys).size).toBe(2);
+      harness.dispose();
+    });
+
+    // The review schedule, end to end through the real verdict store: the
+    // offer is out for A, the restart waits for the lane, and B replaces A
+    // under the same pid and does not answer either. The check mimics the
+    // monitor's: it holds the offer to the host recorded when it was made.
+    it("abandons the restart, killing nothing, when a host that reuses the pid replaced the offered one while it waited", async () => {
+      const offered = { offerId: 1, pid: 4242, websocketUrl: "ws://a/rpc" };
+      let published = { pid: 4242, websocketUrl: "ws://a/rpc" };
+      const harness = await installBridge(
+        async (offer) =>
+          offer.offerId === offered.offerId &&
+          offer.pid === offered.pid &&
+          published.pid === offered.pid &&
+          published.websocketUrl === offered.websocketUrl,
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      // B, same pid, another endpoint, published with no tick in between: the
+      // verdict store still holds A's offer.
+      published = { pid: 4242, websocketUrl: "ws://b/rpc" };
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it("abandons an offer id other than the verdict's without asking the monitor's check", async () => {
+      const confirm = vi.fn(async () => true);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      const result = harness.invoke({ pid: 4242, offerId: 2 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(harness.hostController.killed).toBe(0);
       harness.dispose();
     });
 
     it.each([
+      ["a bare pid, the old form", 4242],
       ["a string", "4242"],
-      ["a negative number", -1],
-      ["zero", 0],
-      ["a fraction", 1.5],
       ["undefined", undefined],
       ["null", null],
-    ])(
-      "declines %s as the pid without calling respawn",
-      async (_name, rawPid) => {
-        const confirm = vi.fn(async () => true);
-        const harness = await installBridge(confirm, UNRESPONSIVE);
+      ["an empty object", {}],
+      ["a missing offerId", { pid: 4242 }],
+      ["a missing pid", { offerId: 1 }],
+      ["a zero offerId", { pid: 4242, offerId: 0 }],
+      ["a negative offerId", { pid: 4242, offerId: -1 }],
+      ["a fractional offerId", { pid: 4242, offerId: 1.5 }],
+      ["a string offerId", { pid: 4242, offerId: "1" }],
+      ["an unsafe offerId", { pid: 4242, offerId: 2 ** 53 }],
+      ["a zero pid", { pid: 0, offerId: 1 }],
+      ["a negative pid", { pid: -1, offerId: 1 }],
+      ["a fractional pid", { pid: 1.5, offerId: 1 }],
+      ["a string pid", { pid: "4242", offerId: 1 }],
+    ])("declines %s without calling respawn", async (_name, rawOffer) => {
+      const confirm = vi.fn(async () => true);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
 
-        await expect(harness.invoke(rawPid)).resolves.toEqual({
-          kind: "declined",
-          message: STILL_RUNNING_MESSAGE,
-        });
-        expect(harness.hostController.respawnCalls).toBe(0);
-        expect(confirm).not.toHaveBeenCalled();
-        harness.dispose();
-      },
-    );
+      await expect(harness.invoke(rawOffer)).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.respawnCalls).toBe(0);
+      expect(confirm).not.toHaveBeenCalled();
+      harness.dispose();
+    });
   });
 
   // The renderer's host directory seeds "which id is THIS machine" from this

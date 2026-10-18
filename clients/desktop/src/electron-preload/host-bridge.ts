@@ -6,6 +6,7 @@ import {
 import type {
   DesktopPublishedHostSnapshot,
   LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   RegisteredHostsPush,
 } from "../ipc-contracts/host-types";
 import type { HostRestartRequestResult } from "../ipc-contracts/host-management-types";
@@ -172,7 +173,9 @@ export interface HostBridgeSurface {
   ): Disposable;
   onSystemResumed(handler: () => void): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
-  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult>;
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
 }
 
@@ -206,11 +209,11 @@ export function buildHostBridge(): HostBridgeSurface {
         RunnerHostInvoke.requestHostRespawn,
       ) as Promise<HostRestartRequestResult>,
 
-    forceRestartUnresponsiveHost: (pid) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.forceRestartUnresponsiveHost,
-        pid,
-      ) as Promise<HostRestartRequestResult>,
+    forceRestartUnresponsiveHost: (offer) =>
+      ipcRenderer.invoke(RunnerHostInvoke.forceRestartUnresponsiveHost, {
+        pid: offer.pid,
+        offerId: offer.offerId,
+      }) as Promise<HostRestartRequestResult>,
 
     getLastKnownLocalHostId: () =>
       ipcRenderer.invoke(RunnerHostInvoke.lastKnownLocalHostId) as Promise<

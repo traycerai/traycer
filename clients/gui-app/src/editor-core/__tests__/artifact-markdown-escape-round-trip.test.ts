@@ -5,7 +5,11 @@ import {
   yXmlFragmentToProseMirrorRootNode,
 } from "@tiptap/y-tiptap";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { jsonContentToArtifactMarkdown } from "@traycer/protocol/common/json-content-serializer";
+import {
+  jsonContentToArtifactMarkdown,
+  unresolvedArtifactImageText,
+  type ArtifactImage,
+} from "@traycer/protocol/common/json-content-serializer";
 import { artifactDocumentBundle } from "../artifact-document-bundle";
 
 /**
@@ -157,8 +161,35 @@ function proseMirrorJsonOf(fragment: Y.XmlFragment): JsonContent {
   return json;
 }
 
+/**
+ * The artifact reader's own parse of `md` as a whole artifact body: the image
+ * when the body is exactly one image, `null` otherwise. This is the real
+ * parser the disk mirror reads artifacts back with, handed to the serializer
+ * so it never carries a copy of the grammar.
+ */
+function readImage(md: string): ArtifactImage | null {
+  const blocks = parseJson(md).content ?? [];
+  const only = blocks.length === 1 ? blocks[0] : undefined;
+  if (only === undefined) return null;
+  const inner =
+    only.type === "paragraph" && only.content?.length === 1
+      ? only.content[0]
+      : only;
+  if (inner.type !== "image") return null;
+  const alt = inner.attrs?.alt;
+  const src = inner.attrs?.src;
+  return {
+    alt: typeof alt === "string" ? alt : "",
+    src: typeof src === "string" ? src : "",
+  };
+}
+
 function serialize(fragment: Y.XmlFragment): string {
-  return jsonContentToArtifactMarkdown(proseMirrorJsonOf(fragment), OPTIONS);
+  return jsonContentToArtifactMarkdown(
+    proseMirrorJsonOf(fragment),
+    OPTIONS,
+    readImage,
+  );
 }
 
 function containsHardBreak(node: JsonContent): boolean {
@@ -1210,5 +1241,316 @@ describe("trailing spaces at the end of a paragraph (traycer#1563)", () => {
       content: [textParagraph([plainText("    ")])],
     };
     expect(serialize(fragmentOf(doc))).toBe("");
+  });
+});
+
+/**
+ * Unmarked text of only spaces and tabs renders as nothing, so a hard break
+ * before it ends the paragraph's text all the same and is dropped with it.
+ */
+describe("a trailing hard break followed by only whitespace is dropped (traycer#1563)", () => {
+  const rows = [
+    ["a, break, a space", ["a", "HB", " "], "a", 0],
+    ["a, break, a tab", ["a", "HB", "\t"], "a", 0],
+    ["a, break, b, break, a space", ["a", "HB", "b", "HB", " "], "a\\\nb", 1],
+  ] as const;
+
+  it.each(rows)("%s", (_name, parts, expectedMd, breaks) => {
+    const content = parts.map((part) =>
+      part === "HB" ? { type: "hardBreak" } : plainText(part),
+    );
+    const md1 = serialize(
+      fragmentOf({ type: "doc", content: [textParagraph(content)] }),
+    );
+    expect(md1).toBe(expectedMd);
+
+    const json1 = parseJson(md1);
+    expect(hardBreakCount(json1)).toBe(breaks);
+    const fragment1 = fragmentOf(json1);
+    expect(serialize(fragment1)).toBe(md1);
+  });
+});
+
+/**
+ * What the host writes for an image it cannot resolve yet is
+ * `unresolvedArtifactImageText(alt, src)`. The serializer keeps that text
+ * raw exactly when the artifact reader itself parses it as one image whose
+ * own text it is, so the next read retries the image; otherwise the text is
+ * escaped and reads back as the same text. Each row is generated the way the
+ * host builds its text, and the expectations are what the real parser says.
+ */
+describe("unresolved image text: the reader decides (traycer#1563)", () => {
+  interface ImageRow {
+    readonly name: string;
+    readonly alt: string;
+    readonly src: string;
+    // Whether the real parser reads the host's text for this alt and source as
+    // one image at all.
+    readonly readsAsImage: boolean;
+    // Whether that image's own text is the host's text, so it stays raw.
+    readonly verbatim: boolean;
+  }
+
+  const rows: readonly ImageRow[] = [
+    {
+      name: "a double-backtick code span holding a bracket (the review case)",
+      alt: "a ``]`` b",
+      src: "images/missing.png",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "a triple-backtick code span holding a bracket",
+      alt: "a ```]``` b",
+      src: "images/missing.png",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "an alt that is a code span",
+      alt: "`x`",
+      src: "images/missing.png",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "a single-backtick code span holding a bracket",
+      alt: "a `]` b",
+      src: "x",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "a backslash-escaped closing bracket, which the parser reads as a bare one",
+      alt: "a \\] b",
+      src: "x",
+      readsAsImage: true,
+      verbatim: false,
+    },
+    {
+      name: "a backslash-escaped opening bracket, which the parser reads as a bare one",
+      alt: "a \\[ b",
+      src: "x",
+      readsAsImage: true,
+      verbatim: false,
+    },
+    {
+      name: "a doubled backslash, which the parser keeps",
+      alt: "a \\\\ b",
+      src: "x",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "brackets nested 0 levels deep",
+      alt: "a",
+      src: "x",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "brackets nested 1 level deep",
+      alt: "a[b]",
+      src: "x",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "brackets nested 2 levels deep",
+      alt: "a[b[b]]",
+      src: "x",
+      readsAsImage: false,
+      verbatim: false,
+    },
+    {
+      name: "brackets nested 3 levels deep",
+      alt: "a[b[b[b]]]",
+      src: "x",
+      readsAsImage: false,
+      verbatim: false,
+    },
+    {
+      name: "an empty alt",
+      alt: "",
+      src: "x",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "a source with a space, bracketed",
+      alt: "a",
+      src: "images/a b.png",
+      readsAsImage: true,
+      verbatim: true,
+    },
+    {
+      name: "a source with parentheses, bracketed",
+      alt: "a",
+      src: "x(1).png",
+      readsAsImage: true,
+      verbatim: true,
+    },
+  ];
+
+  const imageTypeIn = (node: JsonContent): boolean =>
+    node.type === "image" || (node.content ?? []).some(imageTypeIn);
+
+  it.each(rows)("$name", (row) => {
+    const text = unresolvedArtifactImageText(row.alt, row.src);
+    const fragment0 = fragmentOf({
+      type: "doc",
+      content: [textParagraph([plainText(text)])],
+    });
+
+    // What the real parser says about the host's text, as a whole body.
+    expect(readImage(text) !== null).toBe(row.readsAsImage);
+
+    const md1 = serialize(fragment0);
+    const json1 = parseJson(md1);
+    const fragment1 = fragmentOf(json1);
+    const md2 = serialize(fragment1);
+
+    if (row.verbatim) {
+      // Kept raw, and read as an image again: the retry. The document is an
+      // image from here on.
+      expect(md1).toBe(text);
+      expect(imageTypeIn(json1)).toBe(true);
+      expect(readImage(md1)).toEqual({ alt: row.alt, src: row.src });
+    } else {
+      // Escaped, and read back as the same text in the same paragraph, stable
+      // from the first pass.
+      expect(md1).not.toBe(text);
+      expect(md2).toBe(md1);
+      expect(imageTypeIn(json1)).toBe(false);
+      expect(textOf(json1)).toBe(text);
+      expect(proseMirrorJsonOf(fragment1)).toEqual(
+        proseMirrorJsonOf(fragment0),
+      );
+      expect(fragment1.toJSON()).toBe(fragment0.toJSON());
+    }
+  });
+
+  it("reads the review case back as an image with the host's own alt and source", () => {
+    const text = unresolvedArtifactImageText("a ``]`` b", "images/missing.png");
+    expect(text).toBe("![a ``]`` b](images/missing.png)");
+    expect(readImage(text)).toEqual({
+      alt: "a ``]`` b",
+      src: "images/missing.png",
+    });
+  });
+});
+
+/**
+ * An image node must read back as itself. The reader does not undo every
+ * escape the usual spelling writes (it keeps an escaped backslash in the alt as
+ * both characters), so on the artifact path the reader picks the spelling: the
+ * usual escaped one first, then brackets-only, then the host's own text.
+ */
+describe("an image node's alt round-trips through the artifact reader (traycer#1563)", () => {
+  const alts: ReadonlyArray<readonly [string, string]> = [
+    ["a backslash", "a \\ b"],
+    ["a doubled backslash", "a \\\\ b"],
+    ["no brackets", "a"],
+    ["brackets one level deep", "a[b]"],
+    ["a code span", "a `b` c"],
+    ["a code span holding a bracket", "a ``]`` b"],
+    ["an alt that is a code span", "`x`"],
+    ["an empty alt", ""],
+  ];
+  const srcs: ReadonlyArray<readonly [string, string]> = [
+    ["a plain source", "images/x.png"],
+    ["a source with spaces", "images/a b.png"],
+  ];
+  const rows = alts.flatMap(([altName, alt]) =>
+    srcs.map(([srcName, src]) => ({
+      name: `${altName}, ${srcName}`,
+      alt,
+      src,
+    })),
+  );
+
+  function imageDoc(alt: string, src: string): JsonContent {
+    return { type: "doc", content: [{ type: "image", attrs: { src, alt } }] };
+  }
+
+  it.each(rows)("$name", ({ alt, src }) => {
+    const fragment0 = fragmentOf(imageDoc(alt, src));
+    const md1 = serialize(fragment0);
+
+    const json1 = parseJson(md1);
+    const fragment1 = fragmentOf(json1);
+    // One pass, then re-ingest, gives the identical image and Yjs.
+    expect(readImage(md1)).toEqual({ alt, src });
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
+    expect(fragment1.toJSON()).toBe(fragment0.toJSON());
+    // And a second pass writes the same bytes.
+    expect(serialize(fragment1)).toBe(md1);
+  });
+
+  // Alts that already round-tripped keep their bytes: the usual escaped
+  // spelling stays first.
+  it.each([
+    ["no brackets", "a", "images/x.png", "![a](images/x.png)"],
+    ["an empty alt", "", "images/x.png", "![](images/x.png)"],
+    [
+      "brackets one level deep",
+      "a[b]",
+      "images/x.png",
+      "![a\\[b\\]](images/x.png)",
+    ],
+    ["a source with spaces", "a", "images/a b.png", "![a](<images/a b.png>)"],
+    ["a code span", "a `b` c", "images/x.png", "![a `b` c](images/x.png)"],
+  ])("keeps the usual escaped bytes for %s", (_name, alt, src, expected) => {
+    expect(serialize(fragmentOf(imageDoc(alt, src)))).toBe(expected);
+  });
+});
+
+/**
+ * A backslash directly before a `]`, or at the end of the alt, cannot be kept
+ * by the reader: it keeps an escaped backslash as both characters and reads
+ * `\]` as a bare bracket. No spelling reads back exactly, so the spelling
+ * written is one whose read-back image is written with those same bytes again:
+ * the alt changes once, and every pass after is identical.
+ */
+describe("an image alt the reader cannot keep changes once and is then stable (traycer#1563)", () => {
+  const rows = [
+    {
+      name: "a trailing backslash",
+      alt: "a \\",
+      pass1: "![a \\\\](images/x.png)",
+      readBackAlt: "a \\\\",
+    },
+    {
+      name: "a backslash right before a closing bracket",
+      alt: "a \\] b",
+      pass1: "![a \\\\\\] b](images/x.png)",
+      readBackAlt: "a \\\\] b",
+    },
+    {
+      name: "a lone backtick",
+      alt: "a ` b",
+      pass1: "![a \\` b](images/x.png)",
+      readBackAlt: "a \\` b",
+    },
+  ] as const;
+
+  it.each(rows)("$name", ({ alt, pass1, readBackAlt }) => {
+    const src = "images/x.png";
+    const fragment0 = fragmentOf({
+      type: "doc",
+      content: [{ type: "image", attrs: { src, alt } }],
+    });
+    const md1 = serialize(fragment0);
+    expect(md1).toBe(pass1);
+    expect(readImage(md1)).toEqual({ alt: readBackAlt, src });
+
+    const fragment1 = fragmentOf(parseJson(md1));
+    const md2 = serialize(fragment1);
+    expect(md2).toBe(pass1);
+
+    const fragment2 = fragmentOf(parseJson(md2));
+    expect(proseMirrorJsonOf(fragment2)).toEqual(proseMirrorJsonOf(fragment1));
+    expect(fragment2.toJSON()).toBe(fragment1.toJSON());
+    expect(serialize(fragment2)).toBe(pass1);
   });
 });

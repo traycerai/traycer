@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { JsonContent } from "../registry";
 import {
   jsonContentToArtifactMarkdown,
   jsonContentToMarkdown,
+  unresolvedArtifactImageText,
+  type ArtifactImage,
+  type ArtifactImageReader,
 } from "../json-content-serializer";
 
 /**
@@ -47,8 +50,27 @@ function bulletList(items: JsonContent[]): JsonContent {
   return { type: "bulletList", content: items };
 }
 
+// Protocol cannot carry the artifact parser, so the reader here is a stub that
+// knows only the simplest image shape: one line, `![alt](dest)` with a flat
+// alt and a bare or bracketed destination. What the REAL parser reads as one
+// image is covered where that parser lives (the gui-app round trip).
+const SIMPLE_IMAGE = /^!\[([^[\]\n]*)\]\((?:<([^<>\n]*)>|([^\s()<>]*))\)$/;
+
+const simpleImageReader: ArtifactImageReader = (markdown) => {
+  const match = SIMPLE_IMAGE.exec(markdown);
+  if (match === null) return null;
+  return { alt: match[1] ?? "", src: match[2] ?? match[3] ?? "" };
+};
+
+function artifactWith(
+  content: JsonContent,
+  readImage: ArtifactImageReader,
+): string {
+  return jsonContentToArtifactMarkdown(content, OPTIONS, readImage);
+}
+
 function artifact(content: JsonContent): string {
-  return jsonContentToArtifactMarkdown(content, OPTIONS);
+  return artifactWith(content, simpleImageReader);
 }
 
 function prompt(content: JsonContent): string {
@@ -453,10 +475,6 @@ describe("artifact unresolved image source text", () => {
     expect(artifact(content)).toBe("- ![a](b.png)");
   });
 
-  it("writes an image whose alt text holds balanced brackets verbatim", () => {
-    verbatim("![a [b] c](x)");
-  });
-
   it("escapes one text node that is an image followed by a link, which is not one image", () => {
     expect(artifactOf("![x](a) [y](b)")).toBe("!\\[x](a) \\[y](b)");
   });
@@ -720,6 +738,46 @@ describe("artifact paragraph ends", () => {
     ).toBe("a\\\nb");
   });
 
+  // Unmarked text of only spaces and tabs renders as nothing, so a hard break
+  // before it ends the paragraph's text all the same.
+  it("drops a trailing hard break that is followed by only a space", () => {
+    expect(artifact(paragraphDoc([plain("a"), hardBreak, plain(" ")]))).toBe(
+      "a",
+    );
+  });
+
+  it("drops a trailing hard break that is followed by only a tab", () => {
+    expect(artifact(paragraphDoc([plain("a"), hardBreak, plain("\t")]))).toBe(
+      "a",
+    );
+  });
+
+  it("keeps the middle hard break when whitespace follows the trailing one", () => {
+    expect(
+      artifact(
+        paragraphDoc([
+          plain("a"),
+          hardBreak,
+          plain("b"),
+          hardBreak,
+          plain(" "),
+        ]),
+      ),
+    ).toBe("a\\\nb");
+  });
+
+  it("drops a trailing hard break and whitespace in a list item too", () => {
+    expect(
+      artifact(
+        doc([
+          bulletList([
+            listItem([paragraph([plain("a"), hardBreak, plain(" ")])]),
+          ]),
+        ]),
+      ),
+    ).toBe("- a");
+  });
+
   it("drops a trailing hard break in a list item too", () => {
     expect(
       artifact(
@@ -752,36 +810,114 @@ describe("artifact paragraph ends", () => {
   });
 });
 
-describe("artifact unresolved image alt: nesting depth", () => {
-  // `a` followed by `depth` levels of `[b…]`.
-  const alt = (depth: number): string => {
-    let value = "a";
-    for (let level = 0; level < depth; level++) {
-      value = `a[b${value.slice(1)}]`;
-    }
-    return value;
-  };
+describe("artifact unresolved image text: the reader decides", () => {
+  const paragraphOfText = (value: string): JsonContent =>
+    doc([paragraph([plain(value)])]);
 
-  it("writes an alt nested up to one level deep verbatim", () => {
-    expect(artifactOf(`![${alt(0)}](x)`)).toBe(`![${alt(0)}](x)`);
-    expect(artifactOf(`![${alt(1)}](x)`)).toBe(`![${alt(1)}](x)`);
-  });
-
-  it("escapes the opening brackets of an alt nested two or more levels deep", () => {
-    expect(artifactOf(`![${alt(2)}](x)`)).toBe("!\\[a\\[b\\[b]]](x)");
-    expect(artifactOf(`![${alt(3)}](x)`)).toBe("!\\[a\\[b\\[b\\[b]]]](x)");
-    expect(artifactOf(`![${alt(5)}](x)`)).toBe(
-      "!\\[a\\[b\\[b\\[b\\[b\\[b]]]]]](x)",
+  it("builds the host's text for an image from its alt and source", () => {
+    expect(unresolvedArtifactImageText("a", "x.png")).toBe("![a](x.png)");
+    expect(unresolvedArtifactImageText("", "x")).toBe("![](x)");
+    expect(unresolvedArtifactImageText("a b", "images/a b.png")).toBe(
+      "![a b](<images/a b.png>)",
+    );
+    expect(unresolvedArtifactImageText("a", "x(1).png")).toBe(
+      "![a](<x(1).png>)",
     );
   });
 
-  it("writes a backslash-escaped bracket and a bracket inside a code span verbatim", () => {
-    expect(artifactOf("![a \\] b](x)")).toBe("![a \\] b](x)");
-    expect(artifactOf("![a `]` b](x)")).toBe("![a `]` b](x)");
+  it("writes the text verbatim when the reader reads it as one image whose text it is", () => {
+    const reader = vi.fn((): ArtifactImage => ({ alt: "a [b] c", src: "x" }));
+    expect(artifactWith(paragraphOfText("![a [b] c](x)"), reader)).toBe(
+      "![a [b] c](x)",
+    );
+    expect(reader).toHaveBeenCalledWith("![a [b] c](x)");
   });
 
-  it("still escapes an image followed by a link", () => {
-    expect(artifactOf("![x](a) [y](b)")).toBe("!\\[x](a) \\[y](b)");
+  it("writes the bracketed form verbatim when the source needs it", () => {
+    const reader: ArtifactImageReader = () => ({
+      alt: "a",
+      src: "images/a b (1).png",
+    });
+    expect(
+      artifactWith(paragraphOfText("![a](<images/a b (1).png>)"), reader),
+    ).toBe("![a](<images/a b (1).png>)");
+  });
+
+  it("escapes the text when the reader reads no image", () => {
+    const reader: ArtifactImageReader = () => null;
+    expect(artifactWith(paragraphOfText("![a](x)"), reader)).toBe("!\\[a](x)");
+  });
+
+  it("escapes the text when the image the reader reads has another text", () => {
+    // Another alt:
+    expect(
+      artifactWith(paragraphOfText("![a](x)"), () => ({ alt: "b", src: "x" })),
+    ).toBe("!\\[a](x)");
+    // Another source:
+    expect(
+      artifactWith(paragraphOfText("![a](x)"), () => ({ alt: "a", src: "y" })),
+    ).toBe("!\\[a](x)");
+    // The same source, written bracketed where the host's text is bare:
+    expect(
+      artifactWith(paragraphOfText("![a](<x>)"), () => ({
+        alt: "a",
+        src: "x",
+      })),
+    ).toBe("!\\[a](\\<x>)");
+    // The same source, written bare where the host's text brackets it:
+    expect(
+      artifactWith(paragraphOfText("![a](x y)"), () => ({
+        alt: "a",
+        src: "x y",
+      })),
+    ).toBe("!\\[a](x y)");
+  });
+
+  it("does not ask the reader about text that cannot be one image", () => {
+    const reader = vi.fn((): ArtifactImage => ({ alt: "a", src: "x" }));
+    const notCandidates: JsonContent[] = [
+      paragraphOfText("plain text"),
+      paragraphOfText("a ![a](x)"),
+      paragraphOfText("![a](x) tail"),
+      paragraphOfText("![a](x"),
+      paragraphOfText("[a](x)"),
+      paragraphOfText("!a](x)"),
+      paragraphOfText("![a](x)\n![b](y)"),
+      paragraphOfText("![a](x\n)"),
+      // Not one unmarked text node:
+      doc([paragraph([text("![a](x)", [{ type: "bold" }])])]),
+      doc([paragraph([plain("![a]"), plain("(x)")])]),
+    ];
+    for (const content of notCandidates) {
+      artifactWith(content, reader);
+    }
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("does not ask the reader inside a table cell", () => {
+    const reader = vi.fn((): ArtifactImage => ({ alt: "a", src: "x" }));
+    const content = doc([
+      {
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: [
+              {
+                type: "tableCell",
+                content: [paragraph([plain("![a](x)")])],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    artifactWith(content, reader);
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("leaves the prompt serializer's output for the same text unchanged", () => {
+    expect(prompt(paragraphOfText("![a [b] c](x)"))).toBe("![a [b] c](x)");
   });
 });
 
@@ -803,7 +939,7 @@ describe("artifact empty list markers inside a block quote", () => {
   });
   // Private-use and noncharacter code points the serializer could use to hold
   // a marker's trailing space through its trim.
-  const PLACEHOLDER = /[﷐-﷯-]/u;
+  const PLACEHOLDER = new RegExp(String.raw`[\uFDD0-\uFDEF\uE000-\uF8FF]`, "u");
 
   it("keeps the space after an empty task marker in a quote", () => {
     const md = artifact(doc([quote(emptyTask)]));
@@ -842,5 +978,107 @@ describe("artifact empty list markers inside a block quote", () => {
     );
     expect(ordered).toBe("- > 10. ");
     expect(ordered).not.toMatch(PLACEHOLDER);
+  });
+});
+
+describe("artifact image node: the reader picks the alt spelling", () => {
+  const imageDoc = (alt: string, src: string): JsonContent =>
+    doc([{ type: "image", attrs: { src, alt } }]);
+  // A reader that accepts exactly the listed spellings, as the image `alt`
+  // and `src` they stand for.
+  const accepting =
+    (
+      accepted: readonly string[],
+      alt: string,
+      src: string,
+    ): ArtifactImageReader =>
+    (markdown) =>
+      accepted.includes(markdown) ? { alt, src } : null;
+
+  it("writes the usual escaped spelling when the reader accepts it", () => {
+    const reader = vi.fn(accepting(["![a\\[b\\]](x)"], "a[b]", "x"));
+    expect(artifactWith(imageDoc("a[b]", "x"), reader)).toBe("![a\\[b\\]](x)");
+    // The escaped form is asked first, and nothing else once it is accepted.
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(reader).toHaveBeenCalledWith("![a\\[b\\]](x)");
+  });
+
+  it("writes the brackets-only spelling when the reader rejects the escaped one and accepts it", () => {
+    // Alt `a \ b`: the escaped spelling doubles the backslash.
+    const reader = vi.fn(accepting(["![a \\ b](x)"], "a \\ b", "x"));
+    expect(artifactWith(imageDoc("a \\ b", "x"), reader)).toBe("![a \\ b](x)");
+    expect(reader.mock.calls.map((call) => call[0])).toEqual([
+      "![a \\\\ b](x)",
+      "![a \\ b](x)",
+    ]);
+  });
+
+  it("falls to the host's own text when the reader accepts neither bracket spelling", () => {
+    const text = unresolvedArtifactImageText("a ] b", "x");
+    const reader = accepting([text], "a ] b", "x");
+    expect(artifactWith(imageDoc("a ] b", "x"), reader)).toBe(text);
+  });
+
+  it("falls back to the escaped spelling when the reader accepts none", () => {
+    expect(artifactWith(imageDoc("a \\ b", "x"), () => null)).toBe(
+      "![a \\\\ b](x)",
+    );
+  });
+
+  it("does not take a spelling the reader reads as another alt or source", () => {
+    // Accepts the escaped spelling, but as a different alt: rejected, and the
+    // brackets-only one is taken.
+    const reader: ArtifactImageReader = (markdown) =>
+      markdown === "![a \\\\ b](x)"
+        ? { alt: "a \\\\ b", src: "x" }
+        : markdown === "![a \\ b](x)"
+          ? { alt: "a \\ b", src: "x" }
+          : null;
+    expect(artifactWith(imageDoc("a \\ b", "x"), reader)).toBe("![a \\ b](x)");
+  });
+
+  it("leaves the prompt serializer's spelling alone", () => {
+    expect(prompt(imageDoc("a \\ b", "x"))).toBe("![a \\\\ b](x)");
+  });
+});
+
+describe("artifact image node: an alt no spelling reads back exactly", () => {
+  const imageDoc = (alt: string, src: string): JsonContent =>
+    doc([{ type: "image", attrs: { src, alt } }]);
+
+  // The alt is a lone backtick. The spellings are:
+  //   1, 2, 3  ![o`](s)     (a backtick is not escaped)
+  //   4, 5     ![o\`](s)    (the backtick is escaped)
+  // The stub reads the first as no image and the second as an image whose alt
+  // keeps the backslash, so no spelling reads back as "o`".
+  const BARE = "![o`](s)";
+  const ESCAPED = "![o\\`](s)";
+  const KEPT_BACKSLASH = "o\\`";
+
+  it("writes the first spelling whose read-back image is written with the same bytes again", () => {
+    const reader = vi.fn<ArtifactImageReader>((markdown) =>
+      markdown === ESCAPED ? { alt: KEPT_BACKSLASH, src: "s" } : null,
+    );
+    expect(artifactWith(imageDoc("o`", "s"), reader)).toBe(ESCAPED);
+    // The image it read back is written, as its own first exact spelling, with
+    // those very bytes: the alt changes once and then every pass is the same.
+    expect(artifactWith(imageDoc(KEPT_BACKSLASH, "s"), reader)).toBe(ESCAPED);
+  });
+
+  it("does not take a spelling whose read-back is written differently next time", () => {
+    // The reader reads every spelling as another alt, "other", and "other" is
+    // written as `![other](s)`, never as the bytes tried: nothing settles.
+    const reader: ArtifactImageReader = () => ({ alt: "other", src: "s" });
+    expect(artifactWith(imageDoc("o`", "s"), reader)).toBe(BARE);
+  });
+
+  it("falls to the first spelling when no spelling settles, even if the reader reads none", () => {
+    expect(artifactWith(imageDoc("o`", "s"), () => null)).toBe(BARE);
+  });
+
+  it("does not settle on a spelling whose read-back image has another source", () => {
+    const reader: ArtifactImageReader = (markdown) =>
+      markdown === ESCAPED ? { alt: KEPT_BACKSLASH, src: "other" } : null;
+    expect(artifactWith(imageDoc("o`", "s"), reader)).toBe(BARE);
   });
 });

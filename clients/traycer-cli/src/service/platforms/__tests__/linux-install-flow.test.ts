@@ -937,6 +937,96 @@ describe("linux service stop --force", () => {
     });
   });
 
+  // What was published BEFORE the stop - nothing, or a process already gone -
+  // is not the host being gone: a host can publish while `systemctl stop` is
+  // awaited, and a failed stop job leaves a unit that restarts itself. The
+  // record is always read again after the stop, and judged then.
+  describe("without --force, the record is always read again after the stop", () => {
+    afterEach(() => {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    });
+
+    it("nothing published before the stop, a live host published by the time it returns: fails naming that pid", async () => {
+      PID.evidenceReads = [
+        { kind: "absent" },
+        { kind: "read", metadata: { pid: 5151 } },
+      ];
+      // 5151 is alive.
+      PID.goneFn = () => false;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*still running.*--force/),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("a dead process published before the stop, a live host published after it: fails naming the live pid", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "read", metadata: { pid: 5151 } },
+      ];
+      PID.goneFn = (pid) => pid === 4242;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*still running.*--force/),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("nothing published before the stop and nothing after it: resolves", async () => {
+      PID.evidenceReads = [{ kind: "absent" }, { kind: "absent" }];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a dead process published before the stop and the same one after it: resolves", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "read", metadata: { pid: 4242 } },
+      ];
+      PID.goneFn = () => true;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a dead process published before the stop and an unreadable record after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      PID.goneFn = () => true;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+    });
+  });
+
   // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)
   // can itself be a crash - `failed` - whose Restart=on-failure replacement
   // is already coming back up by the time the cancel runs. The cancel's own

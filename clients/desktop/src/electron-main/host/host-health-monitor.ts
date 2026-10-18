@@ -18,7 +18,11 @@ import type {
 } from "./host-recovery-governor";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type {
+  DesktopLocalHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
+} from "../../ipc-contracts/host-types";
 
 /**
  * Steady-state watchdog for the CLI-owned host. Runs on every platform (see
@@ -215,27 +219,41 @@ export interface HostHealthMonitorDeps {
   readonly readLiveSupervisorPid: () => Promise<number | null>;
   /**
    * Told once a live host has stayed unreachable past `UNREACHABLE_WARN_MS`,
-   * with its pid and how long it has been silent, and told `null` when that
-   * ends (it answers again, or dies). Production publishes it to the renderer,
-   * which offers the person a force restart. The monitor itself still kills
-   * nothing.
+   * with its pid, a new offer id and how long it has been silent, and told
+   * `null` when that ends (it answers again, or dies). Production publishes it
+   * to the renderer, which offers the person a force restart. The monitor
+   * itself still kills nothing.
    */
-  readonly onHostUnresponsive: (
-    state: { readonly pid: number; readonly unreachableForMs: number } | null,
-  ) => void;
+  readonly onHostUnresponsive: (state: LocalHostUnresponsive | null) => void;
 }
 
 export interface HostHealthMonitor {
   dispose(): void;
   /**
-   * Whether the host with this pid is, right now, the one this monitor holds
-   * unresponsive: still offered a force restart, still published, and its
-   * endpoint still unanswered on a fresh probe. The offer's action asks this
-   * before restarting, so a host that answered or was replaced since the
-   * offer is not restarted from under its work.
+   * Whether this offer is still the one out, and the host it was made for -
+   * the pid, endpoint and start identity recorded when the offer was made,
+   * never whatever is published now - is still the published one and still
+   * unanswered on a fresh probe. The offer's action asks this before
+   * restarting, so a host that answered, or replaced the offered one (even
+   * under the same pid), is not restarted from under its work.
    */
-  stillUnresponsive(pid: number): Promise<boolean>;
+  stillUnresponsive(offer: LocalHostUnresponsiveOffer): Promise<boolean>;
 }
+
+/**
+ * The host a force-restart offer was made for, recorded when it was made. The
+ * offer's action is held to this, not to whatever is published by then.
+ */
+interface OfferedHost {
+  readonly offerId: number;
+  readonly pid: number;
+  readonly websocketUrl: string;
+  readonly startIdentity: ProcessStartIdentity | null;
+}
+
+// Process-wide, so an offer id never repeats even across monitors (the
+// startup path can start a new one after disposing the last).
+let lastOfferId = 0;
 
 interface PublishedHealthMetadata {
   readonly snapshot: DesktopLocalHostSnapshot;
@@ -287,7 +305,11 @@ export function startHostHealthMonitor(
   // Whether `onHostUnresponsive` was last told a state rather than `null`, so
   // the end of a stall is announced once and a healthy host announces nothing.
   let unresponsiveReported = false;
+  // The host the force-restart offer out now was made for, or `null` when no
+  // offer is out.
+  let offeredHost: OfferedHost | null = null;
   const clearUnresponsive = (): void => {
+    offeredHost = null;
     if (!unresponsiveReported) return;
     unresponsiveReported = false;
     deps.onHostUnresponsive(null);
@@ -296,12 +318,18 @@ export function startHostHealthMonitor(
   // any reachable observation, so only a continuously unreachable host reaches
   // the demote window.
   let unreachableSince: number | null = null;
-  // The host the current outage is about, as the published snapshot names it:
-  // its pid and its endpoint, the same two `isCurrentPublishedSnapshot`
-  // compares. Another published host, even one that reuses the pid, gets its
-  // own outage: the clock, the once-per-stall latches and any force-restart
-  // offer describe the old one, so they start over.
-  let outageHostKey: string | null = null;
+  // The host the current outage is about: the published snapshot's pid and
+  // endpoint (the two `isCurrentPublishedSnapshot` compares) and the start
+  // identity pid.json published for that same host. Another host, even one
+  // that reuses the pid and the endpoint, gets its own outage: the clock, the
+  // once-per-stall latches and any force-restart offer describe the old one,
+  // so they start over. A tick whose pid.json read does not name the
+  // snapshot's host (unreadable, mid-write, or another host) learns no
+  // identity, and keeps the one already known rather than starting over.
+  let outageHost: {
+    readonly endpointKey: string;
+    readonly startIdentity: ProcessStartIdentity | null;
+  } | null = null;
   // Earliest tick that may ask the governor again after an `alive` denial. See
   // ALIVE_RECHECK_INTERVAL_MS: this throttles the ONE path that would otherwise
   // re-probe a demoted-but-living host forever.
@@ -429,6 +457,7 @@ export function startHostHealthMonitor(
    */
   const isBusyRatherThanDown = async (
     snapshot: DesktopLocalHostSnapshot,
+    startIdentity: ProcessStartIdentity | null,
     now: number,
   ): Promise<boolean> => {
     const unreachableForMs =
@@ -472,9 +501,21 @@ export function startHostHealthMonitor(
         { pid: snapshot.pid, unreachableForMs },
       );
       // The hold stays; what changes is that the person is told, and offered
-      // the force restart that only they may choose.
+      // the force restart that only they may choose. The offer records the
+      // host it is about, so its action can reach only that host.
+      lastOfferId += 1;
+      offeredHost = {
+        offerId: lastOfferId,
+        pid: snapshot.pid,
+        websocketUrl: snapshot.websocketUrl,
+        startIdentity,
+      };
       unresponsiveReported = true;
-      deps.onHostUnresponsive({ pid: snapshot.pid, unreachableForMs });
+      deps.onHostUnresponsive({
+        pid: snapshot.pid,
+        offerId: lastOfferId,
+        unreachableForMs,
+      });
     }
     if (!busyLogged) {
       busyLogged = true;
@@ -498,7 +539,7 @@ export function startHostHealthMonitor(
         // nothing - whatever took the snapshot away (a stop, an uninstall, a
         // respawn in progress). The next published host starts a new outage,
         // even one that comes back under the same pid.
-        outageHostKey = null;
+        outageHost = null;
         clearUnresponsive();
         // A deferred recovery intentionally demotes the snapshot before the
         // foreign lock holder finishes. Keep ownership across that null
@@ -547,9 +588,19 @@ export function startHostHealthMonitor(
         await attemptRecovery(metadata);
         return;
       }
-      const hostKey = `${String(snapshot.pid)} ${snapshot.websocketUrl}`;
-      if (outageHostKey !== hostKey) {
-        outageHostKey = hostKey;
+      const published = await readPublishedMetadata(deps.host.pidMetadataFile);
+      if (isDisposed()) return;
+      const endpointKey = `${String(snapshot.pid)} ${snapshot.websocketUrl}`;
+      const sameEndpoint = outageHost?.endpointKey === endpointKey;
+      const startIdentity =
+        published !== null &&
+        isCurrentPublishedSnapshot(snapshot, published.snapshot)
+          ? published.startIdentity
+          : sameEndpoint
+            ? (outageHost?.startIdentity ?? null)
+            : null;
+      if (!sameEndpoint || outageHost?.startIdentity !== startIdentity) {
+        outageHost = { endpointKey, startIdentity };
         consecutiveFailures = 0;
         unreachableSince = null;
         busyLogged = false;
@@ -557,7 +608,6 @@ export function startHostHealthMonitor(
         nextLivenessCheckAt = 0;
         clearUnresponsive();
       }
-      const published = await readPublishedMetadata(deps.host.pidMetadataFile);
       if (
         published !== null &&
         isCurrentPublishedSnapshot(snapshot, published.snapshot) &&
@@ -611,10 +661,11 @@ export function startHostHealthMonitor(
       // the replacement, not about the snapshot's process. Treating that as
       // busy would pin the renderer to a dead endpoint for the whole
       // unreachable-demote window instead of converging on the next tick.
-      const publishedIsThisHost =
+      if (
         published !== null &&
-        isCurrentPublishedSnapshot(snapshot, published.snapshot);
-      if (publishedIsThisHost && (await isBusyRatherThanDown(snapshot, now))) {
+        isCurrentPublishedSnapshot(snapshot, published.snapshot) &&
+        (await isBusyRatherThanDown(snapshot, published.startIdentity, now))
+      ) {
         return;
       }
       if (isDisposed()) return;
@@ -722,43 +773,52 @@ export function startHostHealthMonitor(
       disposed = true;
       clearInterval(timer);
     },
-    stillUnresponsive: async (pid) => {
-      // Whether the host with `pid` is the one published right now, in the
-      // snapshot and on disk alike. Asked on both sides of the probe: a
-      // host swapped in while the probe was out must not inherit the
-      // verdict the probe reached about the one before it.
-      const publishedIsStill =
-        async (): Promise<PublishedHealthMetadata | null> => {
-          if (isDisposed() || !unresponsiveReported) return null;
-          const snapshot = deps.host.getSnapshot();
-          if (snapshot === null || snapshot.pid !== pid) return null;
-          const published = await readPublishedMetadata(
-            deps.host.pidMetadataFile,
-          );
-          if (
-            isDisposed() ||
-            published === null ||
-            !isCurrentPublishedSnapshot(snapshot, published.snapshot)
-          ) {
-            return null;
-          }
-          return published;
-        };
-      const before = await publishedIsStill();
-      if (before === null) return false;
+    stillUnresponsive: async (offer) => {
+      // Held to the host recorded when the offer was made, never to the one
+      // published now: a host that replaced it before the click, even under
+      // the same pid and not answering yet, has had no busy window of its own.
+      const offered = offeredHost;
+      if (
+        offered === null ||
+        offered.offerId !== offer.offerId ||
+        offered.pid !== offer.pid
+      ) {
+        return false;
+      }
+      // Whether the offer is still out and the offered host is the one
+      // published right now, in the snapshot and on disk alike. Asked on both
+      // sides of the probe: a host swapped in while the probe was out must
+      // not inherit the verdict the probe reached about the offered one.
+      const offeredIsStillPublished = async (): Promise<boolean> => {
+        if (isDisposed() || offeredHost !== offered) return false;
+        const snapshot = deps.host.getSnapshot();
+        if (
+          snapshot === null ||
+          snapshot.pid !== offered.pid ||
+          snapshot.websocketUrl !== offered.websocketUrl
+        ) {
+          return false;
+        }
+        const published = await readPublishedMetadata(
+          deps.host.pidMetadataFile,
+        );
+        return (
+          !isDisposed() &&
+          offeredHost === offered &&
+          published !== null &&
+          isCurrentPublishedSnapshot(snapshot, published.snapshot) &&
+          published.startIdentity === offered.startIdentity
+        );
+      };
+      if (!(await offeredIsStillPublished())) return false;
       const answered = await isPublishedHostEndpointReachable(
-        before.snapshot.websocketUrl,
-        before.snapshot.pid,
-        before.startIdentity,
+        offered.websocketUrl,
+        offered.pid,
+        offered.startIdentity,
         probe,
       );
       if (answered) return false;
-      const after = await publishedIsStill();
-      return (
-        after !== null &&
-        after.snapshot.websocketUrl === before.snapshot.websocketUrl &&
-        after.startIdentity === before.startIdentity
-      );
+      return offeredIsStillPublished();
     },
   };
 }

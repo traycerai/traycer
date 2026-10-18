@@ -394,7 +394,20 @@ async function runHostUninstallWithActuators(
     // host was never asked/consented to die, and a probe that still finds one
     // means the kill did not land. Only "asked, and nothing answers" earns the
     // purge that deletes pid metadata and rotates the active log.
-    liveness = await observeLiveness(deps, ctx, published);
+    // Every process this decision observes, by identity, with what is known
+    // of its exit. The install may go only once EACH is proven gone: a
+    // verdict about one process never stands in for another's, so a dead
+    // successor read at the boundary cannot clear a captured host that was
+    // still running, or whose exit could not be established. A later probe
+    // of the SAME process (same pid and start identity) replaces its earlier
+    // verdict, since it is newer evidence about that process.
+    const observed = new Map<string, LivenessObservation>();
+    if (published !== null) {
+      observed.set(
+        publishedProcessKey(published),
+        await observeLiveness(deps, ctx, published),
+      );
+    }
     // Registration is verified too, for the same reason: on Linux the unit
     // file is removed even when `disable --now` timed out, and on Windows
     // `/Delete` tolerates failure. Ask the controller what is actually
@@ -411,14 +424,18 @@ async function runHostUninstallWithActuators(
     // exactly the right answer here too.
     const successorRead = await readPublishedHostReadOutcome(deps, ctx);
     const successor = successorRead.host;
-    if (!successorRead.answered) {
-      liveness = "unknown";
-    } else if (successor !== null) {
+    if (successor !== null) {
       // Identity-probe B rather than inheriting A's verdict. A successor
       // record is not proof of life either - it can be stale - so it gets the
-      // same treatment A got.
-      liveness = await observeLiveness(deps, ctx, successor);
+      // same treatment A got, and is added beside A's verdict, not over it.
+      observed.set(
+        publishedProcessKey(successor),
+        await observeLiveness(deps, ctx, successor),
+      );
     }
+    liveness = successorRead.answered
+      ? foldObservedLiveness(observed.values())
+      : "unknown";
     registrationClear = retainedAfterAll?.state === "not-installed";
     // THE RUNTIME PURGE IS WITHHELD UNCONDITIONALLY, and that is a deliberate
     // retreat from what this command used to do.
@@ -460,16 +477,16 @@ async function runHostUninstallWithActuators(
     // stopped, or now with `--force`.
     // An unreadable record at the boundary is no evidence the host is gone
     // (it may be mid-write by a live one), so it keeps the install as well,
-    // and so does a published process whose exit could not be established:
-    // a probe that threw or could not tell is not a dead host. Only a
-    // published process proven gone, or nothing published at all, lets a
-    // stopped host uninstall.
+    // and so does any published process whose exit could not be established:
+    // a probe that threw or could not tell is not a dead host. Only every
+    // published process seen proven gone, or nothing published at all, lets
+    // a stopped host uninstall.
     if (
       !args.force &&
       (!stopResolved ||
         liveness === "live" ||
         !successorRead.answered ||
-        ((published !== null || successor !== null) && liveness !== "gone"))
+        (observed.size > 0 && liveness !== "gone"))
     ) {
       ctx.logger.warn(
         "Host uninstall kept the install because the host did not stop",
@@ -715,6 +732,29 @@ async function readPublishedHostReadOutcome(
     });
     return { answered: false, host: null };
   }
+}
+
+/** One published process: its pid and the start identity it was published with. */
+function publishedProcessKey(host: PublishedHost): string {
+  return `${String(host.pid)} ${host.startIdentity ?? ""}`;
+}
+
+/**
+ * The verdict for a set of processes: `live` if any still runs, `gone` only
+ * when every one is proven gone, `unknown` otherwise - and `unknown` for an
+ * empty set, since observing nothing is not evidence of an exit.
+ */
+function foldObservedLiveness(
+  verdicts: Iterable<LivenessObservation>,
+): LivenessObservation {
+  let sawAny = false;
+  let allGone = true;
+  for (const verdict of verdicts) {
+    if (verdict === "live") return "live";
+    sawAny = true;
+    if (verdict !== "gone") allGone = false;
+  }
+  return sawAny && allGone ? "gone" : "unknown";
 }
 
 /**

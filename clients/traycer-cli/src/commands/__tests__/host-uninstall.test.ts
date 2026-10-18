@@ -1025,6 +1025,35 @@ describe("runHostUninstall - a published process that is not proven gone (trayce
       reads: [{ pid: 4242, startIdentity: null }, null],
       probe: async () => "indeterminate",
     },
+    // The entry capture A and the boundary successor B are different
+    // processes: a dead B says nothing about A.
+    {
+      name: "a captured host still serving behind a dead successor",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async (pid) => (pid === 111 ? "current" : "dead"),
+    },
+    {
+      name: "a captured host whose probe is indeterminate behind a dead successor",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async (pid) => (pid === 111 ? "indeterminate" : "dead"),
+    },
+    {
+      name: "a captured host whose probe throws behind a dead successor",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async (pid) => {
+        if (pid === 111) throw new Error("ps: operation not permitted");
+        return "dead";
+      },
+    },
     {
       name: "an unusable published pid, which names no process",
       reads: [{ pid: -5, startIdentity: "first" }, null],
@@ -1083,6 +1112,38 @@ describe("runHostUninstall - a published process that is not proven gone (trayce
       name: "a published pid that now belongs to another process",
       reads: [{ pid: 4242, startIdentity: "first" }, null],
       probe: async () => "mismatch",
+    },
+    {
+      name: "a captured host and a different successor, both proven gone",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async () => "dead",
+    },
+    {
+      name: "the same published process read again at the boundary, proven gone",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 111, startIdentity: "a" },
+      ],
+      probe: async () => "dead",
+    },
+    // A later probe of the SAME process (pid and start identity) is newer
+    // evidence about it and replaces the earlier verdict.
+    {
+      name: "the same published process, first indeterminate and then proven gone at the boundary",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 111, startIdentity: "a" },
+      ],
+      probe: (() => {
+        let calls = 0;
+        return async (): Promise<PublishedProcessIdentityVerdict> => {
+          calls += 1;
+          return calls === 1 ? "indeterminate" : "dead";
+        };
+      })(),
     },
     {
       name: "a published successor proven gone",

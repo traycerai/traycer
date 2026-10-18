@@ -82,6 +82,9 @@ interface SerializerContext {
   // (`jsonContentToMarkdown`), because a model or a person reads those
   // directly and gains nothing from a backslash.
   escapeText: boolean;
+  // The artifact reader's own verdict on whether a paragraph's text is one
+  // image (see `unresolvedImageSourceText`); `null` off the artifact path.
+  readImage: ArtifactImageReader | null;
   // The placeholder for the space after an empty ordered or task marker; see
   // `keptMarkerSpaceFor`. Empty in the first rendering, which chooses it.
   keptMarkerSpace: string;
@@ -93,6 +96,7 @@ interface SerializerContext {
 function createContext(
   options: SerializerOptions,
   escapeText: boolean,
+  readImage: ArtifactImageReader | null,
   keptMarkerSpace: string,
 ): SerializerContext {
   return {
@@ -107,6 +111,7 @@ function createContext(
     inListItem: false,
     inTableCell: false,
     escapeText,
+    readImage,
     keptMarkerSpace,
     keptMarkerSpaceUses: { count: 0 },
   };
@@ -1058,22 +1063,43 @@ function serializeHeading(node: JsonContent, ctx: SerializerContext): string {
   return `${prefix} ${content}`;
 }
 
-// The host keeps an artifact image it cannot resolve yet (a missing file, a
-// failed download) as a paragraph holding the image's own Markdown as plain
-// text, `![alt](dest)` with `dest` bracketed as `<src>` when the source holds
-// whitespace or parentheses (`rawArtifactImageText` in the host's
-// epic-file-sync). Written back verbatim, the next read parses it as an image
-// again, which is how a later write retries it. Escaped, it would stay text
-// for good, so exactly the text the parser reads back as one image - and
-// nothing looser - is left raw. The alt is marked's link label: brackets
-// nested one level deep, backslash escapes, and code spans, inside which a
-// `]` closes nothing. A deeper bracket, or any other `]`, ends the label
-// where marked ends it, so `![a [b [c]]](x)` and `![x](a) [y](b)` are not one
-// image to the parser; raw or escaped, they read back as the same text.
-const UNRESOLVED_IMAGE_SOURCE_TEXT =
-  /^!\[(?:\[(?:\\.|[^[\]\\\n])*\]|\\.|`[^`\n]*`|[^[\]\\`\n])*\]\((?:<[^<>\n]*>|[^\s()<>]*)\)$/;
+/** An image as the artifact reader parsed it: its alt text and its source. */
+export interface ArtifactImage {
+  readonly alt: string;
+  readonly src: string;
+}
 
-function unresolvedImageSourceText(node: JsonContent): string | null {
+/**
+ * The artifact reader's own parse of `markdown` as a whole artifact body: the
+ * image, when the body is exactly one image and nothing else, and `null`
+ * otherwise. Supplied by whoever parses artifact bodies back, from that same
+ * parser, so the serializer never carries a copy of its grammar.
+ */
+export type ArtifactImageReader = (markdown: string) => ArtifactImage | null;
+
+/**
+ * The paragraph text the host keeps in place of an artifact image it cannot
+ * resolve yet (a missing file, a failed download): the image's own Markdown,
+ * `![alt](dest)`, with `dest` bracketed as `<src>` when the source holds
+ * whitespace or parentheses.
+ */
+export function unresolvedArtifactImageText(alt: string, src: string): string {
+  const destination = /[\s()]/.test(src) ? `<${src}>` : src;
+  return `![${alt}](${destination})`;
+}
+
+// Written back verbatim, the host's text for an unresolved image
+// (`unresolvedArtifactImageText`) parses as that image again on the next
+// read, which is how a later write retries it. Escaped, it would stay text
+// for good. So a paragraph that is one unmarked text node is left raw exactly
+// when the reader itself parses that text as one image, and that image's
+// text is the paragraph's text again - nothing looser, and nothing decided by
+// a second copy of the parser's grammar. Anything else is escaped like any
+// other text, and reads back as the same text.
+function unresolvedImageSourceText(
+  node: JsonContent,
+  readImage: ArtifactImageReader,
+): string | null {
   const only = node.content?.length === 1 ? node.content[0] : undefined;
   if (
     only?.type !== "text" ||
@@ -1082,26 +1108,49 @@ function unresolvedImageSourceText(node: JsonContent): string | null {
   ) {
     return null;
   }
-  return UNRESOLVED_IMAGE_SOURCE_TEXT.test(only.text) ? only.text : null;
+  const text = only.text;
+  // Only a candidate is handed to the parser: one line that opens an image
+  // and ends its destination.
+  if (!text.startsWith("![") || !text.endsWith(")") || text.includes("\n")) {
+    return null;
+  }
+  const image = readImage(text);
+  return image !== null &&
+    unresolvedArtifactImageText(image.alt, image.src) === text
+    ? text
+    : null;
 }
 
 // A hard break that ends a paragraph breaks no line, and CommonMark has no
 // way to write one: `\` before the paragraph's end reads back as a literal
 // backslash the person never typed. So the artifact form leaves it out, and
-// the paragraph reads back without it.
+// the paragraph reads back without it. "Ends" counts what renders as nothing:
+// unmarked text of only spaces and tabs is trimmed off the line anyway, so a
+// hard break before it would end the paragraph's text all the same.
 function withoutTrailingHardBreaks(
   content: JsonContent[] | undefined,
 ): JsonContent[] | undefined {
   if (content === undefined) return undefined;
   let end = content.length;
-  while (end > 0 && content[end - 1]?.type === "hardBreak") end--;
+  while (end > 0 && rendersAsParagraphEnd(content[end - 1])) end--;
   return end === content.length ? content : content.slice(0, end);
+}
+
+function rendersAsParagraphEnd(node: JsonContent | undefined): boolean {
+  return (
+    node?.type === "hardBreak" ||
+    (node?.type === "text" &&
+      (node.marks?.length ?? 0) === 0 &&
+      /^[ \t]*$/.test(node.text ?? ""))
+  );
 }
 
 function serializeParagraph(node: JsonContent, ctx: SerializerContext): string {
   const indent = ctx.inListItem ? "" : getIndent(ctx);
   const unresolvedImage =
-    ctx.escapeText && !ctx.inTableCell ? unresolvedImageSourceText(node) : null;
+    ctx.readImage !== null && !ctx.inTableCell
+      ? unresolvedImageSourceText(node, ctx.readImage)
+      : null;
   if (unresolvedImage !== null) return `${indent}${unresolvedImage}`;
   const children = serializeChildren(
     ctx.escapeText && !ctx.inTableCell
@@ -1645,15 +1694,67 @@ function asAutolink(node: JsonContent): JsonContent {
   };
 }
 
-function serializeImage(node: JsonContent): string {
+function serializeImage(node: JsonContent, ctx: SerializerContext): string {
   const src = readStringAttr(node.attrs, "src");
   const alt = readStringAttr(node.attrs, "alt");
   if (src.length === 0) return "";
-  const escapedAlt = alt.replace(/[\\[\]]/g, "\\$&");
   const destination = /[\s()<>]/.test(src)
     ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
     : src;
-  return `![${escapedAlt}](${destination})`;
+  if (ctx.readImage === null) {
+    return `![${alt.replace(/[\\[\]]/g, "\\$&")}](${destination})`;
+  }
+  return artifactImageSpelling(alt, src, destination, ctx.readImage);
+}
+
+// The characters each spelling of an image escapes in its alt (`null`: the
+// alt as written), the usual escaped one first so files that already
+// round-trip keep their bytes.
+const IMAGE_ALT_ESCAPES: readonly (RegExp | null)[] = [
+  /[\\[\]]/g,
+  /[[\]]/g,
+  null,
+  /[\\[\]`]/g,
+  /[[\]`]/g,
+];
+
+function imageSpellings(alt: string, destination: string): string[] {
+  return IMAGE_ALT_ESCAPES.map(
+    (escape) =>
+      `![${escape === null ? alt : alt.replace(escape, "\\$&")}](${destination})`,
+  );
+}
+
+// On the artifact path an image must read back as itself, and the reader does
+// not undo every escape the usual spelling writes: it keeps an escaped
+// backslash in the alt as both characters, so that alt would grow on every
+// pass. So the reader picks: the first spelling it reads back as this same
+// alt and source. Some alts have none - the reader can keep no backslash
+// right before a `]` or at the end of the alt - and then the spelling written
+// is one whose read-back image is written with those same bytes again, so the
+// alt changes once and every later pass is identical.
+function artifactImageSpelling(
+  alt: string,
+  src: string,
+  destination: string,
+  readImage: ArtifactImageReader,
+): string {
+  const spellings = imageSpellings(alt, destination);
+  const readsAs = (spelling: string, expectedAlt: string): boolean => {
+    const read = readImage(spelling);
+    return read !== null && read.alt === expectedAlt && read.src === src;
+  };
+  const exact = spellings.find((spelling) => readsAs(spelling, alt));
+  if (exact !== undefined) return exact;
+  const settling = spellings.find((spelling) => {
+    const read = readImage(spelling);
+    if (read === null || read.src !== src) return false;
+    const next = imageSpellings(read.alt, destination).find((candidate) =>
+      readsAs(candidate, read.alt),
+    );
+    return next === spelling;
+  });
+  return settling ?? spellings[0] ?? "";
 }
 
 function serializeNode(node: JsonContent, ctx: SerializerContext): string {
@@ -1667,7 +1768,7 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
     case "hardBreak":
       return serializeHardBreak(ctx);
     case "image":
-      return serializeImage(node);
+      return serializeImage(node, ctx);
     case "heading":
       return serializeHeading(node, ctx);
     case "bulletList":
@@ -1749,15 +1850,21 @@ function normalizeMarkdown(
  */
 function renderMarkdown(
   options: SerializerOptions,
-  escapeText: boolean,
+  readImage: ArtifactImageReader | null,
   render: (ctx: SerializerContext) => string,
 ): string {
-  const draft = createContext(options, escapeText, "");
+  const escapeText = readImage !== null;
+  const draft = createContext(options, escapeText, readImage, "");
   const drafted = render(draft);
   if (draft.keptMarkerSpaceUses.count === 0) {
     return normalizeMarkdown(drafted, "", escapeText);
   }
-  const ctx = createContext(options, escapeText, keptMarkerSpaceFor(drafted));
+  const ctx = createContext(
+    options,
+    escapeText,
+    readImage,
+    keptMarkerSpaceFor(drafted),
+  );
   return normalizeMarkdown(render(ctx), ctx.keptMarkerSpace, escapeText);
 }
 
@@ -1765,7 +1872,7 @@ export function jsonContentToMarkdown(
   content: JsonContent,
   options: SerializerOptions,
 ): string {
-  return renderMarkdown(options, false, (ctx) => serializeNode(content, ctx));
+  return renderMarkdown(options, null, (ctx) => serializeNode(content, ctx));
 }
 
 /**
@@ -1779,6 +1886,9 @@ export function jsonContentToMarkdown(
 export function jsonContentToArtifactMarkdown(
   content: JsonContent,
   options: SerializerOptions,
+  readImage: ArtifactImageReader,
 ): string {
-  return renderMarkdown(options, true, (ctx) => serializeNode(content, ctx));
+  return renderMarkdown(options, readImage, (ctx) =>
+    serializeNode(content, ctx),
+  );
 }

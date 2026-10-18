@@ -1168,8 +1168,8 @@ function localHostLaneStarters(
             services.hostLifecycle.readIdentifiedSupervisorPid(),
           onHostUnresponsive: publishLocalHostUnresponsive,
         });
-        setLocalHostStillUnresponsiveCheck((pid) =>
-          healthMonitor.stillUnresponsive(pid),
+        setLocalHostStillUnresponsiveCheck((offer) =>
+          healthMonitor.stillUnresponsive(offer),
         );
         state.bridge?.disposeFns.push(() => {
           // No monitor, no verdict: an offer left standing would be one whose

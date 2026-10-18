@@ -294,7 +294,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect(host.requestHostRespawnCalls).toBe(2);
   });
 
-  it("restarts through forceRestartUnresponsiveHost only for the pid the host reports unresponsive", async () => {
+  it("restarts through forceRestartUnresponsiveHost only for the offer the host reports unresponsive", async () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
       authnBaseUrl: "http://localhost:5005",
@@ -305,20 +305,36 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
       traycerCli: undefined,
     });
 
-    await expect(host.forceRestartUnresponsiveHost(4242)).resolves.toEqual({
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 }),
+    ).resolves.toEqual({
       kind: "declined",
       message: "The host is no longer unresponsive.",
     });
     expect(host.requestHostRespawnCalls).toBe(0);
 
-    host.setLocalHostUnresponsive({ pid: 4242, unreachableForMs: 600_000 });
-    await expect(host.forceRestartUnresponsiveHost(9999)).resolves.toEqual({
+    host.setLocalHostUnresponsive({
+      pid: 4242,
+      offerId: 7,
+      unreachableForMs: 600_000,
+    });
+    // A pid or an offer id other than the reported one is declined.
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 9999, offerId: 7 }),
+    ).resolves.toEqual({
       kind: "declined",
       message: "The host is no longer unresponsive.",
     });
-    await expect(host.forceRestartUnresponsiveHost(4242)).resolves.toEqual({
-      kind: "restarted",
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 8 }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: "The host is no longer unresponsive.",
     });
+    expect(host.requestHostRespawnCalls).toBe(0);
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 }),
+    ).resolves.toEqual({ kind: "restarted" });
     expect(host.requestHostRespawnCalls).toBe(1);
   });
 

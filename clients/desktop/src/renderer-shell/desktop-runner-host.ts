@@ -62,6 +62,7 @@ import type {
   LocalHostCapability,
   LocalHostSnapshot,
   LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
   SystemResumeEvent,
@@ -264,7 +265,9 @@ export interface DesktopPreloadBridge {
   ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
-  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult>;
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
@@ -1151,8 +1154,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.requestHostRespawn();
   }
 
-  forceRestartUnresponsiveHost(pid: number): Promise<HostRestartRequestResult> {
-    return this.bridge.forceRestartUnresponsiveHost(pid);
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult> {
+    return this.bridge.forceRestartUnresponsiveHost(offer);
   }
 
   dispose(): void {
