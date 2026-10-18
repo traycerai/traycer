@@ -535,13 +535,13 @@ export async function readCliConfig(): Promise<CliConfig> {
     parsed = JSON.parse(raw);
   } catch {
     throw new Error(
-      "~/.traycer/cli/config.json is not valid JSON; refusing to overwrite. Fix or delete it.",
+      "Traycer's config.json is not valid JSON; refusing to overwrite. Fix or delete it.",
     );
   }
   const result = parseCliConfig(parsed);
   if (!result.success) {
     throw new Error(
-      `~/.traycer/cli/config.json does not match the expected schema: ${result.error.message}`,
+      `Traycer's config.json does not match the expected schema: ${result.error.message}`,
     );
   }
   return result.data;

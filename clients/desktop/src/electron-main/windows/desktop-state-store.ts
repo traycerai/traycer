@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import { config } from "../../config";
 import type {
   OwnershipEntry,
@@ -57,10 +57,7 @@ export function resolveDesktopStateFilePath(): string {
   // epic data under ~/.traycer/epics stays shared - only the window/tab state
   // is per-environment. production → ~/.traycer/desktop-windows.json;
   // dev/staging nest under their name.
-  const base = environmentSubdir(
-    join(homedir(), ".traycer"),
-    config.environment,
-  );
+  const base = environmentSubdir(traycerDataRoot(), config.environment);
   return join(base, "desktop-windows.json");
 }
 

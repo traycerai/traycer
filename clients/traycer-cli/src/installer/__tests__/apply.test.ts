@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DataRootResolution } from "@traycer/protocol/config/data-root";
 import type { HostStartAdoptionPublisher } from "../../host/host-start-adoption";
 
 type Environment = "dev" | "production";
@@ -79,6 +80,40 @@ vi.mock("node:os", async (importOriginal) => {
     ...actual,
     platform: () => mocks.platformOverride ?? actual.platform(),
     homedir: () => mocks.sandboxHome || actual.tmpdir(),
+  };
+});
+
+// The moved-data-root guard reads the process's data-root resolution. A test
+// moves the data folder by setting `movedRoot`; null is the default folder.
+const dataRootMock = vi.hoisted(() => ({ movedRoot: null as string | null }));
+vi.mock("@traycer/protocol/config/data-root", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@traycer/protocol/config/data-root")>();
+  const { homedir } = await import("node:os");
+  return {
+    ...actual,
+    currentDataRootResolution: (): DataRootResolution => {
+      const bootstrapDir = actual.dataBootstrapDir(homedir());
+      const movedRoot = dataRootMock.movedRoot;
+      if (movedRoot === null) {
+        return {
+          kind: "default",
+          root: actual.defaultDataRoot(homedir()),
+          bootstrapDir,
+        };
+      }
+      return {
+        kind: "configured",
+        root: movedRoot,
+        bootstrapDir,
+        record: {
+          version: 1,
+          generation: 1,
+          root: movedRoot,
+          migrationId: null,
+        },
+      };
+    },
   };
 });
 
@@ -1044,6 +1079,49 @@ describe("applyHost", () => {
         noService: false,
         expectedStageFingerprint: null,
         expectedStagedVersion: "2.0.0",
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect((await readHostInstallRecord(ENV))?.version).toBe("2.0.0");
+    });
+  });
+
+  describe("while the data folder is moved", () => {
+    afterEach(() => {
+      dataRootMock.movedRoot = null;
+    });
+
+    it("refuses a staged registry build over a local-* install and leaves the install untouched", async () => {
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      await writeInstall("local-host-20261017", {});
+      await writeStaged("2.0.0", {});
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_UPDATE_NOT_NEWER" });
+
+      expect((await readHostInstallRecord(ENV))?.version).toBe(
+        "local-host-20261017",
+      );
+      expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("control: the same stage applies when the data folder is the default one", async () => {
+      await writeInstall("local-host-20261017", {});
+      await writeStaged("2.0.0", {});
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
         onProgress: () => {},
       });
 

@@ -541,7 +541,8 @@ describe("WorktreeAgentCreateChip ready", () => {
     await openMenu();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Couldn't read this host's setting");
-    expect(alert.textContent).toContain("~/.traycer/cli/config.json");
+    expect(alert.textContent).toContain("Traycer's config.json");
+    expect(alert.textContent).not.toContain("~/.traycer");
     expect(screen.queryByRole("menuitemradio")).toBeNull();
     expect(chip().textContent).toBe("Agent worktrees");
     expect(harness.sets()).toEqual([]);

@@ -219,9 +219,9 @@ function AgentWorktreesPolicyChip(props: {
         <DropdownMenuSeparator />
         {query.isError ? (
           <p role="alert" className="px-1.5 py-1 text-ui-xs text-destructive">
-            Couldn&apos;t read this host&apos;s setting. Repair
-            ~/.traycer/cli/config.json on that machine, or back it up before
-            resetting it, then reopen Settings.
+            Couldn&apos;t read this host&apos;s setting. Repair Traycer&apos;s
+            config.json on that machine, or back it up before resetting it, then
+            reopen Settings.
           </p>
         ) : (
           <DropdownMenuRadioGroup
