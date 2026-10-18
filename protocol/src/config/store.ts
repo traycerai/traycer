@@ -1063,6 +1063,31 @@ export async function setLogLevels(
   }));
 }
 
+/** Which of the two thresholds in the `logs` block a scoped change sets. */
+export type CliConfigLogScope = "cli" | "host";
+
+/**
+ * Sets ONE log threshold and keeps the other as the file holds it at write
+ * time. A caller changing one scope must use this rather than reading both
+ * and passing the other back to {@link setLogLevels}: a value read before the
+ * lock reverts a concurrent change to the other scope.
+ */
+export async function setLogLevel(
+  scope: CliConfigLogScope,
+  level: LogLevel,
+): Promise<void> {
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      logs:
+        scope === "cli"
+          ? { ...current.logs, cliLogLevel: level }
+          : { ...current.logs, hostLogLevel: level },
+    },
+    result: undefined,
+  }));
+}
+
 /** The configured client + host log thresholds (defaults when unset). */
 export async function readLogLevels(): Promise<LogsConfig> {
   return (await readCliConfig()).logs;

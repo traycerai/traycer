@@ -1,18 +1,18 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { platform as osPlatform } from "node:os";
 import {
   link,
   mkdir,
+  readdir,
   readFile,
   rm,
   stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { errorCode } from "./credentials-fs";
 import {
-  breakStaleLock,
   holderProvablyDead,
   ownPidStartFingerprintAsync,
 } from "./credentials-lock";
@@ -26,14 +26,12 @@ import {
  * write. Readers never take it: the rename keeps every whole-document read
  * atomic.
  *
- * The lock only ever appears complete: the holder's record (pid, start-time
- * fingerprint, nonce) is written to a temp file of its own, then hard-linked
- * into place, which fails with EEXIST when the lock exists. On a filesystem
- * without hard links the record is written by an `O_CREAT | O_EXCL` create
- * instead (`flag: "wx"`, `CREATE_NEW` on Windows), which can leave an empty
- * lock behind a holder stopped between the create and the write; the caller's
- * {@link CliConfigLockHandle.stillHeld} check before its rename is the guard
- * for that path.
+ * The holder's record (pid, start-time fingerprint, nonce) is written to a
+ * temp file of its own, then hard-linked into place, which fails with EEXIST
+ * when the lock exists, so the lock appears complete. On a filesystem without
+ * hard links the record is written by an `O_CREAT | O_EXCL` create instead
+ * (`flag: "wx"`, `CREATE_NEW` on Windows), which can leave an empty lock
+ * behind a holder stopped between the create and the write.
  *
  * A lock is broken only when it is older than `staleAgeMs` AND it names a
  * holder that is provably dead: the pid is gone, or its start-time
@@ -44,6 +42,15 @@ import {
  * process cannot see (another pid namespace sharing the home directory) from
  * being judged dead mid-write; a legitimate hold lasts one read, merge, write
  * and rename.
+ *
+ * Breaking is exclusive per dead record: only the creator of the break token
+ * for that record's nonce (`config.json.lock.break-<hash>.<generation>`) may
+ * unlink the lock, and only after re-reading it and finding that same record.
+ * Every other breaker of the record loses the token race and waits, so no
+ * breaker can remove a lock that replaced the dead one. A token whose creator
+ * died is never removed by another breaker; the next one takes the next
+ * generation instead. Tokens of records that are gone are swept by the next
+ * holder.
  */
 
 export interface CliConfigLockTiming {
@@ -53,18 +60,26 @@ export interface CliConfigLockTiming {
   readonly pollMs: number;
   // Minimum lock age (file mtime) before a dead holder's lock may be broken.
   readonly staleAgeMs: number;
+  // Backoff for a release that failed in the foreground, retried in the
+  // background until it lands (the last delay repeats).
+  readonly backgroundReleaseDelaysMs: readonly number[];
 }
 
 const DEFAULT_TIMING: CliConfigLockTiming = {
   waitMs: 15_000,
   pollMs: 25,
   staleAgeMs: 5_000,
+  backgroundReleaseDelaysMs: [100, 250, 500, 1_000, 2_000, 5_000],
 };
 
 // How long a live verdict for one lock record is reused before probing again,
 // so a contender polling behind a live holder does not spawn `tasklist` (the
 // Windows liveness probe) on every poll.
 const LIVE_VERDICT_REUSE_MS = 1_000;
+
+// Break-token generations tried for one dead record before waiting. Each
+// further generation needs the previous token's creator to have died too.
+const BREAK_GENERATIONS = 8;
 
 // Windows reports a create or link over a file that is being deleted (a
 // peer's release still has a handle open) as access denied rather than
@@ -75,13 +90,16 @@ const TRANSIENT_WINDOWS_ERROR_CODES: ReadonlySet<string> = new Set([
   "EPERM",
 ]);
 
-// What `link` answers on a filesystem without hard links (FAT, exFAT, some
-// network shares); the exclusive create still works there.
+// What `link` answers on a filesystem without hard links: EPERM on a FAT
+// volume under Linux, ENOTSUP / EOPNOTSUPP / ENOSYS elsewhere, and EISDIR,
+// libuv's reading of the ERROR_INVALID_FUNCTION a FAT volume gives Windows.
+// The exclusive create still works there.
 const LINK_UNSUPPORTED_ERROR_CODES: ReadonlySet<string> = new Set([
   "EPERM",
   "ENOTSUP",
   "EOPNOTSUPP",
   "ENOSYS",
+  "EISDIR",
 ]);
 
 const RELEASE_ATTEMPTS = 3;
@@ -89,19 +107,25 @@ const RELEASE_RETRY_MS = 15;
 
 let timingOverride: CliConfigLockTiming | null = null;
 
-/** Shortens the lock's waits for tests; `null` restores the defaults. */
+/** Overrides some of the lock's timings for tests; `null` restores them all. */
 export function setCliConfigLockTimingForTests(
-  timing: CliConfigLockTiming | null,
+  timing: Partial<CliConfigLockTiming> | null,
 ): void {
-  timingOverride = timing;
+  timingOverride = timing === null ? null : { ...DEFAULT_TIMING, ...timing };
+}
+
+function currentTiming(): CliConfigLockTiming {
+  return timingOverride ?? DEFAULT_TIMING;
 }
 
 export interface CliConfigLockHandle {
   // Whether the lock file still carries this handle's record. Checked right
   // before the config rename, so a holder whose lock was taken from it
-  // (the exclusive-create path, or a misjudged takeover) writes nothing.
+  // (a misjudged takeover) writes nothing.
   stillHeld(): Promise<boolean>;
-  // Owner-checked unlink: removes the lock only while it is still ours.
+  // Owner-checked unlink: removes the lock only while it is still ours. A
+  // removal that keeps failing is never dropped: it is logged and retried
+  // in the background and before this process's next acquire.
   release(): Promise<void>;
 }
 
@@ -112,6 +136,9 @@ interface LockRecord {
   readonly acquiredAt: number;
 }
 
+// This process's own locks whose release has not landed yet, by lock path.
+const unreleased = new Map<string, LockRecord[]>();
+
 /**
  * Acquires the lock at `lockPath`, waiting up to the configured `waitMs`.
  * Throws when the wait runs out, naming only the lock path, so the caller
@@ -120,7 +147,7 @@ interface LockRecord {
 export async function acquireCliConfigLock(
   lockPath: string,
 ): Promise<CliConfigLockHandle> {
-  const timing = timingOverride ?? DEFAULT_TIMING;
+  const timing = currentTiming();
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   const record: LockRecord = {
     pid: process.pid,
@@ -133,7 +160,9 @@ export async function acquireCliConfigLock(
   let liveVerdict: { readonly raw: string; readonly until: number } | null =
     null;
   while (true) {
+    await releaseUnreleased(lockPath);
     if (await tryCreate(lockPath, serialized)) {
+      await sweepBreakTokens(lockPath, record.nonce);
       return makeHandle(lockPath, record);
     }
     const holder = await readHolder(lockPath);
@@ -149,13 +178,16 @@ export async function acquireCliConfigLock(
         liveVerdict.raw === holder.raw &&
         Date.now() < liveVerdict.until;
       if (!reuseVerdict) {
-        if (
-          await holderProvablyDead(
-            holder.record.pid,
-            holder.record.pidStartTime,
-          )
-        ) {
-          if ((await breakStaleLock(lockPath, holder.raw)) === "removed") {
+        if (await recordHolderDead(holder.record)) {
+          if (
+            await breakDeadLock(
+              lockPath,
+              holder.raw,
+              holder.record.nonce,
+              serialized,
+              timing,
+            )
+          ) {
             continue;
           }
         } else {
@@ -176,37 +208,133 @@ export async function acquireCliConfigLock(
 }
 
 /**
- * One attempt to take the lock. The record goes into a temp file first and is
- * linked into place, so the lock never exists without its record; where the
- * filesystem has no hard links, an exclusive create writes it instead.
+ * Removes the dead lock whose bytes are `deadRaw`, if this contender wins the
+ * break token for its nonce. Resolves `true` when the caller should retry its
+ * create at once (the lock is gone, by this breaker or another), `false` to
+ * keep waiting.
  */
-async function tryCreate(
+async function breakDeadLock(
   lockPath: string,
+  deadRaw: string,
+  deadNonce: string,
   serialized: string,
+  timing: CliConfigLockTiming,
 ): Promise<boolean> {
-  const tmp = `${lockPath}.${randomUUID()}.tmp`;
+  const tokenBase = breakTokenBase(lockPath, deadNonce);
+  for (let generation = 0; generation < BREAK_GENERATIONS; generation += 1) {
+    const tokenPath = `${tokenBase}.${generation}`;
+    if (await tryCreate(tokenPath, serialized)) {
+      try {
+        // Only this token's creator may remove the record, and the lock cannot
+        // change under it: the dead holder will not release, and every other
+        // breaker of this record needs this token.
+        const current = await readHolder(lockPath);
+        if (current === null || current.raw !== deadRaw) return true;
+        await unlink(lockPath).catch((err: unknown) => {
+          if (errorCode(err) !== "ENOENT") throw err;
+        });
+        return true;
+      } finally {
+        await rm(tokenPath, { force: true });
+      }
+    }
+    // Another breaker holds this generation. Move past it only when its
+    // creator died holding it; otherwise it is breaking, and we wait.
+    const token = await readHolder(tokenPath);
+    if (token === null) return false;
+    const tokenAgeMs = await lockAgeMs(tokenPath);
+    if (
+      token.record === null ||
+      tokenAgeMs === null ||
+      tokenAgeMs < timing.staleAgeMs ||
+      !(await recordHolderDead(token.record))
+    ) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function breakTokenPrefix(lockPath: string): string {
+  return `${basename(lockPath)}.break-`;
+}
+
+function breakTokenBase(lockPath: string, nonce: string): string {
+  // Hashed: the nonce comes from a file anyone could have written, so it
+  // never becomes a path segment as is.
+  const digest = createHash("sha256").update(nonce).digest("hex").slice(0, 32);
+  return join(dirname(lockPath), `${breakTokenPrefix(lockPath)}${digest}`);
+}
+
+// A break token's own name: `<lock>.break-<32 hex>.<generation>`. A breaker's
+// temp file for a token (`<token>.<uuid>.tmp`) does not match, so a sweep never
+// pulls one from under a `link` in flight.
+const BREAK_TOKEN_SUFFIX = /^[0-9a-f]{32}\.\d+$/;
+
+/**
+ * Removes every break token but those for `heldNonce`. Run by a new holder:
+ * the record each other token names is gone for good (nonces never repeat),
+ * so a breaker still working on one re-reads the lock, finds another record
+ * and removes nothing.
+ */
+async function sweepBreakTokens(
+  lockPath: string,
+  heldNonce: string,
+): Promise<void> {
+  const dir = dirname(lockPath);
+  const prefix = breakTokenPrefix(lockPath);
+  const keep = `${basename(breakTokenBase(lockPath, heldNonce))}.`;
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (
+      entry.startsWith(prefix) &&
+      BREAK_TOKEN_SUFFIX.test(entry.slice(prefix.length)) &&
+      !entry.startsWith(keep)
+    ) {
+      await rm(join(dir, entry), { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+function recordHolderDead(record: LockRecord): Promise<boolean> {
+  return holderProvablyDead(record.pid, record.pidStartTime);
+}
+
+/**
+ * One attempt to create the file at `path` carrying `serialized`. The record
+ * goes into a temp file first and is linked into place, so the file never
+ * exists without its record; where the filesystem has no hard links, an
+ * exclusive create writes it instead.
+ */
+async function tryCreate(path: string, serialized: string): Promise<boolean> {
+  const tmp = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });
     try {
-      await link(tmp, lockPath);
+      await link(tmp, path);
       return true;
     } catch (err) {
       const code = errorCode(err);
-      if (code === "EEXIST") return false;
+      if (code === "EEXIST" || isTransientWindowsError(code)) return false;
       if (code === null || !LINK_UNSUPPORTED_ERROR_CODES.has(code)) throw err;
     }
-    return await tryExclusiveCreate(lockPath, serialized);
+    return await tryExclusiveCreate(path, serialized);
   } finally {
     await rm(tmp, { force: true });
   }
 }
 
 async function tryExclusiveCreate(
-  lockPath: string,
+  path: string,
   serialized: string,
 ): Promise<boolean> {
   try {
-    await writeFile(lockPath, serialized, {
+    await writeFile(path, serialized, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
@@ -229,15 +357,15 @@ function isTransientWindowsError(code: string | null): boolean {
 
 interface Holder {
   readonly raw: string;
-  // `null` when the lock names no holder (empty, unparseable, or unreadable
+  // `null` when the file names no holder (empty, unparseable, or unreadable
   // mid-release on Windows): never broken.
   readonly record: LockRecord | null;
 }
 
-async function readHolder(lockPath: string): Promise<Holder | null> {
+async function readHolder(path: string): Promise<Holder | null> {
   let raw: string;
   try {
-    raw = await readFile(lockPath, "utf8");
+    raw = await readFile(path, "utf8");
   } catch (err) {
     const code = errorCode(err);
     if (code === "ENOENT") return null;
@@ -268,9 +396,9 @@ function parseRecord(raw: string): LockRecord | null {
   };
 }
 
-async function lockAgeMs(lockPath: string): Promise<number | null> {
+async function lockAgeMs(path: string): Promise<number | null> {
   try {
-    return Date.now() - (await stat(lockPath)).mtimeMs;
+    return Date.now() - (await stat(path)).mtimeMs;
   } catch {
     return null;
   }
@@ -285,32 +413,83 @@ function isOurs(holder: Holder | null, record: LockRecord): boolean {
   );
 }
 
+/**
+ * Removes `record`'s lock if it is still there. Resolves `true` once the lock
+ * no longer carries it (removed now, or already gone or replaced), `false` on
+ * a removal that failed and must be retried.
+ */
+async function removeIfOurs(
+  lockPath: string,
+  record: LockRecord,
+): Promise<boolean> {
+  try {
+    if (!isOurs(await readHolder(lockPath), record)) return true;
+    await unlink(lockPath);
+    return true;
+  } catch (err) {
+    return errorCode(err) === "ENOENT";
+  }
+}
+
+/** Retries this process's failed releases of `lockPath` once each. */
+async function releaseUnreleased(lockPath: string): Promise<void> {
+  const pending = unreleased.get(lockPath);
+  if (pending === undefined) return;
+  for (const record of [...pending]) {
+    if (await removeIfOurs(lockPath, record)) forget(lockPath, record);
+  }
+}
+
+function forget(lockPath: string, record: LockRecord): void {
+  const pending = unreleased.get(lockPath);
+  if (pending === undefined) return;
+  const rest = pending.filter((entry) => entry.nonce !== record.nonce);
+  if (rest.length === 0) unreleased.delete(lockPath);
+  else unreleased.set(lockPath, rest);
+}
+
+/**
+ * Keeps retrying a release that failed in the foreground until it lands or
+ * an acquire in this process lands it first. Unref'd: a process that exits
+ * leaves a dead holder, which the next writer breaks.
+ */
+function retryReleaseInBackground(
+  lockPath: string,
+  record: LockRecord,
+  attempt: number,
+): void {
+  const delays = currentTiming().backgroundReleaseDelaysMs;
+  const delay = delays[Math.min(attempt, delays.length - 1)] ?? 5_000;
+  const timer = setTimeout(() => {
+    const pending = unreleased.get(lockPath);
+    if (pending === undefined || !pending.some((e) => e.nonce === record.nonce))
+      return;
+    void removeIfOurs(lockPath, record).then((removed) => {
+      if (removed) forget(lockPath, record);
+      else retryReleaseInBackground(lockPath, record, attempt + 1);
+    });
+  }, delay);
+  timer.unref();
+}
+
 function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
   let released = false;
   return {
     stillHeld: async () => isOurs(await readHolder(lockPath), record),
     release: async () => {
       if (released) return;
+      released = true;
       for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt += 1) {
-        try {
-          if (!isOurs(await readHolder(lockPath), record)) {
-            // Gone, or not ours: nothing of ours to remove.
-            released = true;
-            return;
-          }
-          await unlink(lockPath);
-          released = true;
-          return;
-        } catch (err) {
-          if (errorCode(err) === "ENOENT") {
-            released = true;
-            return;
-          }
-          // Transient (a Windows sharing violation): retry so this process
-          // does not leave its own live lock behind for every later writer.
-          if (attempt < RELEASE_ATTEMPTS - 1) await sleep(RELEASE_RETRY_MS);
-        }
+        if (await removeIfOurs(lockPath, record)) return;
+        // Transient (a Windows sharing violation): retry before handing it to
+        // the background.
+        if (attempt < RELEASE_ATTEMPTS - 1) await sleep(RELEASE_RETRY_MS);
       }
+      console.warn(
+        `Could not remove the settings lock ${lockPath}; retrying in the background.`,
+      );
+      unreleased.set(lockPath, [...(unreleased.get(lockPath) ?? []), record]);
+      retryReleaseInBackground(lockPath, record, 0);
     },
   };
 }

@@ -27,6 +27,12 @@ const h = vi.hoisted(() => ({
   renameFailure: null as string | null,
   // Fails EVERY link while set, to force the exclusive-create fallback.
   linkFailure: null as string | null,
+  // Fails the next links targeting the settings lock, one code per call.
+  lockLinkFailures: [] as string[],
+  // Counts unlinks of the settings lock, failed or not.
+  lockUnlinks: 0,
+  // Fails the next unlinks of the settings lock, one code per call.
+  unlinkFailures: [] as string[],
   // Fails the next `flag: "wx"` creates, one code per call.
   wxFailures: [] as string[],
 }));
@@ -71,9 +77,21 @@ vi.mock("node:fs/promises", async (importActual) => {
       await actual.rename(source, target);
     },
     link: async (existing: string, linkPath: string) => {
-      if (linkPath === `${cliConfigPath()}.lock`) h.lockLinks += 1;
+      if (linkPath === `${cliConfigPath()}.lock`) {
+        h.lockLinks += 1;
+        const code = h.lockLinkFailures.shift();
+        if (code !== undefined) throw simulatedError(code);
+      }
       if (h.linkFailure !== null) throw simulatedError(h.linkFailure);
       await actual.link(existing, linkPath);
+    },
+    unlink: async (path: string) => {
+      if (path === `${cliConfigPath()}.lock`) {
+        h.lockUnlinks += 1;
+        const code = h.unlinkFailures.shift();
+        if (code !== undefined) throw simulatedError(code);
+      }
+      await actual.unlink(path);
     },
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
       const options = args[2];
@@ -114,6 +132,7 @@ import {
   setCatalogProbeTimeoutOverride,
   setCatalogProbeTimeoutSeconds,
   setEnvOverride,
+  setLogLevel,
   setLogLevels,
   setShell,
   writeCliConfig,
@@ -206,16 +225,22 @@ beforeEach(async () => {
   h.configRenames = 0;
   h.lockLinks = 0;
   h.renameFailure = null;
+  h.lockUnlinks = 0;
   h.linkFailure = null;
+  h.lockLinkFailures = [];
+  h.unlinkFailures = [];
   h.wxFailures = [];
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   lastSeam?.open();
   lastSeam = null;
   h.park = null;
   h.renameFailure = null;
   h.linkFailure = null;
+  h.lockLinkFailures = [];
+  h.unlinkFailures = [];
   h.wxFailures = [];
   setCliConfigLockTimingForTests(null);
   await rm(h.home, { recursive: true, force: true });
@@ -396,6 +421,38 @@ describe("concurrent config writers", () => {
     });
   });
 
+  describe("scoped log levels", () => {
+    it("keeps a concurrent change to the other threshold", async () => {
+      await seed({ envOverrides: { SEED_KEY: "s" } });
+
+      await runInterleaved(
+        () => setLogLevel("host", "debug"),
+        () => setLogLevel("cli", "warn"),
+      );
+
+      expect((await readCliConfig()).logs).toEqual({
+        cliLogLevel: "warn",
+        hostLogLevel: "debug",
+      });
+    });
+
+    it("changes one threshold and keeps the other as the file holds it", async () => {
+      await seed({ logs: { cliLogLevel: "error", hostLogLevel: "trace" } });
+
+      await setLogLevel("cli", "info");
+      expect((await readCliConfig()).logs).toEqual({
+        cliLogLevel: "info",
+        hostLogLevel: "trace",
+      });
+
+      await setLogLevel("host", "warn");
+      expect((await readCliConfig()).logs).toEqual({
+        cliLogLevel: "info",
+        hostLogLevel: "warn",
+      });
+    });
+  });
+
   describe("two writers of the same block, different keys", () => {
     it("keeps both setEnvOverride keys", async () => {
       await seed(SEED_WITH_SHELL);
@@ -512,6 +569,69 @@ describe("concurrent config writers", () => {
       });
     });
 
+    // Windows answers a link over a file being deleted with access denied.
+    it.each(["EACCES", "EBUSY"])(
+      "retries a win32 link that fails %s instead of throwing",
+      async (code) => {
+        h.platform = "win32";
+        h.lockLinkFailures = [code];
+
+        await setEnvOverride("WIN", "1");
+
+        expect((await readCliConfig()).envOverrides).toEqual({ WIN: "1" });
+        expect(h.lockLinks).toBeGreaterThanOrEqual(2);
+        expect(existsSync(lockPath())).toBe(false);
+      },
+    );
+
+    it("never drops a failed release silently", async () => {
+      const secret = "s3cr3t-value-123";
+      await seed({ envOverrides: { SECRET_KEY: secret } });
+      setCliConfigLockTimingForTests({
+        waitMs: 1500,
+        pollMs: 10,
+        staleAgeMs: 300,
+        // Out of reach of this test: only the next acquire may land the release.
+        backgroundReleaseDelaysMs: [60_000],
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.unlinkFailures = ["EBUSY", "EBUSY", "EBUSY"];
+
+      await setEnvOverride("FIRST", "1");
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const warning = warn.mock.calls.flat().join(" ");
+      expect(warning).toContain(lockPath());
+      expect(warning).not.toContain(secret);
+      expect(warning).not.toContain("SECRET_KEY");
+
+      // The leaked lock names this live process, so only this process's own
+      // retry of the release lets the next setter in.
+      await setEnvOverride("SECOND", "2");
+
+      expect((await readCliConfig()).envOverrides).toEqual({
+        SECRET_KEY: secret,
+        FIRST: "1",
+        SECOND: "2",
+      });
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it("lands a failed release in the background without another setter", async () => {
+      setCliConfigLockTimingForTests({ backgroundReleaseDelaysMs: [50] });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.unlinkFailures = ["EBUSY", "EBUSY", "EBUSY"];
+
+      await setEnvOverride("ONLY", "1");
+      expect(existsSync(lockPath())).toBe(true);
+
+      for (let i = 0; i < 200 && existsSync(lockPath()); i += 1) {
+        await delay(10);
+      }
+
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
     it("falls back to an exclusive create when hard links are unsupported", async () => {
       h.linkFailure = "ENOTSUP";
 
@@ -579,7 +699,9 @@ describe("concurrent config writers", () => {
   describe("exclusive-create fallback errors", () => {
     it("treats EPERM on the exclusive create as a busy lock on win32", async () => {
       h.platform = "win32";
-      h.linkFailure = "EPERM";
+      // ENOTSUP, not EPERM: on win32 a link EPERM means a busy lock, not an
+      // unsupported filesystem, so only ENOTSUP reaches the exclusive create.
+      h.linkFailure = "ENOTSUP";
       h.wxFailures = ["EPERM"];
 
       await setEnvOverride("WIN", "1");
@@ -591,6 +713,8 @@ describe("concurrent config writers", () => {
 
     it("does not swallow EPERM on the exclusive create outside win32", async () => {
       h.platform = "linux";
+      // Outside win32 a link EPERM is an unsupported filesystem, so this
+      // reaches the exclusive create too.
       h.linkFailure = "EPERM";
       h.wxFailures = ["EPERM"];
 
