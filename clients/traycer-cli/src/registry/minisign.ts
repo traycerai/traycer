@@ -2,7 +2,10 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { ParsedMinisignPublicKey } from "./trusted-keys";
+import {
+  trustedKeysOverlayPath,
+  type ParsedMinisignPublicKey,
+} from "./trusted-keys";
 
 // Hard ceiling for the `pure` (non-prehashed) signature algorithm where
 // the whole archive is buffered in memory. Production hosts publish
@@ -160,8 +163,7 @@ export async function verifyMinisignArchive(
   if (opts.trustedKeys.length === 0) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
-      message:
-        "minisign verify: no trusted public keys are configured; set TRAYCER_HOST_TRUSTED_PUBKEYS or populate ~/.traycer/cli/host-trusted-pubkeys",
+      message: `minisign verify: no trusted public keys are configured; set TRAYCER_HOST_TRUSTED_PUBKEYS or populate ${trustedKeysOverlayPath()}`,
       details: null,
       exitCode: 1,
     });

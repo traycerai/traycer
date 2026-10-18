@@ -267,6 +267,7 @@ import {
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   resolveAgentReasoningLabel,
+  resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
   resolveSenderLabel,
   type SenderDisplayContext,
@@ -1874,7 +1875,7 @@ function useChatTileSessionViewModel(
     { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
   );
   const displayCatalog = tabModelCatalog.harnesses;
-  const { modelLabels, modelReasoningLabels } = useMemo(
+  const { modelLabels, modelReasoningLabels, modelServiceTierLabels } = useMemo(
     () => getModelLabelIndex(displayCatalog),
     [displayCatalog],
   );
@@ -2108,8 +2109,20 @@ function useChatTileSessionViewModel(
   });
 
   const displayContext = useMemo<SenderDisplayContext>(
-    () => ({ profile, collaborators, modelLabels, modelReasoningLabels }),
-    [collaborators, modelLabels, modelReasoningLabels, profile],
+    () => ({
+      profile,
+      collaborators,
+      modelLabels,
+      modelReasoningLabels,
+      modelServiceTierLabels,
+    }),
+    [
+      collaborators,
+      modelLabels,
+      modelReasoningLabels,
+      modelServiceTierLabels,
+      profile,
+    ],
   );
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
@@ -2119,6 +2132,8 @@ function useChatTileSessionViewModel(
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
         resolveAgentReasoningLabel(sender, reasoningEffort, displayContext),
+      resolveAgentServiceTierLabel: (sender, serviceTier) =>
+        resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
     [displayContext],

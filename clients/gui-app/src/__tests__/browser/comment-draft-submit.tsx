@@ -112,6 +112,7 @@ const spine = new HostClient<HostRpcRegistry>({
                 handle: "alice",
               },
             },
+            environmentId: null,
             team: null,
           },
         ],

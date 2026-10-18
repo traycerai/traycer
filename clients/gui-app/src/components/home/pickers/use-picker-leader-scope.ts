@@ -18,7 +18,7 @@ import type {
   ReasoningFooterConfig,
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
-import { toggleServiceTier } from "@/components/home/pickers/model-service-tier";
+import { stepServiceTier } from "@/components/home/pickers/model-service-tier";
 import { PICKER_REASONING_LEADER_INDEX_LIMIT } from "@/providers/keybinding-context";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
@@ -155,11 +155,11 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
         {
           actionId: "model.reasoning.byDigit",
           // Own the modifier even without model settings so an unavailable
-          // digit cannot switch a tab behind the picker. Zero is always Fast.
+          // digit cannot switch a tab behind the picker. Zero steps the speed tier.
           isActive: () => true,
           dispatch: (digit) => {
             if (digit === 0) {
-              return toggleServiceTier(stateRef.current.serviceTier);
+              return stepServiceTier(stateRef.current.serviceTier);
             }
             const reasoningConfig = stateRef.current.reasoning;
             if (

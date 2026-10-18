@@ -182,10 +182,9 @@ import {
   useChatArchiveSupported,
   SET_CHAT_ARCHIVED_METHOD,
 } from "@/hooks/epic/use-chat-archive-support";
-import {
-  getNegotiatedHostMethods,
-  subscribeNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { subscribeRecordWriteRouting } from "@/lib/host/owner-gone-write-routing";
+import { readRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifactInBatch,
@@ -1867,10 +1866,16 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     [selection.selectedVisibleIds, tree],
   );
   const ownerHostIds = useEpicNodeHostIds(selectedRootIds);
-  const supported = useSyncExternalStore(subscribeNegotiatedManifests, () =>
+  // Each record is gated on the host its archive will be SENT to (a live
+  // stand-in when its owner is down), as the row's own control is.
+  const supported = useSyncExternalStore(subscribeRecordWriteRouting, () =>
     (ownerHostIds.length === 0 ? [sessionHostId] : ownerHostIds).every(
       (ownerHostId) => {
-        const hostId = ownerHostId ?? sessionHostId;
+        const hostId = readRecordWriteServingHostId(
+          ownerHostId ?? sessionHostId,
+          "epic.setChatArchived",
+          sessionHostId,
+        );
         return (
           hostId !== null &&
           getNegotiatedHostMethods(hostId)?.has(SET_CHAT_ARCHIVED_METHOD) ===

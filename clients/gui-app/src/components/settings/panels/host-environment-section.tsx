@@ -2,13 +2,28 @@
  * Docs: see ../SETTINGS.md
  * Update that file whenever this settings surface changes.
  */
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentDescriptor,
+  EnvironmentHostBinding,
+} from "@traycer/protocol/host/environment/contracts";
+import type { HostRegistryKind } from "@traycer/protocol/host/host-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { EnvironmentMachinesList } from "@/components/settings/panels/environment-machines-list";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useEnvironmentHostBindMutation } from "@/hooks/bots/use-environment-host-bind-mutation";
@@ -26,6 +41,14 @@ import { cn } from "@/lib/utils";
  * becomes this host's environment only when the person picks it here. A
  * refusal from the host is shown in place, beside the list.
  *
+ * Binding to a team asks first, in words that depend on what the host is: a
+ * person's own machine serves the team's bots and skills and stays theirs; a
+ * sandbox becomes the team's. A host a team member other than the reader
+ * added to a team is shown, not changed: only the member who added it can
+ * move it (`canUnbind`). Below the picker, every team's machines the reader
+ * may see (`EnvironmentMachinesList`) - admin surface only; the bot flow
+ * never asks for a machine.
+ *
  * Reads and writes go through the Settings scope's client, the host the
  * sidebar has selected, never the app-wide one. `following` (the scope is
  * the active host, through the ambient client) is as usable as `ready`.
@@ -40,6 +63,14 @@ export function HostEnvironmentSection(props: {
   const enabled = usable && support === true;
   const environments = useEnvironmentListQuery(scope.client, enabled);
   const binding = useEnvironmentHostReadQuery(scope.client, enabled);
+  const hostListSupport = useHostMethodSupport(
+    scope.hostId,
+    "environment.host.list",
+  );
+  const registeredHosts = useRegisteredHosts();
+  const hostKind =
+    registeredHosts.data?.hosts.find((host) => host.hostId === scope.hostId)
+      ?.kind ?? null;
 
   if (!usable || support === null) return null;
 
@@ -79,14 +110,23 @@ export function HostEnvironmentSection(props: {
       // Keyed by host: the bind mutation's pending and error state belong to
       // the host that received the bind, so switching the scope to another
       // host mounts a fresh picker with no feedback carried over.
-      <HostEnvironmentPicker
-        key={scope.hostId}
-        client={scope.client}
-        hostId={scope.hostId}
-        environments={environments.data.environments}
-        currentEnvironmentId={binding.data.environment.environmentId}
-        labelledBy={headingId}
-      />
+      <>
+        <HostEnvironmentPicker
+          key={scope.hostId}
+          client={scope.client}
+          hostId={scope.hostId}
+          hostLabel={scope.hostLabel}
+          hostKind={hostKind}
+          environments={environments.data.environments}
+          binding={binding.data}
+          labelledBy={headingId}
+        />
+        <EnvironmentMachinesList
+          client={scope.client}
+          environments={environments.data.environments}
+          enabled={hostListSupport === true}
+        />
+      </>
     );
   }
 
@@ -113,14 +153,38 @@ export function HostEnvironmentSection(props: {
 function HostEnvironmentPicker(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
+  readonly hostLabel: string;
+  /** The host's registry kind; `null` when the registry has not said. */
+  readonly hostKind: HostRegistryKind | null;
   readonly environments: ReadonlyArray<EnvironmentDescriptor>;
-  readonly currentEnvironmentId: string;
+  readonly binding: EnvironmentHostBinding;
   readonly labelledBy: string;
 }): ReactNode {
-  const { client, hostId, environments, currentEnvironmentId, labelledBy } =
-    props;
+  const {
+    client,
+    hostId,
+    hostLabel,
+    hostKind,
+    environments,
+    binding,
+    labelledBy,
+  } = props;
   const bind = useEnvironmentHostBindMutation(client, hostId);
+  const [confirming, setConfirming] = useState<EnvironmentDescriptor | null>(
+    null,
+  );
+  const currentEnvironmentId = binding.environment.environmentId;
+  // Another member added this host to a team: it is listed, never moved from
+  // here. Only the member who added it can change its environment.
+  const locked = binding.explicit && !binding.canUnbind;
   const pendingId = bind.isPending ? bind.variables.environmentId : null;
+  const choose = (environment: EnvironmentDescriptor): void => {
+    if (environment.ownerKind === "organization") {
+      setConfirming(environment);
+      return;
+    }
+    bind.mutate({ environmentId: environment.environmentId });
+  };
   return (
     <>
       <ul
@@ -137,16 +201,14 @@ function HostEnvironmentPicker(props: {
                 aria-pressed={current}
                 data-testid="host-environment-option"
                 data-environment-id={environment.environmentId}
-                disabled={current || bind.isPending}
+                disabled={current || locked || bind.isPending}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-ui-xs transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 disabled:cursor-default",
                   current
                     ? "border-foreground/20 bg-foreground/8 text-foreground"
                     : "border-border/60 text-muted-foreground hover:bg-foreground/6 hover:text-foreground",
                 )}
-                onClick={() =>
-                  bind.mutate({ environmentId: environment.environmentId })
-                }
+                onClick={() => choose(environment)}
               >
                 {current ? (
                   <Check className="size-3.5" aria-hidden="true" />
@@ -169,6 +231,15 @@ function HostEnvironmentPicker(props: {
           );
         })}
       </ul>
+      {locked ? (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="host-environment-locked"
+        >
+          Only the member who added this machine to {binding.environment.label}{" "}
+          can change it.
+        </p>
+      ) : null}
       {bind.error === null ? null : (
         <p
           role="alert"
@@ -178,6 +249,60 @@ function HostEnvironmentPicker(props: {
           {bind.error.message}
         </p>
       )}
+      <Dialog
+        open={confirming !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirming(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Run {confirming?.label ?? ""}&apos;s bots on {hostLabel}?
+            </DialogTitle>
+            <DialogDescription data-testid="host-environment-confirm-copy">
+              {confirming === null
+                ? null
+                : bindConfirmationCopy(hostLabel, confirming.label, hostKind)}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(null)}>
+              Cancel
+            </Button>
+            <Button
+              data-testid="host-environment-confirm"
+              onClick={() => {
+                if (confirming === null) return;
+                bind.mutate({ environmentId: confirming.environmentId });
+                setConfirming(null);
+              }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
+}
+
+/**
+ * What binding a host to a team does to it, by kind: a person's own machine
+ * serves the team and stays theirs; a sandbox becomes the team's. A host
+ * whose kind the registry has not said gets the sentence true of both.
+ */
+function bindConfirmationCopy(
+  hostLabel: string,
+  teamLabel: string,
+  hostKind: HostRegistryKind | null,
+): string {
+  switch (hostKind) {
+    case "personal":
+      return `${hostLabel} will run ${teamLabel}'s bots and skills. It stays yours; only you see it here and can change this.`;
+    case "sandbox":
+      return `${hostLabel} becomes ${teamLabel}'s: every member sees it, and the team's bots and tasks can run on it.`;
+    case null:
+      return `${hostLabel} will run ${teamLabel}'s bots and skills.`;
+  }
 }

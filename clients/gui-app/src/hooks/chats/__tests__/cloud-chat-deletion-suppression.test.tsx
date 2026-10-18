@@ -32,6 +32,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { DeleteChatResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -205,6 +206,8 @@ function newSession(): OpenedStoreForTest {
 
 interface DeleteGate {
   resolve: ((publicationChatId: string | null) => void) | null;
+  /** Answer with a full response, for the fields `resolve` fixes. */
+  answer: ((response: DeleteChatResponse) => void) | null;
   reject: ((error: HostRpcError) => void) | null;
 }
 
@@ -264,7 +267,7 @@ function createFixture(
   const listCalls = { value: 0 };
   const cloudListCalls = { value: 0 };
   const requestSeq = { value: 0 };
-  const deleteGate: DeleteGate = { resolve: null, reject: null };
+  const deleteGate: DeleteGate = { resolve: null, answer: null, reject: null };
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -306,14 +309,18 @@ function createFixture(
         // observable.
         "epic.deleteChat": (params) =>
           new Promise((resolve, reject) => {
-            deleteGate.resolve = (publicationChatId) => {
+            deleteGate.answer = (response) => {
               const index = records.findIndex(
                 (entry) => entry.chatId === params.chatId,
               );
               if (index >= 0) records.splice(index, 1);
-              resolve({
+              resolve(response);
+            };
+            deleteGate.resolve = (publicationChatId) => {
+              deleteGate.answer?.({
                 deleted: true,
                 publicationChatId: publicationChatId ?? null,
+                outcome: "applied",
               });
             };
             deleteGate.reject = (error) => reject(error);
@@ -795,4 +802,99 @@ describe("authoritative publication identity from the delete response", () => {
       }),
     ).toBe(true);
   });
+});
+
+// A `requested` answer names the owner it filed for (`ownerHostId`), and may
+// carry no publication identity (`publicationChatId: null`). The settle path
+// decides only on the fields it has: with an identity it confirms under the
+// owner; without one it keeps the provisional key only when the owner is the
+// row's own host, which that key already names, and otherwise drops it.
+describe("a requested delete answer, by which fields it carries", () => {
+  function rowVisible(
+    chats: readonly CloudChatSummary[],
+    ownerHostId: string,
+  ): boolean {
+    return chats.some(
+      (chat) =>
+        chat.identity.chatId === "chat-1" &&
+        chat.identity.ownerUserId === VIEWER_ID &&
+        chat.ownerHostId === ownerHostId,
+    );
+  }
+
+  it.each([
+    // [ownerHostId on the answer, publicationChatId, row host hidden, other host hidden]
+    ["absent", "chat-1", true, false],
+    ["absent", null, true, false],
+    ["the row's host", "chat-1", true, false],
+    ["the row's host", null, true, false],
+    ["another host", "chat-1", false, true],
+    ["another host", null, false, false],
+  ] as const)(
+    "ownerHostId %s, publicationChatId %s: hides the row's host %s, the other host %s",
+    async (owner, publicationChatId, rowHidden, otherHidden) => {
+      fixture = createFixture({
+        cloudRows: [HOST_ID, OTHER_HOST_ID].map((ownerHostId) =>
+          cloudChat({
+            identity: {
+              taskId: EPIC_ID,
+              chatId: "chat-1",
+              ownerUserId: VIEWER_ID,
+            },
+            ownerHostId,
+            isOwnedByViewer: true,
+            title: `On ${ownerHostId}`,
+          }),
+        ),
+      });
+      const rendered = renderChannel();
+      await settleFirstRead();
+      await waitFor(() => {
+        expect(rendered.result.current.cloudList.isSuccess).toBe(true);
+      });
+
+      rendered.result.current.deleteChat.mutate({
+        epicId: EPIC_ID,
+        chatId: "chat-1",
+        hostId: HOST_ID,
+      });
+      await waitFor(() => {
+        expect(fixture.deleteGate.answer).not.toBeNull();
+      });
+      fixture.deleteGate.answer?.({
+        deleted: true,
+        publicationChatId,
+        outcome: "requested",
+        ...(owner === "absent"
+          ? {}
+          : {
+              ownerHostId: owner === "the row's host" ? HOST_ID : OTHER_HOST_ID,
+            }),
+      });
+      await waitFor(() => {
+        expect(rendered.result.current.deleteChat.isSuccess).toBe(true);
+      });
+
+      // A refetch that still answers both rows, as the cloud does until it
+      // purges: only a confirmed key keeps a row hidden through it.
+      const callsBeforeRefetch = fixture.cloudListCalls.value;
+      await fixture.queryClient.invalidateQueries({
+        queryKey: cloudChatListQueryKey({
+          hostId: HOST_ID,
+          viewerUserId: VIEWER_ID,
+          taskId: EPIC_ID,
+        }),
+      });
+      await waitFor(() => {
+        expect(fixture.cloudListCalls.value).toBeGreaterThan(
+          callsBeforeRefetch,
+        );
+      });
+      await waitFor(() => {
+        const chats = rendered.result.current.cloudList.data?.chats ?? [];
+        expect(rowVisible(chats, HOST_ID)).toBe(!rowHidden);
+        expect(rowVisible(chats, OTHER_HOST_ID)).toBe(!otherHidden);
+      });
+    },
+  );
 });

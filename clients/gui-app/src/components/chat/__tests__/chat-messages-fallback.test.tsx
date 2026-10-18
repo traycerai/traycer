@@ -3039,6 +3039,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       modelLabel: null,
     }),
     resolveAgentReasoningLabel: () => null,
+    resolveAgentServiceTierLabel: () => null,
     contentBlocksPreview: () => "",
   };
 

@@ -31,6 +31,7 @@ import {
   SET_CHAT_ARCHIVED_METHOD,
 } from "@/hooks/epic/use-chat-archive-support";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import {
   CHAT_NOT_ADOPTED_COPY,
@@ -1667,8 +1668,15 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const ownerHostId = useEpicNodeHostId(nodeId);
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
-  const archiveSupported = useHostSupportsMethod(
+  // Gated on the host the archive will be SENT to: a live stand-in when the
+  // owner is down, whose manifest this renderer has, rather than an owner that
+  // may never have handshaken with it.
+  const archiveServingHostId = useRecordWriteServingHostId(
     mutationHostId,
+    "epic.setChatArchived",
+  );
+  const archiveSupported = useHostSupportsMethod(
+    archiveServingHostId,
     SET_CHAT_ARCHIVED_METHOD,
   );
   const isArchived = useEpicNodeArchived(nodeId);

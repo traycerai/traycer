@@ -29,9 +29,8 @@ export interface HomeBotRowModel {
   readonly harness: string;
   readonly model: string;
   /**
-   * The stream's open-request HINT, `null` until a snapshot arrives. The host
-   * shipping today always sends `0`; the conversation's own rows decide what
-   * is open, so the row shows this number and never claims it is the count.
+   * The stream's open-request hint, `null` when unknown. The conversation's
+   * own rows are authoritative for what is open.
    */
   readonly openRequestCount: number | null;
   /** Tasks the bot is still tracking, `null` until a snapshot arrives. */
@@ -122,6 +121,51 @@ export function buildHomeBotRow(
     lastCheckinAt: checkins?.lastAt ?? null,
     boundHere: snapshot?.boundHost.isThisHost ?? null,
   };
+}
+
+/**
+ * What a Home row says about a bot (Tracy Bots): working, idle, or paused -
+ * never which machine it runs on. Paused means the bot's host cannot be
+ * reached, and is said only on evidence this client has:
+ * - no host runs the bot;
+ * - the bound host is one of the reader's own and cannot be dialled now;
+ * - the bound host is in no list the reader can see: not theirs, and not a
+ *   machine of the bot's environment (another member's machine, whose
+ *   reachability this account cannot observe - the tab's `bot.open` answers
+ *   the same).
+ * A machine of the environment the reader cannot dial (a team machine
+ * another member added) has unknown reachability here; the row says idle
+ * and opening the tab decides. So does an environment whose machine list
+ * has not answered (`environmentHostIds` null), and a host directory that
+ * has not answered (`connectableResolved` false): until then the reader's
+ * own machines are not known, so nothing about them is evidence.
+ */
+export type HomeBotState = "working" | "idle" | "paused";
+
+export function homeBotState(input: {
+  readonly working: boolean;
+  readonly boundHostId: string | null;
+  /** Hosts in the reader's own directory. */
+  readonly directoryHostIds: ReadonlySet<string>;
+  /** Of those, the ones this client can dial now. */
+  readonly connectableHostIds: ReadonlySet<string>;
+  /** Whether the directory has answered; until it has, the two sets above
+   * are empty for want of an answer, not because there are no hosts. */
+  readonly connectableResolved: boolean;
+  /** The machines of the bot's environment the reader may see beyond their
+   * own (empty for a personal environment, which has none), or null while a
+   * team environment's list has not answered. */
+  readonly environmentHostIds: ReadonlySet<string> | null;
+}): HomeBotState {
+  const { boundHostId } = input;
+  if (boundHostId === null) return "paused";
+  if (input.working) return "working";
+  if (!input.connectableResolved) return "idle";
+  if (input.directoryHostIds.has(boundHostId)) {
+    return input.connectableHostIds.has(boundHostId) ? "idle" : "paused";
+  }
+  if (input.environmentHostIds === null) return "idle";
+  return input.environmentHostIds.has(boundHostId) ? "idle" : "paused";
 }
 
 function compareBots(a: BotRecord, b: BotRecord): number {

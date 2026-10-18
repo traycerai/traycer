@@ -141,6 +141,7 @@ describe("environment.host.list protocol contract", () => {
           hostLabel: "studio",
           hostPlatform: "darwin-arm64",
           enrolledByUserId: "user-1",
+          kind: "personal",
           boundAt: 1_700_000_000_000,
         },
         {
@@ -148,6 +149,7 @@ describe("environment.host.list protocol contract", () => {
           hostLabel: null,
           hostPlatform: null,
           enrolledByUserId: "user-2",
+          kind: "sandbox",
           boundAt: 1_700_000_000_001,
         },
       ],
@@ -157,7 +159,7 @@ describe("environment.host.list protocol contract", () => {
     );
   });
 
-  it("rejects a request without an environment, a host without its enroller, or a bare array root", () => {
+  it("rejects a request without an environment, a host without its enroller or kind, a kind it does not know, or a bare array root", () => {
     expect(environmentHostListV10.requestSchema.safeParse({}).success).toBe(
       false,
     );
@@ -166,10 +168,17 @@ describe("environment.host.list protocol contract", () => {
       hostLabel: null,
       hostPlatform: null,
       enrolledByUserId: "user-1",
+      kind: "personal",
       boundAt: 1,
     };
     const { enrolledByUserId: _enrolledBy, ...noEnroller } = host;
-    for (const bad of [{ hosts: [noEnroller] }, [host]]) {
+    const { kind: _kind, ...noKind } = host;
+    for (const bad of [
+      { hosts: [noEnroller] },
+      { hosts: [noKind] },
+      { hosts: [{ ...host, kind: "laptop" }] },
+      [host],
+    ]) {
       expect(environmentHostListV10.responseSchema.safeParse(bad).success).toBe(
         false,
       );

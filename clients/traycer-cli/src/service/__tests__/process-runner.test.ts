@@ -86,8 +86,8 @@ describe("runCommand spawn-failure classification", () => {
   });
 });
 
-// `runCommandForBytes`: {@link runCommand}'s sibling for a read whose stdout
-// is not UTF-8 (`schtasks /Query /XML` on Windows). Real children again - the
+// `runCommandForBytes`: {@link runCommand}'s sibling for a read whose caller
+// decodes stdout itself (the task definition read on Windows). Real children again - the
 // question is exactly the same class of "did this reach the OS" as above,
 // now against the `{stdout: Buffer, exitCode}` shape and buffer decoding.
 const bytesOptions = {
@@ -110,14 +110,12 @@ describe("runCommandForBytes", () => {
     expect(result.exitCode).toBe(3);
     expect(Buffer.isBuffer(result.stdout)).toBe(true);
     expect(result.stdout.toString("utf8")).toBe("partial-output");
-    // What tells a missing task from every other `/Query` failure
-    // (`queryScheduledTaskXml`): an exit code alone cannot.
+    // The caller decides what a non-zero exit and its stderr mean.
     expect(result.stderr).toBe("ERROR: Access is denied.");
   });
 
   it("resolves stdout as raw bytes, not a UTF-8-decoded string (the whole reason this function exists)", async () => {
-    // A UTF-16LE-with-BOM buffer: this is exactly the shape `schtasks
-    // /Query /TN <task> /XML` writes, and decoding it as UTF-8 mangles it.
+    // A UTF-16LE-with-BOM buffer, which decoding as UTF-8 mangles.
     // Round-tripping it through the child's stdout and back through
     // `TextDecoder("utf-16le")` proves the runner never touched the bytes.
     const text = "<Task>hello</Task>";
