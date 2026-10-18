@@ -2388,6 +2388,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "environment.host.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
   // A bounded read over settled facts (Usage page + epic cost badge). The

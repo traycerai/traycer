@@ -1,0 +1,147 @@
+import { useId, useMemo, type ReactNode } from "react";
+import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import { Button } from "@/components/ui/button";
+import { useHostClient } from "@/lib/host/runtime";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import {
+  buildHomeBotsModel,
+  EMPTY_HOME_BOTS_MODEL,
+} from "@/lib/home-bots/bots-model";
+import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
+
+/** The Home tab's own section heading, so this reads as one of its bands. */
+const HEADING_CLASS_NAME = "tracking-[0.08em] uppercase";
+const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
+const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
+
+/**
+ * The bots band on Home (Tracy Bots): every environment the reader belongs
+ * to, side by side, each with its bots and its own create form.
+ *
+ * Read through the app-wide host like the rest of Home. The host answers for
+ * every environment from the cloud, so which host serves the list does not
+ * change it; a bot's TAB, by contrast, binds to the host its trunk runs on.
+ * On a host whose handshake has no `bot.list` the band shows the same update
+ * notice the usage panel uses, and nothing else on Home changes.
+ */
+export function HomeBotsSection(): ReactNode {
+  const hostId = useEffectiveHostId();
+  const client = useHostClient();
+  const support = useHostMethodSupport(hostId, "bot.list");
+  const enabled = support === true;
+  const environments = useEnvironmentListQuery(client, enabled);
+  const bots = useBotListQuery(client, enabled);
+  const directory = useHostDirectoryList();
+  const connectable = useConnectableHostIds();
+  const bindings = useHostEnvironmentBindings(connectable.hostIds, enabled);
+  const headingId = useId();
+
+  const hostLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const entry of directory.data ?? [])
+      labels.set(entry.hostId, entry.label);
+    return labels;
+  }, [directory.data]);
+  const connectableHostIds = useMemo(
+    () => new Set(connectable.hostIds),
+    [connectable.hostIds],
+  );
+  const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
+  const botList = bots.data?.bots ?? EMPTY_BOTS;
+  const model = useMemo(
+    () =>
+      environments.data === undefined && bots.data === undefined
+        ? EMPTY_HOME_BOTS_MODEL
+        : buildHomeBotsModel({ environments: environmentList, bots: botList }),
+    [bots.data, environmentList, environments.data, botList],
+  );
+
+  // The handshake has not answered yet: nothing to say either way, and a band
+  // that flashes "unavailable" before every connect is worse than a late one.
+  if (support === null) return null;
+
+  // The directory's label, else the raw id; never the placeholder constant,
+  // which is a sentinel and not a word for a person.
+  const hostLabel = hostId === null ? null : (hostLabels.get(hostId) ?? hostId);
+
+  let body: ReactNode;
+  if (!support) {
+    body = (
+      <BotsUnavailableNotice
+        hostLabel={hostLabel}
+        testId="home-bots-unavailable"
+      />
+    );
+  } else if (environments.isError || bots.isError) {
+    body = (
+      <div
+        role="status"
+        data-testid="home-bots-error"
+        className="mx-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-ui-sm text-destructive"
+      >
+        <span>Couldn&apos;t load your bots.</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void environments.refetch();
+            void bots.refetch();
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  } else if (environments.data === undefined || bots.data === undefined) {
+    body = (
+      <div
+        data-testid="home-bots-loading"
+        aria-busy="true"
+        className="mx-3 h-24 animate-pulse rounded-lg bg-foreground/10"
+      />
+    );
+  } else {
+    body = (
+      <div className="grid gap-3 px-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
+        {model.groups.map((group) => (
+          <HomeBotsGroupCard
+            key={group.environmentId}
+            group={group}
+            hostLabels={hostLabels}
+            connectableHostIds={connectableHostIds}
+            environmentBindings={bindings}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <section
+      data-testid="home-bots"
+      aria-labelledby={headingId}
+      className="@container flex flex-col gap-1"
+    >
+      <div className="flex items-center justify-between gap-3 px-3 pt-4 pb-1 text-ui-xs text-muted-foreground">
+        <h2 id={headingId} className={HEADING_CLASS_NAME}>
+          Bots
+        </h2>
+        {support && bots.data !== undefined ? (
+          <span className="tabular-nums" data-testid="home-bots-count">
+            {model.botCount === 1 ? "1 bot" : `${model.botCount} bots`}
+          </span>
+        ) : null}
+      </div>
+      {body}
+    </section>
+  );
+}

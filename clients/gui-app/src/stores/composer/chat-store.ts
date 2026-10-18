@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
 import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type {
   ChatQueueSteerMode,
   ChatRunSettings,
@@ -731,6 +732,15 @@ export interface ChatMessage {
   role: ChatMessageRole;
   content: string;
   segments: ReadonlyArray<MessageSegment>;
+  /**
+   * The request this user row opened in a bot conversation (Tracy Bots), or
+   * absent on every row outside one. `resolvedAt: null` is an OPEN request;
+   * a resolved one may name the bot's reply row by `resolvedByMessageId`.
+   * Carried from the persisted row untouched: the resolution state lives on
+   * the USER row, never on the reply, so this is the one place a surface
+   * reads it.
+   */
+  conversationRequest?: ConversationRequest;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
