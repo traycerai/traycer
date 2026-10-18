@@ -1,8 +1,8 @@
 /**
- * Where a Home bot row opens its tab (Tracy Bots): on the host the bot RUNS
- * on when that host can be dialled, and through the host this window reads
- * (the effective host) when it cannot - the offline state, where the
- * conversation list and a queued send go through the effective host.
+ * A Home bot row (Tracy Bots): says working, idle or paused and never which
+ * machine the bot runs on, and opens its tab through the host this window
+ * reads (the effective host), moving an existing tab off a host this client
+ * can no longer dial.
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -13,8 +13,9 @@ import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription"
 
 const mocks = vi.hoisted(() => ({
   state: {
-    effectiveHostId: "host-effective",
+    effectiveHostId: "host-effective" as string | null,
     snapshot: null as BotSubscriptionSnapshot | null,
+    working: false,
   },
   navigate: vi.fn(),
   navigateToTabIntent: vi.fn(),
@@ -36,20 +37,29 @@ vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   }),
 }));
 vi.mock("@/stores/agent-activity-store", () => ({
-  useEpicAgentActivity: () => ({ working: new Set<string>() }),
+  useEpicAgentActivity: () => ({
+    working: new Set<string>(mocks.state.working ? ["agent-1"] : []),
+  }),
 }));
 vi.mock("@/lib/tab-navigation", () => ({
   navigateToTabIntent: mocks.navigateToTabIntent,
 }));
 
-import { HomeBotRow } from "@/components/home/bots/home-bot-row";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  HomeBotRow,
+  type HomeBotHostReach,
+} from "@/components/home/bots/home-bot-row";
+import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const OWN = "host-own";
+const EFFECTIVE = "host-effective";
+const TEAMMATE = "host-teammate";
+const SANDBOX = "host-sandbox";
 
 const BOT: BotRecord = {
   botId: BOT_ID,
-  environmentId: "env-personal",
+  environmentId: "env-team",
   createdByUserId: "user-1",
   title: "Release Bot",
   harness: "claude",
@@ -57,33 +67,62 @@ const BOT: BotRecord = {
   effort: null,
   profile: null,
   trunkChatId: "trunk-1",
-  boundHostId: "host-bound",
+  boundHostId: OWN,
   hostEpoch: 1,
   createdAt: 1_000,
   archivedAt: null,
 };
 
-const HOST_LABELS: ReadonlyMap<string, string> = new Map([
-  ["host-bound", "Studio Mac"],
-  ["host-effective", "Laptop"],
-]);
+interface Mount {
+  readonly bot: BotRecord;
+  /** The reader's own hosts. */
+  readonly directory: ReadonlyArray<string>;
+  /** Of those, the ones this client can dial. */
+  readonly connectable: ReadonlyArray<string>;
+  readonly environmentHostIds: ReadonlySet<string> | null;
+}
 
-function mountRow(connectable: ReadonlyArray<string>): void {
+function reach(input: Mount): HomeBotHostReach {
+  return {
+    directoryHostIds: new Set(input.directory),
+    connectableHostIds: new Set(input.connectable),
+  };
+}
+
+const OWN_AND_DIALABLE: Mount = {
+  bot: BOT,
+  directory: [OWN, EFFECTIVE],
+  connectable: [OWN, EFFECTIVE],
+  environmentHostIds: new Set(),
+};
+
+function mountRow(input: Mount): void {
   render(
     <StrictMode>
       <HomeBotRow
-        bot={BOT}
-        hostLabels={HOST_LABELS}
-        connectableHostIds={new Set(connectable)}
+        bot={input.bot}
+        hostReach={reach(input)}
+        environmentHostIds={input.environmentHostIds}
       />
     </StrictMode>,
   );
 }
 
+function stateBadge(): { text: string; state: string | null } {
+  const badge = screen.getByTestId("home-bot-state");
+  return { text: badge.textContent, state: badge.getAttribute("data-state") };
+}
+
+function tabHostId(): string | null {
+  const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
+  return record === null ? null : record.hostId;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.state.effectiveHostId = "host-effective";
+  mocks.state.effectiveHostId = EFFECTIVE;
   mocks.state.snapshot = null;
+  mocks.state.working = false;
   useBotTabsStore.setState({ tabs: {} });
 });
 
@@ -91,75 +130,161 @@ afterEach(() => {
   cleanup();
 });
 
-describe("<HomeBotRow /> open host", () => {
-  it("opens the tab on the effective host when the bound host is not connectable", async () => {
-    const user = userEvent.setup();
-    mountRow(["host-effective"]);
+describe("<HomeBotRow /> state", () => {
+  it("says Idle for a bot on one of the reader's own hosts that can be dialled", () => {
+    mountRow(OWN_AND_DIALABLE);
 
-    expect(screen.getByTestId("home-bot-host").textContent).toContain(
-      "Studio Mac",
-    );
-    expect(screen.getByTestId("home-bot-host").textContent).toContain(
-      "offline",
-    );
-    await user.click(screen.getByTestId("home-bot-row"));
-
-    const record = useBotTabsStore.getState().tabs[BOT_ID];
-    expect(record.hostId).toBe("host-effective");
-    expect(record.title).toBe("Release Bot");
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
   });
 
-  it("opens the tab on the bound host when it is connectable", async () => {
-    const user = userEvent.setup();
-    mountRow(["host-effective", "host-bound"]);
+  it("says Working while the bot's agents run", () => {
+    mocks.state.working = true;
+    mountRow(OWN_AND_DIALABLE);
 
-    expect(screen.getByTestId("home-bot-host").textContent).not.toContain(
-      "offline",
-    );
-    await user.click(screen.getByTestId("home-bot-row"));
-
-    expect(useBotTabsStore.getState().tabs[BOT_ID].hostId).toBe("host-bound");
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(stateBadge()).toEqual({ text: "Working", state: "working" });
   });
 
-  it("follows the snapshot's fresher host when deciding where to open", async () => {
-    const user = userEvent.setup();
+  it("says Paused for a bot on one of the reader's own hosts that cannot be dialled", () => {
+    mountRow({ ...OWN_AND_DIALABLE, connectable: [EFFECTIVE] });
+
+    expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
+  });
+
+  it("says Paused for a bot no host runs", () => {
+    mountRow({ ...OWN_AND_DIALABLE, bot: { ...BOT, boundHostId: null } });
+
+    expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
+  });
+
+  it("says Paused for a personal bot bound to a machine outside the reader's directory", () => {
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      bot: { ...BOT, boundHostId: TEAMMATE },
+      environmentHostIds: new Set(),
+    });
+
+    expect(stateBadge().state).toBe("paused");
+  });
+
+  it("says Idle for a team bot on the team's sandbox, which the team's list carries", () => {
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      bot: { ...BOT, boundHostId: SANDBOX },
+      environmentHostIds: new Set([SANDBOX]),
+    });
+
+    expect(stateBadge().state).toBe("idle");
+  });
+
+  it("says Idle for a team bot while the team's machine list has not answered", () => {
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      bot: { ...BOT, boundHostId: TEAMMATE },
+      environmentHostIds: null,
+    });
+
+    expect(stateBadge().state).toBe("idle");
+  });
+
+  it("says Paused for a team bot on another member's laptop the team's list does not carry", () => {
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      bot: { ...BOT, boundHostId: TEAMMATE },
+      environmentHostIds: new Set([SANDBOX]),
+    });
+
+    expect(stateBadge().state).toBe("paused");
+  });
+
+  it("follows the snapshot's fresher bound host", () => {
     mocks.state.snapshot = {
-      bot: { ...BOT, boundHostId: "host-moved", hostEpoch: 2 },
+      bot: { ...BOT, boundHostId: null, hostEpoch: 2 },
       tasks: [],
       openRequestCount: 0,
-      boundHost: { hostId: "host-moved", epoch: 2, isThisHost: false },
+      boundHost: { hostId: null, epoch: 2, isThisHost: false },
     };
-    mountRow(["host-effective", "host-moved"]);
+    mountRow(OWN_AND_DIALABLE);
 
-    await user.click(screen.getByTestId("home-bot-row"));
-
-    expect(useBotTabsStore.getState().tabs[BOT_ID].hostId).toBe("host-moved");
+    expect(stateBadge().state).toBe("paused");
   });
 
-  it("renders a bot no host runs as offline, labelled No host, and opens through the effective host", async () => {
-    const user = userEvent.setup();
-    render(
-      <StrictMode>
-        <HomeBotRow
-          bot={{ ...BOT, boundHostId: null }}
-          hostLabels={HOST_LABELS}
-          connectableHostIds={new Set(["host-effective", "host-bound"])}
-        />
-      </StrictMode>,
-    );
+  it("names no machine, offline state or working dot, whatever the state", () => {
+    for (const input of [
+      OWN_AND_DIALABLE,
+      { ...OWN_AND_DIALABLE, connectable: [EFFECTIVE] },
+      { ...OWN_AND_DIALABLE, bot: { ...BOT, boundHostId: null } },
+    ]) {
+      mountRow(input);
+      const row = screen.getByTestId("home-bot-row");
+      expect(row.textContent).toContain("Release Bot");
+      expect(row.textContent).not.toMatch(
+        /host-|Studio Mac|Laptop|offline|No host/i,
+      );
+      expect(screen.queryByTestId("home-bot-host")).toBeNull();
+      expect(screen.queryByTestId("home-bot-working")).toBeNull();
+      cleanup();
+    }
+  });
+});
 
-    expect(screen.getByTestId("home-bot-host").textContent).toContain(
-      "No host",
-    );
-    expect(screen.getByTestId("home-bot-host").textContent).toContain(
-      "offline",
-    );
+describe("<HomeBotRow /> open", () => {
+  it("opens a new tab through the effective host, never the bound host", async () => {
+    const user = userEvent.setup();
+    mountRow(OWN_AND_DIALABLE);
+
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(useBotTabsStore.getState().tabs[BOT_ID].hostId).toBe(
-      "host-effective",
-    );
+    expect(tabHostId()).toBe(EFFECTIVE);
+    expect(useBotTabsStore.getState().tabs[BOT_ID].title).toBe("Release Bot");
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens through the effective host for a paused bot too", async () => {
+    const user = userEvent.setup();
+    mountRow({ ...OWN_AND_DIALABLE, bot: { ...BOT, boundHostId: null } });
+
+    await user.click(screen.getByTestId("home-bot-row"));
+
+    expect(tabHostId()).toBe(EFFECTIVE);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an open tab on a host this client can still dial", async () => {
+    const user = userEvent.setup();
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: BOT_ID, hostId: OWN, title: "Release Bot" });
+    mountRow(OWN_AND_DIALABLE);
+
+    await user.click(screen.getByTestId("home-bot-row"));
+
+    expect(tabHostId()).toBe(OWN);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves an open tab off a host this client can no longer dial onto the effective host", async () => {
+    const user = userEvent.setup();
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: BOT_ID, hostId: TEAMMATE, title: "Release Bot" });
+    mountRow(OWN_AND_DIALABLE);
+
+    await user.click(screen.getByTestId("home-bot-row"));
+
+    expect(tabHostId()).toBe(EFFECTIVE);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens nothing, and disables the row, while there is no effective host", async () => {
+    const user = userEvent.setup();
+    mocks.state.effectiveHostId = null;
+    mountRow(OWN_AND_DIALABLE);
+
+    const row = screen.getByTestId("home-bot-row");
+    expect(row).toHaveProperty("disabled", true);
+    await user.click(row);
+
+    expect(tabHostId()).toBeNull();
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 });

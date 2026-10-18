@@ -13,7 +13,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
-import { BotTranscriptOffline } from "@/components/bots/bot-transcript-offline";
+import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
 
 const MESSAGE_MAX = 100_000;
 
@@ -24,24 +24,24 @@ const MESSAGE_MAX = 100_000;
  *
  * The composer is deliberately plain. A send is a request to the bot, not a
  * turn: there is no model to choose, nothing to approve, no files to attach,
- * and the bot's host may be offline - in which case the host accepts the
- * message as `queued` and the bot reads it when its host is back. The view
- * says so inline, once, for the send that was queued.
+ * and the bot may be paused - in which case the host accepts the message as
+ * `queued` and the bot reads it once it can be reached. The view says so
+ * inline, once, for the send that was queued.
  */
 export function BotConversationView(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly botTitle: string;
   /**
-   * The bound host's label when the tab is NOT on the bound host and that
-   * host cannot be dialled (the offline state): the transcript is that
-   * host's to serve, so a placeholder stands in for it, while the list and
-   * the composer keep working through this tab's host - a send is accepted
-   * and queued for the bound host's return.
+   * The tab is not on the host that runs the bot and cannot reach it (the
+   * paused state): the transcript is that host's to serve, so a placeholder
+   * stands in for it, while the list and the composer keep working through
+   * this tab's host - a send is accepted and delivered when the bot can be
+   * reached.
    */
-  readonly offlineHostLabel: string | null;
+  readonly paused: boolean;
 }): ReactNode {
-  const { botId, hostId, botTitle, offlineHostLabel } = props;
+  const { botId, hostId, botTitle, paused } = props;
   const client = useTabHostClient();
   const conversations = useBotConversationListQuery(client, botId, true);
   // The app conversation is the bot's first; later ones (A2A, other
@@ -108,7 +108,9 @@ export function BotConversationView(props: {
       className="flex min-h-0 flex-1 flex-col"
       data-testid="bot-conversation"
     >
-      {offlineHostLabel === null ? (
+      {paused ? (
+        <BotTranscriptPaused />
+      ) : (
         <BotChatTranscript
           botId={botId}
           chatId={conversation.conversationId}
@@ -117,8 +119,6 @@ export function BotConversationView(props: {
           instanceId={`bot-conversation:${botId}`}
           linkRequests
         />
-      ) : (
-        <BotTranscriptOffline hostLabel={offlineHostLabel} />
       )}
       <BotConversationComposer
         botId={botId}
@@ -146,8 +146,7 @@ function ComposerStatus(props: {
       className="text-muted-foreground"
       data-testid="bot-conversation-queued"
     >
-      Saved. The bot&apos;s host is offline; it reads this when the host is
-      back.
+      Saved. The bot reads it once it can be reached.
     </p>
   );
 }

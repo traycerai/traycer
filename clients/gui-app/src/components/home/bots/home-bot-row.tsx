@@ -5,30 +5,54 @@ import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { Badge } from "@/components/ui/badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
-import { buildHomeBotRow } from "@/lib/home-bots/bots-model";
+import {
+  buildHomeBotRow,
+  homeBotState,
+  type HomeBotState,
+} from "@/lib/home-bots/bots-model";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
 
+/** The reader's own hosts, and which of them this client can dial now. */
+export interface HomeBotHostReach {
+  readonly directoryHostIds: ReadonlySet<string>;
+  readonly connectableHostIds: ReadonlySet<string>;
+}
+
+const STATE_LABELS: Readonly<Record<HomeBotState, string>> = {
+  working: "Working",
+  idle: "Idle",
+  paused: "Paused",
+};
+
+const STATE_BADGE_VARIANTS = {
+  working: "success",
+  idle: "muted",
+  paused: "warning",
+} as const satisfies Record<HomeBotState, "success" | "muted" | "warning">;
+
 /**
  * One bot on Home. The row subscribes to its own `bot.subscribe` through the
  * app-wide host and renders whatever the snapshot says as it arrives: the
- * title, the tracked tasks, the next check-in, and the open-request HINT. The
- * hint is shown only when it is above zero, because the conversation's rows,
- * not this number, decide what is open.
+ * title, its state, the tracked tasks, the next check-in, and the
+ * open-request HINT. The hint is shown only when it is above zero, because
+ * the conversation's rows, not this number, decide what is open.
  *
- * Opening binds the tab to the host the bot RUNS on: that host alone serves
- * the bot's chats. The row says which host that is, and whether it can be
- * dialed right now, before the click.
+ * The row never names the machine the bot runs on: it says working, idle or
+ * paused (`homeBotState`). Opening it opens the tab through this window's
+ * host, which asks `bot.open` where the bot is served and follows the answer.
  */
 export function HomeBotRow(props: {
   readonly bot: BotRecord;
-  readonly hostLabels: ReadonlyMap<string, string>;
-  readonly connectableHostIds: ReadonlySet<string>;
+  readonly hostReach: HomeBotHostReach;
+  /** The machines of the bot's environment the reader may see beyond their
+   * own; `null` while a team environment's list has not answered. */
+  readonly environmentHostIds: ReadonlySet<string> | null;
 }): ReactNode {
-  const { bot, hostLabels, connectableHostIds } = props;
+  const { bot, hostReach, environmentHostIds } = props;
   const hostId = useEffectiveHostId();
   const subscription = useBotSubscription({
     hostId,
@@ -43,20 +67,14 @@ export function HomeBotRow(props: {
   const working = useEpicAgentActivity(bot.botId).working.size > 0;
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
-
-  const hostLabel =
-    row.boundHostId === null
-      ? "No host"
-      : (hostLabels.get(row.boundHostId) ?? row.boundHostId);
-  // A bot no host runs reads as an offline one: the same state, the same way
-  // out (move it here).
-  const hostOffline =
-    row.boundHostId === null || !connectableHostIds.has(row.boundHostId);
-  // The tab binds to the host the bot RUNS on when that host can be dialled.
-  // When it cannot, the tab opens through the host this window reads
-  // (offline state): the conversation list and a queued send go through it,
-  // and the person may move the bot here. Never a clone.
-  const openHostId = hostOffline && hostId !== null ? hostId : row.boundHostId;
+  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
+  const state = homeBotState({
+    working,
+    boundHostId: row.boundHostId,
+    directoryHostIds: hostReach.directoryHostIds,
+    connectableHostIds: hostReach.connectableHostIds,
+    environmentHostIds,
+  });
   const openRequests = row.openRequestCount ?? 0;
 
   return (
@@ -64,30 +82,41 @@ export function HomeBotRow(props: {
       type="button"
       data-testid="home-bot-row"
       data-bot-id={row.botId}
+      disabled={hostId === null}
       className="group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       onClick={() => {
-        if (openHostId === null) return;
-        openBotTab({ botId: row.botId, hostId: openHostId, title: row.title });
+        if (hostId === null) return;
+        // An open tab keeps its host - unless this client can no longer
+        // dial it (a restored tab, a host gone since): then it opens again
+        // through this window's host, which finds the one serving the bot.
+        const existing = lookupBotTab(
+          useBotTabsStore.getState().tabs,
+          row.botId,
+        );
+        if (
+          existing !== null &&
+          !hostReach.connectableHostIds.has(existing.hostId)
+        ) {
+          rebindBotTab(row.botId, hostId);
+        }
+        openBotTab({ botId: row.botId, hostId, title: row.title });
         navigateToTabIntent(navigate, botTabIntent(row.botId), undefined);
       }}
     >
-      <span className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
         <Bot className="size-4" aria-hidden="true" />
-        {working ? (
-          <span
-            className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-success ring-2 ring-card"
-            aria-label="Working"
-            data-testid="home-bot-working"
-          />
-        ) : null}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-ui-sm text-foreground">{row.title}</span>
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs text-muted-foreground">
-          <span className="truncate" data-testid="home-bot-host">
-            {hostLabel}
-            {hostOffline ? " · offline" : null}
-          </span>
+          <Badge
+            variant={STATE_BADGE_VARIANTS[state]}
+            size="xs"
+            data-testid="home-bot-state"
+            data-state={state}
+          >
+            {STATE_LABELS[state]}
+          </Badge>
           {row.tasksTracking === null ? null : (
             <span data-testid="home-bot-tasks">
               {row.tasksTracking === 1
