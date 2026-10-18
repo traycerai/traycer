@@ -70,9 +70,9 @@ describe("pageContentPolicy", () => {
 });
 
 describe("artifactContentPolicy", () => {
-  it("builds on the https-only page policy, adding the scheme to every directive but frame-src", () => {
+  it("builds on the https-only page policy, adding the colon-bearing source to every directive but frame-src", () => {
     const base = directives(pageContentPolicy("https-only"));
-    const parsed = directives(artifactContentPolicy("traycer-sandbox"));
+    const parsed = directives(artifactContentPolicy("traycer-sandbox:"));
     for (const [name, sources] of base) {
       if (name === "frame-src") continue;
       expect(parsed.get(name)).toBe(`${sources} traycer-sandbox:`);
@@ -84,14 +84,18 @@ describe("artifactContentPolicy", () => {
       "'none'",
     );
     expect(
-      directives(artifactContentPolicy("traycer-sandbox")).get("frame-src"),
+      directives(artifactContentPolicy("traycer-sandbox:")).get("frame-src"),
     ).toBe("'none'");
   });
 
-  it("names the given scheme literally, not a fixed constant", () => {
-    const policy = directives(artifactContentPolicy("capacitor"));
+  it("names the given source literally, not a fixed constant", () => {
+    const policy = directives(artifactContentPolicy("capacitor:"));
     expect(policy.get("default-src")).toBe("https: data: blob: capacitor:");
     expect(policy.get("default-src")).not.toContain("traycer-sandbox:");
+  });
+
+  it("falls back to the plain https-only page policy for a null source - Android's own serving scheme is https, already covered by it", () => {
+    expect(artifactContentPolicy(null)).toBe(pageContentPolicy("https-only"));
   });
 
   it.each([
@@ -104,7 +108,7 @@ describe("artifactContentPolicy", () => {
     "media-src",
     "default-src",
   ])("touches %s exactly once", (name) => {
-    const policy = artifactContentPolicy("traycer-sandbox");
+    const policy = artifactContentPolicy("traycer-sandbox:");
     const directiveCount = policy
       .split("; ")
       .filter((directive) => directive.startsWith(`${name} `)).length;
@@ -112,18 +116,20 @@ describe("artifactContentPolicy", () => {
   });
 
   it.each([
-    ["a trailing colon", "traycer-sandbox:"],
-    ["a leading digit", "9bad"],
-    ["a space", "has space"],
+    ["no trailing colon", "traycer-sandbox"],
+    ["a leading digit", "9bad:"],
+    ["a space", "has space:"],
     ["an empty string", ""],
-    ["a semicolon", "traycer;sandbox"],
-  ])("throws on a scheme with %s", (_label, scheme) => {
-    expect(() => artifactContentPolicy(scheme)).toThrow();
+    ["a semicolon", "traycer;sandbox:"],
+  ])("throws 'Invalid artifact policy source' on %s", (_label, source) => {
+    expect(() => artifactContentPolicy(source)).toThrow(
+      "Invalid artifact policy source",
+    );
   });
 
-  it("accepts the scheme punctuation RFC 3986 allows (+, ., -)", () => {
+  it("accepts the scheme punctuation RFC 3986 allows (+, ., -), as long as it ends in a colon", () => {
     expect(() =>
-      artifactContentPolicy("traycer-sandbox+beta.v1"),
+      artifactContentPolicy("traycer-sandbox+beta.v1:"),
     ).not.toThrow();
   });
 });

@@ -20,6 +20,7 @@ const FOUR_MIB = EPIC_READ_FILE_RANGE_MAX_BYTES;
 const TWENTY_FIVE_MIB = EPIC_READ_FILE_TEXT_MAX_BYTES;
 
 const DOCUMENT_OPTIONS: ArtifactDocumentOptions = {
+  policySource: "traycer-sandbox:",
   csp: null,
   nonce: "n-1",
   shortcuts: [],
@@ -1131,7 +1132,7 @@ describe("ArtifactServer.serve — tree-path nesting", () => {
   });
 
   it("falls back to the outside resolver with the full tree path for a sibling resolved via relative URL, and serves it raw", async () => {
-    const entryUrl = buildArtifactAddress({ scheme: "traycer-artifact", artifactId: "myart", mountId: "mountabc1234567890", treePath: "parent/report", path: "index.html" });
+    const entryUrl = buildArtifactAddress({ origin: "traycer-artifact://artifact-myart--mountabc1234567890", artifactId: "myart", mountId: "mountabc1234567890", treePath: "parent/report", path: "index.html" });
     const siblingUrl = new URL("../other/clip.mp4", entryUrl).href;
     const sibling = parseArtifactAddress(siblingUrl);
     if (sibling === null) throw new Error("expected the sibling URL to parse");

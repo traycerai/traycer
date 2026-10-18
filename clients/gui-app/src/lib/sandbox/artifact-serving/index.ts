@@ -11,7 +11,7 @@ export {
   type ArtifactManifestEntry,
 } from "./artifact-manifest";
 export {
-  ARTIFACT_BASE_POLICY,
+  artifactBasePolicy,
   buildArtifactDocument,
   type ArtifactDocumentOptions,
 } from "./artifact-document";

@@ -1,3 +1,4 @@
+import { MobileSandboxArtifacts, SandboxArtifacts } from "./sandbox-artifacts-plugin";
 import { App } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { AppLauncher } from "@capacitor/app-launcher";
@@ -265,7 +266,12 @@ export class MobileRunnerHost implements IRunnerHost {
   // No local host, so no lifecycle policy to configure.
   readonly hostLifecycle = null;
   readonly browserView = null;
-  readonly sandboxArtifacts = null;
+  readonly sandboxArtifacts = Capacitor.isNativePlatform()
+    ? new MobileSandboxArtifacts(
+        SandboxArtifacts,
+        Capacitor.getPlatform() === "android" ? "android" : "ios",
+      )
+    : null;
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;

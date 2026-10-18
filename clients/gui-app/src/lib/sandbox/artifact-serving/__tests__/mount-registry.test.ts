@@ -49,7 +49,7 @@ function serverFor(path: string, text: string): ArtifactServer {
     treePath: "",
     manifest: manifestOf(path, bytes.length),
     readSpan,
-    document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+    document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
   });
 }
 
@@ -77,6 +77,9 @@ function createFakeBridge(): FakeBridge {
   let onRequestCalls = 0;
   let onCancelCalls = 0;
   return {
+    policySource: "traycer-sandbox:",
+    artifactOrigin: ({ artifactId, mountId }) =>
+      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
     registered,
     unregistered,
     responses,
@@ -257,6 +260,9 @@ describe("mountArtifact", () => {
     const registered: string[] = [];
     const unregistered: string[] = [];
     const bridge: SandboxArtifactBridge = {
+      policySource: "traycer-sandbox:",
+      artifactOrigin: ({ artifactId, mountId }) =>
+        `traycer-sandbox://artifact-${artifactId}--${mountId}`,
       register: (mountId) =>
         new Promise((resolve) => {
           registered.push(mountId);
@@ -295,7 +301,7 @@ describe("mountArtifact", () => {
       treePath: "",
       manifest: manifestOf("a.txt", 5),
       readSpan,
-      document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+      document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
     });
     const serveSpy = vi.spyOn(server, "serve");
     const bridge = createFakeBridge();
@@ -334,7 +340,7 @@ describe("mountArtifact", () => {
         treePath: "",
         manifest: manifestOf(path, 5),
         readSpan,
-        document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+        document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
       });
     }
     const bridge = createFakeBridge();
@@ -482,7 +488,7 @@ describe("request cancellation (onCancel)", () => {
       treePath: "",
       manifest: manifestOf("a.txt", 5),
       readSpan,
-      document: { csp: null, theme: THEME, nonce: "n", shortcuts: [] },
+      document: { policySource: "traycer-sandbox:", csp: null, theme: THEME, nonce: "n", shortcuts: [] },
     });
     const serveSpy = vi.spyOn(server, "serve");
     const bridge = createFakeBridge();

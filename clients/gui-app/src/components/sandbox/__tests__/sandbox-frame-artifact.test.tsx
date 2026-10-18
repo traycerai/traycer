@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   SandboxArtifactBridge,
+  SandboxArtifactOriginParts,
   SandboxArtifactReply,
 } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -11,20 +12,45 @@ import {
   type SandboxSource,
 } from "@/components/sandbox/sandbox-frame";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import { artifactContentPolicy } from "@/lib/sandbox/mcp-csp";
+import {
+  sandboxArtifactPolicySource,
+  sandboxLoaderBaseUrl,
+} from "@/lib/sandbox/sandbox-url";
 import {
   buildArtifactAddress,
   type ArtifactManifest,
   type ArtifactOutsideReferenceResolver,
   type ArtifactReadSpan,
+  type ArtifactServerOptions,
 } from "@/lib/sandbox/artifact-serving";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
-const { openLink } = vi.hoisted(() => ({ openLink: vi.fn() }));
+const { openLink, artifactServerCalls } = vi.hoisted(() => ({
+  openLink: vi.fn(),
+  artifactServerCalls: [] as ArtifactServerOptions[],
+}));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+// A thin spy over the real class: every other test in this file still gets
+// the genuine ArtifactServer behavior, while the mobile/Android tests below
+// can read back the `document.policySource`/`document.csp` SandboxFrame
+// actually built, rather than re-deriving them and asserting a tautology.
+vi.mock("@/lib/sandbox/artifact-serving", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/sandbox/artifact-serving")>();
+  class SpyArtifactServer extends actual.ArtifactServer {
+    constructor(options: ArtifactServerOptions) {
+      artifactServerCalls.push(options);
+      super(options);
+    }
+  }
+  return { ...actual, ArtifactServer: SpyArtifactServer };
+});
 
 afterEach(() => {
   cleanup();
   openLink.mockReset();
+  artifactServerCalls.length = 0;
 });
 
 /**
@@ -52,7 +78,8 @@ function artifactSource(
     },
   };
   // Never actually invoked by these tests: jsdom does not load a custom
-  // scheme's iframe `src`, so no byte range is ever requested through it.
+  // scheme's (or the Android https-reserved) iframe `src`, so no byte range
+  // is ever requested through it.
   const readSpan: ArtifactReadSpan = () =>
     Promise.resolve({ unavailable: "missing" });
   const resolveOutsideReference: ArtifactOutsideReferenceResolver = () => null;
@@ -67,15 +94,34 @@ function artifactSource(
   };
 }
 
+const DESKTOP_POLICY_SOURCE = "traycer-sandbox:";
+const IOS_POLICY_SOURCE = "traycer-artifact:";
+/** Android's own serving scheme is https, so it needs no extra CSP source. */
+const ANDROID_POLICY_SOURCE = null;
+
+/** Mirrors the real bridges' own `artifactOrigin` shape for each platform. */
+function originFor(
+  policySource: string | null,
+  { artifactId, mountId }: SandboxArtifactOriginParts,
+): string {
+  if (policySource === null) {
+    return `https://artifact-${artifactId}--${mountId}.traycer-artifact.invalid`;
+  }
+  const scheme = policySource.slice(0, -1);
+  return `${scheme}://artifact-${artifactId}--${mountId}`;
+}
+
 interface FakeBridge extends SandboxArtifactBridge {
   readonly registered: string[];
   readonly unregistered: string[];
 }
 
-function createFakeBridge(): FakeBridge {
+function createFakeBridge(policySource: string | null): FakeBridge {
   const registered: string[] = [];
   const unregistered: string[] = [];
   return {
+    policySource,
+    artifactOrigin: (parts) => originFor(policySource, parts),
     registered,
     unregistered,
     register: (mountId) => {
@@ -92,6 +138,10 @@ function createFakeBridge(): FakeBridge {
     onCancel: () => ({ dispose: () => undefined }),
     respond: (_reply: SandboxArtifactReply) => Promise.resolve(),
   };
+}
+
+function desktopFakeBridge(): FakeBridge {
+  return createFakeBridge(DESKTOP_POLICY_SOURCE);
 }
 
 function hostWith(bridge: SandboxArtifactBridge | null): IRunnerHost {
@@ -139,7 +189,7 @@ function artifactFrame(options: {
 
 describe("<SandboxFrame /> artifact source, with a runner host that serves artifacts", () => {
   it("registers a mount through the runner host's artifact bridge and points the iframe at its address", async () => {
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     render(
       <RunnerHostContext.Provider value={host}>
@@ -156,7 +206,10 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const [mountId] = bridge.registered;
     expect(iframe.getAttribute("src")).toBe(
       buildArtifactAddress({
-        scheme: "traycer-sandbox",
+        origin: originFor(DESKTOP_POLICY_SOURCE, {
+          artifactId: "myart",
+          mountId,
+        }),
         artifactId: "myart",
         mountId: mountId,
         treePath: "",
@@ -172,6 +225,8 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     let resolveRegister: () => void = () => undefined;
     const registered: string[] = [];
     const bridge: SandboxArtifactBridge = {
+      policySource: DESKTOP_POLICY_SOURCE,
+      artifactOrigin: (parts) => originFor(DESKTOP_POLICY_SOURCE, parts),
       register: (mountId) =>
         new Promise((resolve) => {
           registered.push(mountId);
@@ -207,7 +262,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
   });
 
   it("unregisters the mount through the bridge when the frame unmounts", async () => {
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     const { unmount } = render(
       <RunnerHostContext.Provider value={host}>
@@ -226,7 +281,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
   });
 
   it("mounts a fresh server, with a fresh mount id, when the artifact id changes", async () => {
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     const { rerender } = render(
       <RunnerHostContext.Provider value={host}>
@@ -257,7 +312,10 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const iframe = await screen.findByTitle("Artifact page");
     expect(iframe.getAttribute("src")).toBe(
       buildArtifactAddress({
-        scheme: "traycer-sandbox",
+        origin: originFor(DESKTOP_POLICY_SOURCE, {
+          artifactId: "second-art",
+          mountId: secondMountId,
+        }),
         artifactId: "second-art",
         mountId: secondMountId,
         treePath: "",
@@ -267,7 +325,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
   });
 
   it("includes a nested treePath in the artifact's served address", async () => {
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     render(
       <RunnerHostContext.Provider value={host}>
@@ -283,7 +341,10 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const [mountId] = bridge.registered;
     expect(iframe.getAttribute("src")).toBe(
       buildArtifactAddress({
-        scheme: "traycer-sandbox",
+        origin: originFor(DESKTOP_POLICY_SOURCE, {
+          artifactId: "myart",
+          mountId,
+        }),
         artifactId: "myart",
         mountId: mountId,
         treePath: "proof/nested",
@@ -297,7 +358,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     // `artifactSource()` for the second render would also hand `sameSource`
     // a new manifest/readSpan/resolver identity, which alone would force a
     // remount and leave this test passing for the wrong reason.
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     const firstSource = artifactSource("myart", "", "index.html");
     const { rerender } = render(
@@ -329,7 +390,10 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const iframe = await screen.findByTitle("Artifact page");
     expect(iframe.getAttribute("src")).toBe(
       buildArtifactAddress({
-        scheme: "traycer-sandbox",
+        origin: originFor(DESKTOP_POLICY_SOURCE, {
+          artifactId: "myart",
+          mountId: secondMountId,
+        }),
         artifactId: "myart",
         mountId: secondMountId,
         treePath: "proof/nested",
@@ -339,7 +403,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
   });
 
   it("serves a loose report.html as the entry document, not index.html", async () => {
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     render(
       <RunnerHostContext.Provider value={host}>
@@ -355,7 +419,10 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const [mountId] = bridge.registered;
     expect(iframe.getAttribute("src")).toBe(
       buildArtifactAddress({
-        scheme: "traycer-sandbox",
+        origin: originFor(DESKTOP_POLICY_SOURCE, {
+          artifactId: "myart",
+          mountId,
+        }),
         artifactId: "myart",
         mountId: mountId,
         treePath: "",
@@ -368,7 +435,7 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     // One source, reused and overridden on only `entryPath` - same reasoning
     // as the treePath-only test above. The manifest needs both documents
     // from the start, since it stays the same object across both renders.
-    const bridge = createFakeBridge();
+    const bridge = desktopFakeBridge();
     const host = hostWith(bridge);
     const base = artifactSource("myart", "", "index.html");
     const firstSource: Extract<SandboxSource, { kind: "artifact" }> = {
@@ -414,13 +481,114 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
     const iframe = await screen.findByTitle("Artifact page");
     expect(iframe.getAttribute("src")).toBe(
       buildArtifactAddress({
-        scheme: "traycer-sandbox",
+        origin: originFor(DESKTOP_POLICY_SOURCE, {
+          artifactId: "myart",
+          mountId: secondMountId,
+        }),
         artifactId: "myart",
         mountId: secondMountId,
         treePath: "",
         path: "report.html",
       }),
     );
+  });
+});
+
+describe("<SandboxFrame /> artifact source, served over iOS's own scheme", () => {
+  it("addresses the iframe and the document's base CSP by the bridge's own policy source, while the loader stays the bundled mobile path", async () => {
+    const bridge = createFakeBridge(IOS_POLICY_SOURCE);
+    const host = hostWith(bridge);
+    render(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: artifactSource("myart", "", "index.html"),
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(sandboxArtifactPolicySource(host)).toBe(IOS_POLICY_SOURCE);
+    const iframe = await screen.findByTitle("Artifact page");
+    const [mountId] = bridge.registered;
+    expect(iframe.getAttribute("src")).toBe(
+      buildArtifactAddress({
+        origin: originFor(IOS_POLICY_SOURCE, { artifactId: "myart", mountId }),
+        artifactId: "myart",
+        mountId: mountId,
+        treePath: "",
+        path: "index.html",
+      }),
+    );
+    expect(iframe.getAttribute("src")?.startsWith("traycer-artifact://")).toBe(
+      true,
+    );
+
+    // The served document's own CSP (not the loader's) is built from the
+    // SAME policy source the bridge reported - not desktop's "traycer-sandbox:".
+    const lastServerOptions = artifactServerCalls.at(-1);
+    expect(lastServerOptions?.document.policySource).toBe(IOS_POLICY_SOURCE);
+    expect(lastServerOptions?.document.csp).toBe(
+      artifactContentPolicy(IOS_POLICY_SOURCE),
+    );
+    expect(lastServerOptions?.document.csp).toContain("traycer-artifact:");
+
+    // Artifact serving gets its own native scheme on iOS, but the sandbox
+    // LOADER itself never moves off the bundled `/sandbox/` path - mobile has
+    // no privileged scheme of its own for the loader the way desktop's
+    // `traycer-sandbox://` does.
+    expect(sandboxLoaderBaseUrl(host)).toBe(
+      new URL("/sandbox/index.html", window.location.href).href,
+    );
+    expect(sandboxLoaderBaseUrl(host)).not.toContain("traycer-sandbox://");
+  });
+});
+
+describe("<SandboxFrame /> artifact source, served over Android's reserved https origin", () => {
+  it("addresses the iframe by the https(-only) origin and adds no extra CSP source, with the loader still bundled", async () => {
+    const bridge = createFakeBridge(ANDROID_POLICY_SOURCE);
+    const host = hostWith(bridge);
+    render(
+      <RunnerHostContext.Provider value={host}>
+        {artifactFrame({
+          source: artifactSource("myart", "", "index.html"),
+          title: "Artifact page",
+          onBridge: null,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(sandboxArtifactPolicySource(host)).toBeNull();
+    const iframe = await screen.findByTitle("Artifact page");
+    const [mountId] = bridge.registered;
+    const expectedOrigin = originFor(ANDROID_POLICY_SOURCE, {
+      artifactId: "myart",
+      mountId,
+    });
+    expect(expectedOrigin).toBe(
+      `https://artifact-myart--${mountId}.traycer-artifact.invalid`,
+    );
+    expect(iframe.getAttribute("src")).toBe(
+      buildArtifactAddress({
+        origin: expectedOrigin,
+        artifactId: "myart",
+        mountId: mountId,
+        treePath: "",
+        path: "index.html",
+      }),
+    );
+    expect(iframe.getAttribute("src")?.startsWith("https://")).toBe(true);
+
+    // No policy source to add: Android's own origin is already https, which
+    // the base https-only page policy already covers.
+    const lastServerOptions = artifactServerCalls.at(-1);
+    expect(lastServerOptions?.document.policySource).toBeNull();
+    expect(lastServerOptions?.document.csp).toBe(artifactContentPolicy(null));
+
+    expect(sandboxLoaderBaseUrl(host)).toBe(
+      new URL("/sandbox/index.html", window.location.href).href,
+    );
+    expect(sandboxLoaderBaseUrl(host)).not.toContain("traycer-sandbox://");
   });
 });
 

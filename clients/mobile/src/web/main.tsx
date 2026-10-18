@@ -162,19 +162,20 @@ const remoteFetcher: RemoteHostFetcher | null =
   devHostFetch === null ? null : () => devHostFetch();
 
 /**
- * Narrows the shell's static `frame-src 'self'` (index.html) to the one
+ * Narrows the app-origin part of the static frame policy to the one
  * document the app frames, the sandbox loader, so a sandboxed page cannot
  * navigate its own frame to another app route or to a `/_capacitor_*` native
  * route. Added at runtime because the origin differs per shell -
  * `capacitor://localhost` on iOS, `http://localhost` on Android, the dev
  * server under live reload - and a meta policy only narrows: the two
  * intersect. Spelled from protocol and host because `location.origin` can be
- * "null" for a custom scheme. Before the first render, so before any frame.
+ * "null" for a custom scheme. Artifact documents use their separate native
+ * scheme. Before the first render, so before any frame.
  */
 function restrictFramesToSandboxLoader(): void {
   const meta = document.createElement("meta");
   meta.httpEquiv = "Content-Security-Policy";
-  meta.content = `frame-src ${location.protocol}//${location.host}/sandbox/index.html`;
+  meta.content = `frame-src ${location.protocol}//${location.host}/sandbox/index.html traycer-artifact: https://*.traycer-artifact.invalid`;
   document.head.append(meta);
 }
 

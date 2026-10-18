@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ForwardedShortcut } from "../../forwarded-shortcuts";
 import type { SandboxTheme } from "../../theme-map";
 import {
-  ARTIFACT_BASE_POLICY,
+  artifactBasePolicy,
   buildArtifactDocument,
   type ArtifactDocumentOptions,
 } from "../artifact-document";
@@ -12,7 +12,10 @@ import {
 // waits, in a jsdom window that is its own parent, for a resource message.
 // A variable specifier keeps the type-checker from treating it as a module.
 const LOADER = "../../sandbox-loader";
-const BASE_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_BASE_POLICY}">`;
+// Every fixture below is served as if by desktop; the mobile and Android
+// cases (their own policy source shape) get their own tests further down.
+const POLICY_SOURCE = "traycer-sandbox:";
+const BASE_META = `<meta http-equiv="Content-Security-Policy" content="${artifactBasePolicy(POLICY_SOURCE)}">`;
 
 interface Delivery {
   readonly kind: "page" | "wireframe" | "app";
@@ -65,6 +68,7 @@ async function loaderDocument(delivery: Delivery): Promise<string> {
 
 function documentOptionsOf(delivery: Delivery): ArtifactDocumentOptions {
   return {
+    policySource: POLICY_SOURCE,
     csp: delivery.csp,
     nonce: delivery.nonce,
     theme: delivery.theme,
@@ -163,7 +167,9 @@ describe("buildArtifactDocument / sandbox loader parity", () => {
     const doc = new DOMParser().parseFromString(composed, "text/html");
     const policies = [...doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]')];
 
-    expect(policies[0].getAttribute("content")).toBe(ARTIFACT_BASE_POLICY);
+    expect(policies[0].getAttribute("content")).toBe(
+      artifactBasePolicy(POLICY_SOURCE),
+    );
     if (delivery.csp === null) {
       expect(policies).toHaveLength(1);
     } else {
@@ -173,6 +179,95 @@ describe("buildArtifactDocument / sandbox loader parity", () => {
         policies[0].compareDocumentPosition(policies[1]) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     }
+  });
+});
+
+describe("artifactBasePolicy, by policy source", () => {
+  it("names the given colon-bearing source literally in default-src, same as desktop's own", () => {
+    expect(artifactBasePolicy("traycer-artifact:")).toBe(
+      "default-src * traycer-artifact: data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'",
+    );
+  });
+
+  it("adds no extra source at all for a null policy source - Android's https origin needs none", () => {
+    expect(artifactBasePolicy(null)).toBe(
+      "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'",
+    );
+  });
+
+  it("keeps form-action and base-uri locked to 'none' for the mobile source too", () => {
+    const policy = artifactBasePolicy("traycer-artifact:");
+    expect(policy).toContain("form-action 'none'");
+    expect(policy).toContain("base-uri 'none'");
+  });
+
+  it("keeps form-action and base-uri locked to 'none' for the null (Android) source too", () => {
+    const policy = artifactBasePolicy(null);
+    expect(policy).toContain("form-action 'none'");
+    expect(policy).toContain("base-uri 'none'");
+  });
+
+  it("rejects a non-null source that is not a valid, colon-terminated URI scheme token", () => {
+    expect(() => artifactBasePolicy("not valid:")).toThrow(
+      "Invalid artifact policy source",
+    );
+    expect(() => artifactBasePolicy("traycer-artifact")).toThrow(
+      "Invalid artifact policy source",
+    );
+  });
+
+  it("composes the mobile source into the actual base meta a served document carries", () => {
+    const delivery: Delivery = {
+      kind: "page",
+      html: "<!doctype html><p>hi</p>",
+      csp: null,
+      nonce: "n-mobile",
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "dark",
+        background: null,
+        variables: {},
+      },
+      shortcuts: [],
+    };
+    const composed = buildArtifactDocument(delivery.html, {
+      ...documentOptionsOf(delivery),
+      policySource: "traycer-artifact:",
+    });
+    const doc = new DOMParser().parseFromString(composed, "text/html");
+    const [basePolicy] = [
+      ...doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]'),
+    ];
+    expect(basePolicy.getAttribute("content")).toBe(
+      artifactBasePolicy("traycer-artifact:"),
+    );
+    expect(basePolicy.getAttribute("content")).toContain("form-action 'none'");
+    expect(basePolicy.getAttribute("content")).toContain("base-uri 'none'");
+  });
+
+  it("composes a null (Android) source into the actual base meta, with no extra source token", () => {
+    const delivery: Delivery = {
+      kind: "page",
+      html: "<!doctype html><p>hi</p>",
+      csp: null,
+      nonce: "n-android",
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "dark",
+        background: null,
+        variables: {},
+      },
+      shortcuts: [],
+    };
+    const composed = buildArtifactDocument(delivery.html, {
+      ...documentOptionsOf(delivery),
+      policySource: null,
+    });
+    const doc = new DOMParser().parseFromString(composed, "text/html");
+    const [basePolicy] = [
+      ...doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]'),
+    ];
+    expect(basePolicy.getAttribute("content")).toBe(artifactBasePolicy(null));
   });
 });
 
@@ -223,6 +318,7 @@ function runBootstrapInIsolatedWindow(composedHtml: string): {
 describe("sandbox bootstrap load ordering", () => {
   it("sends document-ready with the nonce before a forced size-changed, even though the size has not changed", () => {
     const options: ArtifactDocumentOptions = {
+      policySource: POLICY_SOURCE,
       csp: null,
       nonce: "n-document-ready",
       shortcuts: [],

@@ -41,6 +41,7 @@ import {
 } from "@/lib/sandbox/mcp-csp";
 import {
   sandboxAllowAttribute,
+  sandboxArtifactPolicySource,
   sandboxLoaderBaseUrl,
   sandboxLoaderUrl,
   type SandboxPermission,
@@ -251,6 +252,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
   } = props;
   const runnerHost = useRunnerHostOrNull();
   const artifact = source.kind === "artifact";
+  const artifactPolicySource = sandboxArtifactPolicySource(runnerHost);
 
   const [servedFrame, setServedFrame] = useState<ServedFrame | null>(null);
   const openLink = useOpenLink();
@@ -279,7 +281,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
 
   const policy = useMemo((): FramePolicy => {
     if (artifact)
-      return { valid: true, csp: artifactContentPolicy("traycer-sandbox") };
+      return { valid: true, csp: artifactContentPolicy(artifactPolicySource) };
     if (kind !== "app") {
       return { valid: true, csp: pageContentPolicy(networkPolicy) };
     }
@@ -287,7 +289,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
     return result.kind === "ok"
       ? { valid: true, csp: result.policy }
       : { valid: false, csp: null };
-  }, [artifact, kind, networkPolicy, appCsp]);
+  }, [artifact, artifactPolicySource, kind, networkPolicy, appCsp]);
   const csp = policy.csp;
 
   const theme = useMemo(() => {
@@ -424,6 +426,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       readSpan: inputs.source.readSpan,
       resolveOutsideReference: inputs.source.resolveOutsideReference,
       document: {
+        policySource: inputs.runnerHost.sandboxArtifacts.policySource,
         csp: inputs.policy.csp,
         theme: inputs.theme,
         nonce,
@@ -432,7 +435,10 @@ export function SandboxFrame(props: SandboxFrameProps) {
     });
     const mount = mountArtifact(inputs.runnerHost, server);
     const url = buildArtifactAddress({
-      scheme: "traycer-sandbox",
+      origin: inputs.runnerHost.sandboxArtifacts.artifactOrigin({
+        artifactId: inputs.source.artifactId,
+        mountId: mount.mountId,
+      }),
       artifactId: inputs.source.artifactId,
       mountId: mount.mountId,
       treePath: inputs.source.treePath,

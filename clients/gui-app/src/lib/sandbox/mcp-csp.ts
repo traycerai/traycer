@@ -41,16 +41,17 @@ export function pageContentPolicy(networkPolicy: SandboxNetworkPolicy): string {
 }
 
 /** Artifact files share the dedicated sandbox scheme; child frames stay closed. */
-export function artifactContentPolicy(scheme: string): string {
-  if (!/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme)) {
-    throw new Error("Invalid artifact scheme");
+export function artifactContentPolicy(policySource: string | null): string {
+  if (policySource === null) return pageContentPolicy("https-only");
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:$/.test(policySource)) {
+    throw new Error("Invalid artifact policy source");
   }
   return pageContentPolicy("https-only")
     .split("; ")
     .map((directive) =>
       directive.startsWith("frame-src ")
         ? directive
-        : `${directive} ${scheme}:`,
+        : `${directive} ${policySource}`,
     )
     .join("; ");
 }

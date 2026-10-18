@@ -2,12 +2,17 @@ import type { ForwardedShortcut } from "../forwarded-shortcuts";
 import { buildDocument } from "../sandbox-document";
 import type { SandboxTheme } from "../theme-map";
 
-// Mirrors sandbox/index.html and the desktop sandbox handler's response header.
-// Served documents need their own base policy when a catcher cannot set headers.
-export const ARTIFACT_BASE_POLICY =
-  "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'";
+// Every intersecting policy must name the scheme: WebKit's wildcard does
+// not admit custom-scheme subresources from an opaque sandbox document.
+export function artifactBasePolicy(policySource: string | null): string {
+  if (policySource !== null && !/^[A-Za-z][A-Za-z0-9+.-]*:$/.test(policySource)) {
+    throw new Error("Invalid artifact policy source");
+  }
+  return `default-src *${policySource === null ? "" : ` ${policySource}`} data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'`;
+}
 
 export interface ArtifactDocumentOptions {
+  readonly policySource: string | null;
   readonly csp: string | null;
   readonly theme: SandboxTheme;
   readonly nonce: string;
@@ -28,6 +33,6 @@ export function buildArtifactDocument(
   });
   return document.replace(
     /^<!doctype html>/,
-    `<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_BASE_POLICY}">`,
+    `<!doctype html><meta http-equiv="Content-Security-Policy" content="${artifactBasePolicy(options.policySource)}">`,
   );
 }

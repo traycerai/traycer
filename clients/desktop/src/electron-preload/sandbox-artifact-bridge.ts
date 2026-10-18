@@ -12,6 +12,9 @@ import { subscribe } from "./subscribe";
 
 export function buildSandboxArtifactBridge(): SandboxArtifactBridge {
   return {
+    policySource: "traycer-sandbox:",
+    artifactOrigin: ({ artifactId, mountId }) =>
+      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
     register: (mountId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.sandboxArtifactRegister,

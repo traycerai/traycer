@@ -7,7 +7,7 @@ export interface ArtifactAddress {
 
 const ARTIFACT_ID = /^[a-z0-9_-]+$/;
 const MOUNT_ID = /^[a-z0-9]+$/;
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/;
+const ANDROID_HOST_SUFFIX = ".traycer-artifact.invalid";
 
 /** Manifest paths are decoded once, at the URL boundary, never at lookup. */
 export function isArtifactPath(path: string): boolean {
@@ -31,7 +31,14 @@ export function parseArtifactAddress(url: string): ArtifactAddress | null {
   const match =
     /^([A-Za-z][A-Za-z0-9+.-]*):\/\/artifact-([^/?#]+)(\/[^?#]*)?(?:[?#].*)?$/.exec(url);
   if (match === null) return null;
-  const authority = match[2];
+  const scheme = match[1];
+  let authority = match[2];
+  if (scheme === "https") {
+    if (!authority.endsWith(ANDROID_HOST_SUFFIX)) return null;
+    authority = authority.slice(0, -ANDROID_HOST_SUFFIX.length);
+  } else if (scheme !== "traycer-sandbox" && scheme !== "traycer-artifact") {
+    return null;
+  }
   const delimiter = authority.lastIndexOf("--");
   if (delimiter < 1) return null;
   const artifactId = authority.slice(0, delimiter);
@@ -50,7 +57,7 @@ export function parseArtifactAddress(url: string): ArtifactAddress | null {
 }
 
 export interface ArtifactAddressParts {
-  readonly scheme: string;
+  readonly origin: string;
   readonly artifactId: string;
   readonly mountId: string;
   readonly treePath: string;
@@ -59,12 +66,13 @@ export interface ArtifactAddressParts {
 
 /** Keeping the folder in the URL lets the browser resolve parent references. */
 export function buildArtifactAddress(address: ArtifactAddressParts): string {
-  const { scheme, artifactId, mountId, treePath, path } = address;
-  const protocol = scheme.endsWith(":") ? scheme.slice(0, -1) : scheme;
+  const { origin, artifactId, mountId, treePath, path } = address;
+  const parsed = parseArtifactAddress(origin);
   const relativePath = path === "" ? "index.html" : path;
   const fullPath = treePath === "" ? relativePath : `${treePath}/${relativePath}`;
   if (
-    !SCHEME.test(protocol) ||
+    !/^[^:/?#]+:\/\/[^/?#]+$/.test(origin) ||
+    parsed === null || parsed.artifactId !== artifactId || parsed.mountId !== mountId ||
     !ARTIFACT_ID.test(artifactId) ||
     !MOUNT_ID.test(mountId) ||
     (treePath !== "" && !isArtifactPath(treePath)) ||
@@ -73,7 +81,7 @@ export function buildArtifactAddress(address: ArtifactAddressParts): string {
   ) {
     throw new Error("Invalid artifact address");
   }
-  return `${protocol}://artifact-${artifactId}--${mountId}/${fullPath.split("/").map(encodeURIComponent).join("/")}`;
+  return `${origin}/${fullPath.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 export function newMountId(): string {

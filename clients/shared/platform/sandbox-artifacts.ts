@@ -28,8 +28,16 @@ export type SandboxArtifactReply =
       readonly status: 404 | 503;
     };
 
+export interface SandboxArtifactOriginParts {
+  readonly artifactId: string;
+  readonly mountId: string;
+}
+
 /** Supplies bounded file spans to the shell's sandbox protocol handler. */
 export interface SandboxArtifactBridge {
+  /** An extra CSP scheme source, including its colon; HTTPS needs none. */
+  readonly policySource: string | null;
+  artifactOrigin(parts: SandboxArtifactOriginParts): string;
   register(mountId: string): Promise<void>;
   unregister(mountId: string): Promise<void>;
   onRequest(handler: (request: SandboxArtifactRequest) => void): Disposable;
