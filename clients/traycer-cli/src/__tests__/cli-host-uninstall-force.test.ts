@@ -135,16 +135,20 @@ describe("host uninstall --force", () => {
 });
 
 describe("host uninstall --all help", () => {
-  function allOptionDescription(): string {
+  function optionDescription(long: string): string {
     const program = buildProgramWithAgentRoles(false);
     const host = findSubcommand(program, "host");
     const uninstall = host === null ? null : findSubcommand(host, "uninstall");
     if (uninstall === null) throw new Error("command 'host uninstall' missing");
     const option = uninstall.options.find(
-      (candidate) => candidate.long === "--all",
+      (candidate) => candidate.long === long,
     );
-    if (option === undefined) throw new Error("option '--all' missing");
+    if (option === undefined) throw new Error(`option '${long}' missing`);
     return option.description;
+  }
+
+  function allOptionDescription(): string {
+    return optionDescription("--all");
   }
 
   it("says the stop is cooperative on macOS and Linux", () => {
@@ -156,6 +160,15 @@ describe("host uninstall --all help", () => {
   it("says that on Windows the stop ends the host's process tree", () => {
     expect(allOptionDescription()).toContain(
       "On Windows the stop ends the host's process tree, so running terminal sessions and in-flight agent work are lost.",
+    );
+  });
+
+  it("describes --force without naming a signal", () => {
+    const description = optionDescription("--force");
+    expect(description).not.toContain("SIGKILL");
+    expect(description).toContain("stop the host even if it is not responding");
+    expect(description).toContain(
+      "Running terminal sessions and in-flight agent work are killed.",
     );
   });
 });

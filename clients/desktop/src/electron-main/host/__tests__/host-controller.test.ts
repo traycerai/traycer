@@ -5963,6 +5963,18 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(await isHostRemovedByUser()).toBe(false);
   });
 
+  // The CLI keeps the install when it could not confirm the host stopped: the
+  // stop failed, the host is still running, or its pid record could not be
+  // read. None of those shows the host is not responding, so the message says
+  // only what happened and gives no force-restart advice.
+  it("words the uninstall-kept-the-install message without a not-responding claim or force-restart advice (traycer#1563)", () => {
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).toContain(
+      "could not be confirmed as stopped",
+    );
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain("not responding");
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain("Force restart");
+  });
+
   // traycer#1563 R5: the uninstall's stop was declined because the host has
   // work in progress, and the CLI rethrows the host's own `E_HOST_BUSY`.
   // Nothing was removed, so it is the busy outcome with a Force to offer, and

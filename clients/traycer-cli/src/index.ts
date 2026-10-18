@@ -1979,7 +1979,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--force",
-        "With --all: stop the host even if it is not responding (escalates to SIGKILL; running terminal sessions and in-flight agent work are killed), then remove the install.",
+        "With --all: stop the host even if it is not responding, then remove the install. Running terminal sessions and in-flight agent work are killed.",
       )
       .addHelpText(
         "after",

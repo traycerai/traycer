@@ -195,7 +195,7 @@ function read(md: string): JsonContent {
 }
 
 function serializeJson(content: JsonContent): string {
-  return jsonContentToArtifactMarkdown(content, OPTIONS, read);
+  return jsonContentToArtifactMarkdown(content, OPTIONS);
 }
 
 function serialize(fragment: Y.XmlFragment): string {
@@ -1334,14 +1334,14 @@ describe("unresolved image text: the reader decides (traycer#1563)", () => {
       name: "a backslash-escaped closing bracket, which the parser reads as a bare one",
       alt: "a \\] b",
       src: "x",
-      readsAsImage: true,
+      readsAsImage: false,
       verbatim: false,
     },
     {
       name: "a backslash-escaped opening bracket, which the parser reads as a bare one",
       alt: "a \\[ b",
       src: "x",
-      readsAsImage: true,
+      readsAsImage: false,
       verbatim: false,
     },
     {
@@ -1369,15 +1369,15 @@ describe("unresolved image text: the reader decides (traycer#1563)", () => {
       name: "brackets nested 2 levels deep",
       alt: "a[b[b]]",
       src: "x",
-      readsAsImage: false,
-      verbatim: false,
+      readsAsImage: true,
+      verbatim: true,
     },
     {
       name: "brackets nested 3 levels deep",
       alt: "a[b[b[b]]]",
       src: "x",
-      readsAsImage: false,
-      verbatim: false,
+      readsAsImage: true,
+      verbatim: true,
     },
     {
       name: "an empty alt",
@@ -1442,7 +1442,7 @@ describe("unresolved image text: the reader decides (traycer#1563)", () => {
 
   it("reads the review case back as an image with the host's own alt and source", () => {
     const text = unresolvedArtifactImageText("a ``]`` b", "images/missing.png");
-    expect(text).toBe("![a ``]`` b](images/missing.png)");
+    expect(text).toBe("![a ``\\]`` b](images/missing.png)");
     expect(readImage(text)).toEqual({
       alt: "a ``]`` b",
       src: "images/missing.png",
@@ -1588,11 +1588,6 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
       src: "images/missing.png",
     },
     {
-      name: "a newline before brackets",
-      alt: "a\n[b]",
-      src: "images/missing.png",
-    },
-    {
       name: "a newline after a backslash",
       alt: "a \\\nb",
       src: "images/missing.png",
@@ -1660,6 +1655,28 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
     },
   );
 
+  // The reader reads this label as one image, but the decoder does not accept
+  // it: a later line that starts with a backslash is not a line the decoder
+  // proves a paragraph carries as written. The fallback stays text - the
+  // retry is lost for this one alt, and the text round-trips exactly.
+  it("writes a later line that starts with an escaped bracket as text, stable from the first pass", () => {
+    const text = unresolvedArtifactImageText("a\n[b]", "images/missing.png");
+    expect(text).toBe("![a\n\\[b\\]](images/missing.png)");
+    const fragment0 = fragmentOf({
+      type: "doc",
+      content: [textParagraph([plainText(text)])],
+    });
+    const md1 = serialize(fragment0);
+    expect(md1).toBe("!\\[a\n\\\\\\[b\\\\]](images/missing.png)");
+    const json1 = parseJson(md1);
+    expect(imagesIn(json1)).toEqual([]);
+    expect(textOf(json1)).toBe(text);
+    const fragment1 = fragmentOf(json1);
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
+    expect(fragment1.toJSON()).toBe(fragment0.toJSON());
+    expect(serialize(fragment1)).toBe(md1);
+  });
+
   it("pins the escaped bytes of the two unreadable labels", () => {
     const bytes = (alt: string): string =>
       serialize(
@@ -1718,45 +1735,125 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
       }),
     };
 
+    // The block after a first paragraph, which is where the readers keep the
+    // image in a list item.
+    const later =
+      (list: "bullet" | "ordered" | "task") =>
+      (block: JsonContent): JsonContent => {
+        const lead = textParagraph([plainText("t")]);
+        const item: JsonContent =
+          list === "task"
+            ? {
+                type: "taskItem",
+                attrs: { checked: false },
+                content: [lead, block],
+              }
+            : { type: "listItem", content: [lead, block] };
+        if (list === "bullet") {
+          return {
+            type: "doc",
+            content: [{ type: "bulletList", content: [item] }],
+          };
+        }
+        if (list === "ordered") {
+          return {
+            type: "doc",
+            content: [
+              {
+                type: "orderedList",
+                attrs: { start: 1, type: null },
+                content: [item],
+              },
+            ],
+          };
+        }
+        return {
+          type: "doc",
+          content: [{ type: "taskList", content: [item] }],
+        };
+      };
+    const firstTask = (block: JsonContent): JsonContent => ({
+      type: "doc",
+      content: [
+        {
+          type: "taskList",
+          content: [
+            { type: "taskItem", attrs: { checked: false }, content: [block] },
+          ],
+        },
+      ],
+    });
+    const wraps = {
+      ...wrap,
+      "a bullet item's later block": later("bullet"),
+      "an ordered item's later block": later("ordered"),
+      "a task item's later block": later("task"),
+      "a task item": firstTask,
+    };
+
     const raw = [
       ["the top level", "a", "![a](images/missing.png)"],
       ["the top level", "a\nb", "![a\nb](images/missing.png)"],
-      ["an ordered item", "a", "1. ![a](images/missing.png)"],
-      ["an ordered item", "a\nb", "1. ![a\n   b](images/missing.png)"],
       ["a block quote", "a", "> ![a](images/missing.png)"],
       ["a block quote", "a\nb", "> ![a\n> b](images/missing.png)"],
+      ["a bullet item's later block", "a", "- t\n\n  ![a](images/missing.png)"],
+      [
+        "an ordered item's later block",
+        "a",
+        "1. t\n\n   ![a](images/missing.png)",
+      ],
+      [
+        "an ordered item's later block",
+        "a\nb",
+        "1. t\n\n   ![a\n   b](images/missing.png)",
+      ],
     ] as const;
 
     it.each(raw)(
-      "%s, alt %j: the ingest keeps the image, so the fallback is written raw",
+      "%s, alt %j: both readers keep the image, so the fallback is written raw",
       (where, alt, md) => {
-        const doc = wrap[where](textParagraph([plainText(fallback(alt))]));
+        const doc = wraps[where](textParagraph([plainText(fallback(alt))]));
         const md1 = serialize(fragmentOf(doc));
         expect(md1).toBe(md);
         // The stored document keeps the image, with its alt and source.
         expect(altsIn(read(md1))).toEqual([alt]);
-        // Raw is the very bytes the image itself is written with there.
-        expect(md1).toBe(serializeJson(wrap[where](imageNode(alt))));
+        // Raw is the very bytes the image itself is written with there. A
+        // paragraph after a sibling block is separated from it by a blank
+        // line, which an image block is not.
+        const sameBytes = where.includes("later block")
+          ? md1.replace("\n\n", "\n")
+          : md1;
+        expect(sameBytes).toBe(serializeJson(wraps[where](imageNode(alt))));
       },
     );
 
+    // An item's first block is read on its marker line, where the readers put
+    // the image inside the paragraph and the schema drops it, or disagree.
     const asText = [
       ["a bullet item", "a", "- !\\[a](images/missing.png)"],
       ["a bullet item", "a\nb", "- !\\[a\n  b](images/missing.png)"],
+      ["an ordered item", "a", "1. !\\[a](images/missing.png)"],
+      ["an ordered item", "a\nb", "1. !\\[a\n   b](images/missing.png)"],
+      ["a task item", "a", "- [ ] !\\[a](images/missing.png)"],
+      [
+        "a task item's later block",
+        "a",
+        "- [ ] t\n\n  !\\[a](images/missing.png)",
+      ],
     ] as const;
 
     it.each(asText)(
-      "%s, alt %j: the ingest drops the image, so the fallback is written as text and kept as text",
+      "%s, alt %j: the fallback is written as text and kept as text",
       (where, alt, md) => {
         const text = fallback(alt);
-        const doc = wrap[where](textParagraph([plainText(text)]));
+        const doc = wraps[where](textParagraph([plainText(text)]));
         const md1 = serialize(fragmentOf(doc));
         expect(md1).toBe(md);
 
         // The stored document keeps the fallback, as its text, and no image.
         const stored = read(md1);
         expect(imagesIn(stored)).toEqual([]);
-        expect(textOf(stored)).toBe(text);
+        expect(textOf(stored).endsWith(text)).toBe(true);
         // And it is stable.
         expect(serializeJson(stored)).toBe(md1);
       },
@@ -1806,7 +1903,7 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
       expect(md3).toBe(md2);
     });
 
-    it("writes an image node whose alt holds CRLF once, and then the same bytes every pass", () => {
+    it("writes an image node whose alt holds CRLF without the carriage return from the first pass", () => {
       let doc: JsonContent = {
         type: "doc",
         content: [
@@ -1820,7 +1917,7 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
         doc = parseJson(md);
       }
       expect(passes).toEqual([
-        "![a\r\nb](images/x.png)",
+        "![a\nb](images/x.png)",
         "![a\nb](images/x.png)",
         "![a\nb](images/x.png)",
         "![a\nb](images/x.png)",
