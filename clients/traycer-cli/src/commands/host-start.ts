@@ -1221,7 +1221,11 @@ export async function runHostStart(
   // CLI the host spawned inherits that end - so a grandchild outliving a dead
   // host would hold one socket per attempt open in this process for as long
   // as it lives. Same argument, same remedy, as the stderr pipe.
-  let attemptStatusPipe: Readable | null = null;
+  //
+  // A holder rather than a `let`: the pipe is assigned inside the admission
+  // callback, and control-flow narrowing does not see assignments made in a
+  // closure, so a plain `let` reads as `null` forever at the loop top.
+  const attemptStatusPipe: { current: Readable | null } = { current: null };
   // Resolves the first time a shutdown signal arrives, so a backoff can be
   // ABANDONED rather than merely re-checked once it finishes.
   //
@@ -1579,8 +1583,8 @@ export async function runHostStart(
     const isFirstAttempt = attemptNumber === 1;
     // The previous attempt's frame has been consumed by now (every reader of
     // it runs before the loop comes back here), so the pipe can go.
-    attemptStatusPipe?.destroy();
-    attemptStatusPipe = null;
+    attemptStatusPipe.current?.destroy();
+    attemptStatusPipe.current = null;
     // Only once the gate's own proof is spent: an unspent one is still this
     // attempt's to use, and consuming again would strand it.
     if (parkRuleOwed && !isFirstAttempt && pendingAdoption === null) {
@@ -2067,9 +2071,7 @@ export async function runHostStart(
       // so do the settlement sites below (`resolveShutdownReason`): a forwarded
       // POSIX signal is how the record's own writer delivers a restart, so a
       // signal with no record standing is the only case that asks for nothing.
-      return exitSupervisor(
-        exitCodeForRequestedStop(stopAnnounced),
-      );
+      return exitSupervisor(exitCodeForRequestedStop(stopAnnounced));
     }
 
     // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
@@ -2246,7 +2248,7 @@ export async function runHostStart(
             ? stdioStreams[LAYER0_STATUS_FD]
             : undefined;
           if (isReadable(layer0Status)) {
-            attemptStatusPipe = layer0Status;
+            attemptStatusPipe.current = layer0Status;
             layer0Status.on("error", () => undefined);
             layer0FrameRead = deps.readLayer0Frame(
               layer0Status,
@@ -2446,9 +2448,7 @@ export async function runHostStart(
           ),
         );
         await deps.closeLogFd(logFd);
-        return exitSupervisor(
-          exitCodeForRequestedStop(cause.reason),
-        );
+        return exitSupervisor(exitCodeForRequestedStop(cause.reason));
       }
       // The fresh record resolution happens inside admission. Preserve the
       // supervisor's existing target-resolution contract if it fails there:
@@ -2960,9 +2960,7 @@ export async function runHostStart(
           attemptId,
           stopReason: latchedBy,
         });
-        return exitSupervisor(
-          exitCodeForRequestedStop(latchedBy),
-        );
+        return exitSupervisor(exitCodeForRequestedStop(latchedBy));
       }
       logger.info("Host child requested an intentional restart", {
         environment: opts.environment,
@@ -3184,7 +3182,10 @@ async function yieldedIncumbentPid(
 ): Promise<number | null> {
   let read: Layer0FrameRead;
   try {
-    read = await withFrameDeadline(frameRead, LAYER0_FRAME_CONSUMER_DEADLINE_MS);
+    read = await withFrameDeadline(
+      frameRead,
+      LAYER0_FRAME_CONSUMER_DEADLINE_MS,
+    );
   } catch {
     return null;
   }

@@ -384,9 +384,17 @@ vi.mock("../pid-metadata", () => ({
   readHostPidMetadata: mocks.readHostPidMetadata,
   readHostPidMetadataEvidence: mocks.readHostPidMetadataEvidence,
 }));
-vi.mock("../../store/process-identity", () => ({
-  getPublishedProcessIdentityVerdict: mocks.identityVerdict,
-}));
+// Partial: this suite reaches `src/index.ts`, whose `host start` command
+// binds `isProcessAlive` into its default deps at module load, so the mock
+// must carry every export the module has and override only the verdict.
+vi.mock("../../store/process-identity", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/process-identity")>();
+  return {
+    ...actual,
+    getPublishedProcessIdentityVerdict: mocks.identityVerdict,
+  };
+});
 // R3: `readOwnServiceRegistrationDisabled` is gone. The automatic-path
 // refusal (`refuseUpdateOverUnstartableService`) now reads the caller's task
 // through `readWindowsServiceTaskOwnership`, so `mocks.ownServiceDisabled`'s

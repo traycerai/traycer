@@ -6229,7 +6229,9 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
     expect(recorded.spawnCalls).toHaveLength(1);
     expect(recorded.exited).toBe(0);
     expect(sleeps).toHaveLength(
-      Math.ceil(YIELDED_INCUMBENT_EXIT_WAIT_MS / YIELDED_INCUMBENT_EXIT_POLL_MS),
+      Math.ceil(
+        YIELDED_INCUMBENT_EXIT_WAIT_MS / YIELDED_INCUMBENT_EXIT_POLL_MS,
+      ),
     );
     expect(
       recorded.loggerWarns.some(
