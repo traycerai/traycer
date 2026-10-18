@@ -27,7 +27,7 @@ const SEVEN_OPTIONS: ReadonlyArray<ReasoningLevelOption> = [
 ];
 
 // A model whose service tiers resolve to a single "Fast" upgrade over its
-// declared default - the shape `findUpgradeServiceTierForModel` needs to
+// declared default - the shape `nonDefaultServiceTiersForModel` needs to
 // surface the footer's Fast toggle.
 const FAST_MODEL: ModelOption = {
   harnessId: "codex",

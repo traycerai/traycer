@@ -291,7 +291,7 @@ function OwnerSettingsHeaderRows(props: {
   // a doubled one when reasoning is; that bug re-appears with every field
   // added. Here a missing field simply drops out and its neighbours close up.
   const allSegments: ReadonlyArray<SettingsSegment | null> = [
-    view.modelLabel === null && !view.fastMode
+    view.modelLabel === null && view.serviceTierLabel === null
       ? null
       : {
           key: "model",
@@ -307,9 +307,9 @@ function OwnerSettingsHeaderRows(props: {
               {view.modelLabel === null ? null : (
                 <span className="min-w-0 truncate">{view.modelLabel}</span>
               )}
-              {view.fastMode ? (
+              {view.serviceTierLabel !== null ? (
                 <Zap
-                  aria-label="Fast mode"
+                  aria-label={`Speed: ${view.serviceTierLabel}`}
                   className="size-3.5 shrink-0 fill-current text-warning-foreground"
                   strokeWidth={2}
                 />

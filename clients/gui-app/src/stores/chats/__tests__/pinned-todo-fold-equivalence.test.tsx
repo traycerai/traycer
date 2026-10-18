@@ -183,6 +183,7 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
+  resolveAgentServiceTierLabel: () => null,
   contentBlocksPreview: () => "",
 };
 

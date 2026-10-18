@@ -49,3 +49,58 @@ for (const setting of ["model", "reasoning", "fast mode"] as const) {
     await expect(page.getByRole("tooltip")).toHaveCount(0);
   });
 }
+
+test("keyboard Speed selection does not commit the active model row", async ({
+  page,
+}) => {
+  await page.goto(`${fixture("model-picker-modal-focus")}?dual-tier=1`);
+  await page.getByRole("button", { name: /Sonnet · low/ }).click();
+  const picker = page.getByRole("dialog", { name: "Select model" });
+  await expect(picker).toBeVisible();
+
+  const speed = page.getByRole("button", { name: /Speed: Standard/ });
+  await speed.focus();
+  await page.keyboard.press("Enter");
+  const ultrafast = page.getByRole("menuitemradio", { name: "Ultrafast" });
+  await expect(ultrafast).toBeVisible();
+  expect(
+    await ultrafast.evaluate(
+      (element) => element.closest('[data-slot="popover-content"]') === null,
+    ),
+  ).toBe(true);
+  await page.keyboard.press("End");
+  await expect(ultrafast).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(
+    page.getByRole("button", { name: /Speed: Ultrafast/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Sonnet · low/ }),
+  ).toBeVisible();
+  await expect(picker).toBeVisible();
+});
+
+test("pointer Speed selection and Escape keep the model picker open", async ({
+  page,
+}) => {
+  await page.goto(`${fixture("model-picker-modal-focus")}?dual-tier=1`);
+  await page.getByRole("button", { name: /Sonnet · low/ }).click();
+  const picker = page.getByRole("dialog", { name: "Select model" });
+  await expect(picker).toBeVisible();
+
+  await page.getByRole("button", { name: /Speed: Standard/ }).click();
+  const ultrafast = page.getByRole("menuitemradio", { name: "Ultrafast" });
+  await expect(ultrafast).toBeVisible();
+  await ultrafast.click();
+  await expect(
+    page.getByRole("button", { name: /Speed: Ultrafast/ }),
+  ).toBeVisible();
+  await expect(picker).toBeVisible();
+
+  await page.getByRole("button", { name: /Speed: Ultrafast/ }).click();
+  await expect(ultrafast).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(ultrafast).not.toBeVisible();
+  await expect(picker).toBeVisible();
+});

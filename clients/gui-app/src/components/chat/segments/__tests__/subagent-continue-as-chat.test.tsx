@@ -203,6 +203,7 @@ describe("useSubagentContinueAsChat", () => {
                 reasoningEffort: null,
                 reasoningEffortLabel: null,
                 serviceTier: null,
+                serviceTierLabel: null,
                 costUsd: null,
               },
       };

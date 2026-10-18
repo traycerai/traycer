@@ -678,6 +678,7 @@ export interface AssistantTurnMeta {
   /** Picker-style label resolved from the selected model's reasoning options. */
   readonly reasoningEffortLabel: string | null;
   readonly serviceTier: string | null;
+  readonly serviceTierLabel: string | null;
   /**
    * Cumulative billed cost for the turn in USD, from the turn's final usage.
    * `null` for harnesses that don't price the turn (Codex/Cursor) and for live/
