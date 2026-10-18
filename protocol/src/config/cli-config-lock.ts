@@ -195,6 +195,9 @@ export async function acquireCliConfigLock(
   const deadline = Date.now() + timing.waitMs;
   let liveVerdict: { readonly raw: string; readonly until: number } | null =
     null;
+  // Break-token creators proven dead during this acquire, so a long chain of
+  // dead tokens is probed once per creator, not on every poll.
+  const deadCreators = new Set<string>();
   while (true) {
     await releaseUnreleased(lockPath);
     await removeRetainedTokens();
@@ -228,6 +231,7 @@ export async function acquireCliConfigLock(
               serialized,
               timing,
               deadline,
+              deadCreators,
             )
           ) {
             continue;
@@ -261,10 +265,10 @@ function lockTimeoutError(
  * keep waiting.
  *
  * The generation to claim is the one after the highest that exists, read from
- * the directory each attempt, and is taken only when every existing token's
- * creator died holding it. There is no fixed number of generations: however
- * many breakers died mid-break, the next one can still break, and the acquire
- * deadline is the only bound.
+ * the directory on each attempt of the polled wait, and is taken only when
+ * every existing token's creator died holding it. There is no fixed number of
+ * generations: however many breakers died mid-break, the next one can still
+ * break, and the acquire deadline is the only bound.
  */
 async function breakDeadLock(
   lockPath: string,
@@ -273,56 +277,54 @@ async function breakDeadLock(
   serialized: string,
   timing: CliConfigLockTiming,
   deadline: number,
+  deadCreators: Set<string>,
 ): Promise<boolean> {
   const tokenBase = breakTokenBase(lockPath, deadNonce);
-  // Creators already proven dead in this call, so a long chain of dead tokens
-  // is probed once per creator, not once per generation per attempt.
-  const deadCreators = new Set<string>();
-  while (Date.now() < deadline) {
-    const generations = await tokenGenerations(tokenBase);
-    // Any token whose creator is not provably dead is a breaker at work (or
-    // one nothing proves dead): it alone may remove this record, so we wait.
-    for (const generation of generations) {
-      if (
-        !(await tokenCreatorDead(
-          `${tokenBase}.${generation}`,
-          timing,
-          deadCreators,
-        ))
-      ) {
-        return false;
-      }
+  const generations = await tokenGenerations(tokenBase);
+  // Any token whose creator is not provably dead is a breaker at work (or one
+  // nothing proves dead): it alone may remove this record, so we wait.
+  for (const generation of generations) {
+    // A liveness probe can take seconds (`tasklist` on Windows), so a long
+    // chain is checked against the deadline before each one.
+    if (Date.now() >= deadline) return false;
+    if (
+      !(await tokenCreatorDead(
+        `${tokenBase}.${generation}`,
+        timing,
+        deadCreators,
+      ))
+    ) {
+      return false;
     }
-    const next = generations.reduce((max, g) => Math.max(max, g + 1), 0);
-    const tokenPath = `${tokenBase}.${next}`;
-    if (await tryCreate(tokenPath, serialized)) {
-      try {
-        // Only this token's creator may remove the record, and the lock cannot
-        // change under it: the dead holder will not release, and every other
-        // breaker of this record needs this token.
-        const current = await readHolder(lockPath);
-        if (current === null || current.raw !== deadRaw) return true;
-        try {
-          await unlink(lockPath);
-        } catch (err) {
-          const code = errorCode(err);
-          // A Windows sharing violation is contention: wait and try again.
-          if (isTransientWindowsError(code)) return false;
-          if (code !== "ENOENT") throw err;
-        }
-        return true;
-      } finally {
-        // Never fails the acquire. A token that will not go is retried by this
-        // process: when the dead lock is still there (a blocked unlink), only
-        // its removal lets the next breaker in, since it names a live creator.
-        await rm(tokenPath, { force: true }).catch(() => {
-          retainTokenRemoval(tokenPath, serialized);
-        });
-      }
-    }
-    // Another breaker claimed that generation first: look again.
   }
-  return false;
+  const next = generations.reduce((max, g) => Math.max(max, g + 1), 0);
+  const tokenPath = `${tokenBase}.${next}`;
+  // Another breaker claimed that generation first, or a Windows filter held
+  // the link: back to the polled wait, which lists the tokens again.
+  if (!(await tryCreate(tokenPath, serialized))) return false;
+  try {
+    // Only this token's creator may remove the record, and the lock cannot
+    // change under it: the dead holder will not release, and every other
+    // breaker of this record needs this token.
+    const current = await readHolder(lockPath);
+    if (current === null || current.raw !== deadRaw) return true;
+    try {
+      await unlink(lockPath);
+    } catch (err) {
+      const code = errorCode(err);
+      // A Windows sharing violation is contention: wait and try again.
+      if (isTransientWindowsError(code)) return false;
+      if (code !== "ENOENT") throw err;
+    }
+    return true;
+  } finally {
+    // Never fails the acquire. A token that will not go is retried by this
+    // process: when the dead lock is still there (a blocked unlink), only its
+    // removal lets the next breaker in, since it names a live creator.
+    await rm(tokenPath, { force: true }).catch(() => {
+      retainTokenRemoval(tokenPath, serialized);
+    });
+  }
 }
 
 /** The generations of the break tokens that exist under `tokenBase`. */
