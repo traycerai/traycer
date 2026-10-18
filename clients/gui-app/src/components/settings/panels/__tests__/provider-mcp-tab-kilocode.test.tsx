@@ -5,7 +5,13 @@ import type {
   ProviderMcpOrigin,
   ProviderMcpServer,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import { useMcpPendingAuthStore } from "@/stores/settings/mcp-pending-auth-store";
@@ -566,6 +572,149 @@ describe("<ProviderMcpTab /> KiloCode origin, coverage and notices", () => {
       />,
     );
     expect(screen.queryByTestId("mcp-coverage-line")).toBeNull();
+  });
+
+  it("U3: an inherited non-global row names its real source; inherited global stays From global", () => {
+    setLists({
+      global: [
+        connectedServer({
+          name: "managed-docs",
+          origin: origin({
+            scope: "managed",
+            label: "Managed settings",
+            inherited: true,
+            editable: false,
+          }),
+        }),
+        connectedServer({
+          name: "env-docs",
+          origin: origin({
+            scope: "env",
+            label: "Environment config",
+            inherited: true,
+            editable: false,
+          }),
+        }),
+        connectedServer({
+          name: "cloud-docs",
+          origin: origin({
+            scope: "cloud",
+            label: "Cloud settings",
+            inherited: true,
+            editable: false,
+          }),
+        }),
+        connectedServer({
+          name: "legacy-docs",
+          origin: origin({
+            scope: "legacy",
+            label: "Legacy settings",
+            inherited: true,
+            editable: false,
+          }),
+        }),
+        connectedServer({
+          name: "global-docs",
+          origin: origin({ scope: "global", inherited: true }),
+        }),
+      ],
+    });
+    renderKilo();
+
+    expect(screen.getByText("Managed settings")).toBeDefined();
+    expect(screen.getByText("Environment config")).toBeDefined();
+    expect(screen.getByText("Cloud settings")).toBeDefined();
+    expect(screen.getByText("Legacy settings")).toBeDefined();
+    expect(screen.getAllByText("From global")).toHaveLength(1);
+    expect(
+      screen.queryByText(/From (Managed|Environment|Cloud|Legacy)/),
+    ).toBeNull();
+  });
+
+  describe("Project Add rejects any name already in the effective view", () => {
+    function tryProjectAdd(name: string): void {
+      fireEvent.click(
+        screen.getByRole("button", { name: /^MCP config location/ }),
+      );
+      fireEvent.click(screen.getByRole("option", { name: /app/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Add MCP server/ }));
+      const dialog = screen.getByTestId("provider-mcp-add-dialog");
+      fireEvent.change(within(dialog).getByPlaceholderText("context7"), {
+        target: { value: name },
+      });
+      fireEvent.change(
+        within(dialog).getByPlaceholderText("https://mcp.example.com"),
+        { target: { value: "https://example.com/mcp" } },
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: /Add server/ }),
+      );
+    }
+
+    function setProject(rows: ProviderMcpServer[]): void {
+      mcpMocks.projectListResult.data = {
+        servers: rows,
+        notices: [],
+        coverage: null,
+      };
+    }
+
+    // An inherited override is made with toggleServer, never by re-adding the
+    // name, so all three shapes are refused and nothing is written.
+    it.each([
+      [
+        "an inherited global row",
+        connectedServer({
+          name: "dup",
+          origin: origin({ scope: "global", inherited: true, editable: true }),
+        }),
+      ],
+      [
+        "a project-decided row",
+        connectedServer({
+          name: "dup",
+          origin: origin({ scope: "project", label: "Project settings" }),
+        }),
+      ],
+      ["an old-host row with no origin", connectedServer({ name: "dup" })],
+    ])("blocks the name of %s", (_label, server) => {
+      setProject([server]);
+      renderKilo();
+      tryProjectAdd("dup");
+
+      expect(
+        screen.getByText(/A server named “dup” already exists/),
+      ).toBeDefined();
+      expect(mcpMocks.mutate).not.toHaveBeenCalled();
+    });
+  });
+
+  it("an editable inherited row in Project view is overridden with toggleServer, not Add", () => {
+    mcpMocks.projectListResult.data = {
+      servers: [
+        connectedServer({
+          name: "dup",
+          origin: origin({ scope: "global", inherited: true, editable: true }),
+        }),
+      ],
+      notices: [],
+      coverage: null,
+    };
+    renderKilo();
+    fireEvent.click(
+      screen.getByRole("button", { name: /^MCP config location/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: /app/ }));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Disable dup" }));
+
+    expect(mcpMocks.mutate).toHaveBeenCalledTimes(1);
+    expect(mcpMocks.mutate.mock.calls[0]?.[0]).toMatchObject({
+      providerId: "kilocode",
+      scope: "project",
+      workspaceRoot: "/Users/dev/app",
+      mutation: { action: "toggleServer", name: "dup", enabled: false },
+    });
   });
 
   it("U3: a non-Kilo provider's incomplete coverage gets the generic line, not Kilo copy", () => {

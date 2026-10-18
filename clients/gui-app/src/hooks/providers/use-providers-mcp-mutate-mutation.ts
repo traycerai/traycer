@@ -185,7 +185,22 @@ export function useProvidersMcpMutate(): UseMutationResult<
         void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
       }
     },
-    onError: (error, variables) => {
+    onError: (error, variables, ctx) => {
+      if (
+        isProviderNativeRpcError(error) &&
+        error.nativeCode === "server_not_found" &&
+        ctx !== undefined &&
+        ctx.hostId !== null
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: providersNativeQueryKeys.mcpList(ctx.hostId, {
+            providerId: variables.providerId,
+            scope: variables.scope,
+            workspaceRoot: variables.workspaceRoot,
+          }),
+          exact: true,
+        });
+      }
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
         return;
       }

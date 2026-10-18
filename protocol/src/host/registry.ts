@@ -1,4 +1,5 @@
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
+import type { NativeListResult } from "./provider-native-schemas";
 import {
   organizationReadV10,
   organizationReadV11,
@@ -3344,6 +3345,20 @@ export const providersListDowngradeV9ToV1 = defineDowngradePath<
   }),
 });
 
+/** Preserve a useful native refusal on peers with the published error enum. */
+export function downgradeNativeListErrorForPublishedLines(
+  native: NativeListResult | null,
+): NativeListResult | null {
+  if (
+    native === null ||
+    native.ok ||
+    (native.code !== "server_not_found" && native.code !== "change_shadowed")
+  ) {
+    return native;
+  }
+  return { ...native, code: "unsupported_action" };
+}
+
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
   typeof providersListV103,
   typeof providersListV92
@@ -3363,6 +3378,7 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
       providersListResponseSchemaV92,
       {
         ...response,
+        native: downgradeNativeListErrorForPublishedLines(response.native),
         providers: downgradeProviderCliStateListToV92(response.providers),
       },
     ),
@@ -3385,6 +3401,7 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
       providersListResponseSchemaV80,
       {
         ...response,
+        native: downgradeNativeListErrorForPublishedLines(response.native),
         providers: downgradeProviderCliStateListToV80(response.providers),
       },
     ),
@@ -3407,6 +3424,7 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
       providersListResponseSchemaV70,
       {
         ...response,
+        native: downgradeNativeListErrorForPublishedLines(response.native),
         providers: downgradeProviderCliStateListToV70(response.providers),
       },
     ),

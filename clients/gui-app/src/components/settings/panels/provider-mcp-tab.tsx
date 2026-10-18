@@ -1784,7 +1784,9 @@ function ServerRowBadges(props: {
       {server.origin !== null && server.origin !== undefined ? (
         <>
           <Badge variant="muted" className="h-4" size="xs">
-            {server.origin.inherited ? "From global" : server.origin.label}
+            {server.origin.inherited && server.origin.scope === "global"
+              ? "From global"
+              : server.origin.label}
           </Badge>
           {!server.origin.editable ? (
             <Badge variant="muted" className="h-4" size="xs">

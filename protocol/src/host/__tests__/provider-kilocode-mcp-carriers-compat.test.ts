@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index";
+import { providersListResponseSchema } from "@traycer/protocol/host/provider-schemas";
+
 import {
   providersListV70,
   providersListV90,
@@ -12,6 +15,7 @@ import {
   providersNativeMutateV10,
   providersNativeMutateV11,
   providersNativeMutateV12,
+  hostRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { providerNativeErrorCodeSchema } from "@traycer/protocol/host/provider-native-schemas";
 
@@ -331,4 +335,48 @@ describe("new error codes exist only on list@10.3 and nativeMutate@1.2 (A37)", (
       ).toBe(true);
     }
   });
+});
+
+describe("list@10.3 -> 9.2 / 8.0 / 7.0 bridges map the new codes (A38)", () => {
+  const TARGET_MAJORS = [9, 8, 7] as const;
+
+  function downgradeNative(
+    major: (typeof TARGET_MAJORS)[number],
+    native: unknown,
+  ): unknown {
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      10,
+      major,
+      providersListResponseSchema.parse({ providers: [], native }),
+    );
+    expect(downgraded.ok).toBe(true);
+    return downgraded.ok ? downgraded.value.native : undefined;
+  }
+
+  for (const major of TARGET_MAJORS) {
+    for (const code of ["server_not_found", "change_shadowed"] as const) {
+      it(`${code} reaches a v${major} caller as unsupported_action with its detail`, () => {
+        expect(
+          downgradeNative(major, { ok: false, code, detail: "Not changed." }),
+        ).toEqual({
+          ok: false,
+          code: "unsupported_action",
+          detail: "Not changed.",
+        });
+      });
+    }
+
+    it(`v${major}: an old code and a success pass through unchanged`, () => {
+      const oldCode = { ok: false, code: "duplicate_name", detail: "x" };
+      expect(downgradeNative(major, oldCode)).toEqual(oldCode);
+      const success = downgradeNative(major, {
+        ok: true,
+        kind: "mcp",
+        servers: [],
+        notices: [],
+      });
+      expect(success).toMatchObject({ ok: true, kind: "mcp", servers: [] });
+    });
+  }
 });
