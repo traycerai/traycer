@@ -349,6 +349,28 @@ export async function settleMigrationRun(
 }
 
 /**
+ * Whether `path` is there. Only proven absence is "absent": the path is gone
+ * while its parent is still readable. An unreadable path or a missing drive
+ * (whose paths also answer ENOENT) proves nothing either way: "unknown".
+ */
+export async function pathPresence(
+  path: string,
+): Promise<"present" | "absent" | "unknown"> {
+  try {
+    await lstat(path);
+    return "present";
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== "ENOENT") return "unknown";
+  }
+  try {
+    await lstat(dirname(path));
+    return "absent";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * Roll back a plan this command started, and say exactly what is left: the
  * journal stays as a rolled-back record, and the destination folder the start
  * created is removed only while it is still that folder and empty.
@@ -369,22 +391,13 @@ export async function discardPlan(
       ],
     };
   }
-  let destination: "removed" | "kept" | "unknown" = "kept";
-  try {
-    await lstat(journal.destination.path);
-  } catch (error) {
-    // Only proven absence means it was removed: the folder is gone while its
-    // parent is still readable. An unreadable path or a missing drive (whose
-    // paths also answer ENOENT) proves nothing either way.
-    const absent = isErrnoException(error) && error.code === "ENOENT";
-    const parentReadable = absent
-      ? await lstat(dirname(journal.destination.path)).then(
-          () => true,
-          () => false,
-        )
-      : false;
-    destination = absent && parentReadable ? "removed" : "unknown";
-  }
+  const presence = await pathPresence(journal.destination.path);
+  const destination =
+    presence === "present"
+      ? "kept"
+      : presence === "absent"
+        ? "removed"
+        : "unknown";
   return {
     discarded: true,
     lines: [

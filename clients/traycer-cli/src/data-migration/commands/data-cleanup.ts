@@ -1,4 +1,3 @@
-import { lstat } from "node:fs/promises";
 import { readMigrationJournalSync } from "@traycer/protocol/config/data-bootstrap-records";
 import {
   migrationIdSchema,
@@ -6,7 +5,7 @@ import {
   type MigrationJournal,
 } from "@traycer/protocol/config/data-migration-contracts";
 import { dataBootstrapDir } from "@traycer/protocol/config/data-root";
-import { CLI_ERROR_CODES, isErrnoException } from "../../runner/errors";
+import { CLI_ERROR_CODES } from "../../runner/errors";
 import {
   cleanupSource,
   discardRolledBackDestination,
@@ -18,7 +17,7 @@ import {
   type DataCommandDeps,
   type DataCommandOutcome,
 } from "./data-command-types";
-import { engineProgressReporter } from "./data-migrate";
+import { engineProgressReporter, pathPresence } from "./data-migrate";
 import { formatBytes, stoppedOutcome } from "./data-report";
 
 /**
@@ -73,6 +72,14 @@ export async function dataCleanup(
   }
   const journal = read.record;
   const gone = await alreadyDeletedSide(journal);
+  if (gone === "unreachable") {
+    return failed(
+      CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED,
+      `Traycer cannot reach ${journal.destination.path}; reconnect its drive and run \`traycer data cleanup ${id}\` again. Nothing was deleted.`,
+      { migrationId: id, phase: journal.phase },
+      [],
+    );
+  }
   if (gone !== null) {
     const path =
       gone === "source" ? journal.source.path : journal.destination.path;
@@ -160,23 +167,23 @@ const DISCARD_REFUSALS: ReadonlySet<string> = new Set([
   "discard-destination-in-use",
 ]);
 
-/** The side an earlier cleanup already deleted, so a re-run has nothing left to do. */
+/**
+ * The side an earlier cleanup already deleted, so a re-run has nothing left
+ * to do; "unreachable" when the rolled-back copy's presence cannot be proven
+ * either way (an offline drive answers ENOENT too).
+ */
 async function alreadyDeletedSide(
   journal: MigrationJournal,
-): Promise<"source" | "destination" | null> {
+): Promise<"source" | "destination" | "unreachable" | null> {
   if (
     journal.phase === "complete" &&
     journal.cleanupProgress?.finished === true
   )
     return "source";
   if (journal.phase === "rolled-back") {
-    try {
-      await lstat(journal.destination.path);
-    } catch (error) {
-      if (isErrnoException(error) && error.code === "ENOENT")
-        return "destination";
-      throw error;
-    }
+    const presence = await pathPresence(journal.destination.path);
+    if (presence === "absent") return "destination";
+    if (presence === "unknown") return "unreachable";
   }
   return null;
 }

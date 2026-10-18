@@ -1,3 +1,4 @@
+import { chmod, rename } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type {
   MigrationId,
@@ -383,6 +384,47 @@ describe.skipIf(process.platform === "win32")(
         });
         expect(again.text.join("\n")).toContain("was already deleted");
         expect(io.questions).toEqual([]);
+      });
+
+      // A missing parent stands in for an offline drive, whose paths also
+      // answer ENOENT: that proves nothing was deleted.
+      it("after a rollback, an unreachable destination drive refuses and deletes nothing", async () => {
+        const harness = await haltedAfter("copying");
+        assertDone(await rollbackMigration(harness.makeDeps({})));
+        const journal = readActiveJournal(harness.bootstrapDir);
+        const offline = `${harness.destinationParent}-offline`;
+        await rename(harness.destinationParent, offline);
+
+        const refused = errorOf(
+          await dataCleanup(
+            cleanupDeps(harness, new ScriptedIo(false, []), false),
+            { migrationId: journal.id, yes: true },
+          ),
+        );
+
+        expect(refused.code).toBe(CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED);
+        expect(refused.message).toContain("cannot reach");
+        expect(refused.message).toContain("Nothing was deleted");
+        expect(refused.details).not.toMatchObject({ alreadyDeleted: true });
+        await rename(offline, harness.destinationParent);
+        expect(await pathExists(harness.destinationRoot)).toBe(true);
+      });
+
+      it("after a rollback, an unreadable destination parent refuses and deletes nothing", async () => {
+        const harness = await haltedAfter("copying");
+        assertDone(await rollbackMigration(harness.makeDeps({})));
+        const journal = readActiveJournal(harness.bootstrapDir);
+        await chmod(harness.destinationParent, 0o000);
+
+        const outcome = await dataCleanup(
+          cleanupDeps(harness, new ScriptedIo(false, []), false),
+          { migrationId: journal.id, yes: true },
+        ).finally(() => chmod(harness.destinationParent, 0o755));
+
+        const refused = errorOf(outcome);
+        expect(refused.code).toBe(CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED);
+        expect(refused.message).toContain("cannot reach");
+        expect(await pathExists(harness.destinationRoot)).toBe(true);
       });
 
       // After repair the engine keeps repaired stores (no exact byte record
