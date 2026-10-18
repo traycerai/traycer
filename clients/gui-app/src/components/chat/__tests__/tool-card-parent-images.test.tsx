@@ -213,12 +213,12 @@ function onlyCard(row: ChatMessageModel): SubagentSegment {
 }
 
 beforeEach(() => {
-  useToolOpenStore.getState().reset("default");
+  useToolOpenStore.getState().reset(TILE_INSTANCE_ID);
 });
 
 afterEach(() => {
   cleanup();
-  useToolOpenStore.getState().reset("default");
+  useToolOpenStore.getState().reset(TILE_INSTANCE_ID);
 });
 
 describe.each([
