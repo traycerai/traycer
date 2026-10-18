@@ -343,6 +343,67 @@ describe("<SetUpPersonalGroup />", () => {
     expect(marks()).toEqual(["provider=true", "secret=false", "agents=false"]);
   });
 
+  it("re-reads secrets and providers when the host reports a new settings revision, as when a step is done in the dashboard", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const facts: {
+        providers: ProviderCliState[];
+        secrets: EnvironmentSecret[];
+        status: EnvironmentStatusResponse;
+        methods: readonly string[];
+      } = {
+        providers: [],
+        secrets: [],
+        status: environmentStatusFixture({
+          receivedRevision: 1,
+          appliedRevision: 1,
+        }),
+        methods: ALL_METHODS,
+      };
+      const calls = renderGroup(facts, "settings");
+
+      await waitFor(() => {
+        expect(calls.status).toBeGreaterThan(0);
+        expect(calls.secrets).toBeGreaterThan(0);
+        expect(calls.providers).toBeGreaterThan(0);
+      });
+      await waitFor(() => {
+        expect(progress()).toBe("0 of 3 done");
+      });
+      const statusReadsBefore = calls.status;
+
+      // The person finishes two steps in the dashboard: the host's settings
+      // move to revision 2 and its secrets and providers change with them.
+      facts.status = environmentStatusFixture({
+        receivedRevision: 2,
+        appliedRevision: 2,
+      });
+      facts.secrets = [secret({})];
+      facts.providers = [storedKey()];
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+
+      // The 5 s status poll fired again.
+      expect(calls.status).toBeGreaterThan(statusReadsBefore);
+      let received = progress();
+      try {
+        await waitFor(() => {
+          received = progress();
+          expect(received).toBe("2 of 3 done");
+        });
+      } catch (error) {
+        throw new Error(
+          `progress stayed "${received}" after the status poll (status reads: ${calls.status}, secrets reads: ${calls.secrets}, providers reads: ${calls.providers}); ${String(error)}`,
+        );
+      }
+      expect(marks()).toEqual(["provider=true", "secret=true", "agents=false"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens the page each step names", () => {
     renderGroup(NOTHING, "settings");
 

@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentLocalOverridesResponse,
@@ -8,6 +10,9 @@ import type {
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { DELTA_FED_READS } from "@/lib/environment/delta-fed-reads";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 /*
  * A host's own environment reads, through the client the caller names: the
@@ -37,7 +42,43 @@ export function useEnvironmentStatusRead(
     params: {},
     options: { enabled: enabled && supported === true, poll: true },
   });
+  useRereadOnRevision(hostId, query.data ?? null);
   return { supported, data: query.data ?? null, isError: query.isError };
+}
+
+/**
+ * Re-reads the host's {@link DELTA_FED_READS} when its polled status reports
+ * a new revision of the person's settings: a change made in the dashboard
+ * reaches the host as a revision, and those reads are not re-read otherwise.
+ * The first status a reader sees for a host only records the revision.
+ */
+function useRereadOnRevision(
+  hostId: string | null,
+  status: EnvironmentStatusResponse | null,
+): void {
+  const queryClient = useQueryClient();
+  const seen = useRef<{
+    readonly hostId: string | null;
+    readonly revision: string;
+  } | null>(null);
+  const revision =
+    status === null
+      ? null
+      : `${status.receivedRevision ?? "none"}:${status.appliedRevision ?? "none"}`;
+  useEffect(() => {
+    if (revision === null) return;
+    const previous = seen.current;
+    seen.current = { hostId, revision };
+    if (previous === null || previous.hostId !== hostId) return;
+    if (previous.revision === revision) return;
+    for (const method of DELTA_FED_READS) {
+      void queryClient
+        .invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(hostId, method),
+        })
+        .catch(ignoreError);
+    }
+  }, [hostId, revision, queryClient]);
 }
 
 export function useEnvironmentNoticesRead(

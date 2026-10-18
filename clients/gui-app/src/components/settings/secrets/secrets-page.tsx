@@ -10,6 +10,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useOpenLink } from "@/lib/links/open-link";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { secretsDashboardAddUrl } from "@/lib/sandboxes/secrets-dashboard";
 import {
@@ -25,13 +26,6 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * back; a refusal (no session on this computer among them) shows the host's
  * own words.
  */
-/** The reads a change to a secret moves: the list, its versions, its rotation. */
-const SECRET_READS = [
-  "environment.secrets.list",
-  "environment.secrets.versions",
-  "environment.secrets.rotation",
-] as const;
-
 export function SecretsPage(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
