@@ -100,7 +100,9 @@ async function openRowWithSelected(
 }
 
 function reorderHandle(page: Page, index: number): Locator {
-  return page.getByRole("button", { name: `Reorder element (${String(index)})` });
+  return page.getByRole("button", {
+    name: `Reorder element (${String(index)})`,
+  });
 }
 
 function resizeHandle(page: Page, corner: string): Locator {
@@ -167,7 +169,10 @@ test.describe("resizing at canvas zoom", () => {
     }) => {
       await openRowWithSelected(page, zoom, "a");
 
-      await dragFrom(page, resizeHandle(page, "bottom right"), { x: 40, y: 20 });
+      await dragFrom(page, resizeHandle(page, "bottom right"), {
+        x: 40,
+        y: 20,
+      });
       // The positive event: the dashed preview shows the size that will be saved.
       await expect(page.locator("[data-canvas-resize-preview]")).toBeVisible();
       await page.mouse.up();

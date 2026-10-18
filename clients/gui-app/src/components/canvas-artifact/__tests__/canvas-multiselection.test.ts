@@ -359,7 +359,11 @@ describe("completeAdditivePick checks the set against the live container", () =>
     const owner = Symbol("tile");
     withPrimary(owner);
     addPick(owner, pickOf(2, {}));
-    addPickIn(owner, pickOf(3, {}), layoutHolding([element(1), element(3)], {}));
+    addPickIn(
+      owner,
+      pickOf(3, {}),
+      layoutHolding([element(1), element(3)], {}),
+    );
     expect(markers()).toEqual([2]);
     expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
   });

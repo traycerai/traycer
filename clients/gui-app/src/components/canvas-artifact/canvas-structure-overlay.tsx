@@ -66,7 +66,15 @@ function StructureHandles(props: {
     onLostPointerCapture: gesture.lostCapture,
   };
   return (
-    <div className="absolute" style={{ left: props.box.x, top: props.box.y, width: props.box.width, height: props.box.height }}>
+    <div
+      className="absolute"
+      style={{
+        left: props.box.x,
+        top: props.box.y,
+        width: props.box.width,
+        height: props.box.height,
+      }}
+    >
       {EDGES.map((edge, index) => (
         <TooltipWrapper
           key={edge}
@@ -123,14 +131,24 @@ function StructurePreview(props: { readonly gesture: CanvasStructureGesture }) {
         <div
           data-canvas-resize-preview=""
           className="absolute border border-dashed border-primary bg-primary/10"
-          style={{ left: preview.box.x, top: preview.box.y, width: preview.box.width, height: preview.box.height }}
+          style={{
+            left: preview.box.x,
+            top: preview.box.y,
+            width: preview.box.width,
+            height: preview.box.height,
+          }}
         />
       )}
       {preview.marker === null ? null : (
         <div
           data-canvas-insertion-marker=""
           className="absolute bg-primary"
-          style={{ left: preview.marker.x, top: preview.marker.y, width: preview.marker.width, height: preview.marker.height }}
+          style={{
+            left: preview.marker.x,
+            top: preview.marker.y,
+            width: preview.marker.width,
+            height: preview.marker.height,
+          }}
         />
       )}
     </>
@@ -166,7 +184,8 @@ export function CanvasStructureOverlay(props: {
     node.cssWidth !== null &&
     node.cssHeight !== null;
   const moveNote =
-    facts.moveRefusal ?? (layout === null ? "Opening element layout…" : reorderRefusal(layout));
+    facts.moveRefusal ??
+    (layout === null ? "Opening element layout…" : reorderRefusal(layout));
   return (
     <>
       {additional.map((element) => {
@@ -178,7 +197,12 @@ export function CanvasStructureOverlay(props: {
             key={element.tid ?? element.marker ?? element.selector}
             data-canvas-additional-outline=""
             className="absolute border border-primary"
-            style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }}
+            style={{
+              left: bounds.x,
+              top: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+            }}
           />
         );
       })}

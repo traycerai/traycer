@@ -78,7 +78,16 @@ function parseLayoutNode(value: unknown): CanvasLayoutNode | null {
     (cssHeight !== null && cssHeight < 0)
   )
     return null;
-  return { ...identity, left, top, cssWidth, cssHeight, box, order, gridPlacement };
+  return {
+    ...identity,
+    left,
+    top,
+    cssWidth,
+    cssHeight,
+    box,
+    order,
+    gridPlacement,
+  };
 }
 export function parseCanvasSiblingLayout(
   value: unknown,

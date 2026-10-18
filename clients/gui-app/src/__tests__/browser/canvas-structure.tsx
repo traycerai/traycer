@@ -187,9 +187,19 @@ function recordOf(request: EpicEditArtboardRequest): RecordedEdit {
   const { edit } = request;
   switch (edit.kind) {
     case "set-box":
-      return { kind: edit.kind, width: edit.width, height: edit.height, before: null };
+      return {
+        kind: edit.kind,
+        width: edit.width,
+        height: edit.height,
+        before: null,
+      };
     case "move-element":
-      return { kind: edit.kind, width: null, height: null, before: edit.before };
+      return {
+        kind: edit.kind,
+        width: null,
+        height: null,
+        before: edit.before,
+      };
     default:
       return { kind: edit.kind, width: null, height: null, before: null };
   }
@@ -247,7 +257,9 @@ const runnerHost = new MockRunnerHost({
   traycerCli: undefined,
 });
 let requestCounter = 0;
-const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry: rpc }) =>
+const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
+  registry: rpc,
+}) =>
   new MockHostMessenger<HostRpcRegistry>({
     registry: rpc,
     requestId: () => `structure-${String((requestCounter += 1))}`,
@@ -391,7 +403,8 @@ function sizesOf(
     const rect = frameDocument
       .querySelector(`[data-tid="${tid}"]`)
       ?.getBoundingClientRect();
-    if (rect !== undefined) sizes[tid] = { width: rect.width, height: rect.height };
+    if (rect !== undefined)
+      sizes[tid] = { width: rect.width, height: rect.height };
   }
   return sizes;
 }

@@ -168,24 +168,39 @@ describe("arrangementRefusal", () => {
   it("accepts absolute and relative elements in the minimum number", () => {
     const nodes = [
       placed("a", { left: 0, top: 0, width: 10, height: 10 }),
-      layoutNode({ ...placed("b", { left: 5, top: 5, width: 10, height: 10 }), position: "relative" }),
+      layoutNode({
+        ...placed("b", { left: 5, top: 5, width: 10, height: 10 }),
+        position: "relative",
+      }),
     ];
     expect(arrangementRefusal(nodes, 2)).toBeNull();
   });
 
   it("asks for more elements when too few are chosen", () => {
-    expect(arrangementRefusal([placed("a", { left: 0, top: 0, width: 1, height: 1 })], 2)).toBe(
-      "Select at least 2 elements.",
-    );
     expect(
-      arrangementRefusal([placed("a", { left: 0, top: 0, width: 1, height: 1 }), placed("b", { left: 0, top: 0, width: 1, height: 1 })], 3),
+      arrangementRefusal(
+        [placed("a", { left: 0, top: 0, width: 1, height: 1 })],
+        2,
+      ),
+    ).toBe("Select at least 2 elements.");
+    expect(
+      arrangementRefusal(
+        [
+          placed("a", { left: 0, top: 0, width: 1, height: 1 }),
+          placed("b", { left: 0, top: 0, width: 1, height: 1 }),
+        ],
+        3,
+      ),
     ).toBe("Select at least 3 elements.");
   });
 
   it.each(["static", "fixed", "sticky"])("refuses a %s element", (position) => {
     const nodes = [
       placed("a", { left: 0, top: 0, width: 1, height: 1 }),
-      layoutNode({ ...placed("b", { left: 0, top: 0, width: 1, height: 1 }), position }),
+      layoutNode({
+        ...placed("b", { left: 0, top: 0, width: 1, height: 1 }),
+        position,
+      }),
     ];
     expect(arrangementRefusal(nodes, 2)).toBe(
       "Ask the agent to arrange these elements in this layout.",
@@ -199,7 +214,10 @@ describe("arrangementRefusal", () => {
   ])("refuses %s", (_label, overrides) => {
     const nodes = [
       placed("a", { left: 0, top: 0, width: 1, height: 1 }),
-      layoutNode({ ...placed("b", { left: 0, top: 0, width: 1, height: 1 }), ...overrides }),
+      layoutNode({
+        ...placed("b", { left: 0, top: 0, width: 1, height: 1 }),
+        ...overrides,
+      }),
     ];
     expect(arrangementRefusal(nodes, 2)).toBe(
       "This layout cannot be aligned here. Ask the agent to change it.",
@@ -690,7 +708,10 @@ describe("reorderTarget", () => {
     it("places an element that is not in this container before the right neighbour", () => {
       const target = layout({
         axis: "x",
-        siblings: [tile("a", { x: 0, y: 0, width: 100, height: 50 }), tile("c", { x: 100, y: 0, width: 100, height: 50 })],
+        siblings: [
+          tile("a", { x: 0, y: 0, width: 100, height: 50 }),
+          tile("c", { x: 100, y: 0, width: 100, height: 50 }),
+        ],
       });
       const foreign = { marker: 999, tid: "elsewhere", tagName: "div" };
       expect(reorderTarget(target, foreign, { x: 90, y: 10 })).toEqual({
@@ -736,13 +757,19 @@ describe("reorderTarget", () => {
     ["the pointer below the container", { x: 10, y: 301 }],
   ])("has no target for %s", (_label, point) => {
     const row = layout({
-      siblings: [tile("a", { x: 0, y: 0, width: 100, height: 50 }), tile("b", { x: 100, y: 0, width: 100, height: 50 })],
+      siblings: [
+        tile("a", { x: 0, y: 0, width: 100, height: 50 }),
+        tile("b", { x: 100, y: 0, width: 100, height: 50 }),
+      ],
     });
     expect(reorderTarget(row, selectedB, point)).toBeNull();
   });
 
   it("has no target for a truncated container, an only child, or a neighbour it cannot name", () => {
-    const siblings = [tile("a", { x: 0, y: 0, width: 100, height: 50 }), tile("b", { x: 100, y: 0, width: 100, height: 50 })];
+    const siblings = [
+      tile("a", { x: 0, y: 0, width: 100, height: 50 }),
+      tile("b", { x: 100, y: 0, width: 100, height: 50 }),
+    ];
     expect(
       reorderTarget(layout({ siblings, truncated: true }), selectedB, {
         x: 10,
@@ -751,7 +778,9 @@ describe("reorderTarget", () => {
     ).toBeNull();
     expect(
       reorderTarget(
-        layout({ siblings: [tile("b", { x: 0, y: 0, width: 100, height: 50 })] }),
+        layout({
+          siblings: [tile("b", { x: 0, y: 0, width: 100, height: 50 })],
+        }),
         selectedB,
         { x: 10, y: 10 },
       ),
@@ -821,9 +850,15 @@ describe("reorderRefusal", () => {
   });
 
   it("accepts a single column and a reversed row", () => {
-    const column = [flow("a", { x: 0, y: 0, width: 80, height: 100 }), flow("b", { x: 0, y: 100, width: 80, height: 100 })];
+    const column = [
+      flow("a", { x: 0, y: 0, width: 80, height: 100 }),
+      flow("b", { x: 0, y: 100, width: 80, height: 100 }),
+    ];
     expect(reorderRefusal(row(column, { axis: "y" }))).toBeNull();
-    const reversed = [flow("a", { x: 200, y: 0, width: 100, height: 50 }), flow("b", { x: 100, y: 0, width: 100, height: 50 })];
+    const reversed = [
+      flow("a", { x: 200, y: 0, width: 100, height: 50 }),
+      flow("b", { x: 100, y: 0, width: 100, height: 50 }),
+    ];
     expect(reorderRefusal(row(reversed, { reverse: true }))).toBeNull();
   });
 
@@ -878,14 +913,28 @@ describe("reorderRefusal", () => {
 
   it("refuses a sibling with an empty box", () => {
     expectRefused(
-      row([inFlow[0], inFlow[1], flow("c", { x: 200, y: 0, width: 0, height: 50 })], {}),
+      row(
+        [
+          inFlow[0],
+          inFlow[1],
+          flow("c", { x: 200, y: 0, width: 0, height: 50 }),
+        ],
+        {},
+      ),
       SINGLE_LANE,
     );
   });
 
   it("refuses siblings that overlap along the axis", () => {
     expectRefused(
-      row([inFlow[0], inFlow[1], flow("c", { x: 150, y: 0, width: 100, height: 50 })], {}),
+      row(
+        [
+          inFlow[0],
+          inFlow[1],
+          flow("c", { x: 150, y: 0, width: 100, height: 50 }),
+        ],
+        {},
+      ),
       SINGLE_LANE,
     );
   });
@@ -893,7 +942,11 @@ describe("reorderRefusal", () => {
   it("refuses a visual order that is not the source order", () => {
     expectRefused(
       row(
-        [flow("a", { x: 200, y: 0, width: 100, height: 50 }), inFlow[1], flow("c", { x: 0, y: 0, width: 100, height: 50 })],
+        [
+          flow("a", { x: 200, y: 0, width: 100, height: 50 }),
+          inFlow[1],
+          flow("c", { x: 0, y: 0, width: 100, height: 50 }),
+        ],
         {},
       ),
       SINGLE_LANE,
@@ -905,7 +958,9 @@ describe("reorderRefusal", () => {
     // moving it in the source would change nothing the person can see.
     function withOrder(orders: readonly number[]): CanvasSiblingLayout {
       return row(
-        inFlow.map((node, index) => layoutNode({ ...node, order: orders[index] })),
+        inFlow.map((node, index) =>
+          layoutNode({ ...node, order: orders[index] }),
+        ),
         {},
       );
     }
@@ -922,7 +977,9 @@ describe("reorderRefusal", () => {
     it("accepts boxes that share one order, zero or not", () => {
       expect(reorderRefusal(withOrder([0, 0, 0]))).toBeNull();
       expect(reorderRefusal(withOrder([2, 2, 2]))).toBeNull();
-      expect(reorderTarget(withOrder([2, 2, 2]), selectedB, point)).not.toBeNull();
+      expect(
+        reorderTarget(withOrder([2, 2, 2]), selectedB, point),
+      ).not.toBeNull();
     });
 
     it("refuses a box that names its own grid row or column", () => {
@@ -933,14 +990,23 @@ describe("reorderRefusal", () => {
     });
 
     it("accepts boxes with no grid placement", () => {
-      const auto = inFlow.map((node) => layoutNode({ ...node, gridPlacement: false }));
+      const auto = inFlow.map((node) =>
+        layoutNode({ ...node, gridPlacement: false }),
+      );
       expect(reorderRefusal(row(auto, {}))).toBeNull();
     });
   });
 
   it("refuses a wrapped container with more than one row", () => {
     expectRefused(
-      row([inFlow[0], inFlow[1], flow("c", { x: 0, y: 60, width: 100, height: 50 })], {}),
+      row(
+        [
+          inFlow[0],
+          inFlow[1],
+          flow("c", { x: 0, y: 60, width: 100, height: 50 }),
+        ],
+        {},
+      ),
       SINGLE_LANE,
     );
   });
@@ -1276,15 +1342,14 @@ describe("structureFacts", () => {
   });
 
   describe("the file's own markup decides what can be rearranged", () => {
-    function pickIn(
-      html: string,
-      containerTag: string,
-      pickTag: string,
-    ) {
+    function pickIn(html: string, containerTag: string, pickTag: string) {
       const document = boardDocument(html);
       const container = elementsOf(document, containerTag)[0];
-      const picked = childrenOf(container).find((child) => child.tagName === pickTag);
-      if (picked === undefined) throw new Error(`no ${pickTag} in ${containerTag}`);
+      const picked = childrenOf(container).find(
+        (child) => child.tagName === pickTag,
+      );
+      if (picked === undefined)
+        throw new Error(`no ${pickTag} in ${containerTag}`);
       return facts(document, [picked], container);
     }
 
@@ -1302,27 +1367,43 @@ describe("structureFacts", () => {
 
     describe("foreign content", () => {
       it.each([
-        ["an svg shape", "<div><svg><rect width=\"1\" height=\"1\"></rect><circle r=\"1\"></circle></svg></div>", "svg", "rect"],
-        ["a math symbol", "<div><math><mi>x</mi><mo>+</mo></math></div>", "math", "mi"],
-      ])("refuses to move, group or ungroup %s, but still lets it be sized", (_label, html, container, picked) => {
-        const result = pickIn(html, container, picked);
-        expect(result.refusal).toBeNull();
-        expect(result.nodes).toHaveLength(1);
-        expect(result.moveRefusal).not.toBeNull();
-        expect(result.wrapRefusal).not.toBeNull();
-        expect(result.unwrapRefusal).not.toBeNull();
-      });
+        [
+          "an svg shape",
+          '<div><svg><rect width="1" height="1"></rect><circle r="1"></circle></svg></div>',
+          "svg",
+          "rect",
+        ],
+        [
+          "a math symbol",
+          "<div><math><mi>x</mi><mo>+</mo></math></div>",
+          "math",
+          "mi",
+        ],
+      ])(
+        "refuses to move, group or ungroup %s, but still lets it be sized",
+        (_label, html, container, picked) => {
+          const result = pickIn(html, container, picked);
+          expect(result.refusal).toBeNull();
+          expect(result.nodes).toHaveLength(1);
+          expect(result.moveRefusal).not.toBeNull();
+          expect(result.wrapRefusal).not.toBeNull();
+          expect(result.unwrapRefusal).not.toBeNull();
+        },
+      );
 
       it.each([
         ["an svg root", "<div><svg><rect></rect></svg><p>b</p></div>", "svg"],
         ["a math root", "<div><math><mi>x</mi></math><p>b</p></div>", "math"],
-      ])("lets %s under HTML be moved and grouped, but not ungrouped", (_label, html, picked) => {
-        const result = pickIn(html, "div", picked);
-        expect(result.refusal).toBeNull();
-        expect(result.moveRefusal).toBeNull();
-        expect(result.wrapRefusal).toBeNull();
-        expect(result.unwrapRefusal).not.toBeNull();
-      });
+      ])(
+        "lets %s under HTML be moved and grouped, but not ungrouped",
+        (_label, html, picked) => {
+          const result = pickIn(html, "div", picked);
+          expect(result.refusal).toBeNull();
+          expect(result.moveRefusal).toBeNull();
+          expect(result.wrapRefusal).toBeNull();
+          expect(result.unwrapRefusal).not.toBeNull();
+        },
+      );
 
       it("refuses to group or move a shape nested deeper in an svg", () => {
         const result = pickIn(
@@ -1338,16 +1419,19 @@ describe("structureFacts", () => {
     describe("tags the file leaves open", () => {
       const IMPLICIT = "<main><p>A<p>B</main>";
 
-      it.each([0, 1])("blocks moving, grouping and ungrouping paragraph %s, which has no closing tag", (index) => {
-        const document = boardDocument(IMPLICIT);
-        const [main] = elementsOf(document, "main");
-        const paragraph = childrenOf(main)[index];
-        const result = facts(document, [paragraph], main);
-        expect(result.refusal).toBeNull();
-        expect(result.moveRefusal).not.toBeNull();
-        expect(result.wrapRefusal).not.toBeNull();
-        expect(result.unwrapRefusal).not.toBeNull();
-      });
+      it.each([0, 1])(
+        "blocks moving, grouping and ungrouping paragraph %s, which has no closing tag",
+        (index) => {
+          const document = boardDocument(IMPLICIT);
+          const [main] = elementsOf(document, "main");
+          const paragraph = childrenOf(main)[index];
+          const result = facts(document, [paragraph], main);
+          expect(result.refusal).toBeNull();
+          expect(result.moveRefusal).not.toBeNull();
+          expect(result.wrapRefusal).not.toBeNull();
+          expect(result.unwrapRefusal).not.toBeNull();
+        },
+      );
 
       it("blocks moving a sibling whose neighbour has no closing tag", () => {
         const mixed = boardDocument("<div><span>a</span><p>b<p>c</div>");
@@ -1366,7 +1450,9 @@ describe("structureFacts", () => {
       });
 
       it("blocks grouping an element that holds an unclosed paragraph", () => {
-        const document = boardDocument("<div><section><p>A<p>B</section><span>c</span></div>");
+        const document = boardDocument(
+          "<div><section><p>A<p>B</section><span>c</span></div>",
+        );
         const [div] = elementsOf(document, "div");
         const [section] = childrenOf(div);
         const result = facts(document, [section], div);
@@ -1403,30 +1489,98 @@ describe("structureFacts", () => {
     describe("grouping needs a container the host accepts", () => {
       it.each<[string, string, string, string]>([
         ["menu", "<menu><li>a</li><li>b</li></menu>", "menu", "li"],
-        ["optgroup", "<select><optgroup><option>a</option><option>b</option></optgroup></select>", "optgroup", "option"],
-        ["datalist", "<datalist><option>a</option><option>b</option></datalist>", "datalist", "option"],
-        ["tbody", "<table><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>", "tbody", "tr"],
-        ["tr", "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>", "tr", "td"],
-        ["colgroup", "<table><colgroup><col><col></colgroup></table>", "colgroup", "col"],
-        ["caption", "<table><caption><b>a</b><i>b</i></caption></table>", "caption", "b"],
-      ])("refuses to group the children of a %s", (_label, html, container, picked) => {
-        const result = pickIn(html, container, picked);
-        expect(result.wrapRefusal).not.toBeNull();
-      });
+        [
+          "optgroup",
+          "<select><optgroup><option>a</option><option>b</option></optgroup></select>",
+          "optgroup",
+          "option",
+        ],
+        [
+          "datalist",
+          "<datalist><option>a</option><option>b</option></datalist>",
+          "datalist",
+          "option",
+        ],
+        [
+          "tbody",
+          "<table><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>",
+          "tbody",
+          "tr",
+        ],
+        [
+          "tr",
+          "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+          "tr",
+          "td",
+        ],
+        [
+          "colgroup",
+          "<table><colgroup><col><col></colgroup></table>",
+          "colgroup",
+          "col",
+        ],
+        [
+          "caption",
+          "<table><caption><b>a</b><i>b</i></caption></table>",
+          "caption",
+          "b",
+        ],
+      ])(
+        "refuses to group the children of a %s",
+        (_label, html, container, picked) => {
+          const result = pickIn(html, container, picked);
+          expect(result.wrapRefusal).not.toBeNull();
+        },
+      );
     });
 
     describe("ungrouping needs a wrapper the host accepts", () => {
       it.each<[string, string, string, string]>([
         ["menu", "<div><menu><li>a</li></menu></div>", "div", "menu"],
         ["ol", "<div><ol><li>a</li></ol></div>", "div", "ol"],
-        ["select", "<div><select><option>a</option></select></div>", "div", "select"],
+        [
+          "select",
+          "<div><select><option>a</option></select></div>",
+          "div",
+          "select",
+        ],
         ["dl", "<div><dl><dt>a</dt><dd>b</dd></dl></div>", "div", "dl"],
-        ["table", "<div><table><tbody><tr><td>a</td></tr></tbody></table></div>", "div", "table"],
-        ["optgroup", "<select><optgroup><option>a</option></optgroup></select>", "select", "optgroup"],
-        ["thead", "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>a</td></tr></tbody></table>", "table", "thead"],
-        ["tbody", "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>a</td></tr></tbody></table>", "table", "tbody"],
-        ["tfoot", "<table><tbody><tr><td>a</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>", "table", "tfoot"],
-        ["tr", "<table><tbody><tr><td>a</td></tr></tbody></table>", "tbody", "tr"],
+        [
+          "table",
+          "<div><table><tbody><tr><td>a</td></tr></tbody></table></div>",
+          "div",
+          "table",
+        ],
+        [
+          "optgroup",
+          "<select><optgroup><option>a</option></optgroup></select>",
+          "select",
+          "optgroup",
+        ],
+        [
+          "thead",
+          "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>a</td></tr></tbody></table>",
+          "table",
+          "thead",
+        ],
+        [
+          "tbody",
+          "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>a</td></tr></tbody></table>",
+          "table",
+          "tbody",
+        ],
+        [
+          "tfoot",
+          "<table><tbody><tr><td>a</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>",
+          "table",
+          "tfoot",
+        ],
+        [
+          "tr",
+          "<table><tbody><tr><td>a</td></tr></tbody></table>",
+          "tbody",
+          "tr",
+        ],
       ])("refuses to ungroup a %s", (_label, html, container, picked) => {
         expect(pickIn(html, container, picked).unwrapRefusal).not.toBeNull();
       });
@@ -1437,5 +1591,4 @@ describe("structureFacts", () => {
       });
     });
   });
-
 });

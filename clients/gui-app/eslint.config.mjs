@@ -2874,6 +2874,7 @@ export default tseslint.config(
             "pdfViewer", // pdf.js, styled by pdf-preview.css
             "toaster", // sonner's own root class
             "cn-toast", // the hook sonner's toastOptions.classNames targets
+            "nokey", // XYFlow's capture-phase Shift selection opt-out
 
             // Markers with no CSS at all: a name a test's querySelector or a
             // sibling selector reaches for. Removing them would break the

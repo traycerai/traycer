@@ -38,34 +38,38 @@ function actionPosition(
   };
 }
 
-function SelectionOutline(props: { readonly box: CanvasBox; readonly generated: boolean; readonly hideHandles: boolean | undefined }) {
+function SelectionOutline(props: {
+  readonly box: CanvasBox;
+  readonly generated: boolean;
+  readonly hideHandles: boolean | undefined;
+}) {
   return (
-          <div
-            className="absolute border border-primary"
-            style={{
-              left: props.box.x,
-              top: props.box.y,
-              width: props.box.width,
-              height: props.box.height,
-            }}
-          >
-            {!props.generated && !props.hideHandles
-              ? [
-                  "-left-1 -top-1",
-                  "-right-1 -top-1",
-                  "-left-1 -bottom-1",
-                  "-right-1 -bottom-1",
-                ].map((position) => (
-                  <span
-                    key={position}
-                    className={cn(
-                      "absolute size-2 border border-primary bg-background",
-                      position,
-                    )}
-                  />
-                ))
-              : null}
-          </div>
+    <div
+      className="absolute border border-primary"
+      style={{
+        left: props.box.x,
+        top: props.box.y,
+        width: props.box.width,
+        height: props.box.height,
+      }}
+    >
+      {!props.generated && !props.hideHandles
+        ? [
+            "-left-1 -top-1",
+            "-right-1 -top-1",
+            "-left-1 -bottom-1",
+            "-right-1 -bottom-1",
+          ].map((position) => (
+            <span
+              key={position}
+              className={cn(
+                "absolute size-2 border border-primary bg-background",
+                position,
+              )}
+            />
+          ))
+        : null}
+    </div>
   );
 }
 
@@ -226,7 +230,9 @@ export function CanvasSelectionOverlay(props: {
   };
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-10"
+      // XYFlow captures Shift-pointerdown before our shields can receive it.
+      // Its nokey opt-out leaves element selection with this overlay.
+      className="nokey pointer-events-none absolute inset-0 z-10"
       data-canvas-selection-overlay=""
     >
       {shields.map((shield) => (
@@ -287,7 +293,11 @@ export function CanvasSelectionOverlay(props: {
               }}
             />
           ))}
-          <SelectionOutline box={box} generated={selection.element.generated} hideHandles={props.hideHandles} />
+          <SelectionOutline
+            box={box}
+            generated={selection.element.generated}
+            hideHandles={props.hideHandles}
+          />
           {props.hideAction ? null : (
             <div
               className="absolute z-20 flex max-w-full items-start gap-1 [&]:pointer-events-auto"

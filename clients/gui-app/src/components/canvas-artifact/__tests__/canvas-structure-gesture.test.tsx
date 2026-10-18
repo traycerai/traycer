@@ -223,7 +223,9 @@ describe("reordering", () => {
     });
     await mountOverlay(mixed, FRAME_ACTUAL);
     for (const index of [1, 2, 3, 4])
-      expect(handle(`Reorder element (${index})`).hasAttribute("disabled")).toBe(true);
+      expect(
+        handle(`Reorder element (${index})`).hasAttribute("disabled"),
+      ).toBe(true);
   });
 });
 

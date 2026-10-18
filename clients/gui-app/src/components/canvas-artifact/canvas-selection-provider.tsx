@@ -105,7 +105,9 @@ export function CanvasSelectionProvider(
         })
         .catch(() => {
           /* The next click can retry a frame replaced while answering. */
-          useCanvasSelectionStore.getState().completeAdditivePick(selectionOwner, generation, null, null);
+          useCanvasSelectionStore
+            .getState()
+            .completeAdditivePick(selectionOwner, generation, null, null);
         });
     },
     [artifactId, registry, selectionOwner],

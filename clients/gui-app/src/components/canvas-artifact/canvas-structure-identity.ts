@@ -1,4 +1,7 @@
-import type { ArtboardEdit, ArtboardElementLocator } from "@traycer/protocol/host/epic/artboard-edit";
+import type {
+  ArtboardEdit,
+  ArtboardElementLocator,
+} from "@traycer/protocol/host/epic/artboard-edit";
 import type {
   CanvasElement,
   CanvasElementLocator,
