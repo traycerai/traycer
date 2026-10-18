@@ -492,8 +492,31 @@ const BULLET_START = /^[-+](?=[ \t]|$)/;
 const DASH_BREAK_OR_UNDERLINE = /^-(?:[ \t]*-)*[ \t]*$/;
 const EQUALS_UNDERLINE = /^=+[ \t]*$/;
 const ORDERED_START = /^([0-9]{1,9})([.)])(?=[ \t]|$)/;
-const TABLE_DELIMITER_ROW =
-  /^\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+
+// A GFM delimiter row: `|? cell (| cell)* |?` and trailing spaces or tabs,
+// each cell `:?-+:?` padded with spaces or tabs. A scan, because the regex
+// form backtracks quadratically over a long run of spaces between a cell
+// and a character that ends the match.
+function isTableDelimiterRow(text: string): boolean {
+  let i = text[0] === "|" ? 1 : 0;
+  let cells = 0;
+  for (;;) {
+    let j = i;
+    while (isSpaceOrTab(text[j])) j++;
+    if (text[j] === ":") j++;
+    const dashes = j;
+    while (text[j] === "-") j++;
+    if (j === dashes) break;
+    if (text[j] === ":") j++;
+    while (isSpaceOrTab(text[j])) j++;
+    cells++;
+    i = j;
+    if (text[i] !== "|") break;
+    i++;
+  }
+  while (isSpaceOrTab(text[i])) i++;
+  return cells > 0 && i === text.length;
+}
 
 // Where a backslash goes so `line` cannot open a block, or -1. The line is
 // the whole paragraph line; the inserted backslash always precedes any code
@@ -518,7 +541,7 @@ function lineStartEscapeOffset(line: string, firstLine: boolean): number {
     return indent + ordered[1].length;
   }
   if (!firstLine && EQUALS_UNDERLINE.test(rest)) return indent;
-  if (!firstLine && rest.includes("|") && TABLE_DELIMITER_ROW.test(rest)) {
+  if (!firstLine && rest.includes("|") && isTableDelimiterRow(rest)) {
     return indent + rest.indexOf("-");
   }
   return -1;
@@ -1267,9 +1290,31 @@ export function decodeUnresolvedArtifactImageText(
 // item (a list starting at any number: inside a list item the host's parser
 // opens one there), an HTML block, and a line of only rule, setext or table
 // delimiter characters (a thematic break, a setext underline, a GFM delimiter
-// row that makes the line above a table header).
-const PARAGRAPH_ENDING_LINE =
-  /^(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|[*+-](?:[ \t]|$)|[0-9]{1,9}[.)](?:[ \t]|$)|<|[-=*_|: \t]*[-=*_][-=*_|: \t]*$)/;
+// row that makes the line above a table header). The delimiter-only lines are
+// matched by a scan: as a regex, two runs of those characters around a
+// required one backtrack quadratically on a long near-match.
+const PARAGRAPH_ENDING_START =
+  /^(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|[*+-](?:[ \t]|$)|[0-9]{1,9}[.)](?:[ \t]|$)|<)/;
+
+function endsParagraph(line: string): boolean {
+  return PARAGRAPH_ENDING_START.test(line) || isDelimiterOnlyLine(line);
+}
+
+function isDelimiterOnlyLine(line: string): boolean {
+  let sawDelimiter = false;
+  for (const char of line) {
+    if (char === "-" || char === "=" || char === "*" || char === "_") {
+      sawDelimiter = true;
+    } else if (char !== "|" && char !== ":" && !isSpaceOrTab(char)) {
+      return false;
+    }
+  }
+  return sawDelimiter;
+}
+
+function isSpaceOrTab(char: string | undefined): boolean {
+  return char === " " || char === "\t";
+}
 
 // Every line of a label after its first is a paragraph continuation line, so
 // it must not be blank, must not start with whitespace (the paragraph strips
@@ -1282,8 +1327,8 @@ function labelLinesStayInParagraph(label: string): boolean {
     if (
       line === "" ||
       /^\s/.test(line) ||
-      PARAGRAPH_ENDING_LINE.test(line) ||
-      /[ \t]$/.test(lines[index - 1])
+      endsParagraph(line) ||
+      isSpaceOrTab(lines[index - 1].at(-1))
     ) {
       return false;
     }
@@ -1923,12 +1968,30 @@ function serializeImage(node: JsonContent, ctx: SerializerContext): string {
  * bracket and backtick escaped, which the readers keep as written apart from
  * the brackets.
  */
+// Each line break with the spaces and tabs on either side of it becomes one
+// space. A scan, not `/[ \t]*\n[ \t]*/g`, which retries a long space run from
+// each of its positions when no line break follows it.
+function joinLinesTrimmingSpaces(text: string): string {
+  const lines = text.split("\n");
+  const last = lines.length - 1;
+  return lines
+    .map((line, index) => {
+      let start = 0;
+      let end = line.length;
+      if (index > 0) while (start < end && isSpaceOrTab(line[start])) start++;
+      if (index < last)
+        while (end > start && isSpaceOrTab(line[end - 1])) end--;
+      return line.slice(start, end);
+    })
+    .join(" ");
+}
+
 function artifactImageMarkdown(alt: string, src: string): string {
   const exact = unresolvedArtifactImageText(alt, src);
   if (decodeUnresolvedArtifactImageText(exact) !== null) return exact;
   let settled = alt.replace(/\r\n?/g, "\n").replace(/\x00/g, "");
   if (!labelLinesStayInParagraph(settled.replace(/[[\]]/g, "\\$&"))) {
-    settled = settled.replace(/[ \t]*\n[ \t]*/g, " ");
+    settled = joinLinesTrimmingSpaces(settled);
   }
   const plain = unresolvedArtifactImageText(settled, src);
   if (decodeUnresolvedArtifactImageText(plain) !== null) return plain;
@@ -2005,15 +2068,44 @@ function serializeDocument(node: JsonContent, ctx: SerializerContext): string {
 // back as the first paragraph's own text (more never reach here, see
 // `escapeParagraphLineStarts`), and nothing else an artifact writes starts
 // with a space.
+// The trims below are scans: `/[ \t]+$/gm` and `/[ \t\n]+$/` retry a long
+// whitespace run from each of its positions when it is not at a line end.
+
+// Drops the spaces and tabs before every line terminator and at the end, as
+// `/[ \t]+$/gm` did (its `$` also matches before `\r`, U+2028 and U+2029).
+function trimLineEnds(md: string): string {
+  return md
+    .split(/(\r|\n|\u2028|\u2029)/)
+    .map((part, index) => {
+      if (index % 2 === 1) return part;
+      let end = part.length;
+      while (end > 0 && isSpaceOrTab(part[end - 1])) end--;
+      return part.slice(0, end);
+    })
+    .join("");
+}
+
+// Drops leading line breaks (and, off the artifact path, leading spaces and
+// tabs) and trailing spaces, tabs and line breaks.
+function trimDocumentEdges(md: string, keepLeadingSpaces: boolean): string {
+  const isEdge = (char: string | undefined, leading: boolean) =>
+    char === "\n" || (!(leading && keepLeadingSpaces) && isSpaceOrTab(char));
+  let start = 0;
+  while (start < md.length && isEdge(md[start], true)) start++;
+  let end = md.length;
+  while (end > start && isEdge(md[end - 1], false)) end--;
+  return md.slice(start, end);
+}
+
 function normalizeMarkdown(
   md: string,
   keptMarkerSpace: string,
   escapeText: boolean,
 ): string {
-  const trimmed = md
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+$/gm, "")
-    .replace(escapeText ? /^\n+|[ \t\n]+$/g : /^[ \t\n]+|[ \t\n]+$/g, "");
+  const trimmed = trimDocumentEdges(
+    trimLineEnds(md.replace(/\n{3,}/g, "\n\n")),
+    escapeText,
+  );
   return keptMarkerSpace === ""
     ? trimmed
     : trimmed.replace(keptMarkerSpaceLine(keptMarkerSpace), "$1 ");

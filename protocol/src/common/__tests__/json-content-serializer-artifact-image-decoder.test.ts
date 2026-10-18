@@ -377,4 +377,27 @@ describe("decodeUnresolvedArtifactImageText: linear time", () => {
     const span = `![\`${"a".repeat(SMALL)}\`](x)`;
     expect(best(span)).toBeLessThan(2000);
   });
+
+  // Growth only, no ceiling: 4x the input may take about 4x the time, and a
+  // quadratic scan takes about 16x, whatever the machine's speed.
+  const SMALL_LINES = 16_000;
+  const LARGE_LINES = 64_000;
+
+  function grows(label: (size: number) => string): void {
+    const text = (size: number): string =>
+      unresolvedArtifactImageText(label(size), "images/x.png");
+    const smallTime = best(text(SMALL_LINES));
+    const largeTime = best(text(LARGE_LINES));
+    expect(largeTime).toBeLessThan(6 * smallTime + 50);
+  }
+
+  it("rejects a later label line of dashes that ends in another character in linear time", () => {
+    grows((size) => "a\n" + "-".repeat(size) + "x");
+  });
+
+  it("rejects a later label line of pipes and dashes that ends in another character in linear time", () => {
+    // Pipes and colons alone fail at once on both forms (no rule character
+    // for the required one), so the dashes are what the retries feed on.
+    grows((size) => "a\n" + "|-".repeat(size / 2) + "x");
+  });
 });
