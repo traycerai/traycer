@@ -54,11 +54,13 @@ export function epicFileTextQueryOptions(
 export function useEpicFileTextQuery(
   hostId: string,
   address: EpicFileAddress,
+  enabled: boolean,
 ): UseQueryResult<EpicReadFileResponse, HostRpcError> {
   const rpc = useEpicFileRpc();
   const poll = getConditionPollEpisodeCoordinator(useQueryClient());
   return useQuery({
     ...epicFileTextQueryOptions(hostId, rpc, address),
+    enabled,
     refetchInterval: poll.refetchIntervalFor("epic.readFile"),
   });
 }

@@ -51,7 +51,7 @@ function clampPageHeight(height: number): number {
  */
 export function HtmlViewer(props: HtmlViewerProps) {
   const { hostId, address, title, initialHeight } = props;
-  const query = useEpicFileTextQuery(hostId, address);
+  const query = useEpicFileTextQuery(hostId, address, true);
   const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
   const [crashed, setCrashed] = useState(false);
   const [generation, setGeneration] = useState(0);

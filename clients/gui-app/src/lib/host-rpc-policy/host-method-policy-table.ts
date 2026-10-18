@@ -95,6 +95,17 @@ const EPIC_FILE_ERROR_POLL_LANE: ConditionPollLane = {
   maxDelayMs: MINUTE_MS,
 };
 
+const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
+  id: "epic.readArtifactObject.downloading",
+  initialDelayMs: 500,
+  maxDelayMs: 2 * SECOND_MS,
+};
+const ARTIFACT_OBJECT_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readArtifactObject.error",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
+
 export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   id: "providers.pending",
   initialDelayMs: 800,
@@ -1127,8 +1138,19 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
   "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
-  // Artifact object bytes are read on demand and never polled.
-  "epic.readArtifactObject": { ...LATEST_SCHEDULING, poll: null },
+  // An on-demand object copy can outlast the host's read deadline.
+  "epic.readArtifactObject": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readArtifactObject", {
+      classify: (data) =>
+        data?.kind === "downloading"
+          ? ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE
+          : false,
+      initialErrorLane: ARTIFACT_OBJECT_ERROR_POLL_LANE,
+      staleDataErrorLane: ARTIFACT_OBJECT_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
   "epic.artifactVersions.restore": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

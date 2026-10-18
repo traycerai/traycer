@@ -53,12 +53,16 @@ describe("epic.readFile condition poll", () => {
     );
     renderHook(
       () =>
-        useEpicFileTextQuery("host-1", {
-          epicId: "epic-1",
-          path: "a.html",
-          sha256: "a".repeat(64),
-          via: null,
-        }),
+        useEpicFileTextQuery(
+          "host-1",
+          {
+            epicId: "epic-1",
+            path: "a.html",
+            sha256: "a".repeat(64),
+            via: null,
+          },
+          true,
+        ),
       { wrapper },
     );
 

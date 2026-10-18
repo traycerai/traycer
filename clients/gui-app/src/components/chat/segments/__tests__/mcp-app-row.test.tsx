@@ -7,7 +7,11 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, type ReactNode } from "react";
 import {
   afterEach,
@@ -18,7 +22,11 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { EpicReadFileResponse } from "@traycer/protocol/host/epic/files";
+import type {
+  EpicReadArtifactObjectRequest,
+  EpicReadArtifactObjectResponse,
+  EpicReadFileResponse,
+} from "@traycer/protocol/host/epic/files";
 import type {
   ChatMcpAppCallToolRequest,
   ChatMcpAppCallToolResponse,
@@ -50,7 +58,14 @@ import {
   type SandboxSize,
   type SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { McpAppRpcContext, type McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 import {
   readComposerDraftSnapshot,
@@ -84,11 +99,22 @@ const mocks = vi.hoisted(() => {
     openLink:
       vi.fn<(url: string, kind: string, event: null) => Promise<void>>(),
     frame,
+    // The one host-transport boundary this suite stands in for: which
+    // `HostRequester` a hostId resolves to for the artifact-object read.
+    // `useHostQuery`, the query cache and the condition-poll coordinator
+    // underneath it all run for real against a mock transport.
+    artifactObject: {
+      requester: null as HostRequester<HostRpcRegistry> | null,
+    },
   };
 });
 
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mocks.artifactObject.requester,
 }));
 
 // jsdom has no iframe document to run an app in; the frame is stood in by a
@@ -216,6 +242,61 @@ const HTML_RESPONSE: EpicReadFileResponse = {
   networkPolicy: "https-only",
 };
 
+const ARTIFACT_HOST_ENTRY: HostDirectoryEntry = {
+  hostId: HOST_ID,
+  label: "Test host",
+  kind: "local",
+  websocketUrl: "ws://127.0.0.1:4917/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
+/** Older captures may predate the artifact stamp ledger: no object to find. */
+const ARTIFACT_OBJECT_UNAVAILABLE: EpicReadArtifactObjectResponse = {
+  kind: "unavailable",
+  reason: "missing",
+};
+
+const ARTIFACT_OBJECT_HTML_RESPONSE: EpicReadArtifactObjectResponse = {
+  kind: "text",
+  text: APP_HTML,
+  mediaType: "text/html",
+  networkPolicy: "https-only",
+};
+
+type ArtifactObjectHandler = (
+  params: EpicReadArtifactObjectRequest,
+) => Promise<EpicReadArtifactObjectResponse> | EpicReadArtifactObjectResponse;
+
+/**
+ * Stands in for the `epic.readArtifactObject` RPC: a real `HostClient` over a
+ * mock transport, so `useArtifactObjectTextQuery`'s own query/cache/poll
+ * wiring (the 500ms-to-2s downloading lane, the terminal unavailable lane)
+ * runs for real underneath the row. Installs itself as the row's resolved
+ * host client immediately; call again mid-test to change the answer.
+ */
+function makeArtifactObjectRpc(handler: ArtifactObjectHandler): {
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-artifact-object",
+    handlers: { "epic.readArtifactObject": handler },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) =>
+      hostId === HOST_ID ? ARTIFACT_HOST_ENTRY : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  mocks.artifactObject.requester = spine.createRequester(ARTIFACT_HOST_ENTRY);
+  return { messenger };
+}
+
 interface FakeFileRpc extends EpicFileRpc {
   readonly readFile: Mock<EpicFileRpc["readFile"]>;
 }
@@ -273,12 +354,13 @@ const THEME: ResolvedThemeContextValue = {
   themePreset: "traycer-green",
 };
 
+/** Returns the row's own `QueryClient` so a test can drive it directly. */
 function renderRow(
   fileRpc: EpicFileRpc,
   mcpRpc: McpAppRpc,
   scope: ChatAttachmentScopeValue | null,
   app: ToolCallMcpAppStamp,
-): void {
+): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { gcTime: Infinity } },
   });
@@ -307,6 +389,7 @@ function renderRow(
       </>,
     ),
   );
+  return client;
 }
 
 /** What the app inside the frame does: one JSON-RPC request to the host. */
@@ -344,6 +427,10 @@ beforeEach(() => {
   mocks.frame.props = null;
   mocks.frame.mounts = 0;
   mocks.openLink.mockResolvedValue(undefined);
+  // The default every existing test exercises: no stamped object (an older
+  // capture), so the row falls back to the legacy files-plane read. Tests
+  // covering the sha-hit path call `makeArtifactObjectRpc` again themselves.
+  makeArtifactObjectRpc(() => ARTIFACT_OBJECT_UNAVAILABLE);
   useComposerDraftStore.setState({ drafts: {} });
 });
 
@@ -351,8 +438,10 @@ afterEach(() => {
   cleanup();
   setPhoneLayoutOnly(false);
   vi.useRealTimers();
+  focusManager.setFocused(undefined);
   vi.restoreAllMocks();
   mocks.openLink.mockReset();
+  mocks.artifactObject.requester = null;
   useComposerDraftStore.setState({ drafts: {} });
 });
 
@@ -582,6 +671,193 @@ describe("<McpAppRow /> when the app cannot run here", () => {
     renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
+  });
+});
+
+describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
+  it("renders straight from the artifact-object store on a sha hit, with no legacy files-plane read at all", async () => {
+    const { messenger } = makeArtifactObjectRpc(
+      () => ARTIFACT_OBJECT_HTML_RESPONSE,
+    );
+    const fileRpc = makeFileRpc(HTML_RESPONSE);
+    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+
+    const frame = await screen.findByTestId("sandbox-frame");
+    expect(frame.textContent).toBe(APP_HTML);
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]).toMatchObject({
+      method: "epic.readArtifactObject",
+      params: {
+        epicId: EPIC_ID,
+        sha256: STAMP.snapshot.sha256,
+        want: { kind: "text" },
+      },
+    });
+    expect(fileRpc.readFile).not.toHaveBeenCalled();
+  });
+
+  it("shows the loading placeholder while the object is downloading, then the app once it lands - the legacy read never runs", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    let call = 0;
+    makeArtifactObjectRpc(() => {
+      call += 1;
+      return call === 1
+        ? { kind: "downloading", receivedBytes: 10, totalBytes: 100 }
+        : ARTIFACT_OBJECT_HTML_RESPONSE;
+    });
+    const fileRpc = makeFileRpc(HTML_RESPONSE);
+    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(call).toBe(1);
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+    expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
+
+    // The downloading lane's own cadence, not the legacy RPC's.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // The refetch settles exactly on the timer boundary, and the coordinator's
+    // own render from that settlement is itself a nested fake-timer callback
+    // scheduled one tick later (t+1), past what a 0ms advance drains. 1ms
+    // reaches it without weakening what the test is actually asserting.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(call).toBe(2);
+    expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
+    expect(fileRpc.readFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy files-plane read once the sha is confirmed unavailable, and serves what it returns", async () => {
+    const { messenger } = makeArtifactObjectRpc(
+      () => ARTIFACT_OBJECT_UNAVAILABLE,
+    );
+    const fileRpc = makeFileRpc(HTML_RESPONSE);
+    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+
+    const frame = await screen.findByTestId("sandbox-frame");
+    expect(frame.textContent).toBe(APP_HTML);
+    expect(messenger.calls).toHaveLength(1);
+    expect(fileRpc.readFile).toHaveBeenCalledWith(
+      {
+        epicId: EPIC_ID,
+        path: STAMP.snapshot.path,
+        sha256: STAMP.snapshot.sha256,
+        via: { chatId: CHAT_ID, blockId: BLOCK_ID },
+        want: { kind: "text" },
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("shows the ordinary tool row when both the sha object and the legacy path are unavailable", async () => {
+    makeArtifactObjectRpc(() => ARTIFACT_OBJECT_UNAVAILABLE);
+    const fileRpc = makeFileRpc({ kind: "unavailable", reason: "upload-pending" });
+    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+
+    expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+  });
+});
+
+describe("<McpAppRow /> cached-state precedence under a later host RPC error", () => {
+  it("falls to the ordinary tool row when a downloading answer's own poll rejects, never touching the legacy read", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    let call = 0;
+    makeArtifactObjectRpc(() => {
+      call += 1;
+      if (call === 1) {
+        return { kind: "downloading", receivedBytes: 10, totalBytes: 100 };
+      }
+      throw new Error("host went away mid-download");
+    });
+    const fileRpc = makeFileRpc(HTML_RESPONSE);
+    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(call).toBe(1);
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+    expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
+
+    // The downloading lane's own 500ms poll, now answered with a rejection
+    // instead of more progress or text.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // The settlement's own render is a nested fake-timer tick past the
+    // timer boundary itself, as with the sibling downloading test above.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(call).toBe(2);
+    expect(screen.getByTestId("ordinary-tool-row")).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+    // The cached data is `{kind: "downloading"}`, never `"unavailable"` -
+    // the fallback has to come from the new error precedence, not from the
+    // legacy-snapshot gate tripping on a kind it never actually saw.
+    expect(fileRpc.readFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps showing the served text through a background sweep refetch that errors, rather than resetting to pending or the fallback", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    let call = 0;
+    makeArtifactObjectRpc(() => {
+      call += 1;
+      if (call === 1) return ARTIFACT_OBJECT_HTML_RESPONSE;
+      throw new Error("host went away mid-sweep");
+    });
+    const fileRpc = makeFileRpc(HTML_RESPONSE);
+    const queryClient = renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(call).toBe(1);
+    const frame = screen.getByTestId("sandbox-frame");
+    expect(frame.textContent).toBe(APP_HTML);
+    expect(mocks.frame.mounts).toBe(1);
+
+    // The production invalidator, driven exactly as `HostClient` drives it
+    // on a real reconnect sweep - not a stand-in for it.
+    const invalidator = createHostQueryInvalidator(queryClient);
+    await act(async () => {
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery: "reconnect",
+      });
+      // The invalidator's own cancel-then-invalidate is async, and the
+      // refetch it starts settles on the next fake-timer tick.
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(call).toBe(2);
+    const query = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((entry) => entry.queryKey.includes("epic.readArtifactObject"));
+    if (query === undefined) {
+      throw new Error("expected a cached query for epic.readArtifactObject");
+    }
+    // The sweep's refetch really failed - this is not a test that merely
+    // never observed an error.
+    expect(query.state.status).toBe("error");
+
+    // The row still shows the SAME frame mount with the SAME served text:
+    // a cached text answer is never demoted by a later error.
+    expect(screen.getByTestId("sandbox-frame")).toBe(frame);
+    expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
+    expect(mocks.frame.mounts).toBe(1);
+    expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
+    expect(fileRpc.readFile).not.toHaveBeenCalled();
   });
 });
 
