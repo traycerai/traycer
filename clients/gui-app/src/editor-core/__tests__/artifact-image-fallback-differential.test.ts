@@ -8,6 +8,7 @@ import {
 } from "@traycer/protocol/common/json-content-serializer";
 import {
   READERS,
+  guiReader,
   imageAttrsOf,
   onlyImageOf,
   textsOf,
@@ -1047,4 +1048,372 @@ describe("entities in an alt or a source", () => {
       expect(onlyImageOf(reader.stored(text))).toEqual({ alt, src });
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// 9. Fences, link destinations and code spans through both readers
+// ---------------------------------------------------------------------------
+
+describe("fences, link destinations and code spans: written, ingested, written again", () => {
+  type BlockView =
+    | { kind: "code"; language: string | null; text: string }
+    | { kind: "mermaid"; code: string }
+    | { kind: "wireframe"; html: string };
+
+  // The host converter turns a mermaid or wireframe fence into its own block
+  // after the parse, and the gui parser does it in the parse, so both are
+  // compared as the same view.
+  function blocksOf(node: JsonContent): BlockView[] {
+    const own: BlockView[] = [];
+    const text = textsOf(node).join("");
+    if (node.type === "codeBlock") {
+      const language = node.attrs?.language;
+      if (language === "mermaid") own.push({ kind: "mermaid", code: text });
+      else if (language === "wireframe") {
+        own.push({ kind: "wireframe", html: text });
+      } else {
+        own.push({
+          kind: "code",
+          language:
+            typeof language === "string" && language !== "" ? language : null,
+          text,
+        });
+      }
+    } else if (node.type === "mermaidBlock") {
+      const code = node.attrs?.code;
+      own.push({ kind: "mermaid", code: typeof code === "string" ? code : "" });
+    } else if (node.type === "uiPreviewBlock") {
+      const html = node.attrs?.htmlContent;
+      own.push({
+        kind: "wireframe",
+        html: typeof html === "string" ? html : "",
+      });
+    }
+    return own.concat((node.content ?? []).flatMap(blocksOf));
+  }
+
+  interface Run {
+    readonly text: string;
+    readonly marks: string;
+  }
+
+  // The text of the document as runs of one set of marks, so the code-marked
+  // text and the unmarked text beside it are compared exactly.
+  function runsOf(node: JsonContent): Run[] {
+    const runs: Run[] = [];
+    const visit = (current: JsonContent): void => {
+      if (current.type === "text") {
+        const marks = (current.marks ?? [])
+          .map((mark) =>
+            mark.type === "link"
+              ? `link:${String(mark.attrs?.href)}`
+              : mark.type,
+          )
+          .sort()
+          .join(",");
+        const last = runs.at(-1);
+        if (last !== undefined && last.marks === marks) {
+          runs[runs.length - 1] = {
+            text: last.text + (current.text ?? ""),
+            marks,
+          };
+        } else {
+          runs.push({ text: current.text ?? "", marks });
+        }
+      }
+      for (const child of current.content ?? []) visit(child);
+    };
+    visit(node);
+    return runs;
+  }
+
+  const code = (value: string, language: string | null): JsonContent => ({
+    type: "codeBlock",
+    attrs: { language },
+    content: [{ type: "text", text: value }],
+  });
+  const mermaid = (value: string): JsonContent => ({
+    type: "mermaidBlock",
+    attrs: { code: value },
+  });
+  const wireframe = (value: string): JsonContent => ({
+    type: "uiPreviewBlock",
+    attrs: { htmlContent: value, title: "UI Preview", isCompleteHtml: true },
+  });
+
+  const fenceRows: readonly (readonly [string, JsonContent])[] = [
+    [
+      "a code block with a line of three backticks",
+      doc(code("a\n```\nb", null)),
+    ],
+    [
+      "a code block with a line of four backticks",
+      doc(code("a\n````\nb", null)),
+    ],
+    ["a code block with a line of tildes", doc(code("a\n~~~\nb", null))],
+    ["a code block with a backtick inside a line", doc(code("a`b", null))],
+    [
+      "a mermaid block with a line of three backticks",
+      doc(mermaid("graph\n```\nx")),
+    ],
+    [
+      "a wireframe block with a line of three backticks",
+      doc(wireframe("<p>\n```\n</p>")),
+    ],
+    ["a code block whose language holds a backtick", doc(code("x", "a`b"))],
+    [
+      "that language with a line of tildes in the content",
+      doc(code("x\n~~~\ny", "a`b")),
+    ],
+    [
+      "a longer fence inside a bullet item",
+      doc(ul(li(P("t"), code("a\n```\nb", null)))),
+    ],
+    ["a longer fence inside a quote", doc(bq(code("a\n```\nb", null)))],
+  ];
+
+  it.each(
+    fenceRows.flatMap(([name, content]) =>
+      READERS.map((reader) => [name, reader.name, content, reader] as const),
+    ),
+  )("%s through %s", (_name, _readerName, content, reader) => {
+    const expected = blocksOf(content);
+    const md1 = serialize(content);
+    const stored1 = reader.stored(md1);
+    expect(blocksOf(stored1)).toEqual(expected);
+    const md2 = serialize(stored1);
+    expect(md2).toBe(md1);
+    expect(blocksOf(reader.stored(md2))).toEqual(expected);
+  });
+
+  const link = (label: string, href: string): JsonContent => ({
+    type: "text",
+    text: label,
+    marks: [{ type: "link", attrs: { href } }],
+  });
+  const around = (middle: JsonContent): JsonContent =>
+    doc({
+      type: "paragraph",
+      content: [
+        { type: "text", text: "x " },
+        middle,
+        { type: "text", text: " y" },
+      ],
+    });
+  const inCell = (middle: JsonContent): JsonContent =>
+    doc(table({ type: "paragraph", content: [middle] }));
+
+  const hrefs: readonly string[] = [
+    "https://example.test/a)b",
+    "https://example.test/a b",
+    "https://example.test/a(b",
+    `https://example.test/a${BS}*b`,
+    "https://example.test/a<b",
+    "https://example.test/a>b",
+    "https://example.test/p",
+  ];
+  const cellHrefs: readonly string[] = [
+    ...hrefs,
+    "https://example.test/a|b",
+    `https://example.test/a${BS}|b`,
+  ];
+  const linkRows: readonly (readonly [string, JsonContent])[] = [
+    ...hrefs.map(
+      (href) => [`a link to ${href}`, around(link("t", href))] as const,
+    ),
+    ...cellHrefs.map(
+      (href) =>
+        [`a link to ${href} in a table cell`, inCell(link("t", href))] as const,
+    ),
+  ];
+
+  it.each(
+    linkRows.flatMap(([name, content]) =>
+      READERS.map((reader) => [name, reader.name, content, reader] as const),
+    ),
+  )("%s through %s", (_name, _readerName, content, reader) => {
+    const expected = runsOf(content);
+    const md1 = serialize(content);
+    const stored1 = reader.stored(md1);
+    expect(runsOf(stored1)).toEqual(expected);
+    const md2 = serialize(stored1);
+    expect(md2).toBe(md1);
+    expect(runsOf(reader.stored(md2))).toEqual(expected);
+  });
+
+  const codeText = (value: string, extra: readonly string[]): JsonContent => ({
+    type: "text",
+    text: value,
+    marks: [{ type: "code" }, ...extra.map((type) => ({ type }))],
+  });
+  const codeValues: readonly string[] = [
+    "a`b",
+    "``",
+    "`a",
+    "a`",
+    " a ",
+    "  ",
+    " ",
+    "a``b`c",
+  ];
+  const codeRows: readonly (readonly [string, JsonContent])[] = [
+    ...codeValues.map(
+      (value) =>
+        [
+          `code holding ${JSON.stringify(value)}`,
+          around(codeText(value, [])),
+        ] as const,
+    ),
+    ["code and bold", around(codeText("a`b", ["bold"]))],
+    [
+      "code holding a pipe and a backtick in a table cell",
+      inCell(codeText("a|b`c", [])),
+    ],
+  ];
+
+  it.each(
+    codeRows.flatMap(([name, content]) =>
+      READERS.map((reader) => [name, reader.name, content, reader] as const),
+    ),
+  )("%s through %s", (_name, _readerName, content, reader) => {
+    const expected = runsOf(content);
+    const md1 = serialize(content);
+    const stored1 = reader.stored(md1);
+    expect({ md1, runs: runsOf(stored1) }).toEqual({ md1, runs: expected });
+    const md2 = serialize(stored1);
+    expect(md2).toBe(md1);
+    expect(runsOf(reader.stored(md2))).toEqual(expected);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. A line holding only <br>
+// ---------------------------------------------------------------------------
+
+function nodesOfType(node: JsonContent, type: string): JsonContent[] {
+  const found = node.type === type ? [node] : [];
+  return [
+    ...found,
+    ...(node.content ?? []).flatMap((child) => nodesOfType(child, type)),
+  ];
+}
+
+function paragraphTexts(node: JsonContent): string[] {
+  return nodesOfType(node, "paragraph").map((paragraph) =>
+    (paragraph.content ?? [])
+      .map((child) => (child.type === "text" ? (child.text ?? "") : "\u0000"))
+      .join(""),
+  );
+}
+
+describe("a block holding only <br> is a paragraph of that text, as the host stores it", () => {
+  const rows: ReadonlyArray<readonly [string, string, string, string, string]> =
+    [
+      [
+        "between paragraphs",
+        "before\n\n<br>\n\nafter",
+        "before\n\n" + BS + "<br>\n\nafter",
+        "<br>",
+        "paragraph",
+      ],
+      ["alone", "<br>", BS + "<br>", "<br>", "paragraph"],
+      ["self-closing", "<br/>", BS + "<br/>", "<br/>", "paragraph"],
+      [
+        "self-closing with a space",
+        "<br />",
+        BS + "<br />",
+        "<br />",
+        "paragraph",
+      ],
+      [
+        "under a bullet item",
+        "- a\n  <br>",
+        "- a\n\n  " + BS + "<br>",
+        "<br>",
+        "listItem",
+      ],
+      ["in a quote", "> <br>", "> " + BS + "<br>", "<br>", "blockquote"],
+      [
+        "between paragraphs of an ordered item",
+        "1. a\n\n   <br>\n\n   c",
+        "1. a\n\n   " + BS + "<br>\n\n   c",
+        "<br>",
+        "listItem",
+      ],
+    ];
+
+  it.each(
+    rows.map(([name, input, expectedMd1, breakText, container]) => ({
+      name,
+      input,
+      expectedMd1,
+      breakText,
+      container,
+    })),
+  )("$name", ({ input, expectedMd1, breakText, container }) => {
+    const stored0 = guiReader.stored(input);
+    expect(paragraphTexts(stored0)).toContain(breakText);
+    expect(nodesOfType(stored0, "hardBreak")).toEqual([]);
+    expect(nodesOfType(stored0, container).length).toBeGreaterThan(0);
+
+    const md1 = serialize(stored0);
+    expect(md1).toBe(expectedMd1);
+
+    const stored1 = guiReader.stored(md1);
+    expect(paragraphTexts(stored1)).toContain(breakText);
+    expect(nodesOfType(stored1, "hardBreak")).toEqual([]);
+    expect(nodesOfType(stored1, container).length).toBeGreaterThan(0);
+
+    const md2 = serialize(stored1);
+    expect(md2).toBe(md1);
+  });
+
+  it("an inline <br> in a paragraph stays a hard break and writes a backslash newline", () => {
+    const stored0 = guiReader.stored("a<br>b");
+    expect(stored0).toEqual(
+      doc({
+        type: "paragraph",
+        content: [
+          { type: "text", text: "a" },
+          { type: "hardBreak" },
+          { type: "text", text: "b" },
+        ],
+      }),
+    );
+    const md1 = serialize(stored0);
+    expect(md1).toBe("a" + BS + "\nb");
+    expect(serialize(guiReader.stored(md1))).toBe(md1);
+  });
+
+  it("a <br> in a table cell keeps its hard break", () => {
+    const stored0 = guiReader.stored("| a<br>b |\n| --- |\n| c |");
+    const header = nodesOfType(stored0, "tableHeader");
+    expect(header).toHaveLength(1);
+    expect(nodesOfType(header[0], "hardBreak")).toHaveLength(1);
+    const md1 = serialize(stored0);
+    expect(md1).toBe("| a<br>b |\n| --- |\n| c |");
+    expect(serialize(guiReader.stored(md1))).toBe(md1);
+  });
+
+  it("a <br> in a heading keeps its hard break", () => {
+    const stored0 = guiReader.stored("# a<br>b");
+    expect(stored0).toEqual(
+      doc({
+        type: "heading",
+        attrs: { level: 1 },
+        content: [
+          { type: "text", text: "a" },
+          { type: "hardBreak" },
+          { type: "text", text: "b" },
+        ],
+      }),
+    );
+    const md1 = serialize(stored0);
+    expect(md1).toBe("# a<br>b");
+    expect(serialize(guiReader.stored(md1))).toBe(md1);
+  });
+
+  it("any other html block takes the default path", () => {
+    expect(guiReader.stored("<div>x</div>")).toEqual(doc(P("x")));
+  });
 });

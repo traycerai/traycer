@@ -227,15 +227,24 @@ export const AUTOMATIC_INTENTS_HELD_MESSAGE =
 // `--force` is refused the same way, so no surface offers one. The health
 // monitor's recovery (`respawnIfDown`) matches on it to leave that run alone
 // until it is gone, and a surface shows it as it is.
+export const HOST_NOT_SERVICE_RUN_MESSAGE =
+  "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
+
 // `host uninstall --all` kept the install because it could not confirm the
 // host stopped: the stop failed, the host is still running, or its pid record
 // or process could not be read. None of these shows the host is not
-// responding, so this says only what happened. Nothing was removed.
+// responding, so this says only what happened - including what already had:
+// the CLI turns off the host's automatic start before it asks the host to
+// stop, and that stands.
 export const HOST_UNINSTALL_HOST_RUNNING_MESSAGE =
-  "Traycer was not removed because the host could not be confirmed as stopped. Nothing was removed. Try again in a moment.";
+  "Traycer was not fully removed. Its automatic start was turned off, but the host could not be confirmed as stopped, so its files were kept. Try again in a moment.";
 
-export const HOST_NOT_SERVICE_RUN_MESSAGE =
-  "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
+// Put in front of any other refusal of an uninstall that had already turned
+// off the host's automatic start (the CLI deregisters the service before a
+// busy stop refuses; packaged macOS removes the login item before the CLI
+// runs), so the person is not told nothing changed.
+export const HOST_STARTUP_TURNED_OFF_NOTE =
+  "Traycer was not fully removed: its automatic start was turned off.";
 
 // Who asked for a local-host mutation. Three methods take it -
 // `convergeReady`, `registerService` and `freePortAndRestart` - and they use

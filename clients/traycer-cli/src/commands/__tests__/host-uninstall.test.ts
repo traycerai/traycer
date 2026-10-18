@@ -610,6 +610,103 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({ removedInstallDir: true });
   });
 
+  // The read at entry is evidence too: one that threw is no proof that
+  // nothing was published, so a boundary read that then finds nothing must not
+  // turn into "the host is gone".
+  function readsPublished(
+    entry: "throws" | "null",
+    boundary: "throws" | "null",
+    receivedOptions: UninstallHostOptions[],
+  ): RunHostUninstallDeps {
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    let reads = 0;
+    return {
+      ...base,
+      readPublishedHost: async () => {
+        reads += 1;
+        const behaviour = reads === 1 ? entry : boundary;
+        if (behaviour === "throws")
+          throw new Error("EACCES: permission denied");
+        return null;
+      },
+    };
+  }
+
+  it("keeps the install when the entry read threw and the boundary read finds nothing, without --force", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("throws", "null", receivedOptions);
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+      details: { environment: "dev", removedInstallDir: false },
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, removes the install although the entry read threw", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("throws", "null", receivedOptions);
+    const result = await runHostUninstall(
+      { all: true, force: true },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    );
+
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({ environment: "dev" }),
+    ]);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
+  });
+
+  it("keeps the install when both the entry read and the boundary read threw, without --force", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("throws", "throws", receivedOptions);
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("removes the install when both the entry read and the boundary read answer that nothing is published", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("null", "null", receivedOptions);
+    const result = await runHostUninstall(
+      { all: true, force: false },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    );
+
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({ environment: "dev" }),
+    ]);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
+  });
+
   it("reads --all's registration back from the platform rather than assuming the deregister landed", async () => {
     const deps = commandDeps({
       stop: async () => undefined,

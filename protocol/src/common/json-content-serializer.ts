@@ -148,6 +148,8 @@ interface RenderableMark {
   type: string;
   open: string;
   close: string;
+  // A link's destination, so the run's escaping can write its `](href)`.
+  href: string | null;
 }
 
 function markDelimiters(mark: {
@@ -198,6 +200,10 @@ function renderableMarks(
         key: `${mark.type}:${JSON.stringify(mark.attrs ?? {})}`,
         type: mark.type,
         ...delimiters,
+        href:
+          mark.type === "link" && typeof mark.attrs?.href === "string"
+            ? mark.attrs.href
+            : null,
       },
     ];
   });
@@ -213,11 +219,21 @@ interface TextRunEscaping {
   // content is a link's `](href)`; the fixed ones (`**`, `` ` ``, `~~`, `[`)
   // contain nothing a cell escape touches, so this is a no-op for them.
   delimiter: (delimiter: string) => string;
+  // A link's closing `](href)`, passed through `delimiter` by the caller.
+  linkClose: (href: string) => string;
+  // Whether a code span's backticks are sized to its text. A fixed single
+  // backtick closes early on a backtick in the text, and CommonMark strips a
+  // space from each end of a span that has one at both.
+  sizeCodeSpans: boolean;
 }
+
+const plainLinkClose = (href: string): string => `](${href})`;
 
 const noEscaping: TextRunEscaping = {
   text: (text) => text,
   delimiter: (delimiter) => delimiter,
+  linkClose: plainLinkClose,
+  sizeCodeSpans: false,
 };
 
 // GFM table cells escape a literal `|` as `\|`. The parser (marked's
@@ -265,6 +281,8 @@ const tableCellEscaping: TextRunEscaping = {
   // the `\|`), so the plain-text escape round-trips it exactly as the whole
   // cell used to.
   delimiter: escapeTableCellText,
+  linkClose: plainLinkClose,
+  sizeCodeSpans: false,
 };
 
 // ASCII punctuation: the characters a CommonMark backslash can escape.
@@ -362,6 +380,10 @@ const artifactTextEscaping: TextRunEscaping = {
           false,
         ),
   delimiter: (delimiter) => delimiter,
+  // Written like an image's destination: a bare `](a)b)` or `](a b)` would
+  // end the destination early or not be a link at all.
+  linkClose: (href) => `](${markdownDestination(href)})`,
+  sizeCodeSpans: true,
 };
 
 // A table cell in artifact Markdown is parsed back like any other inline text,
@@ -379,7 +401,14 @@ const artifactTableCellEscaping: TextRunEscaping = {
           marks.some((mark) => mark.type === "link"),
           true,
         ),
-  delimiter: escapeTableCellText,
+  // Doubling every backslash, as the plain cell escape does, would undo the
+  // destination's own escapes. The cell splitter only needs each `|` escaped:
+  // every backslash run the destination writes before one is even, so one
+  // more makes it odd, and the splitter takes exactly that one off again.
+  delimiter: (delimiter) =>
+    delimiter.startsWith("](") ? delimiter : escapeTableCellText(delimiter),
+  linkClose: (href) => `](${markdownDestination(href).replace(/\|/g, "\\|")})`,
+  sizeCodeSpans: true,
 };
 
 /**
@@ -632,7 +661,8 @@ function serializeTextRunWith(
       ...toOpen.filter((mark) => mark.type !== "code"),
       ...toOpen.filter((mark) => mark.type === "code"),
     ];
-    for (const mark of ordered) {
+    for (const ordinary of ordered) {
+      const mark = delimitedFor(ordinary, segment.text, escaping);
       out += escaping.delimiter(mark.open);
       open.push(mark);
     }
@@ -641,6 +671,34 @@ function serializeTextRunWith(
 
   closeDownTo(0);
   return out;
+}
+
+// A code span holds exactly one segment's text (see the kept-code rule
+// above), so its backticks are sized here, when it opens: a run longer or
+// shorter than every backtick run in the text, and a space inside each end
+// when the text starts or ends with a backtick or has a space at both ends.
+function delimitedFor(
+  mark: RenderableMark,
+  text: string,
+  escaping: TextRunEscaping,
+): RenderableMark {
+  if (mark.type === "link" && mark.href !== null) {
+    return { ...mark, close: escaping.linkClose(mark.href) };
+  }
+  if (mark.type !== "code" || !escaping.sizeCodeSpans) return mark;
+  const runs = new Set((text.match(/`+/g) ?? []).map((run) => run.length));
+  let length = 1;
+  while (runs.has(length)) length++;
+  const fence = "`".repeat(length);
+  const padded =
+    text.startsWith("`") ||
+    text.endsWith("`") ||
+    (text.length > 1 &&
+      text.startsWith(" ") &&
+      text.endsWith(" ") &&
+      text.trim() !== "");
+  const pad = padded ? " " : "";
+  return { ...mark, open: `${fence}${pad}`, close: `${pad}${fence}` };
 }
 
 function getValidationMarker(nodeId: string, ctx: SerializerContext): string {
@@ -1043,8 +1101,25 @@ function serializeCodeBlock(node: JsonContent, ctx: SerializerContext): string {
 
   const lines = code.split("\n");
   const indentedCode = lines.map((line) => `${indent}${line}`).join("\n");
+  const fence = fenceFor(code, language, ctx);
 
-  return `${indent}\`\`\`${language}\n${indentedCode}\n${indent}\`\`\``;
+  return `${indent}${fence}${language}\n${indentedCode}\n${indent}${fence}`;
+}
+
+// On the artifact path a fence is longer than every run of its character in
+// the content, so no line of the content can close it early; a language that
+// holds a backtick takes a tilde fence, since a backtick fence's info string
+// cannot. The prompt path keeps its three backticks.
+function fenceFor(
+  content: string,
+  language: string,
+  ctx: SerializerContext,
+): string {
+  if (!ctx.escapeText) return "```";
+  const char = language.includes("`") ? "~" : "`";
+  const runs = content.match(char === "`" ? /`+/g : /~+/g) ?? [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
+  return char.repeat(Math.max(3, longest + 1));
 }
 
 function serializeMermaidBlock(
@@ -1055,7 +1130,8 @@ function serializeMermaidBlock(
   const code = readStringAttr(node.attrs, "code");
   const lines = code.split("\n");
   const indentedCode = lines.map((line) => `${indent}${line}`).join("\n");
-  return `${indent}\`\`\`mermaid\n${indentedCode}\n${indent}\`\`\``;
+  const fence = fenceFor(code, "mermaid", ctx);
+  return `${indent}${fence}mermaid\n${indentedCode}\n${indent}${fence}`;
 }
 
 function serializeUIPreviewBlock(
@@ -1066,7 +1142,8 @@ function serializeUIPreviewBlock(
   const htmlContent = readStringAttr(node.attrs, "htmlContent");
   const lines = htmlContent.split("\n");
   const indentedHtml = lines.map((line) => `${indent}${line}`).join("\n");
-  return `${indent}\`\`\`wireframe\n${indentedHtml}\n${indent}\`\`\``;
+  const fence = fenceFor(htmlContent, "wireframe", ctx);
+  return `${indent}${fence}wireframe\n${indentedHtml}\n${indent}${fence}`;
 }
 
 function serializeHeading(node: JsonContent, ctx: SerializerContext): string {
@@ -1083,13 +1160,13 @@ export interface ArtifactImage {
 }
 
 /**
- * An image's destination as artifact Markdown writes it, for image nodes and
- * for fallback text alike: bare when the source holds nothing a bare
+ * A destination as artifact Markdown writes it, for image nodes, fallback text
+ * and link marks alike: bare when the source holds nothing a bare
  * destination cannot carry as written, else bracketed with `<`, `>` and `\`
  * escaped. Both artifact readers decode either back to the exact source
  * (pinned by the differential tests).
  */
-function imageDestination(src: string): string {
+function markdownDestination(src: string): string {
   return /[\s()<>\\\x00-\x1f\x7f]/.test(src)
     ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
     : src;
@@ -1099,11 +1176,11 @@ function imageDestination(src: string): string {
  * The paragraph text the host keeps in place of an artifact image it cannot
  * resolve yet (a missing file, a failed download): the image's own Markdown,
  * `![alt](dest)`, with the alt's brackets escaped and the destination as
- * `imageDestination` writes it. The host builds its fallback with this, so
+ * `markdownDestination` writes it. The host builds its fallback with this, so
  * the serializer recognizes it by exact equality.
  */
 export function unresolvedArtifactImageText(alt: string, src: string): string {
-  return `![${alt.replace(/[[\]]/g, "\\$&")}](${imageDestination(src)})`;
+  return `![${alt.replace(/[[\]]/g, "\\$&")}](${markdownDestination(src)})`;
 }
 
 /**
@@ -1847,7 +1924,7 @@ function artifactImageMarkdown(alt: string, src: string): string {
   }
   const plain = unresolvedArtifactImageText(settled, src);
   if (decodeUnresolvedArtifactImageText(plain) !== null) return plain;
-  return `![${settled.replace(/[\\[\]`]/g, "\\$&")}](${imageDestination(src)})`;
+  return `![${settled.replace(/[\\[\]`]/g, "\\$&")}](${markdownDestination(src)})`;
 }
 
 function serializeNode(node: JsonContent, ctx: SerializerContext): string {

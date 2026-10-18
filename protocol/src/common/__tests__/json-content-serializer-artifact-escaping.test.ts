@@ -1207,3 +1207,215 @@ describe("unresolvedArtifactImageText: destinations", () => {
     expect(unresolvedArtifactImageText("a", src)).toBe(`![a](${src})`);
   });
 });
+
+describe("artifact fences are longer than their content", () => {
+  const code = (value: string, language: string | null): JsonContent => ({
+    type: "codeBlock",
+    attrs: { language },
+    content: [{ type: "text", text: value }],
+  });
+  const mermaid = (value: string): JsonContent => ({
+    type: "mermaidBlock",
+    attrs: { code: value },
+  });
+  const wireframe = (value: string): JsonContent => ({
+    type: "uiPreviewBlock",
+    attrs: { htmlContent: value, title: "UI Preview", isCompleteHtml: true },
+  });
+  const quote = (content: JsonContent[]): JsonContent => ({
+    type: "blockquote",
+    content,
+  });
+
+  it.each([
+    ["a line of three backticks", "a\n```\nb", "````\na\n```\nb\n````"],
+    ["a line of four backticks", "a\n````\nb", "`````\na\n````\nb\n`````"],
+    ["a line of tildes", "a\n~~~\nb", "```\na\n~~~\nb\n```"],
+    ["a backtick inside a line", "a`b", "```\na`b\n```"],
+    ["a run of two backticks", "a``b", "```\na``b\n```"],
+    ["no backtick at all", "plain", "```\nplain\n```"],
+  ])("writes a code block holding %s", (_name, value, expected) => {
+    expect(artifact(doc([code(value, null)]))).toBe(expected);
+  });
+
+  it("keeps the language behind a longer fence", () => {
+    expect(artifact(doc([code("a\n```\nb", "ts")]))).toBe(
+      "````ts\na\n```\nb\n````",
+    );
+  });
+
+  it("writes a language holding a backtick behind a tilde fence", () => {
+    expect(artifact(doc([code("x", "a`b")]))).toBe("~~~a`b\nx\n~~~");
+  });
+
+  it("makes that tilde fence longer than the tildes in the content", () => {
+    expect(artifact(doc([code("x\n~~~\ny", "a`b")]))).toBe(
+      "~~~~a`b\nx\n~~~\ny\n~~~~",
+    );
+  });
+
+  it("writes a mermaid block holding a line of three backticks behind four", () => {
+    expect(artifact(doc([mermaid("graph\n```\nx")]))).toBe(
+      "````mermaid\ngraph\n```\nx\n````",
+    );
+  });
+
+  it("writes a wireframe block holding a line of three backticks behind four", () => {
+    expect(artifact(doc([wireframe("<p>\n```\n</p>")]))).toBe(
+      "````wireframe\n<p>\n```\n</p>\n````",
+    );
+  });
+
+  it("writes the same blocks with three backticks when nothing in them needs more", () => {
+    expect(artifact(doc([mermaid("graph\nx")]))).toBe(
+      "```mermaid\ngraph\nx\n```",
+    );
+    expect(artifact(doc([wireframe("<p></p>")]))).toBe(
+      "```wireframe\n<p></p>\n```",
+    );
+  });
+
+  it("indents the longer fence inside a bullet item and a quote", () => {
+    expect(
+      artifact(
+        doc([
+          bulletList([
+            listItem([paragraph([plain("t")]), code("a\n```\nb", null)]),
+          ]),
+        ]),
+      ),
+    ).toBe("- t\n  ````\n  a\n  ```\n  b\n  ````");
+    expect(artifact(doc([quote([code("a\n```\nb", null)])]))).toBe(
+      "> ````\n> a\n> ```\n> b\n> ````",
+    );
+  });
+
+  it("leaves the prompt serializer's three backticks alone", () => {
+    expect(prompt(doc([code("a\n```\nb", null)]))).toBe("```\na\n```\nb\n```");
+    expect(prompt(doc([code("x", "a`b")]))).toBe("```a`b\nx\n```");
+    expect(prompt(doc([mermaid("graph\n```\nx")]))).toBe(
+      "```mermaid\ngraph\n```\nx\n```",
+    );
+    expect(prompt(doc([wireframe("<p>\n```\n</p>")]))).toBe(
+      "```wireframe\n<p>\n```\n</p>\n```",
+    );
+  });
+});
+
+describe("artifact link destinations", () => {
+  const link = (label: string, href: string): JsonContent =>
+    text(label, [{ type: "link", attrs: { href } }]);
+  const linked = (href: string): JsonContent => paragraphDoc([link("t", href)]);
+  const inCell = (content: JsonContent[]): JsonContent => tableDoc(content);
+
+  it.each([
+    [
+      "a closing parenthesis (the review case)",
+      "https://example.test/a)b",
+      "[t](<https://example.test/a)b>)",
+    ],
+    ["a space", "https://example.test/a b", "[t](<https://example.test/a b>)"],
+    [
+      "an opening parenthesis",
+      "https://example.test/a(b",
+      "[t](<https://example.test/a(b>)",
+    ],
+    [
+      "a backslash",
+      "https://example.test/a\\*b",
+      "[t](<https://example.test/a\\\\*b>)",
+    ],
+    [
+      "an opening angle bracket",
+      "https://example.test/a<b",
+      "[t](<https://example.test/a\\<b>)",
+    ],
+    [
+      "a closing angle bracket",
+      "https://example.test/a>b",
+      "[t](<https://example.test/a\\>b>)",
+    ],
+    ["nothing unsafe", "https://example.test/p", "[t](https://example.test/p)"],
+  ])("writes a destination with %s", (_name, href, expected) => {
+    expect(artifact(linked(href))).toBe(expected);
+  });
+
+  it("writes the same destinations in a table cell", () => {
+    expect(artifact(inCell([link("t", "https://example.test/a)b")]))).toBe(
+      "| h |\n| --- |\n| [t](<https://example.test/a)b>) |",
+    );
+    expect(artifact(inCell([link("t", "https://example.test/a b")]))).toBe(
+      "| h |\n| --- |\n| [t](<https://example.test/a b>) |",
+    );
+    expect(artifact(inCell([link("t", "https://example.test/a\\*b")]))).toBe(
+      "| h |\n| --- |\n| [t](<https://example.test/a\\\\*b>) |",
+    );
+    expect(artifact(inCell([link("t", "https://example.test/p")]))).toBe(
+      "| h |\n| --- |\n| [t](https://example.test/p) |",
+    );
+  });
+
+  it("gives each pipe in a cell's destination one more backslash", () => {
+    expect(artifact(inCell([link("t", "https://example.test/a|b")]))).toBe(
+      "| h |\n| --- |\n| [t](https://example.test/a\\|b) |",
+    );
+    expect(artifact(inCell([link("t", "https://example.test/a\\|b")]))).toBe(
+      "| h |\n| --- |\n| [t](<https://example.test/a\\\\\\|b>) |",
+    );
+  });
+
+  it("still writes a link whose text is its own URL as an autolink", () => {
+    expect(
+      artifact(
+        paragraphDoc([
+          link("https://example.test/p", "https://example.test/p"),
+        ]),
+      ),
+    ).toBe("<https://example.test/p>");
+  });
+
+  it("leaves the prompt serializer's destination alone", () => {
+    expect(prompt(linked("https://example.test/a)b"))).toBe(
+      "[t](https://example.test/a)b)",
+    );
+    expect(prompt(linked("https://example.test/a b"))).toBe(
+      "[t](https://example.test/a b)",
+    );
+  });
+});
+
+describe("artifact inline code delimiters fit the text", () => {
+  const code = (value: string, extra: Mark[]): JsonContent =>
+    text(value, [{ type: "code" }, ...extra]);
+  const around = (value: string, extra: Mark[]): JsonContent =>
+    paragraphDoc([plain("x "), code(value, extra), plain(" y")]);
+
+  it.each([
+    ["a backtick inside (the review case)", "a`b", "x ``a`b`` y"],
+    ["a run of two backticks only", "``", "x ` `` ` y"],
+    ["a leading backtick", "`a", "x `` `a `` y"],
+    ["a trailing backtick", "a`", "x `` a` `` y"],
+    ["a space at both ends", " a ", "x `  a  ` y"],
+    ["two spaces", "  ", "x `  ` y"],
+    ["one space", " ", "x ` ` y"],
+    ["runs of one and two backticks", "a``b`c", "x ```a``b`c``` y"],
+    ["no backtick", "plain", "x `plain` y"],
+  ])("writes code holding %s", (_name, value, expected) => {
+    expect(artifact(around(value, []))).toBe(expected);
+  });
+
+  it("writes code and bold together", () => {
+    expect(artifact(around("a`b", [{ type: "bold" }]))).toBe("x **``a`b``** y");
+  });
+
+  it("writes code holding a pipe and a backtick in a table cell", () => {
+    expect(artifact(tableDoc([code("a|b`c", [])]))).toBe(
+      "| h |\n| --- |\n| ``a\\|b`c`` |",
+    );
+  });
+
+  it("leaves the prompt serializer's single backticks alone", () => {
+    expect(prompt(around("a`b", []))).toBe("x `a`b` y");
+    expect(prompt(around("plain", []))).toBe("x `plain` y");
+  });
+});

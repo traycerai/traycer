@@ -108,6 +108,7 @@ import {
   AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_STARTUP_TURNED_OFF_NOTE,
   HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
   HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
   SERVICE_REGISTRATION_DISABLED_CODE,
@@ -3981,11 +3982,11 @@ export class HostController {
         return { kind: "deferred", message: HOST_NOT_SERVICE_RUN_MESSAGE };
       }
       if (err.code === HOST_UNINSTALL_HOST_RUNNING_CODE) {
-        // `host uninstall --all` asked the host to stop, it did not, and the
-        // CLI kept the install rather than remove it from under a running
-        // host. Nothing was removed, so this is a deferral: `removeTraycer`
-        // takes back the removed-by-user sentinel on it, and the person is
-        // told to force-restart the host first.
+        // `host uninstall --all` asked the host to stop, could not confirm it
+        // did, and kept the install rather than remove it from under a
+        // running host. The service deregistration before the stop stands,
+        // which the message says; `removeTraycer` keeps its removed-by-user
+        // sentinel on it for the same reason.
         log.info("[host-controller] host mutation refused", {
           kind: this.mutationStatus?.kind ?? null,
           reason: "host-did-not-stop",
@@ -6256,6 +6257,7 @@ export class HostController {
       async () => {
         // Off packaged macOS nothing precedes the CLI, which refuses a
         // terminal run itself before it touches anything.
+        let removedLoginItem = false;
         if (all && (await this.isPackagedMacOwned())) {
           const outcome = await this.unregisterLoginItemUnlessTerminalRun(
             "host-controller-uninstall",
@@ -6266,6 +6268,7 @@ export class HostController {
           if (outcome.result === "terminal-run") {
             return this.terminalRunRefusal("uninstallHost");
           }
+          removedLoginItem = true;
         }
         let raw: unknown;
         try {
@@ -6279,7 +6282,10 @@ export class HostController {
             all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
           );
         } catch (err) {
-          return this.classifyMutationSubprocessError(err, "retry-with-force");
+          return withStartupTurnedOff(
+            this.classifyMutationSubprocessError(err, "retry-with-force"),
+            removedLoginItem || (all && cliTurnedOffStartup(err)),
+          );
         }
         const result = parseUninstallResult(raw, all);
         this.hostLifecycle.ensureWatcherInstalled();
@@ -6311,6 +6317,9 @@ export class HostController {
     const sentinelWasSet = await isHostRemovedByUser();
     await markHostRemovedByUser();
     this.abortInFlightDownload();
+    // Whether a step below turned off the host's automatic start before the
+    // removal stopped short. That step stands, so the sentinel does too.
+    let startupTurnedOff = false;
     const outcome = await this.enqueueMutation<
       MutationOutcome<RemoveTraycerOk>
     >("removeTraycer", "removeTraycer", async () => {
@@ -6337,7 +6346,11 @@ export class HostController {
         // the third Desktop route that stops a host through the CLI.
         raw = await this.streamBundled<unknown>(["host", "uninstall", "--all"]);
       } catch (err) {
-        return this.classifyMutationSubprocessError(err, "retry-with-force");
+        startupTurnedOff = removedLoginItem || cliTurnedOffStartup(err);
+        return withStartupTurnedOff(
+          this.classifyMutationSubprocessError(err, "retry-with-force"),
+          startupTurnedOff,
+        );
       }
       const result = parseUninstallResult(raw, true);
       this.hostLifecycle.ensureWatcherInstalled();
@@ -6358,10 +6371,13 @@ export class HostController {
     // update attempt in progress. Neither did a busy one, where the host
     // declined to stop over work in progress. Take back the sentinel this call
     // wrote, so a machine whose host is still installed is not reported
-    // removed.
+    // removed - unless the host's automatic start was already turned off. Then
+    // the removal is half done, and clearing the sentinel would let an
+    // automatic intent treat that host as one this app still keeps running.
     if (
       (outcome.kind === "deferred" || outcome.kind === "busy") &&
-      !sentinelWasSet
+      !sentinelWasSet &&
+      !startupTurnedOff
     ) {
       await clearHostRemovedByUser();
     }
@@ -6371,4 +6387,39 @@ export class HostController {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Whether `host uninstall --all` refused AFTER turning off the host's
+ * automatic start: it deregisters the service first, then asks the host to
+ * stop, and these two refusals come from that stop.
+ */
+function cliTurnedOffStartup(err: unknown): boolean {
+  return (
+    err instanceof TraycerCliError &&
+    (err.code === HOST_UNINSTALL_HOST_RUNNING_CODE ||
+      err.code === HOST_BUSY_CODE)
+  );
+}
+
+/**
+ * A refused uninstall that had already turned off the host's automatic start
+ * says so. The host-running refusal's own message already does.
+ */
+function withStartupTurnedOff<T>(
+  outcome: MutationOutcome<T>,
+  turnedOff: boolean,
+): MutationOutcome<T> {
+  if (
+    !turnedOff ||
+    outcome.kind === "ok" ||
+    !("message" in outcome) ||
+    outcome.message === HOST_UNINSTALL_HOST_RUNNING_MESSAGE
+  ) {
+    return outcome;
+  }
+  return {
+    ...outcome,
+    message: `${HOST_STARTUP_TURNED_OFF_NOTE} ${outcome.message}`,
+  };
 }

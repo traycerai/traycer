@@ -311,6 +311,7 @@ import {
 import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_STARTUP_TURNED_OFF_NOTE,
   HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
   HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
   HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
@@ -5933,13 +5934,14 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(1);
   });
 
-  // traycer#1563 D3e: the stop inside `host uninstall --all` did not take
-  // effect on a host that is not responding, so the CLI kept the install and
-  // refused (`E_HOST_UNINSTALL_HOST_RUNNING`). Nothing was removed, so the
-  // device must not stay marked removed - that sentinel is what made every
-  // later automatic ensure refuse with `removed-by-user` over a host that
-  // never went away. The person is told to force-restart the host first.
-  it("removeTraycer defers and takes the sentinel back when the CLI kept the install because the host did not stop (traycer#1563 D3e)", async () => {
+  // traycer#1563 D3e: the stop inside `host uninstall --all` could not be
+  // confirmed, so the CLI kept the install and refused
+  // (`E_HOST_UNINSTALL_HOST_RUNNING`). The CLI deregisters the service before
+  // it asks the host to stop, so the removal is half done: the person is told
+  // so, and the removed-by-user sentinel stays - clearing it would let an
+  // automatic ensure treat a host whose automatic start is off as one this
+  // app still keeps running.
+  it("removeTraycer defers with the not-fully-removed message and keeps the sentinel when the CLI kept the install because it could not confirm the host stopped (traycer#1563 D3e)", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "not-running",
       supervisorPid: null,
@@ -5960,26 +5962,35 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       kind: "deferred",
       message: HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
     });
-    expect(await isHostRemovedByUser()).toBe(false);
+    expect(await isHostRemovedByUser()).toBe(true);
   });
 
   // The CLI keeps the install when it could not confirm the host stopped: the
   // stop failed, the host is still running, or its pid record could not be
   // read. None of those shows the host is not responding, so the message says
-  // only what happened and gives no force-restart advice.
-  it("words the uninstall-kept-the-install message without a not-responding claim or force-restart advice (traycer#1563)", () => {
-    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).toContain(
-      "could not be confirmed as stopped",
+  // only what happened and gives no force-restart advice. It does not claim
+  // nothing changed: the automatic start was already turned off.
+  it("words the uninstall-kept-the-install message without a not-responding claim, force-restart advice or a claim that nothing was removed (traycer#1563)", () => {
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).toBe(
+      "Traycer was not fully removed. Its automatic start was turned off, but the host could not be confirmed as stopped, so its files were kept. Try again in a moment.",
     );
     expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain("not responding");
     expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain("Force restart");
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain(
+      "Nothing was removed",
+    );
+    expect(HOST_STARTUP_TURNED_OFF_NOTE).toBe(
+      "Traycer was not fully removed: its automatic start was turned off.",
+    );
+    expect(HOST_STARTUP_TURNED_OFF_NOTE).not.toContain("Nothing was removed");
   });
 
   // traycer#1563 R5: the uninstall's stop was declined because the host has
-  // work in progress, and the CLI rethrows the host's own `E_HOST_BUSY`.
-  // Nothing was removed, so it is the busy outcome with a Force to offer, and
-  // the device must not stay marked removed.
-  it("removeTraycer reports busy with a Force to offer when the CLI rethrows the host's E_HOST_BUSY, and takes the sentinel back", async () => {
+  // work in progress, and the CLI rethrows the host's own `E_HOST_BUSY`. The
+  // CLI had deregistered the service by then, so it is the busy outcome with a
+  // Force to offer, its message says the automatic start is off, and the
+  // sentinel stays.
+  it("removeTraycer reports busy with a Force to offer and the automatic-start note when the CLI rethrows the host's E_HOST_BUSY, and keeps the sentinel", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "not-running",
       supervisorPid: null,
@@ -5997,7 +6008,135 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       kind: "busy",
       continuation: "retry-with-force",
     });
+    if (outcome.kind !== "busy") throw new Error("expected busy");
+    expect(outcome.message).toBe(
+      `${HOST_STARTUP_TURNED_OFF_NOTE} The host has work in progress; refusing to restart it and lose that work.`,
+    );
+    expect(outcome.message).not.toContain("Nothing was removed");
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  // Packaged macOS removes the login item before the CLI runs, so any refusal
+  // after that is a partial removal, whatever the CLI's reason.
+  it("removeTraycer prefixes the note and keeps the sentinel when a packaged-macOS login item was unregistered and the CLI is then lock-busy", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.removeTraycer();
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: `${HOST_STARTUP_TURNED_OFF_NOTE} Another Traycer process is managing the host.`,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  it("uninstallHost(true) prefixes the note when a packaged-macOS login item was unregistered and the CLI is then lock-busy", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: `${HOST_STARTUP_TURNED_OFF_NOTE} Another Traycer process is managing the host.`,
+    });
+  });
+
+  // The control: off packaged macOS nothing precedes the CLI, and a lock-busy
+  // refusal changed nothing, so the message is not prefixed and the sentinel
+  // this call wrote is taken back (the old behaviour).
+  it("removeTraycer leaves a lock-busy refusal off packaged macOS unprefixed and takes the sentinel back", async () => {
+    readSupervisorRunMock.mockResolvedValue({
+      state: "not-running",
+      supervisorPid: null,
+      admittedAs: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
+    );
+    const controller = newController("production");
     expect(await isHostRemovedByUser()).toBe(false);
+
+    const outcome = await controller.removeTraycer();
+
+    expect(unregisterHostLoginItemGuarded).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: "Another Traycer process is managing the host.",
+    });
+    expect(await isHostRemovedByUser()).toBe(false);
+  });
+
+  it("uninstallHost(true) answers the host-did-not-stop refusal with the not-fully-removed message, not prefixed twice", async () => {
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_UNINSTALL_HOST_RUNNING", "kept"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
+    });
+    expect(outcome.kind === "deferred" ? outcome.message : "").not.toContain(
+      "Nothing was removed",
+    );
+  });
+
+  it("uninstallHost(true) prefixes the note on the busy refusal", async () => {
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(outcome).toMatchObject({
+      kind: "busy",
+      continuation: "retry-with-force",
+    });
+    if (outcome.kind !== "busy") throw new Error("expected busy");
+    expect(outcome.message).toBe(
+      `${HOST_STARTUP_TURNED_OFF_NOTE} The host has work in progress; refusing to restart it and lose that work.`,
+    );
+  });
+
+  // Without `--all` the CLI leaves the service and a running host alone, so
+  // nothing was turned off and no refusal is prefixed.
+  it("uninstallHost(false) never prefixes the note", async () => {
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(false);
+
+    expect(outcome).toMatchObject({ kind: "busy" });
+    if (outcome.kind !== "busy") throw new Error("expected busy");
+    expect(outcome.message).toBe(
+      "The host has work in progress; refusing to restart it and lose that work.",
+    );
+    expect(unregisterHostLoginItemGuarded).not.toHaveBeenCalled();
   });
 
   it("removeTraycer proceeds over a packaged-macOS host running as a service", async () => {

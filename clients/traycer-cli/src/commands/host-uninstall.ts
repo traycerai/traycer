@@ -324,9 +324,13 @@ async function runHostUninstallWithActuators(
   // wasted work whose result was discarded - and on Windows it cost seconds
   // (a `tasklist` sweep plus an identity read) of extra window in which a
   // relaunch loop could produce a successor.
-  const published = args.all
-    ? await readPublishedHostBestEffort(deps, ctx)
+  // Its outcome is kept, not only its host: a read that did not answer is no
+  // evidence that nothing was published, so it keeps the install below even
+  // when the boundary read later finds nothing.
+  const entryRead = args.all
+    ? await readPublishedHostReadOutcome(deps, ctx)
     : null;
+  const published = entryRead?.host ?? null;
   let liveness: LivenessObservation = "unknown";
   // Observed BEFORE anything is removed, on the default path: it is the only
   // way this command can say what it is about to leave behind. `--all` reads
@@ -417,11 +421,10 @@ async function runHostUninstallWithActuators(
     // chance to take time. `published` describes the child we captured; this
     // asks whether anything is publishing NOW - a supervisor relaunch loop can
     // produce a successor while these probes are running.
-    // `readPublishedHostBestEffort` returns null both for "nothing published"
-    // and for "the record was unreadable or malformed". The second is not
+    // A null host means either "nothing published" or "the record was
+    // unreadable or malformed"; `answered` tells them apart. The second is not
     // evidence of absence, so it must not leave the captured child's `gone`
-    // standing - `observeLiveness` reports unknown for a null input, which is
-    // exactly the right answer here too.
+    // standing.
     const successorRead = await readPublishedHostReadOutcome(deps, ctx);
     const successor = successorRead.host;
     if (successor !== null) {
@@ -475,9 +478,10 @@ async function runHostUninstallWithActuators(
     // pid record, so every reinstall deferred to it and nothing could replace
     // it. The deregistration above stands; the bytes go once the host is
     // stopped, or now with `--force`.
-    // An unreadable record at the boundary is no evidence the host is gone
-    // (it may be mid-write by a live one), so it keeps the install as well,
-    // and so does any published process whose exit could not be established:
+    // An unreadable record at entry or at the boundary is no evidence the host
+    // is gone (it may be mid-write by a live one), so it keeps the install as
+    // well, and so does any published process whose exit could not be
+    // established:
     // a probe that threw or could not tell is not a dead host. Only every
     // published process seen proven gone, or nothing published at all, lets
     // a stopped host uninstall.
@@ -485,6 +489,7 @@ async function runHostUninstallWithActuators(
       !args.force &&
       (!stopResolved ||
         liveness === "live" ||
+        entryRead?.answered === false ||
         !successorRead.answered ||
         (observed.size > 0 && liveness !== "gone"))
     ) {
@@ -494,7 +499,8 @@ async function runHostUninstallWithActuators(
           environment: ctx.environment,
           stopResolved,
           liveness,
-          publishedRecordReadable: successorRead.answered,
+          publishedRecordReadable:
+            entryRead?.answered !== false && successorRead.answered,
         },
       );
       // The host answered and declined: it is busy, not wedged. Its own
@@ -696,16 +702,6 @@ async function readServiceTaskLeftInPlaceWarning(
     });
     return null;
   }
-}
-
-// Best-effort like the status probe, and for the same reason: this exists to
-// DESCRIBE the end state, so an unreachable endpoint degrades to "unknown"
-// rather than failing a removal that already happened.
-async function readPublishedHostBestEffort(
-  deps: RunHostUninstallDeps,
-  ctx: RunHostUninstallContext,
-): Promise<PublishedHost | null> {
-  return (await readPublishedHostReadOutcome(deps, ctx)).host;
 }
 
 /**
