@@ -332,11 +332,17 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
             delete nextByEpicHost[key];
             changed = true;
           }
+          // The cap runs once, on the final set: capping the adopted set
+          // before these deletions would evict a survivor for an entry that
+          // is about to go anyway.
           return changed
             ? {
                 globalLastRunSettingsByHostId:
                   adopted.globalLastRunSettingsByHostId,
-                epicRunSettingsByEpicHost: nextByEpicHost,
+                epicRunSettingsByEpicHost: cappedForHost(
+                  nextByEpicHost,
+                  hostId,
+                ),
                 legacyGlobalLastRunSettings: null,
                 legacyEpicRunSettingsByEpicId: {},
               }
@@ -379,7 +385,8 @@ interface AdoptedLegacy {
  * Adopt the whole legacy tier into `hostId`'s bucket, the host's own entries
  * winning, for a caller that then retires it. Once retired no host falls back
  * to it, so a choice this host superseded cannot resurface after its own
- * entry is cleared.
+ * entry is cleared. Uncapped: the caller caps the host's slice once its own
+ * changes are applied, so the cap sees the final set.
  */
 function adoptLegacyInto(
   state: Pick<
@@ -410,10 +417,10 @@ function adoptLegacyInto(
   );
   return {
     globalLastRunSettingsByHostId: adoptedGlobal,
-    epicRunSettingsByEpicHost: cappedForHost(
-      { ...adoptedEpics, ...state.epicRunSettingsByEpicHost },
-      hostId,
-    ),
+    epicRunSettingsByEpicHost: {
+      ...adoptedEpics,
+      ...state.epicRunSettingsByEpicHost,
+    },
     changed: true,
   };
 }
