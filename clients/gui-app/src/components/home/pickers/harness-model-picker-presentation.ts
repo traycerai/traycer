@@ -1,6 +1,6 @@
 import {
   findReasoningLabel,
-  findUpgradeServiceTierForModel,
+  selectedServiceTierOption,
   findModelLabel,
   type HarnessModelSelection,
   type ModelOption,
@@ -112,18 +112,15 @@ export function deriveHarnessModelPickerPresentation(
       ? findReasoningLabel(reasoningFooter.value, reasoningFooter.options)
       : null;
   const reasoningStep = deriveReasoningStep(reasoningFooter);
-  const upgradeServiceTier =
+  const selectedServiceTier =
     serviceTierFooter === null
       ? null
-      : findUpgradeServiceTierForModel(serviceTierFooter.selectedModel);
-  const serviceTierActive =
-    serviceTierFooter !== null &&
-    upgradeServiceTier !== null &&
-    serviceTierFooter.value === upgradeServiceTier.id;
-  const activeServiceTierLabel =
-    upgradeServiceTier === null || !serviceTierActive
-      ? null
-      : upgradeServiceTier.label;
+      : selectedServiceTierOption(
+          serviceTierFooter.value,
+          serviceTierFooter.selectedModel,
+        );
+  const serviceTierActive = selectedServiceTier !== null;
+  const activeServiceTierLabel = selectedServiceTier?.label ?? null;
   const maxModeRequired = maxModeRequiredForSelection({
     selectedModel,
     models,

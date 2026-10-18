@@ -129,6 +129,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
 });
 
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { UNRESOLVED_BOT_MEMBER_NAMES } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CHAT_ID = "conversation-app";
@@ -255,6 +256,7 @@ function mountTranscript(messages: ReadonlyArray<Message>): {
         title="Release Bot"
         instanceId="bot-conversation:test"
         linkRequests
+        resolveMemberName={UNRESOLVED_BOT_MEMBER_NAMES}
       />
     </StrictMode>
   );

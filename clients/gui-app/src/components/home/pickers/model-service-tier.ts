@@ -1,13 +1,23 @@
-import { findUpgradeServiceTierForModel } from "@/components/home/data/landing-options";
+import {
+  nonDefaultServiceTiersForModel,
+  normalizeServiceTierForModel,
+} from "@/components/home/data/landing-options";
 import type { ServiceTierFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
 
-/** Shared by the Fast button and its leader shortcut. */
-export function toggleServiceTier(
+/** Step through Standard and the selected model's advertised tiers. */
+export function stepServiceTier(
   config: ServiceTierFooterConfig | null,
 ): boolean {
   if (config === null) return false;
-  const upgrade = findUpgradeServiceTierForModel(config.selectedModel);
-  if (upgrade === null) return false;
-  config.onChange(config.value === upgrade.id ? "" : upgrade.id);
+  const options = nonDefaultServiceTiersForModel(config.selectedModel);
+  if (options.length === 0) return false;
+  const current = normalizeServiceTierForModel(
+    config.value,
+    config.selectedModel,
+  );
+  const index = options.findIndex((option) => option.id === current);
+  config.onChange(
+    index === options.length - 1 ? "" : (options[index + 1]?.id ?? ""),
+  );
   return true;
 }

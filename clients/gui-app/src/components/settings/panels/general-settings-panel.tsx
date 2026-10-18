@@ -120,7 +120,7 @@ export function GeneralSettingsPanel() {
               }
               status={
                 featureSettings.isError
-                  ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
+                  ? "Couldn't read feature settings. Repair Traycer's config.json, or back it up before resetting it, then reopen Settings."
                   : undefined
               }
               control={

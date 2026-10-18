@@ -151,6 +151,10 @@ export interface RenderedMessagesDisplayContext {
     sender: OpenAgentSender,
     reasoningEffort: string | null,
   ) => string | null;
+  readonly resolveAgentServiceTierLabel: (
+    sender: OpenAgentSender,
+    serviceTier: string | null,
+  ) => string | null;
   readonly contentBlocksPreview: (
     blocks: ReadonlyArray<OpenContentBlock>,
   ) => string;
@@ -2140,6 +2144,10 @@ function pendingTurnMeta(
       turn.reasoningEffort,
     ),
     serviceTier: turn.serviceTier,
+    serviceTierLabel: ctx.resolveAgentServiceTierLabel(
+      sender,
+      turn.serviceTier,
+    ),
     // Every field above is settings-derived - what the user PICKED - which is
     // all that exists pre-turn. The credential a spawn actually used is not
     // knowable yet (this indicator renders during setup, before the provider
@@ -3573,6 +3581,10 @@ function renderAssistantTurnSlice(
       input.acc.reasoningEffort,
     ),
     serviceTier: input.acc.serviceTier,
+    serviceTierLabel: input.ctx.resolveAgentServiceTierLabel(
+      input.acc.sender,
+      input.acc.serviceTier,
+    ),
     envCredentialVar: input.acc.envCredentialVar,
     costUsd: input.acc.costUsd,
   };
@@ -4348,6 +4360,7 @@ function toolCardParent(tool: ToolSegment): SubagentSegment {
   return {
     id: tool.id,
     kind: "subagent",
+    toolImageResults: tool.imageResults,
     name: tool.toolName,
     agentType: null,
     task: tool.inputSummary,
@@ -5072,6 +5085,7 @@ const BLOCK_HANDLERS: {
     isRenderableSubAgentBlock(block)
       ? {
           kind: "subagent",
+          toolImageResults: [],
           name: block.name,
           agentType: block.agentType,
           task: block.task,

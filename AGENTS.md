@@ -194,6 +194,13 @@ as any / as unknown / chained  // narrow or define a real type
 ReturnType<typeof fn>          // name the concrete type
 ```
 
+## Slop the sweep keeps finding
+
+| BAD                                                        | GOOD                                                                              |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Repeat the same input, path and assertion in another test. | Keep one case; add coverage only for a distinct regression.                       |
+| Leave A's contract above newly inserted B.                 | Keep each contract comment attached to the declaration or operation it describes. |
+
 ## Skills
 
 Use when the task matches. GUI skills: see `clients/gui-app/AGENTS.md`.

@@ -29,6 +29,7 @@ function card(id: string, name: string): SubagentSegment {
     spawnToolCallId: null,
     parentId: null,
     workflowMeta: null,
+    toolImageResults: [],
     children: [
       {
         id: `${id}-text`,

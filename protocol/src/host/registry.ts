@@ -116,7 +116,11 @@ import {
   agentStopV10,
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
-import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
+import {
+  agentArchiveUpgradeV10ToV11,
+  agentArchiveV10,
+  agentArchiveV11,
+} from "@traycer/protocol/host/agent/archive";
 import { agentResolveMessagePeerV10 } from "@traycer/protocol/host/agent/message-peer";
 import {
   agentConfigureDowngradeV20ToV10,
@@ -563,6 +567,7 @@ import {
   botCreateV10,
   botDeleteV10,
   botListV10,
+  botOpenV10,
   botReadV10,
   botSubscribeV10,
   botUpdateRunSettingsV10,
@@ -652,6 +657,8 @@ import {
   epicBatchDeleteV10,
   epicBatchDeleteV11,
   epicBatchUpdateRolesV10,
+  epicBatchUpdateRolesV11,
+  epicBatchUpdateRolesUpgradeV10ToV11,
   epicCreateArtifactV10,
   epicCreateChatUpgradeV10ToV11,
   epicCreateChatUpgradeV11ToV12,
@@ -671,9 +678,13 @@ import {
   epicDeleteChatV10,
   epicDeleteChatV11,
   epicDeleteChatUpgradeV10ToV11,
+  epicDeleteChatV12,
+  epicDeleteChatUpgradeV11ToV12,
   epicDeleteCommentThreadV10,
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
+  epicDeleteTuiAgentV11,
+  epicDeleteTuiAgentUpgradeV10ToV11,
   epicEditCommentV10,
   epicFinishArtifactImageV10,
   epicGetTaskContextsV10,
@@ -686,6 +697,8 @@ import {
   epicGetTaskContextsUpgradeV12ToV13,
   epicGetTaskContextsUpgradeV13ToV14,
   epicGrantAccessV10,
+  epicGrantAccessV11,
+  epicGrantAccessUpgradeV10ToV11,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicFetchArtifactAttachmentV10,
@@ -717,6 +730,8 @@ import {
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
+  epicListCollaboratorsV11,
+  epicListCollaboratorsUpgradeV10ToV11,
   epicListCommentThreadsV10,
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
@@ -760,8 +775,12 @@ import {
   epicResolveArtifactByPathV10,
   epicSearchArtifactsV10,
   epicRevokeCollaboratorV10,
+  epicRevokeCollaboratorV11,
+  epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
   epicSetChatArchivedV10,
+  epicSetChatArchivedV11,
+  epicSetChatArchivedUpgradeV10ToV11,
   epicSetChatSharingDefaultV10,
   epicSetCloudChatVisibilityV10,
   epicSetCommentThreadResolvedV10,
@@ -7535,11 +7554,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "agent.archive": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentArchiveV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentArchiveV11,
+          upgradeFromPreviousVersion: agentArchiveUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8017,11 +8040,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listCollaborators": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListCollaboratorsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListCollaboratorsV11,
+          upgradeFromPreviousVersion: epicListCollaboratorsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8265,6 +8292,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Open a bot on the serving host, claiming it there when its bound host is
+  // unreachable (T18). Same optional posture as the rest of the namespace.
+  "bot.open": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botOpenV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The human side of a bot (T7): list its conversation records, send one
   // message into one. Same optional posture as the rest of the namespace.
   "bot.conversation.list": {
@@ -8331,7 +8373,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteChat": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicDeleteChatV10,
@@ -8340,6 +8382,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicDeleteChatV11,
           upgradeFromPreviousVersion: epicDeleteChatUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicDeleteChatV12,
+          upgradeFromPreviousVersion: epicDeleteChatUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8394,11 +8440,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // the archive affordance.
   "epic.setChatArchived": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSetChatArchivedV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicSetChatArchivedV11,
+          upgradeFromPreviousVersion: epicSetChatArchivedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8449,11 +8499,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteTuiAgent": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicDeleteTuiAgentV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicDeleteTuiAgentV11,
+          upgradeFromPreviousVersion: epicDeleteTuiAgentUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8485,11 +8539,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.grantAccess": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicGrantAccessV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicGrantAccessV11,
+          upgradeFromPreviousVersion: epicGrantAccessUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8497,11 +8555,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.batchUpdateRoles": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicBatchUpdateRolesV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicBatchUpdateRolesV11,
+          upgradeFromPreviousVersion: epicBatchUpdateRolesUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8509,11 +8571,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.revokeCollaborator": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicRevokeCollaboratorV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicRevokeCollaboratorV11,
+          upgradeFromPreviousVersion: epicRevokeCollaboratorUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

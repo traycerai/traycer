@@ -439,6 +439,7 @@ const DISPLAY_CONTEXT: RenderedMessagesDisplayContext = {
     modelLabel: null,
   }),
   resolveAgentReasoningLabel: () => null,
+  resolveAgentServiceTierLabel: () => null,
   contentBlocksPreview: () => "",
 };
 

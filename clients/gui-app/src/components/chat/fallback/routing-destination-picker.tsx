@@ -23,10 +23,10 @@ import type {
 import { tierRungSkipReasonSchema } from "@traycer/protocol/host/fallback-policy";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
+  advertisedServiceTierOption,
   DEFAULT_PERMISSION,
   modelDisplayLabel,
   normalizeReasoningForModel,
-  normalizeServiceTierForModel,
   type HarnessModelSelection,
   type ModelOption,
   type ReasoningFallback,
@@ -63,7 +63,7 @@ import {
 } from "./fallback-copy";
 import {
   fallbackDestinationOfTuple,
-  useFallbackModelLabels,
+  useFallbackModelCatalogues,
   useFallbackProfileLabels,
   type FallbackModelLabelResolver,
   type FallbackProfileLabelResolver,
@@ -200,7 +200,16 @@ export function RoutingDestinationPicker(props: {
     open,
     enabled: canAct,
   });
-  const { data, failedTuple, labelFor, modelLabelFor } = listing;
+  const { data, failedTuple, labelFor, modelLabelFor, modelFor } = listing;
+  // The existing fallback catalogue is availability-gated and uses the same
+  // null-directory cache slot as the picker. A profile id is not a directory.
+  const failedModel =
+    failedTuple.serviceTier === null
+      ? null
+      : modelFor(failedTuple.harnessId, failedTuple.model);
+  const failedTierName =
+    advertisedServiceTierOption(failedTuple.serviceTier ?? "", failedModel)
+      ?.label ?? failedTuple.serviceTier;
   const seed = useStableValue(
     recommendedTuple(data, failedTuple),
     sameRunSettings,
@@ -290,6 +299,7 @@ export function RoutingDestinationPicker(props: {
       <RoutingConfirmFooter
         store={store}
         failedTuple={failedTuple}
+        failedTierName={failedTierName}
         data={data}
         labelFor={labelFor}
         modelLabelFor={modelLabelFor}
@@ -304,6 +314,7 @@ export function RoutingDestinationPicker(props: {
       canAct,
       data,
       failedTuple,
+      failedTierName,
       footerRefusal,
       labelFor,
       lease.ready,
@@ -450,7 +461,7 @@ function useRoutingListing(input: {
   const labelFor = useFallbackProfileLabels(client, open);
   // The failed tuple's harness, plus one per equivalent-model row: the
   // destinations a listed target can name.
-  const modelLabelFor = useFallbackModelLabels(
+  const modelCatalogues = useFallbackModelCatalogues(
     client,
     [
       failedTuple.harnessId,
@@ -460,7 +471,13 @@ function useRoutingListing(input: {
     ],
     open,
   );
-  return { data, failedTuple, labelFor, modelLabelFor };
+  return {
+    data,
+    failedTuple,
+    labelFor,
+    modelLabelFor: modelCatalogues.labelFor,
+    modelFor: modelCatalogues.modelFor,
+  };
 }
 
 /**
@@ -1027,8 +1044,7 @@ interface RoutingPick {
  *
  * A pick that IS one of the listing's equivalent-model destinations - see
  * {@link listedTarget} - sends that destination's HOST-BUILT target
- * unchanged: crossing providers re-derives effort and fast mode against the
- * destination's catalog, and a client copy would drift from it. Anything else
+ * with its tier clamped to the exact advertised id. Anything else
  * is a client tuple: the store's (harness, model, account, effort) over the
  * failed tuple, whose permission and agent mode it keeps - never the chat
  * composer's - and its fast mode only where the picked model offers it. A
@@ -1045,13 +1061,22 @@ function confirmTarget(
 ): ChatRunSettings | null {
   const { selection, reasoning } = pick;
   if (selection.modelSlug.length === 0) return null;
+  // Routing carries a historical tier when the target advertises that exact
+  // id, including an id it declares as its default. The picker excludes
+  // default tiers from its selectable upgrades, but that is not a routing
+  // membership test. An unresolved catalog cannot verify a paid tier.
+  const tier =
+    pick.selectedModel === null
+      ? ""
+      : (advertisedServiceTierOption(
+          failedTuple.serviceTier ?? "",
+          pick.selectedModel,
+        )?.id ?? "");
   const listed = listedTarget(pick, data);
-  if (listed !== null) return listed;
+  if (listed !== null) {
+    return { ...listed, serviceTier: tier.length === 0 ? null : tier };
+  }
   const effort = reasoning.length === 0 ? null : reasoning;
-  const tier = normalizeServiceTierForModel(
-    failedTuple.serviceTier ?? "",
-    pick.selectedModel,
-  ).trim();
   return {
     ...failedTuple,
     harnessId: selection.harnessId,
@@ -1115,6 +1140,7 @@ function listedTarget(
 function RoutingConfirmFooter({
   store,
   failedTuple,
+  failedTierName,
   data,
   labelFor,
   modelLabelFor,
@@ -1126,6 +1152,7 @@ function RoutingConfirmFooter({
 }: {
   readonly store: ComposerToolbarStore;
   readonly failedTuple: ChatRunSettings;
+  readonly failedTierName: string | null;
   readonly data: ChatFallbackListTargetsResponse | undefined;
   readonly labelFor: FallbackProfileLabelResolver;
   readonly modelLabelFor: FallbackModelLabelResolver;
@@ -1154,6 +1181,12 @@ function RoutingConfirmFooter({
     (target === null
       ? null
       : switchLine({ target, selectedModel, labelFor, modelLabelFor }));
+  const speedNotice = fallbackSpeedNotice(
+    failedTuple,
+    failedTierName,
+    selectedModel,
+    target,
+  );
   const disabled =
     busy || !canAct || !moved || !countdownReady || target === null;
   return (
@@ -1166,16 +1199,21 @@ function RoutingConfirmFooter({
       <div role="status" aria-live="polite" className="sr-only">
         {refusal}
       </div>
-      <div
-        aria-hidden={refusal !== null}
-        className={cn(
-          "min-w-0 flex-1 text-ui-xs",
-          refusal === null
-            ? "truncate text-muted-foreground"
-            : "text-warning-foreground",
-        )}
-      >
-        {line}
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-ui-xs">
+        <div
+          aria-hidden={refusal !== null}
+          className={cn(
+            "truncate",
+            refusal === null
+              ? "text-muted-foreground"
+              : "text-warning-foreground",
+          )}
+        >
+          {line}
+        </div>
+        <div role="status" className="text-warning-foreground">
+          {refusal === null ? speedNotice : null}
+        </div>
       </div>
       <Button size="sm" disabled={disabled} onClick={onConfirm}>
         Switch
@@ -1189,6 +1227,26 @@ function RoutingConfirmFooter({
       </Button>
     </div>
   );
+}
+
+function fallbackSpeedNotice(
+  failedTuple: ChatRunSettings,
+  failedTierName: string | null,
+  selectedModel: ModelOption | null,
+  target: ChatRunSettings | null,
+): string | null {
+  const failedTier = failedTuple.serviceTier?.trim();
+  if (failedTier === undefined || failedTier.length === 0 || target === null) {
+    return null;
+  }
+  if (target.serviceTier === failedTier) return null;
+  const tierName = failedTierName ?? failedTier;
+  const modelName =
+    selectedModel === null ? target.model : modelDisplayLabel(selectedModel);
+  if (selectedModel === null) {
+    return `Couldn't confirm ${tierName} on ${modelName}. No Speed tier is selected.`;
+  }
+  return `${tierName} isn't available on ${modelName}. No Speed tier is selected.`;
 }
 
 /**

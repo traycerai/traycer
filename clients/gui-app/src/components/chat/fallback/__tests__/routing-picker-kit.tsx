@@ -187,6 +187,43 @@ const CODEX_MODELS: ReadonlyArray<ModelOption> = [
     ],
   }),
   model({ harnessId: "codex", slug: "gpt-4.1", label: "GPT-4.1" }),
+  // Speed-tier fixtures: one model advertising Fast only, two advertising
+  // Fast and Ultrafast, for the routing speed-notice tests.
+  model({
+    harnessId: "codex",
+    slug: "gpt-6-sol",
+    label: "GPT-6-Sol",
+    supportedServiceTiers: [
+      { id: "priority", label: "Fast", description: null },
+    ],
+  }),
+  model({
+    harnessId: "codex",
+    slug: "gpt-6.1-sol",
+    label: "GPT-6.1-Sol",
+    supportedServiceTiers: [
+      { id: "priority", label: "Fast", description: null },
+      { id: "ultrafast", label: "Ultrafast", description: null },
+    ],
+  }),
+  model({
+    harnessId: "codex",
+    slug: "gpt-6-astra",
+    label: "GPT-6-Astra",
+    supportedServiceTiers: [
+      { id: "priority", label: "Fast", description: null },
+      { id: "ultrafast", label: "Ultrafast", description: null },
+    ],
+  }),
+  model({
+    harnessId: "codex",
+    slug: "gpt-6-flex",
+    label: "GPT-6-Flex",
+    defaultServiceTier: "priority",
+    supportedServiceTiers: [
+      { id: "priority", label: "Flex", description: null },
+    ],
+  }),
 ];
 
 export const CURSOR_HARNESS: HarnessOption = {
@@ -234,6 +271,15 @@ export const kit = {
   unstableCatalog: false,
   // Every `client` a host-backed read was handed, and whether it was enabled.
   catalogCalls: [] as CatalogCall[],
+  fallbackCatalogueCalls: [] as Array<{
+    readonly harnessIds: ReadonlyArray<string | null>;
+    readonly enabled: boolean;
+  }>,
+  modelRequests: [] as Array<{
+    readonly harnessId: string;
+    readonly workingDirectory: string | null;
+    readonly enabled: boolean;
+  }>,
   providerCalls: [] as Array<string | null>,
   labelCalls: [] as Array<string | null>,
   // The listing.
@@ -272,6 +318,8 @@ export const kit = {
   refetchCalls: 0,
   // Model labels: `harnessId:model` -> label; `null` passes the slug through.
   modelLabels: null as ReadonlyMap<string, string> | null,
+  // The catalog may list a destination while its targeted model read fails.
+  modelsQueryUnavailableFor: null as string | null,
   openSettings: vi.fn<() => void>(),
 };
 
@@ -279,6 +327,8 @@ export function resetKit(): void {
   kit.withCursor = false;
   kit.unstableCatalog = false;
   kit.catalogCalls = [];
+  kit.fallbackCatalogueCalls = [];
+  kit.modelRequests = [];
   kit.providerCalls = [];
   kit.labelCalls = [];
   kit.listCalls = [];
@@ -299,6 +349,7 @@ export function resetKit(): void {
   kit.providers = [];
   kit.refetchCalls = 0;
   kit.modelLabels = null;
+  kit.modelsQueryUnavailableFor = null;
   kit.openSettings.mockReset();
   session.reset();
 }
@@ -419,12 +470,13 @@ export function hostClientModule() {
 }
 
 /** `@/hooks/harnesses/use-gui-harness-catalog`. */
+function modelsOf(harnessId: string): ReadonlyArray<ModelOption> {
+  if (harnessId === "claude") return CLAUDE_MODELS;
+  if (harnessId === "cursor") return CURSOR_MODELS;
+  return CODEX_MODELS;
+}
+
 export function catalogModule() {
-  const modelsOf = (harnessId: string): ReadonlyArray<ModelOption> => {
-    if (harnessId === "claude") return CLAUDE_MODELS;
-    if (harnessId === "cursor") return CURSOR_MODELS;
-    return CODEX_MODELS;
-  };
   const build = (withCursor: boolean) => {
     const harnesses = withCursor
       ? [CLAUDE_HARNESS, CODEX_HARNESS, CURSOR_HARNESS]
@@ -473,9 +525,14 @@ export function catalogModule() {
     useGuiHarnessModelsQueryForClient: (
       client: KitClient | null,
       harnessId: string,
-      _workingDirectory: string | null,
+      workingDirectory: string | null,
       activity: { readonly enabled: boolean },
     ) => {
+      kit.modelRequests.push({
+        harnessId,
+        workingDirectory,
+        enabled: activity.enabled,
+      });
       kit.catalogCalls.push({
         hook: "models",
         clientId: idOf(client),
@@ -483,7 +540,9 @@ export function catalogModule() {
       });
       return {
         data:
-          activity.enabled && client !== null
+          activity.enabled &&
+          client !== null &&
+          harnessId !== kit.modelsQueryUnavailableFor
             ? { harnessId, models: modelsOf(harnessId) }
             : undefined,
         isPending: false,
@@ -754,10 +813,39 @@ export function registryModule<T extends object>(actual: T) {
   };
 }
 
-/** `@/components/chat/fallback/fallback-identity`: the labels resolver only. */
+/** `@/components/chat/fallback/fallback-identity`: routing identity/catalogue resolvers. */
 export function identityModule<T extends object>(actual: T) {
   return {
     ...actual,
+    useFallbackModelCatalogues: (
+      client: KitClient | null,
+      harnessIds: ReadonlyArray<string | null>,
+      enabled: boolean,
+    ) => {
+      kit.labelCalls.push(idOf(client));
+      kit.fallbackCatalogueCalls.push({ harnessIds, enabled });
+      const harnessIdSet = new Set(harnessIds.filter((id) => id !== null));
+      return {
+        labelFor: (harnessId: string, slug: string): string =>
+          kit.modelLabels === null
+            ? slug
+            : (kit.modelLabels.get(`${harnessId}:${slug}`) ?? slug),
+        modelFor: (harnessId: string, slug: string): ModelOption | null => {
+          if (
+            !enabled ||
+            !harnessIdSet.has(harnessId) ||
+            harnessId === kit.modelsQueryUnavailableFor
+          ) {
+            return null;
+          }
+          return (
+            modelsOf(harnessId).find((candidate) => candidate.slug === slug) ??
+            null
+          );
+        },
+        settledFor: () => true,
+      };
+    },
     useFallbackModelLabels: (client: KitClient | null) => {
       kit.labelCalls.push(idOf(client));
       return (harnessId: string, model: string): string =>

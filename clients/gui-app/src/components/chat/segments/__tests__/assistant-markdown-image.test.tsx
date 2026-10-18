@@ -582,6 +582,77 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
+  it("renders a reply image as a full image when its hash matches a generic tool result", () => {
+    blobSrcState.value = {
+      status: "ready",
+      src: "blob:http://localhost/echoed",
+      mediaType: "image/png",
+    };
+    renderImage({
+      src: "/workspace/shots/plot.png",
+      alt: "plot",
+      context: {
+        ...BASE_CONTEXT,
+        resolutions: [
+          resolution(
+            resolvedEntry("/workspace/shots/plot.png", {
+              attachmentHash: "hash-shared-with-eval",
+            }),
+            "msg-1",
+          ),
+        ],
+      },
+    });
+
+    expect(screen.getByRole("img", { name: "plot" }).getAttribute("src")).toBe(
+      "blob:http://localhost/echoed",
+    );
+    expect(
+      document.querySelector("[data-assistant-image-deduplicated]"),
+    ).toBeNull();
+  });
+
+  it("still collapses only the image-generation source to a chip while a same-hash reply image renders in full", () => {
+    blobSrcState.value = {
+      status: "ready",
+      src: "blob:http://localhost/both",
+      mediaType: "image/png",
+    };
+    const client = createQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <AssistantMarkdownImageProvider
+          context={{
+            ...BASE_CONTEXT,
+            resolutions: [
+              resolution(
+                resolvedEntry("/workspace/echo.png", {
+                  attachmentHash: "hash-shared",
+                }),
+                "msg-1",
+              ),
+            ],
+            deduplicatedTargetsBySource: targetsBySource([
+              ["/workspace/generated.png", dedupTarget("tool-img-1", "row-1")],
+            ]),
+          }}
+        >
+          <AssistantMarkdownImageNode
+            src="/workspace/generated.png"
+            alt="generated"
+          />
+          <AssistantMarkdownImageNode src="/workspace/echo.png" alt="echo" />
+        </AssistantMarkdownImageProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      document.querySelectorAll("[data-assistant-image-deduplicated]"),
+    ).toHaveLength(1);
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.getByRole("img", { name: "echo" })).toBeTruthy();
+  });
+
   it("focuses the exact same-row generation card when the dedup link is clicked", () => {
     const client = createQueryClient();
     render(

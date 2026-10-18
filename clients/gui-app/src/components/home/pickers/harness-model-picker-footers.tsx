@@ -1,10 +1,11 @@
 import {
   findReasoningLabel,
-  findUpgradeServiceTierForModel,
+  nonDefaultServiceTiersForModel,
   type ModelOption,
   type ReasoningLevel,
   type ReasoningLevelOption,
   type ServiceTier,
+  type ServiceTierOption,
 } from "@/components/home/data/landing-options";
 import { cn } from "@/lib/utils";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -22,6 +23,7 @@ import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picke
 import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { useReasoningSliderGesture } from "@/components/home/pickers/use-reasoning-slider-gesture";
 import { FastModeFooterButton } from "@/components/home/pickers/fast-mode-footer-button";
+import { ServiceTierMenuButton } from "@/components/home/pickers/service-tier-menu-button";
 import {
   horizontalScrollFadeClass,
   useHorizontalScrollEdges,
@@ -110,25 +112,27 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
   const sliderControl =
     useRegionValue("model", "reasoningControl") === "slider";
   const sliderLayout = sliderControl && (reasoning?.options.length ?? 0) > 1;
-  const upgradeServiceTier =
+  const serviceTiers =
     serviceTier === null
-      ? null
-      : findUpgradeServiceTierForModel(serviceTier.selectedModel);
+      ? []
+      : nonDefaultServiceTiersForModel(serviceTier.selectedModel);
   const hasReasoningOptions =
     reasoning !== null && reasoning.options.length > 0;
-  if (upgradeServiceTier === null && !hasReasoningOptions && !maxMode)
+  if (serviceTiers.length === 0 && !hasReasoningOptions && !maxMode)
     return null;
-  const showGroupSeparator = upgradeServiceTier !== null && hasReasoningOptions;
+  const showGroupSeparator = serviceTiers.length > 0 && hasReasoningOptions;
+  const tierControl =
+    serviceTier === null ? null : (
+      <ServiceTierFooterControl
+        config={serviceTier}
+        options={serviceTiers}
+        inlineShortcut={sliderLayout}
+      />
+    );
 
   return (
     <div className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/20 px-2 py-1.5">
-      {upgradeServiceTier === null || serviceTier === null ? null : (
-        <FastModeFooterButton
-          config={serviceTier}
-          upgrade={upgradeServiceTier}
-          inlineShortcut={sliderLayout}
-        />
-      )}
+      {tierControl}
       {showGroupSeparator ? (
         <div className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
       ) : null}
@@ -157,6 +161,29 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
       ) : null}
     </div>
   );
+}
+
+function ServiceTierFooterControl(props: {
+  readonly config: ServiceTierFooterConfig;
+  readonly options: ReadonlyArray<ServiceTierOption>;
+  readonly inlineShortcut: boolean;
+}) {
+  const { config, options, inlineShortcut } = props;
+  if (options.length === 1) {
+    return (
+      <FastModeFooterButton
+        config={config}
+        upgrade={options[0]}
+        inlineShortcut={inlineShortcut}
+      />
+    );
+  }
+  if (options.length > 1) {
+    return (
+      <ServiceTierMenuButton config={config} inlineShortcut={inlineShortcut} />
+    );
+  }
+  return null;
 }
 
 interface ReasoningFooterGroupProps {

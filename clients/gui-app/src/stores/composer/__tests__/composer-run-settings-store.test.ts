@@ -412,6 +412,194 @@ describe("composer run settings store", () => {
       expect(state.legacyEpicRunSettingsByEpicId).toEqual({});
     });
 
+    // A Task deletion clears each tier in its own scope. Account-wide: every
+    // host bucket and the legacy entry (above). Host-scoped (a local-homed
+    // Task deleted on one host, whose id another host may still serve): that
+    // host's bucket, after the host adopts the transitional legacy tier and
+    // retires it, so the cleared entry cannot fall back to a legacy choice the
+    // host had superseded (gui-app AGENTS.md, the legacy tier).
+    describe("a host-scoped deletion", () => {
+      function seedEveryTier(): void {
+        useComposerRunSettingsStore.setState({
+          legacyGlobalLastRunSettings: EPIC_RUN_SETTINGS,
+          legacyEpicRunSettingsByEpicId: {
+            "epic-1": { settings: EPIC_RUN_SETTINGS, updatedAt: 1 },
+            "epic-3": { settings: EPIC_RUN_SETTINGS, updatedAt: 2 },
+          },
+        });
+        useComposerRunSettingsStore
+          .getState()
+          .setEpicRunSettings("epic-1", HOST_A, REGULAR_RUN_SETTINGS, 10);
+        useComposerRunSettingsStore
+          .getState()
+          .setEpicRunSettings("epic-1", HOST_B, REGULAR_RUN_SETTINGS, 20);
+      }
+
+      function clearOnHostA(): void {
+        useComposerRunSettingsStore
+          .getState()
+          .clearEpicRunSettingsForHost(["epic-1"], HOST_A);
+      }
+
+      it("clears the deleting host's entry without falling back to the legacy one it superseded", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore
+            .getState()
+            .getEpicRunSettings("epic-1", HOST_A),
+        ).toBeNull();
+      });
+
+      it("retires the legacy tier, so no host reads the deleted Task's legacy entry", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        const state = useComposerRunSettingsStore.getState();
+        expect(state.legacyEpicRunSettingsByEpicId).toEqual({});
+        expect(state.legacyGlobalLastRunSettings).toBeNull();
+        expect(state.getEpicRunSettings("epic-1", "host-never")).toBeNull();
+      });
+
+      it("adopts the rest of the legacy tier into the deleting host's bucket", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        const state = useComposerRunSettingsStore.getState();
+        expect(state.getEpicRunSettings("epic-3", HOST_A)).toEqual(
+          EPIC_RUN_SETTINGS,
+        );
+        expect(state.getGlobalRunSettings(HOST_A)).toEqual(EPIC_RUN_SETTINGS);
+      });
+
+      it("keeps the deleting host's own global settings over the legacy ones", () => {
+        seedEveryTier();
+        useComposerRunSettingsStore
+          .getState()
+          .setGlobalRunSettings(HOST_A, REGULAR_RUN_SETTINGS, 5);
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_A),
+        ).toEqual(REGULAR_RUN_SETTINGS);
+      });
+
+      it("keeps another host's bucket, which that host still reads", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore
+            .getState()
+            .getEpicRunSettings("epic-1", HOST_B),
+        ).toEqual(REGULAR_RUN_SETTINGS);
+      });
+
+      // The per-host cap runs once, on the final set, after the deletion:
+      // never on the adopted set before it.
+      describe("the cap", () => {
+        function seedLegacy(count: number): void {
+          useComposerRunSettingsStore.setState({
+            legacyEpicRunSettingsByEpicId: Object.fromEntries(
+              Array.from({ length: count }, (_, index) => [
+                `legacy-${String(index + 1)}`,
+                { settings: EPIC_RUN_SETTINGS, updatedAt: index + 1 },
+              ]),
+            ),
+          });
+        }
+
+        function hostAEpicIds(): string[] {
+          return Object.keys(
+            useComposerRunSettingsStore.getState().epicRunSettingsByEpicHost,
+          )
+            .filter((key) => key.endsWith(` ${HOST_A}`))
+            .map((key) => key.slice(0, key.indexOf(" ")));
+        }
+
+        it("does not evict a survivor for an entry the same sweep deletes", () => {
+          seedLegacy(COMPOSER_RUN_SETTINGS_EPIC_CAP);
+          useComposerRunSettingsStore
+            .getState()
+            .setEpicRunSettings(
+              "epic-new",
+              HOST_A,
+              REGULAR_RUN_SETTINGS,
+              COMPOSER_RUN_SETTINGS_EPIC_CAP + 1,
+            );
+
+          useComposerRunSettingsStore
+            .getState()
+            .clearEpicRunSettingsForHost(
+              [`legacy-${String(COMPOSER_RUN_SETTINGS_EPIC_CAP)}`],
+              HOST_A,
+            );
+
+          const kept = hostAEpicIds();
+          expect(kept).toHaveLength(COMPOSER_RUN_SETTINGS_EPIC_CAP);
+          expect(kept).toContain("legacy-1");
+          expect(kept).toContain("epic-new");
+        });
+
+        it.each([
+          [COMPOSER_RUN_SETTINGS_EPIC_CAP - 1, false],
+          [COMPOSER_RUN_SETTINGS_EPIC_CAP - 1, true],
+          [COMPOSER_RUN_SETTINGS_EPIC_CAP, false],
+          [COMPOSER_RUN_SETTINGS_EPIC_CAP, true],
+          [COMPOSER_RUN_SETTINGS_EPIC_CAP + 1, false],
+          [COMPOSER_RUN_SETTINGS_EPIC_CAP + 1, true],
+        ])(
+          "adopting %i legacy entries (deleting the newest: %s) keeps the newest that fit",
+          (count, deleteNewest) => {
+            seedLegacy(count);
+
+            useComposerRunSettingsStore
+              .getState()
+              .clearEpicRunSettingsForHost(
+                [deleteNewest ? `legacy-${String(count)}` : "epic-absent"],
+                HOST_A,
+              );
+
+            const survivors = deleteNewest ? count - 1 : count;
+            const expected = Math.min(
+              survivors,
+              COMPOSER_RUN_SETTINGS_EPIC_CAP,
+            );
+            const kept = hostAEpicIds();
+            expect(kept).toHaveLength(expected);
+            // The ones kept are the newest survivors.
+            const oldestKept = survivors - expected + 1;
+            expect(kept).toContain(`legacy-${String(oldestKept)}`);
+            expect(kept).not.toContain(`legacy-${String(oldestKept - 1)}`);
+            expect(kept).not.toContain(
+              deleteNewest ? `legacy-${String(count)}` : "epic-absent",
+            );
+          },
+        );
+      });
+
+      it("leaves other epics on the deleting host alone", () => {
+        seedEveryTier();
+        useComposerRunSettingsStore
+          .getState()
+          .setEpicRunSettings("epic-2", HOST_A, EPIC_RUN_SETTINGS, 30);
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore
+            .getState()
+            .getEpicRunSettings("epic-2", HOST_A),
+        ).toEqual(EPIC_RUN_SETTINGS);
+      });
+    });
+
     it("setGlobalRunSettings / setEpicRunSettings are no-ops when hostId is null", () => {
       useComposerRunSettingsStore
         .getState()

@@ -13,6 +13,10 @@ import {
   type ImageGenerationStatus,
 } from "./image-generation/image-generation";
 import { ImageLightbox } from "./image-lightbox";
+import {
+  imageResultFileName,
+  recordedImageAspectRatio,
+} from "./image-result-presentation";
 
 interface ImageGenerationCardProps {
   readonly id: string;
@@ -82,7 +86,7 @@ function GenerationCell(props: {
   const aspectRatio =
     props.result === null
       ? props.fallbackAspectRatio
-      : resultAspectRatio(props.result, props.fallbackAspectRatio);
+      : (recordedImageAspectRatio(props.result) ?? props.fallbackAspectRatio);
   const resolution =
     props.result !== null &&
     props.result.width !== null &&
@@ -181,7 +185,7 @@ function GeneratedImageContent(props: {
         src={image.src}
         alt={alt.length > 0 ? alt : "Generated image"}
         mediaType={effectiveMediaType}
-        suggestedName={generatedImageName(props.result)}
+        suggestedName={imageResultFileName(props.result)}
         className="size-full overflow-hidden"
       >
         <img
@@ -197,12 +201,6 @@ function GeneratedImageContent(props: {
       </ImageLightbox>
     </div>
   );
-}
-
-function generatedImageName(result: ImageGenerationResult): string | null {
-  if (result.filePath === null) return null;
-  const name = result.filePath.split(/[\\/]/).at(-1);
-  return name === undefined || name.length === 0 ? null : name;
 }
 
 function generationPresentation(
@@ -232,16 +230,6 @@ function parseAspectRatio(value: string | undefined): number {
   const height = Number(match[2]);
   if (width <= 0 || height <= 0) return 1;
   return Math.min(4, Math.max(0.25, width / height));
-}
-
-function resultAspectRatio(
-  result: ImageGenerationResult,
-  fallback: number,
-): number {
-  if (result.width === null || result.height === null || result.height <= 0) {
-    return fallback;
-  }
-  return Math.min(4, Math.max(0.25, result.width / result.height));
 }
 
 function generationFrameStyle(
