@@ -406,6 +406,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
                 setEnabled: [],
               },
               traycerSessionToolsNotice: true,
+              openChatsApplyNextMessage: false,
             },
             skills: null,
             modelProviders: null,

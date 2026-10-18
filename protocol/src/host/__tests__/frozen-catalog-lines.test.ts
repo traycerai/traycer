@@ -35,6 +35,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
+  providersListResponseSchemaV102Preimage,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
@@ -265,9 +266,10 @@ const LIVE_FROZEN_EXPORTS = {
   // shape, so a released 10.1 reader never sees a key it cannot spell. Its dump
   // did not change by the freeze.
   "providers.list@10.1": providersListResponseSchemaV101Preimage,
-  // The head line: it names the LIVE schema, so the next growth of the provider
-  // state fails here first.
-  "providers.list@10.2": providersListResponseSchema,
+  // 10.2 froze when the open-chat plugin capability opened 10.3.
+  "providers.list@10.2": providersListResponseSchemaV102Preimage,
+  // The head line catches future growth of the provider state.
+  "providers.list@10.3": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,

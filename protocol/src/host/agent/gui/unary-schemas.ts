@@ -721,6 +721,13 @@ export type ListGuiAgentCommandsRequest = z.infer<
   typeof listGuiAgentCommandsRequestSchema
 >;
 
+/** 1.1 carries the account whose environment the command catalog describes. */
+export const listGuiAgentCommandsRequestSchemaV11 = lazySchema(() =>
+  listGuiAgentCommandsRequestSchema.extend({
+    profileId: z.string().nullable().default(null),
+  }),
+);
+
 export const listGuiAgentCommandsResponseSchema = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,

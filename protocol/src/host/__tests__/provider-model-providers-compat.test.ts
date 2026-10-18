@@ -1850,7 +1850,9 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
   const PAIRS = [
     [
       "plugins capabilities",
-      providerPluginsCapabilitiesSchema,
+      providerPluginsCapabilitiesSchema.omit({
+        openChatsApplyNextMessage: true,
+      }),
       providerPluginsCapabilitiesSchemaV70,
     ],
     [

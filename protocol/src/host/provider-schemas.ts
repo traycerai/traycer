@@ -42,6 +42,7 @@ import {
   nativeMutationSchema,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
+  providerNativeCapabilitiesSchemaBeforeOpenChatPlugins,
   providerNativeCapabilitiesSchemaBeforeMcpRemedies,
   providerNativeCapabilitiesSchemaV70,
   providerNativeCapabilitiesSchemaV70Preimage,
@@ -59,6 +60,7 @@ import {
   type NativeMutation,
   type NativeMutationResult,
   type ProviderNativeCapabilities,
+  type ProviderNativeCapabilitiesBeforeOpenChatPlugins,
   type ProviderNativeCapabilitiesV70Preimage,
 } from "./provider-native-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -1944,7 +1946,7 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.2). Mutation echoes use their
+ * Latest provider CLI state (providers.list@10.3). Mutation echoes use their
  * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
@@ -2323,7 +2325,7 @@ export type ProvidersListRequestV70 = z.infer<
  * the list/discover result (or a typed native error). Classic callers receive
  * `native: null`.
  *
- * Earlier lines each bind a frozen response; only the head (10.2) binds this
+ * Earlier lines each bind a frozen response; only the head (10.3) binds this
  * live schema, so new fields do not widen a released line.
  */
 export const providersListResponseSchema = lazySchema(() =>
@@ -2349,10 +2351,32 @@ export const providersListResponseSchemaV100Preimage = lazySchema(() =>
   }),
 );
 
+/** The released list@10.2 shape before the open-chat plugin capability. */
+export const providersListResponseSchemaV102Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
+    native: nativeListResultSchema.nullable().default(null),
+  }),
+);
+
 /** The released list@10.1 shape before the list-only macOS verdict. */
 export const providersListResponseSchemaV101Preimage = lazySchema(() =>
   z.object({
-    providers: z.array(providerCliStateSchema.omit({ macosRequirement: true })),
+    providers: z.array(
+      providerCliStateSchema.omit({ macosRequirement: true }).extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
     native: nativeListResultSchema.nullable().default(null),
   }),
 );
@@ -4804,6 +4828,7 @@ export type DowngradableToV10ProviderState = (
   // strict v1.0 parse strips the field either way.
   nativeCapabilities?:
     | ProviderNativeCapabilities
+    | ProviderNativeCapabilitiesBeforeOpenChatPlugins
     | ProviderNativeCapabilitiesV70Preimage;
   // Widened to the live OR the pre-image union once the version-manager work
   // grew the live arms with `version`. `providersListDowngradeV7ToV1` feeds

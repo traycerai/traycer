@@ -481,11 +481,16 @@ export function useGuiHarnessCommandsQuery(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,
   workingDirectories: ReadonlyArray<string>,
-  activity: QueryActivityOptions,
+  activity: QueryActivityOptions & { readonly profileId: string | null },
 ): UseQueryResult<ListGuiAgentCommandsResponse, HostRpcError> {
   const params = useMemo(
-    () => guiHarnessCommandsQueryParams(harnessId, workingDirectories),
-    [harnessId, workingDirectories],
+    () =>
+      guiHarnessCommandsQueryParams(
+        harnessId,
+        workingDirectories,
+        activity.profileId,
+      ),
+    [harnessId, workingDirectories, activity.profileId],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listCommands">({
     cacheKeyIdentity: undefined,
@@ -788,12 +793,14 @@ export function useRefreshHarnessCatalogForClient(
 function guiHarnessCommandsQueryParams(
   harnessId: GuiHarnessId,
   workingDirectories: ReadonlyArray<string>,
+  profileId: string | null,
 ) {
   const normalized = dedupeNonEmptyStrings(workingDirectories);
   return {
     harnessId,
     workingDirectory: normalized[0] ?? null,
     workingDirectories: normalized,
+    profileId,
   };
 }
 

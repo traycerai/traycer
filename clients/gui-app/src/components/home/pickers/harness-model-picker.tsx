@@ -588,6 +588,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     EMPTY_COMMANDS_WORKING_DIRECTORIES,
     {
+      profileId: selection.profileId,
       enabled: false,
       subscribed: false,
     },

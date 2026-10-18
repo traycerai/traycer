@@ -251,6 +251,8 @@ import {
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
+  agentGuiListCommandsV11,
+  agentGuiListCommandsUpgradeV10ToV11,
   agentGuiListHarnessesDowngradeV2ToV1,
   agentGuiListHarnessesDowngradeV3ToV1,
   agentGuiListHarnessesDowngradeV3ToV2,
@@ -1239,6 +1241,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
+  providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -2716,7 +2719,39 @@ export const providersListV102 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 2 } as const,
   requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV102Preimage,
+});
+
+export const providersListV103 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 3 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV102ToV103 = defineUpgradePath<
+  typeof providersListV102,
+  typeof providersListV103
+>({
+  from: { major: 10, minor: 2 },
+  to: { major: 10, minor: 3 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      nativeCapabilities: {
+        ...provider.nativeCapabilities,
+        plugins:
+          provider.nativeCapabilities.plugins === null
+            ? null
+            : {
+                ...provider.nativeCapabilities.plugins,
+                openChatsApplyNextMessage: false,
+              },
+      },
+    })),
+  }),
 });
 
 export const providersListUpgradeV101ToV102 = defineUpgradePath<
@@ -3326,10 +3361,10 @@ export const providersListDowngradeV9ToV1 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -3351,10 +3386,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3373,10 +3408,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3395,10 +3430,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3415,10 +3450,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3435,10 +3470,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3455,10 +3490,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3475,10 +3510,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3495,10 +3530,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV102,
+  typeof providersListV103,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -7119,11 +7154,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.gui.listCommands": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentGuiListCommandsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentGuiListCommandsV11,
+          upgradeFromPreviousVersion: agentGuiListCommandsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -12503,7 +12542,7 @@ const HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION = {
     // whose three minors are frozen at the twenty-one ids that release
     // negotiated.
     10: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersListV100,
@@ -12517,6 +12556,10 @@ const HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION = {
           contract: providersListV102,
           upgradeFromPreviousVersion: providersListUpgradeV101ToV102,
           // A new key; no response value-growth projection gate is needed.
+        },
+        3: {
+          contract: providersListV103,
+          upgradeFromPreviousVersion: providersListUpgradeV102ToV103,
         },
       },
       downgradePathsFromLatest: {

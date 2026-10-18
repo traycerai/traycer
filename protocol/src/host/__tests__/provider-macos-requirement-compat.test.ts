@@ -9,6 +9,7 @@ import {
   providerCliStateSchema,
   providerMutationCliStateSchemaV21,
   providersListResponseSchema,
+  providersListResponseSchemaV102Preimage,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -60,9 +61,9 @@ const MACOS_INELIGIBLE = {
 } as const;
 
 describe("providers.list@10.2 carries macosRequirement", () => {
-  it("opens exactly one new minor on major 10", () => {
+  it("keeps the 10.2 macOS capability line registered", () => {
     const entry = hostRpcRegistry["providers.list"][10];
-    expect(entry.latestMinor).toBe(2);
+    expect(entry.latestMinor).toBe(3);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -158,7 +159,9 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     ).toMatchObject({ responseSchema: preimage });
     expect(
       hostRpcRegistry["providers.list"][10].versions[2].contract,
-    ).toMatchObject({ responseSchema: providersListResponseSchema });
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV102Preimage,
+    });
   });
 
   it("upgrades a 10.1 response by filling macosRequirement: null on every provider", () => {
