@@ -413,6 +413,11 @@ export const providerPluginsCapabilitiesSchema = lazySchema(() =>
      * tools are absent from Traycer `execute()` stream. UI warns when true.
      */
     traycerSessionToolsNotice: z.boolean(),
+    /**
+     * Only a host that advertises this field promises next-message pickup.
+     * Older host capability literals omit it; clients treat absence as false.
+     */
+    openChatsApplyNextMessage: z.boolean().optional(),
   }),
 );
 export type ProviderPluginsCapabilities = z.infer<
@@ -550,10 +555,23 @@ export type ProviderNativeCapabilities = z.infer<
   typeof providerNativeCapabilitiesSchema
 >;
 
+/** Plugin shape before open-chat application, also used by frozen v7–v9. */
+export const providerNativeCapabilitiesSchemaBeforeOpenChatPlugins = lazySchema(
+  () =>
+    providerNativeCapabilitiesSchema.extend({
+      plugins: providerPluginsCapabilitiesSchema
+        .omit({ openChatsApplyNextMessage: true })
+        .nullable(),
+    }),
+);
+export type ProviderNativeCapabilitiesBeforeOpenChatPlugins = z.infer<
+  typeof providerNativeCapabilitiesSchemaBeforeOpenChatPlugins
+>;
+
 /** Keep list@10.0's MCP descriptor independent of the live remedy capability. */
 export const providerNativeCapabilitiesSchemaBeforeMcpRemedies = lazySchema(
   () =>
-    providerNativeCapabilitiesSchema.extend({
+    providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.extend({
       mcp: providerMcpCapabilitiesSchemaV70.nullable(),
     }),
 );
@@ -2730,7 +2748,7 @@ export type ProviderSettingsTabV70 = z.infer<
 
 /**
  * Frozen `nativeCapabilities` for the released `providers.list` lines: the live
- * descriptor with the settings-tab enum pinned.
+ * descriptor with the settings-tab enum and pre-open-chat plugin shape pinned.
  *
  * `.extend()` reaches exactly ONE level, which is why this pins the tab list
  * and not the enums nested inside `mcp` / `plugins` / `skills` /
@@ -2749,7 +2767,7 @@ export type ProviderSettingsTabV70 = z.infer<
  * `modelProviders` landed.
  */
 export const providerNativeCapabilitiesSchemaV70 = lazySchema(() =>
-  providerNativeCapabilitiesSchema.extend({
+  providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.extend({
     supportedTabs: z.array(providerSettingsTabSchemaV70),
     mcp: providerMcpCapabilitiesSchemaV70.nullable(),
   }),

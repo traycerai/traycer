@@ -608,6 +608,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     EMPTY_COMMANDS_WORKING_DIRECTORIES,
     {
+      profileId: selection.profileId,
       enabled: false,
       subscribed: false,
     },
@@ -615,14 +616,15 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // Latest-ref indirection: a `UseQueryResult` is a fresh object every render,
   // and `selectedHarnessRefetchGate` must be read at the moment the intent
   // effects below actually fire rather than captured as a stale closure from
-  // whenever `visibleOpen` / `selection.harnessId` last changed - so none of
-  // these is a dependency of those effects. Adding the gate as a dependency
+  // whenever `visibleOpen`, `selection.harnessId`, or `selection.profileId`
+  // last changed. None of those query results or the gate is a dependency of
+  // the intent effects. Adding the gate as a dependency
   // would re-run them on every gate flip, not just on an actual open/selection
   // edge. This effect has no dependency array, so it re-syncs after every
   // render and is declared BEFORE the intent effects: React runs effects in
-  // declaration order, so on the render where the user picks a new harness the
-  // refs already point at that harness's query by the time the selection edge
-  // fires.
+  // declaration order, so on the render where the user picks a new harness or
+  // profile the refs already point at that selection's queries by the time the
+  // selection edge fires.
   const selectedModelsQueryRef = useRef(selectedModelsQuery);
   const selectedCommandsQueryRef = useRef(selectedCommandsQuery);
   const selectedHarnessRefetchGateRef = useRef(selectedHarnessRefetchGate);
@@ -665,14 +667,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     if (!visibleOpen) return;
     runSelectedHarnessIntentRefetch();
   }, [runSelectedHarnessIntentRefetch, visibleOpen]);
-  const skipInitialHarnessRefetchRef = useRef(true);
+  const skipInitialSelectionRefetchRef = useRef(true);
   useEffect(() => {
-    if (skipInitialHarnessRefetchRef.current) {
-      skipInitialHarnessRefetchRef.current = false;
+    if (skipInitialSelectionRefetchRef.current) {
+      skipInitialSelectionRefetchRef.current = false;
       return;
     }
     runSelectedHarnessIntentRefetch();
-  }, [runSelectedHarnessIntentRefetch, selection.harnessId]);
+  }, [
+    runSelectedHarnessIntentRefetch,
+    selection.harnessId,
+    selection.profileId,
+  ]);
   const catalogActive = activityEnabled && visibleOpen;
   // `"cached-only"`: the open popover renders every rail entry's models from
   // whatever the run-target host's cache slots hold (the prefetcher's app-load

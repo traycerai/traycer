@@ -44,6 +44,7 @@ import {
   nativeMutationSchema,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
+  providerNativeCapabilitiesSchemaBeforeOpenChatPlugins,
   providerNativeCapabilitiesSchemaBeforeMcpRemedies,
   providerNativeCapabilitiesSchemaV70,
   providerNativeCapabilitiesSchemaV70Preimage,
@@ -61,6 +62,7 @@ import {
   type NativeMutation,
   type NativeMutationResult,
   type ProviderNativeCapabilities,
+  type ProviderNativeCapabilitiesBeforeOpenChatPlugins,
   type ProviderNativeCapabilitiesV70Preimage,
 } from "./provider-native-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -2354,16 +2356,45 @@ export const providersListResponseSchemaV100Preimage = lazySchema(() =>
 /** The released list@10.1 shape before the list-only macOS verdict. */
 export const providersListResponseSchemaV101Preimage = lazySchema(() =>
   z.object({
-    providers: z.array(providerCliStateSchema.omit({ macosRequirement: true })),
+    providers: z.array(
+      providerCliStateSchema.omit({ macosRequirement: true }).extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
     native: nativeListResultSchemaV101Preimage.nullable().default(null),
   }),
 );
 
-/** The published list@10.2 shape, including the macOS verdict. */
+/** The published list@10.2 shape, before MCP origin and coverage. */
 export const providersListResponseSchemaV102Preimage = lazySchema(() =>
   z.object({
-    providers: z.array(providerCliStateSchema),
+    providers: z.array(
+      providerCliStateSchema.extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
     native: nativeListResultSchemaV101Preimage.nullable().default(null),
+  }),
+);
+
+/** Kilo's published list@10.3 before the open-chat plugin capability. */
+export const providersListResponseSchemaV103Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
+    native: nativeListResultSchema.nullable().default(null),
   }),
 );
 
@@ -4817,6 +4848,7 @@ export type DowngradableToV10ProviderState = (
   // strict v1.0 parse strips the field either way.
   nativeCapabilities?:
     | ProviderNativeCapabilities
+    | ProviderNativeCapabilitiesBeforeOpenChatPlugins
     | ProviderNativeCapabilitiesV70Preimage;
   // Widened to the live OR the pre-image union once the version-manager work
   // grew the live arms with `version`. `providersListDowngradeV7ToV1` feeds

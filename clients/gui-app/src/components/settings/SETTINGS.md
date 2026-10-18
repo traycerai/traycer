@@ -3051,6 +3051,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     - **They cannot ride the list.** Icons are ~900 KB (~1.2 MB base64) for a
       typical Codex install - one 1024x1024 PNG is 451 KB - and
       `useProvidersPluginsList` runs `staleTime: 30_000`.
+      The plugins capability `openChatsApplyNextMessage` changes the post-write
+      hint only when the host advertises it. The hint says that open chats on
+      the changed plugin setup pick changes up with their next message and that
+      a restart ends background work. Other providers keep the restart hint.
     - **`poll: false` on the icon query is load-bearing.** `providers.list` is
       condition-polled and condition queries join the table-owned poll BY
       DEFAULT; `refetchInterval` also fires regardless of `staleTime`, so the

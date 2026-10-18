@@ -2567,6 +2567,7 @@ function useChatTileSessionViewModel(
   } = useSlashCommands("", {
     hostClient: tabHostClient,
     harnessId: currentComposerSettings.harnessId,
+    profileId: currentComposerSettings.profileId,
     // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
     // context-usage chip above uses it: on a folder-fallback chat the two differ,
     // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
@@ -3443,6 +3444,7 @@ function useChatTileSessionViewModel(
       <ContextUsageChipForChat
         handle={handle}
         harnessId={currentComposerSettings.harnessId}
+        profileId={currentComposerSettings.profileId}
         workingDirectories={resolvedComposerMentionRoots}
         commandsEnabled={activationQueries.discoverCompactSlashCommands}
         onCompact={canSendNextStep ? compactConversation : null}
@@ -3453,6 +3455,7 @@ function useChatTileSessionViewModel(
       compactConversation,
       resolvedComposerMentionRoots,
       currentComposerSettings.harnessId,
+      currentComposerSettings.profileId,
       handle,
       activationQueries.discoverCompactSlashCommands,
     ],
@@ -4008,6 +4011,7 @@ interface ChatSessionMessagesSurfaceProps {
 function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
   readonly harnessId: GuiHarnessId;
+  readonly profileId: string | null;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly commandsEnabled: boolean;
   readonly onCompact: ((commandName: string) => void) | null;
@@ -4024,6 +4028,7 @@ function ContextUsageChipForChat(props: {
   const { data: commands } = useSlashCommands("", {
     hostClient: client,
     harnessId: props.harnessId,
+    profileId: props.profileId,
     workingDirectories: props.workingDirectories,
     enabled: props.commandsEnabled,
     localCommands: NO_LOCAL_SLASH_COMMANDS,
