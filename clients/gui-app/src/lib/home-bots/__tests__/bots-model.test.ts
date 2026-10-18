@@ -516,6 +516,27 @@ describe("homeBotState", () => {
       },
     );
 
+    it("is paused for a team bot whose own host is known and cannot be dialled, while the registry has not answered", () => {
+      expect(
+        state({
+          environmentOwnerKind: "organization",
+          personalHostIds: null,
+          connectableHostIds: new Set(),
+        }),
+      ).toBe("paused");
+    });
+
+    it("is paused for a team bot on a host neither answered list carries, while the registry has not answered", () => {
+      expect(
+        state({
+          boundHostId: "host-elsewhere",
+          environmentHostIds: TEAM_ENV_HOSTS,
+          environmentOwnerKind: "organization",
+          personalHostIds: null,
+        }),
+      ).toBe("paused");
+    });
+
     it("keeps a personal environment's working bot working while the registry has not answered", () => {
       expect(
         state({

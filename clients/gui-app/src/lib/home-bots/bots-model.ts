@@ -169,13 +169,29 @@ export function homeBotState(input: {
 }): HomeBotState {
   const { boundHostId } = input;
   if (boundHostId === null) return "paused";
-  if (input.environmentOwnerKind === "organization") {
-    // Until the registry answers, a team bot's host may be a personal
-    // machine, which runs no team bot: neither working nor paused is known.
-    if (input.personalHostIds === null) return "idle";
-    if (input.personalHostIds.has(boundHostId)) return "paused";
+  const team = input.environmentOwnerKind === "organization";
+  if (team && input.personalHostIds?.has(boundHostId) === true) {
+    return "paused";
   }
+  const reach = reachabilityState(input, boundHostId);
+  // Until the registry answers, a team bot's host may be a personal machine,
+  // which runs no team bot: working is not known, though a host proven
+  // unreachable is paused whatever its kind.
+  if (team && input.personalHostIds === null) return reach;
   if (input.working) return "working";
+  return reach;
+}
+
+/** Paused when the answered lists prove the bound host away; idle otherwise. */
+function reachabilityState(
+  input: {
+    readonly directoryHostIds: ReadonlySet<string>;
+    readonly connectableHostIds: ReadonlySet<string>;
+    readonly connectableResolved: boolean;
+    readonly environmentHostIds: ReadonlySet<string> | null;
+  },
+  boundHostId: string,
+): "idle" | "paused" {
   if (!input.connectableResolved) return "idle";
   if (input.directoryHostIds.has(boundHostId)) {
     return input.connectableHostIds.has(boundHostId) ? "idle" : "paused";
