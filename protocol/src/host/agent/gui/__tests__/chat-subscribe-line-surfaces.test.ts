@@ -43,7 +43,10 @@
  *   prompt, the thinking-tokens estimate and frame, the cron background item
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
- *   lines bind frozen schemas without them, so needles do pin the boundary.
+ *   lines bind frozen schemas without them, so needles do pin the boundary;
+ * - `1.29` is the tool-call `artifact` stamp, minted above `1.28`: the
+ *   manifest an inline `traycer_render_inline` artifact showed. PROJECTED,
+ *   like `1.23`'s page/MCP App stamps, so a needle pins the boundary.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -91,9 +94,16 @@ const CLAUDE_PARITY_MINOR = 20;
 // `conversation-message` queue item (pinned below). `1.26` adds the
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
 // queue item (pinned below). `1.28` lets an `artifact_operation` block and
-// event name the html, canvas and file artifact kinds (pinned below). Every
-// threshold above still reads `>=` against the live line.
-const LIVE_MINOR = 28;
+// event name the html, canvas and file artifact kinds (pinned below). `1.29`
+// adds the tool-call `artifact` stamp (pinned below). Every threshold above
+// still reads `>=` against the live line.
+const LIVE_MINOR = 29;
+// `1.29`: the tool-call `artifact` stamp - the manifest an inline
+// `traycer_render_inline` artifact showed. Found structurally
+// (`toolCallArtifactStampPresent`, defined below), not by a substring
+// needle: `'"artifact":'` already appears on every line via the unrelated
+// `checkpointArtifactTagSchema` field.
+const ARTIFACT_STAMP_MINOR = 29;
 // `1.28`: the html-artifacts surface. `"canvas"` appears in no other shape the
 // line carries, so it is the one needle for the grown kind enum.
 const HTML_ARTIFACTS_MINOR = 28;
@@ -234,6 +244,41 @@ function shellShapes(schema: z.ZodType): {
   return tally;
 }
 
+// Whether any `tool_call` or `tool_call.completed` object node carries its
+// OWN `artifact` key, found structurally rather than by a `'"artifact":'`
+// needle - that substring already appears on every line via the unrelated,
+// much older `artifact: checkpointArtifactTagSchema` field (`subscribe.ts`,
+// `subscribe-windowed.ts`), so a plain needle cannot pin this boundary.
+function toolCallArtifactStampPresent(schema: z.ZodType): boolean {
+  let found = false;
+  const visit = (node: unknown): void => {
+    if (found || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties !== null && typeof properties === "object") {
+      const propertyKeys = properties as Record<string, unknown>;
+      const typeConst = literalSchema.safeParse(propertyKeys.type).data?.const;
+      if (
+        (typeConst === "tool_call" || typeConst === "tool_call.completed") &&
+        Object.hasOwn(propertyKeys, "artifact")
+      ) {
+        found = true;
+        return;
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  for (const io of ["input", "output"] as const) {
+    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    if (found) return true;
+  }
+  return found;
+}
+
 const unionArmsSchema = z.object({
   oneOf: z
     .array(z.object({ properties: z.record(z.string(), z.unknown()) }))
@@ -262,13 +307,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.28 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.29 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28,
+      21, 22, 23, 24, 25, 26, 27, 28, 29,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -309,6 +354,20 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           CONVERSATION_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual([]);
+      });
+
+      const carriesArtifactStamp = minor >= ARTIFACT_STAMP_MINOR;
+
+      it(`server frames ${carriesArtifactStamp ? "carry" : "hold back"} the tool-call artifact stamp`, () => {
+        expect(toolCallArtifactStampPresent(contract.serverFrameSchema)).toBe(
+          carriesArtifactStamp,
+        );
+      });
+
+      it("client frames hold back the artifact stamp on every line", () => {
+        expect(toolCallArtifactStampPresent(contract.clientFrameSchema)).toBe(
+          false,
+        );
       });
 
       const carriesHtmlArtifacts = minor >= HTML_ARTIFACTS_MINOR;

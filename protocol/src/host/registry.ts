@@ -353,6 +353,7 @@ import {
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -13838,7 +13839,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 28,
+      latestMinor: 29,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -14014,6 +14015,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         // New artifact kinds require 1.28; the host omits their blocks/events below it.
         28: { contract: chatSubscribeV128 },
+        29: { contract: chatSubscribeV129 },
       },
     },
   },

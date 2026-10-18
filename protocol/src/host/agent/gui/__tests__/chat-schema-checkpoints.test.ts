@@ -34,6 +34,7 @@ import {
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
+  chatSubscribeV128,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -306,6 +307,14 @@ const SERVER_FRAME_DIGESTS = {
     "4e9bcb56f5427b4fe47487bcd73a7a3bf5a0eb903882a3e9a09d35b7291d49f7",
     "30c937db5a5850bec9474b167d4bd7667e4fefb6f97559d3999dcbf03fec41e6",
   ],
+  // Captured from the live schema the moment before 1.29 opened above it: the
+  // html/canvas/file artifact-kind line, with tool calls carrying no
+  // `artifact` stamp. Verified against an independent read of the pre-change
+  // git baseline (HEAD), not just the frozen copy now in the tree.
+  28: [
+    "e531f43cd0a0fa22ebc67251a67c31b59834aa1a3255da6d6a41bb1d3525b410",
+    "06b157c44c485ca1cbc619c67c264552984e046435a767aa368d6820922861da",
+  ],
 } as const;
 
 const contracts = [
@@ -337,10 +346,11 @@ const contracts = [
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
+  chatSubscribeV128,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.27 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.28 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

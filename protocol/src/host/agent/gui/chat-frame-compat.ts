@@ -1367,3 +1367,6 @@ function projectChatEvents(value: unknown): unknown {
 
 /** Below 1.28 the host omits operation blocks/events for non-markdown kinds. */
 export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 28;
+
+/** Older peers receive the tool row without its inline artifact stamp. */
+export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 29;

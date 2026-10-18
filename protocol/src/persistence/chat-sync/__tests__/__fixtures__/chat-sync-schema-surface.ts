@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 8
+              "const": 9
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 8
+              "const": 9
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 8
+              "const": 9
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 8
+              "const": 9
             }
           },
           "required": [
@@ -2942,6 +2942,83 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 "additionalProperties": false
                                               }
                                             },
+                                            "artifact": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "artifactId": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "title": {
+                                                      "type": "string"
+                                                    },
+                                                    "manifest": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "files": {
+                                                          "type": "object",
+                                                          "propertyNames": {
+                                                            "type": "string",
+                                                            "maxLength": 1024,
+                                                            "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                                                          },
+                                                          "additionalProperties": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "sha256": {
+                                                                "type": "string",
+                                                                "pattern": "^[0-9a-f]{64}$"
+                                                              },
+                                                              "byteLength": {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              },
+                                                              "mediaType": {
+                                                                "type": "string",
+                                                                "maxLength": 127,
+                                                                "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "sha256",
+                                                              "byteLength",
+                                                              "mediaType"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          }
+                                                        },
+                                                        "capturedAt": {
+                                                          "type": "number"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "files",
+                                                        "capturedAt"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    "originChatId": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "artifactId",
+                                                    "title",
+                                                    "manifest",
+                                                    "originChatId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "page": {
                                               "default": null,
                                               "anyOf": [
@@ -3231,6 +3308,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "backgroundTask",
                                             "stopped",
                                             "imageResults",
+                                            "artifact",
                                             "page",
                                             "mcpApp"
                                           ],

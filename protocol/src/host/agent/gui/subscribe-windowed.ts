@@ -7,6 +7,7 @@ import {
   openChatEventSchema,
   openMessageSchema,
   openMessageSchemaPreHtml,
+  openMessageSchemaPreArtifact,
   openMessageSchemaPreConversation,
   openMessageSchemaPrePage,
 } from "@traycer/protocol/host/agent/gui/open-harness-wire";
@@ -801,6 +802,13 @@ export const openChatTranscriptWindowSchemaPreHtml = lazySchema(() =>
   }),
 );
 
+export const openChatTranscriptWindowSchemaPreArtifact = lazySchema(() =>
+  chatTranscriptWindowSchema.extend({
+    messages: z.array(openMessageSchemaPreArtifact),
+    events: z.array(openChatEventSchema),
+  }),
+);
+
 export const openChatTranscriptWindowSchema = lazySchema(() =>
   chatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchema),
@@ -1170,6 +1178,13 @@ export const chatRangeResponseSchemaPrePage = lazySchema(() =>
 export const openChatRangeResponseSchemaPreHtml = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchemaPreHtml),
+    events: z.array(openChatEventSchema),
+  }),
+);
+
+export const openChatRangeResponseSchemaPreArtifact = lazySchema(() =>
+  chatRangeResponseSchema.extend({
+    messages: z.array(openMessageSchemaPreArtifact),
     events: z.array(openChatEventSchema),
   }),
 );

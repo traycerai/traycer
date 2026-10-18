@@ -110,6 +110,7 @@ import {
   openChatSchema,
   openRuntimeEventSchema,
   openRuntimeEventSchemaPreHtml,
+  openRuntimeEventSchemaPreArtifact,
   openRuntimeEventSchemaPrePage,
   openUserMessageSchema,
   openUserMessageSchemaPreConversation,
@@ -149,12 +150,14 @@ import {
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
   openChatRangeResponseSchemaPreHtml,
+  openChatRangeResponseSchemaPreArtifact,
   openChatRangeResponseSchemaPreConversation,
   openChatRangeResponseSchemaPrePage,
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPrePage,
   openChatTranscriptWindowSchema,
   openChatTranscriptWindowSchemaPreHtml,
+  openChatTranscriptWindowSchemaPreArtifact,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreCommandCode,
   chatTranscriptWindowSchemaPreFallback,
@@ -3681,7 +3684,7 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue,
   blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
 ];
-// The live shared frames (`chat.subscribe@1.28`): the live open-harness common
+// The live shared frames (`chat.subscribe@1.29`): the live open-harness common
 // set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
@@ -6485,8 +6488,34 @@ const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
   ]),
 );
 
+/** Frozen 1.28: tool calls carry no artifact stamp. */
+const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV124.extend({
+        queue: openChatQueueStateSchema,
+        tail: openChatTranscriptWindowSchemaPreArtifact,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPreArtifact,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchema,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+    blockDeltaServerFrameSchema(openRuntimeEventSchemaPreArtifact),
+  ]),
+);
+
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.28`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.29`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7482,6 +7511,15 @@ export const chatSubscribeV127 = defineStreamRpcContract({
 export const chatSubscribeV128 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 28 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV128,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/** 1.29 stamps the manifest rendered by an inline HTML artifact. */
+export const chatSubscribeV129 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 29 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

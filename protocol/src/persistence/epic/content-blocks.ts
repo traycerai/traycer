@@ -10,6 +10,10 @@ import {
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import {
+  artifactManifestPathSchema,
+  artifactObjectRefSchema,
+} from "./artifacts";
+import {
   imageByteLengthSchema,
   imageDimensionSchema,
   imageSha256HexSchema,
@@ -714,6 +718,79 @@ export const toolCallPageStampSchema = lazySchema(() =>
 );
 export type ToolCallPageStamp = z.infer<typeof toolCallPageStampSchema>;
 
+export const ARTIFACT_STAMP_MAX_FILES = 1024;
+export const ARTIFACT_STAMP_MAX_PATH_CHARS = 1024;
+export const ARTIFACT_STAMP_MAX_MANIFEST_BYTES = 512 * 1024;
+
+/** Bound inline history independently of the capture plane's storage limits. */
+export const toolCallArtifactManifestSchema = lazySchema(() =>
+  z
+    .object({
+      files: z
+        .preprocess(
+          (value, ctx) => {
+            // z.record otherwise drops this key before its path can be checked.
+            if (typeof value === "object" && value !== null) {
+              if (Object.hasOwn(value, "__proto__")) {
+                ctx.addIssue({
+                  code: "custom",
+                  message: "Invalid artifact manifest path",
+                });
+                return z.NEVER;
+              }
+              const paths = Object.keys(value);
+              if (paths.length > ARTIFACT_STAMP_MAX_FILES) {
+                ctx.addIssue({
+                  code: "custom",
+                  message: "Inline artifacts support at most 1024 files.",
+                });
+                return z.NEVER;
+              }
+              if (
+                paths.some(
+                  (path) => path.length > ARTIFACT_STAMP_MAX_PATH_CHARS,
+                )
+              ) {
+                ctx.addIssue({
+                  code: "custom",
+                  message:
+                    "Inline artifact paths support at most 1024 characters.",
+                });
+                return z.NEVER;
+              }
+            }
+            return value;
+          },
+          z.record(
+            artifactManifestPathSchema.max(
+              ARTIFACT_STAMP_MAX_PATH_CHARS,
+              "Inline artifact paths support at most 1024 characters.",
+            ),
+            artifactObjectRefSchema.omit({ status: true }),
+          ),
+        )
+        .nonoptional(),
+      capturedAt: z.number(),
+    })
+    .refine(
+      (manifest) =>
+        new TextEncoder().encode(JSON.stringify(manifest)).byteLength <=
+        ARTIFACT_STAMP_MAX_MANIFEST_BYTES,
+      "Inline artifact manifests support at most 512 KiB.",
+    ),
+);
+
+/** The captured objects an inline artifact showed, independent of upload status. */
+export const toolCallArtifactStampSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string().min(1),
+    title: z.string(),
+    manifest: toolCallArtifactManifestSchema,
+    originChatId: z.string().min(1),
+  }),
+);
+export type ToolCallArtifactStamp = z.infer<typeof toolCallArtifactStampSchema>;
+
 /**
  * One origin an MCP App's CSP may name. Anything but an https or wss origin
  * (optionally `*.`-wildcarded, optionally with a port) is rejected, so no `;`,
@@ -890,6 +967,33 @@ export const toolCallBlockSchema = lazySchema(() =>
     // `toolCallMcpAppStampSchema`. Null for every other call and for blocks
     // persisted before these fields. Deliberately NOT on the hand-frozen
     // `toolCallBlockSchemaPrePage` below, so `1.21` and older never see them.
+    // Defaulted so this is a same-major additive persistence change.
+    artifact: toolCallArtifactStampSchema.nullable().default(null),
+    page: toolCallPageStampSchema.nullable().default(null),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
+// Frozen through chat.subscribe@1.28: keep the artifact stamp off older lines.
+export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
     page: toolCallPageStampSchema.nullable().default(null),
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
@@ -2354,7 +2458,7 @@ export const contentBlockSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchema,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPreArtifact,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,

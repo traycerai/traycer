@@ -44,6 +44,7 @@ import {
   toolCallManagedCommandSchema,
   toolCallMcpAppStampSchema,
   toolCallPageStampSchema,
+  toolCallArtifactStampSchema,
   workflowActivityEntrySchema,
   type AgentFailureReason,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -580,6 +581,24 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // omits them, and an omission is "nothing to say" - a re-completion must
     // not erase a stamp the first completion carried. Not on the hand-frozen
     // `toolCallCompletedEventSchemaPrePage` below.
+    artifact: toolCallArtifactStampSchema.nullable().optional(),
+    page: toolCallPageStampSchema.nullable().optional(),
+    mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
+  }),
+);
+// Frozen through chat.subscribe@1.28.
+export const toolCallCompletedEventSchemaPreArtifact = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.completed"),
+    toolName: z.string(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
     page: toolCallPageStampSchema.nullable().optional(),
     mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
   }),

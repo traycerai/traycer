@@ -49,6 +49,7 @@ import {
   textBlockSchema,
   todoBlockSchema,
   toolCallBlockSchema,
+  toolCallBlockSchemaPreArtifact,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   assistantMessageSchema,
@@ -150,7 +151,7 @@ export const openContentBlockSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPreArtifact,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -166,6 +167,25 @@ export const openContentBlockSchemaPreHtml = lazySchema(() =>
   ]),
 );
 
+export const openContentBlockSchemaPreArtifact = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreArtifact,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 export const openContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -244,6 +264,18 @@ export const openMessageSchema = lazySchema(() =>
   ]),
 );
 export type OpenMessage = z.infer<typeof openMessageSchema>;
+
+export const openAssistantMessageSchemaPreArtifact = lazySchema(() =>
+  openAssistantMessageSchema.extend({
+    blocks: z.array(openContentBlockSchemaPreArtifact),
+  }),
+);
+export const openMessageSchemaPreArtifact = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchema,
+    openAssistantMessageSchemaPreArtifact,
+  ]),
+);
 
 export const openAssistantMessageSchemaPreHtml = lazySchema(() =>
   openAssistantMessageSchema.extend({
