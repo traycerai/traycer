@@ -290,23 +290,6 @@ export interface ChatPreContentInput {
 }
 
 /**
- * Which strip `ChatTile` draws, and the only place that decides it: the tile
- * mounts its banner off this answer, and the body reads the same one.
- *
- * The directory decides first. A lease that reads dead and offline also draws
- * the offline strip while the directory still says reachable or checking: the
- * lease is the stronger evidence (refusals this client saw), and the
- * directory's cloud presence keeps a host that just vanished connectable for
- * minutes. Without this the body said the host was offline while nothing
- * above it offered a way to continue. A host that is starting keeps its
- * starting strip, which never offers Clone.
- *
- * A ready live session outranks the lease, as it outranks the directory in
- * `useHostReachability`: the lease arrives on its own path and can still read
- * dead for a render after the session to the host is up, and a Clone offer
- * over a working chat invites a fork of a healthy agent.
- */
-/**
  * The label the chat tile names its host by, in the strip and the body alike,
  * or `null` for "the host".
  *
@@ -325,6 +308,23 @@ export function chatTileHostLabel(
     : label;
 }
 
+/**
+ * Which strip `ChatTile` draws, and the only place that decides it: the tile
+ * mounts its banner off this answer, and the body reads the same one.
+ *
+ * The directory decides first. A lease that reads dead and offline also draws
+ * the offline strip while the directory still says reachable or checking: the
+ * lease is the stronger evidence (refusals this client saw), and the
+ * directory's cloud presence keeps a host that just vanished connectable for
+ * minutes. Without this the body said the host was offline while nothing
+ * above it offered a way to continue. A host that is starting keeps its
+ * starting strip, which never offers Clone.
+ *
+ * A ready live session outranks the lease, as it outranks the directory in
+ * `useHostReachability`: the lease arrives on its own path and can still read
+ * dead for a render after the session to the host is up, and a Clone offer
+ * over a working chat invites a fork of a healthy agent.
+ */
 export function chatPreContentStrip(
   status: HostReachabilityStatus,
   lease: HostLeaseSnapshot | null,
