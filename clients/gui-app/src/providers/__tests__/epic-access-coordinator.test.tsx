@@ -222,6 +222,7 @@ describe("EpicAccessCoordinator", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useComposerRunSettingsStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
     clearSessionCreatedEpics();
     vi.restoreAllMocks();
   });
@@ -544,7 +545,6 @@ describe("EpicAccessCoordinator", () => {
         .getState()
         .getEpicRunSettings("epic-local", "test-host"),
     ).toBeNull();
-    useSelectionAuthorityStore.getState().reset();
   });
 
   it("T10: routes a multi-epic delete notification through ONE coordinated handleEpicAccessLoss call, not a per-epic loop", async () => {
@@ -661,6 +661,15 @@ describe("EpicAccessCoordinator", () => {
       "epic-left",
       "epic-right",
     ]);
+  });
+
+  it("starts the next test from the selection-authority store's initial state", () => {
+    // The test above sets `effectiveHostId` and leaves it set; the suite's
+    // `afterEach` resets it, so a later deletion notice is not scoped
+    // against a window host leaked from an earlier test.
+    expect(useSelectionAuthorityStore.getState()).toEqual(
+      useSelectionAuthorityStore.getInitialState(),
+    );
   });
 
   it("T10: clears composer run settings for every batch epicId, including one without a resident tab", async () => {
