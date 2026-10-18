@@ -872,8 +872,8 @@ Providers stops showing those two tabs. The host's `supportedTabs` wire is
 unchanged. On both pages a global-scope entry carries whether it is one of the
 person's settings (`PersonalEntryMark`): "Personal" when the host applied one
 of their items as that entry (`environment.status` `appliedAs`), otherwise "On
-<host> only" with "Add to Personal" (`providers.nativeMutate@1.1`
-`promoteToPersonal`, shown only on a host that negotiated 1.1). A project's
+<host> only" with "Add to Personal" (`providers.nativeMutate@1.2`
+`promoteToPersonal`, shown only on a host that negotiated 1.2). A project's
 entries stay with the project and carry no mark. A new entry added, created or
 imported here stays on this host ("On <host> only") until "Add to Personal".
 On a Personal entry the host passes on only Remove and an MCP server's tool
@@ -4483,25 +4483,6 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   hooks. This settings panel edits only the global guide. A workspace can add
   `.traycer/agent-selection-guide.md` manually; agents layer that file over the
   global guide when they work in that workspace.
-  - **Environment** (`panels/host-environment-section.tsx`, above the guide
-    editor, Tracy Bots). Which environment THIS host runs: the personal one
-    unless it was bound to a team. Reads `environment.list` and
-    `environment.host.read` through the scope's client, marks the environment
-    the host reports (`aria-pressed`), and binds on a click through
-    `environment.host.bind`; the mutation has no toast - a refusal is shown in
-    place under the list (`role="alert"`). Nothing is pre-selected: the marked
-    row is the host's own answer, never a default the panel chose. On a host
-    whose handshake lacks `environment.host.read` the section shows one
-    sentence saying the host predates environments; while the capability is
-    unknown it renders nothing. The copy says the host's bots and the guide
-    below belong to the environment. The sidebar's host list shows each
-    host's environment label beside its name (`HostOptionRow`'s
-    `environmentLabel`, resolved by `useHostEnvironmentLabelResolver` in
-    `settings-sidebar.tsx`), read under the same rule as the update badges:
-    only over a session this client already holds (the local host, the
-    scoped host, a remote host with a borrowable session); any other row says
-    nothing. Every other host picker passes `environmentLabelForHost={null}`
-    and shows no label.
 - `Fallback` (section id `fallback`, route `/settings/fallback`,
   `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
   configuration surface for **automatic provider fallback**: what the host does
@@ -5974,6 +5955,26 @@ set-state-in-effect` forbids the effect form, and an effect would also
        (`useHostAccessPromptsStore`, persisted); the host keeps no "asked"
        mark, so another desktop, or this one after its storage is cleared,
        asks again.
+    5. **Runs bots for** (`panels/host-environment-section.tsx`, its own row
+       under the question, Tracy Bots): whose bots THIS host runs, the
+       person's or one team's. It reads the scope's host, the one the picker
+       names, never the window's. Reads `environment.list` and
+       `environment.host.read` through the scope's client, marks the one the
+       host reports (`aria-pressed`), and binds on a click through
+       `environment.host.bind`; the mutation has no toast - a refusal is shown
+       in place under the list (`role="alert"`). Nothing is pre-selected: the
+       marked row is the host's own answer, never a default the panel chose.
+       A sandbox shows nothing (who pays for it settles whose bots it runs). On
+       a host whose handshake lacks `environment.host.read` the row says to
+       update the host; while the capability is unknown it renders nothing.
+       The create-bot form's "choose in Host settings" link opens this page.
+       The sidebar's host list shows each host's environment label beside its
+       name (`HostOptionRow`'s `environmentLabel`, resolved by
+       `useHostEnvironmentLabelResolver` in `settings-sidebar.tsx`), read under
+       the same rule as the update badges: only over a session this client
+       already holds (the local host, the scoped host, a remote host with a
+       borrowable session); any other row says nothing. Every other host
+       picker passes `environmentLabelForHost={null}` and shows no label.
   - **The destructive rule.** Force update…, Force restart… and Apply now end
     running work, so they are destructive-styled wherever they appear: the
     update card, the drain-gate row, and the busy dialogs

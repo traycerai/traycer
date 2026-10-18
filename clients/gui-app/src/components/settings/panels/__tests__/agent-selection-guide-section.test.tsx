@@ -23,8 +23,10 @@ type GuideData = {
   readonly generatedDefaultContent: string;
 };
 
+// A marker, so a mount of the section on this page is visible to the case
+// that says it has none.
 vi.mock("@/components/settings/panels/host-environment-section", () => ({
-  HostEnvironmentSection: () => null,
+  HostEnvironmentSection: () => <div data-testid="host-environment-section" />,
 }));
 
 type Deferred<T> = {
@@ -384,6 +386,14 @@ describe("AgentSelectionGuideSection", () => {
       screen.getByText("Couldn't load agent instructions for this host."),
     ).toBeTruthy();
     expect(screen.queryByTestId("agents-selection-guide-input")).toBeNull();
+  });
+
+  // The page follows the window's host, so a per-host bind control here
+  // bound the wrong machine; it lives on Host > Overview.
+  it("renders no environment section", () => {
+    renderPanel();
+
+    expect(screen.queryByTestId("host-environment-section")).toBeNull();
   });
 
   // Regression: the scope refactor wrapped the loaded state in a frame that

@@ -32,7 +32,7 @@ const HOST_ID = "host-a";
 const TEAM_PERMISSION: PermissionDto = {
   accessType: "organization",
   organizationId: "t1",
-  role: "editor",
+  role: "owner",
   grantedBy: "user-2",
   grantedAt: 1,
 };

@@ -29,6 +29,9 @@ import { cn } from "@/lib/utils";
  * Reads and writes go through the Settings scope's client, the host the
  * sidebar has selected, never the app-wide one. `following` (the scope is
  * the active host, through the ambient client) is as usable as `ready`.
+ *
+ * A sandbox shows nothing: whose bots it runs is settled by who pays for it,
+ * so a person's sandbox is never rebound into a team.
  */
 export function HostEnvironmentSection(props: {
   readonly scope: HostScope;
@@ -36,12 +39,13 @@ export function HostEnvironmentSection(props: {
   const { scope } = props;
   const headingId = useId();
   const usable = isHostScopeUsable(scope.status) && scope.client !== null;
+  const sandbox = scope.host?.kind === "sandbox";
   const support = useHostMethodSupport(scope.hostId, "environment.host.read");
-  const enabled = usable && support === true;
+  const enabled = usable && !sandbox && support === true;
   const environments = useEnvironmentListQuery(scope.client, enabled);
   const binding = useEnvironmentHostReadQuery(scope.client, enabled);
 
-  if (!usable || support === null) return null;
+  if (!usable || sandbox || support === null) return null;
 
   let body: ReactNode;
   if (!support) {
@@ -51,14 +55,13 @@ export function HostEnvironmentSection(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="host-environment-unsupported"
       >
-        {scope.hostLabel} predates environments. Update it to run a team&apos;s
-        bots from this host.
+        Update {scope.hostLabel} to run a team&apos;s bots from it.
       </p>
     );
   } else if (environments.isError || binding.isError) {
     body = (
       <p role="status" className="text-ui-xs text-destructive">
-        Couldn&apos;t read this host&apos;s environment.
+        Couldn&apos;t read whose bots this host runs.
       </p>
     );
   } else if (environments.data === undefined || binding.data === undefined) {
@@ -98,11 +101,10 @@ export function HostEnvironmentSection(props: {
     >
       <div className="min-w-0">
         <h2 id={headingId} className="text-ui-md font-semibold text-foreground">
-          Environment
+          Runs bots for
         </h2>
         <p className="mt-1 text-ui-xs text-muted-foreground">
-          The bots {scope.hostLabel} runs belong to this environment, and so do
-          the agent instructions below.
+          Choose whose bots {scope.hostLabel} runs: yours or a team&apos;s.
         </p>
       </div>
       {body}

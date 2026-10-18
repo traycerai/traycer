@@ -47,7 +47,7 @@ const NOW_MS = Date.parse("2026-10-16T12:00:00.000Z");
 const TEAM_PERMISSION: PermissionDto = {
   accessType: "organization",
   organizationId: "t1",
-  role: "editor",
+  role: "owner",
   grantedBy: "user-2",
   grantedAt: 1,
 };
@@ -154,6 +154,30 @@ describe("taskOwningTeamId", () => {
   it("is null for no permission", () => {
     expect(taskOwningTeamId(null)).toBeNull();
     expect(taskOwningTeamId(undefined)).toBeNull();
+  });
+
+  it("is null for a task merely shared with a team (organization editor grant)", () => {
+    expect(
+      taskOwningTeamId({
+        accessType: "organization",
+        organizationId: "org-1",
+        role: "editor",
+        grantedBy: "u",
+        grantedAt: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("control: is the organization for an organization owner grant", () => {
+    expect(
+      taskOwningTeamId({
+        accessType: "organization",
+        organizationId: "org-1",
+        role: "owner",
+        grantedBy: "u",
+        grantedAt: 0,
+      }),
+    ).toBe("org-1");
   });
 });
 

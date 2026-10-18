@@ -162,7 +162,7 @@ export function CreateBotForm(props: {
           className="text-ui-xs text-muted-foreground"
           data-testid="create-bot-failed-hosts"
         >
-          Couldn&apos;t read which environment{" "}
+          Couldn&apos;t read whose bots{" "}
           {failedHostIds.map((id) => hostLabels.get(id) ?? id).join(", ")}{" "}
           {failedHostIds.length === 1 ? "runs" : "run"}, so{" "}
           {failedHostIds.length === 1 ? "it is" : "they are"} not offered.{" "}
@@ -278,21 +278,17 @@ function CreateBotHostField(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="create-bot-no-host"
       >
-        None of your connected hosts runs {environmentLabel}. A host runs one
-        environment at a time; choose it in{" "}
+        None of your connected hosts runs bots for {environmentLabel}. A host
+        runs bots for you or for one team; choose in{" "}
         <Button
           type="button"
           variant="link"
           size="xs"
           onClick={() =>
-            navigateToTabIntent(
-              navigate,
-              settingsTabIntent("agents"),
-              undefined,
-            )
+            navigateToTabIntent(navigate, settingsTabIntent("host"), undefined)
           }
         >
-          Settings
+          Host settings
         </Button>
         .
       </p>

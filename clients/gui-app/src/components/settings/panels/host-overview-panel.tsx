@@ -28,6 +28,7 @@ import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
+import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
@@ -1995,6 +1996,8 @@ export function HostOverviewPanel(props: {
           hostId={scope.hostId}
           enabled={usable}
         />
+        {/* Whose bots this host runs, for the host the picker names. */}
+        <HostEnvironmentSection scope={scope} />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
