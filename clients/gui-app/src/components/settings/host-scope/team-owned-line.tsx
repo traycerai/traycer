@@ -18,11 +18,14 @@ export function TeamOwnedLine(props: { readonly teamName: string }): ReactNode {
       <span className="min-w-0 max-w-[72ch]">
         {teamOwnedText(props.teamName)}
       </span>
-      <DashboardLinkButton
-        page={(signInUrl) => settingsDashboardUrl(signInUrl, props.teamName)}
-        label="Open the dashboard"
-        testId="team-owned-dashboard-link"
-      />
+      {/* With no team name there is no team page to open. */}
+      {props.teamName === "" ? null : (
+        <DashboardLinkButton
+          page={(signInUrl) => settingsDashboardUrl(signInUrl, props.teamName)}
+          label="Open the dashboard"
+          testId="team-owned-dashboard-link"
+        />
+      )}
     </div>
   );
 }

@@ -147,6 +147,7 @@ export const MOVED_NOTICE_TEXT =
 // ── Team hosts ───────────────────────────────────────────────────────────────
 
 export function teamOwnedText(teamName: string): string {
+  if (teamName === "") return "These settings belong to your team.";
   return `These settings belong to ${teamName}. Change them in the dashboard.`;
 }
 

@@ -444,6 +444,20 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
     expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
   });
 
+  it("names no team and offers no dashboard link when the host reports no team name", async () => {
+    const host = hostWith({ principal: { kind: "team", teamName: "" } }, {});
+    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
+
+    const line = await screen.findByTestId("team-owned-line");
+
+    expect(
+      within(line).getByText("These settings belong to your team."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open the dashboard" }),
+    ).toBeNull();
+  });
+
   it("offers no dashboard button without a shell to name the dashboard", async () => {
     const host = hostWith(
       { principal: { kind: "team", teamName: "Acme" } },
