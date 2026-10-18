@@ -323,7 +323,10 @@ function modelsResponseFor(
 
 interface RpcCallLog {
   readonly listModels: Array<{ readonly harnessId: GuiHarnessId }>;
-  readonly listCommands: Array<{ readonly harnessId: GuiHarnessId }>;
+  readonly listCommands: Array<{
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  }>;
 }
 
 interface PickerRpcFixture {
@@ -365,7 +368,10 @@ function createPickerRpcFixture(
           return modelsResponseFor(params.harnessId);
         },
         "agent.gui.listCommands": (params) => {
-          calls.listCommands.push({ harnessId: params.harnessId });
+          calls.listCommands.push({
+            harnessId: params.harnessId,
+            profileId: params.profileId,
+          });
           return {
             harnessId: params.harnessId,
             commands: [],
@@ -398,9 +404,42 @@ function defaultSelection(harnessId: GuiHarnessId): HarnessModelSelection {
   return { harnessId, modelSlug: "", profileId: null };
 }
 
+function profileSelection(
+  harnessId: GuiHarnessId,
+  profileId: string,
+): HarnessModelSelection {
+  return { harnessId, modelSlug: "", profileId };
+}
+
+/** Lets pending query/effect work settle before an absence is asserted. */
+async function flushPendingWork(): Promise<void> {
+  for (let turn = 0; turn < 5; turn += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
+function commandProfiles(
+  fixture: PickerRpcFixture,
+  harnessId: GuiHarnessId,
+): ReadonlyArray<string | null> {
+  return fixture.calls.listCommands
+    .filter((entry) => entry.harnessId === harnessId)
+    .map((entry) => entry.profileId);
+}
+
 function renderPickerWithFixture(
   fixture: PickerRpcFixture,
   selection: HarnessModelSelection,
+): ComposerToolbarStore {
+  return renderPickerWithActivity(fixture, selection, true);
+}
+
+function renderPickerWithActivity(
+  fixture: PickerRpcFixture,
+  selection: HarnessModelSelection,
+  surfaceActive: boolean,
 ): ComposerToolbarStore {
   const store = createComposerToolbarStore({
     purpose: "run",
@@ -419,7 +458,7 @@ function renderPickerWithFixture(
   });
   render(
     <fixture.Wrapper>
-      <SurfaceActivityProvider active>
+      <SurfaceActivityProvider active={surfaceActive}>
         <TooltipProvider delayDuration={0}>
           <HarnessModelPicker
             labelDisplay="responsive"
@@ -692,6 +731,93 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     });
     // The harness the user left gets no new calls from this edge, aged or not.
     expect(countFor(fixture.calls.listModels, "codex")).toBe(codexModelsAged);
+  });
+
+  it("prewarms the new profile's commands once when the selected profile changes on the same harness, and not again for a same-profile reselection or a return to a warm profile", async () => {
+    const fixture = createPickerRpcFixture([
+      harnessEntry("codex", true),
+      harnessEntry("opencode", false),
+    ]);
+    const store = renderPickerWithFixture(
+      fixture,
+      profileSelection("codex", "profile-a"),
+    );
+    await screen.findByText("codex Model 1");
+    await openPickerByTriggerName(/^codex Model 1/);
+    await waitFor(() => {
+      expect(commandProfiles(fixture, "codex")).toEqual(["profile-a"]);
+    });
+
+    // Same harness, other account: profile B's commands slot has never
+    // loaded, so the selection edge must prewarm it. Keyed on the harness
+    // alone, this edge never fires and B's server stays cold.
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-b"));
+    });
+    await waitFor(() => {
+      expect(commandProfiles(fixture, "codex")).toEqual([
+        "profile-a",
+        "profile-b",
+      ]);
+    });
+
+    // Control: reselecting the same profile is not an edge.
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-b"));
+    });
+    await flushPendingWork();
+    expect(commandProfiles(fixture, "codex")).toEqual([
+      "profile-a",
+      "profile-b",
+    ]);
+
+    // Control: back to A, whose entry is fresh, is an edge with nothing due.
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-a"));
+    });
+    await flushPendingWork();
+    expect(commandProfiles(fixture, "codex")).toEqual([
+      "profile-a",
+      "profile-b",
+    ]);
+  });
+
+  it("issues no commands prewarm for a profile change while the surface is inactive", async () => {
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)]);
+    const store = renderPickerWithActivity(
+      fixture,
+      profileSelection("codex", "profile-a"),
+      false,
+    );
+    await flushPendingWork();
+
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-b"));
+    });
+    await flushPendingWork();
+
+    expect(commandProfiles(fixture, "codex")).toEqual([]);
+  });
+
+  it("issues no commands prewarm for a profile change on an unavailable harness", async () => {
+    const fixture = createPickerRpcFixture([
+      harnessEntry("codex", true),
+      harnessEntry("opencode", false),
+    ]);
+    const store = renderPickerWithFixture(
+      fixture,
+      profileSelection("opencode", "profile-a"),
+    );
+    await screen.findByRole("button", { name: "Select model" });
+    await openPickerByTriggerName("Select model");
+
+    act(() => {
+      store.getState().setSelection(profileSelection("opencode", "profile-b"));
+    });
+    await flushPendingWork();
+
+    expect(commandProfiles(fixture, "opencode")).toEqual([]);
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
   });
 
   it("issues zero listModels and zero listCommands calls when the picker opens on an unavailable/disabled selection", async () => {
