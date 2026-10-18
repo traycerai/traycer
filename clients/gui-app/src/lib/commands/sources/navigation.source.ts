@@ -39,9 +39,28 @@ export const navigationSource: ReactCommandSource = {
       const items: Array<CommandItem> = [];
       if (ctx.pathname !== "/epics") items.push(OPEN_EPICS_ITEM);
       items.push(buildSettingsEntryItem(settingsChord, sectionItems));
+      if (
+        import.meta.env.DEV &&
+        ctx.router.navigateArtifactProof !== undefined
+      ) {
+        items.push(ARTIFACT_PROOF_ITEM);
+      }
       return items;
-    }, [ctx.pathname, settingsChord, sectionItems]);
+    }, [ctx.pathname, ctx.router, settingsChord, sectionItems]);
   },
+};
+
+const ARTIFACT_PROOF_ITEM: CommandItem = {
+  id: "dev:artifact-proof",
+  label: "Dev: artifact serving proof",
+  description: null,
+  keywords: ["dev", "artifact", "sandbox", "proof"],
+  group: "navigation",
+  scope: "actions",
+  shortcut: null,
+  actionId: null,
+  run: (ctx) => ctx.router.navigateArtifactProof?.(),
+  subpage: null,
 };
 
 const OPEN_EPICS_ITEM: CommandItem = {

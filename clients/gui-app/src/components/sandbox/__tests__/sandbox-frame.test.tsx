@@ -38,7 +38,7 @@ describe("<SandboxFrame /> link confirm", () => {
     const statuses: SandboxStatus[] = [];
     render(
       <SandboxFrame
-        html="<p>page</p>"
+        source={{ kind: "html", html: "<p>page</p>" }}
         kind="page"
         title="Page"
         appName={null}
@@ -80,7 +80,7 @@ describe("<SandboxFrame /> unexpected disposal", () => {
   function frame(html: string, onStatus: (status: SandboxStatus) => void) {
     return (
       <SandboxFrame
-        html={html}
+        source={{ kind: "html", html }}
         kind="page"
         title="Page"
         appName={null}

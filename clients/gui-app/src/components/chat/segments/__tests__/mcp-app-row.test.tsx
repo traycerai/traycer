@@ -62,7 +62,7 @@ import {
 } from "@/providers/use-resolved-theme";
 
 interface FrameProps {
-  readonly html: string;
+  readonly source: { readonly kind: "html"; readonly html: string };
   readonly kind: string;
   readonly title: string;
   readonly networkPolicy: string;
@@ -99,21 +99,24 @@ function ignore(): void {}
 /** A real bridge with nothing behind it, as a new frame document hands over. */
 function detachedBridge(): SandboxBridgeHost {
   return new SandboxBridgeHost({
-    resource: {
-      html: "",
-      kind: "app",
-      networkPolicy: "https-only",
-      csp: null,
-      permissions: [],
-      theme: {
-        appliesToRoot: false,
-        colorScheme: "dark",
-        background: null,
-        variables: {},
+    document: {
+      kind: "loader",
+      resource: {
+        html: "",
+        kind: "app",
+        networkPolicy: "https-only",
+        csp: null,
+        permissions: [],
+        theme: {
+          appliesToRoot: false,
+          colorScheme: "dark",
+          background: null,
+          variables: {},
+        },
+        forwardedShortcuts: [],
       },
-      forwardedShortcuts: [],
+      nonce: "nonce",
     },
-    nonce: "nonce",
     hostContext: {
       theme: "dark",
       styles: { variables: {} },
@@ -154,7 +157,7 @@ function FrameDocument(props: FrameProps) {
   }, []);
   return (
     <div data-testid="sandbox-frame" data-kind={props.kind}>
-      {props.html}
+      {props.source.html}
     </div>
   );
 }

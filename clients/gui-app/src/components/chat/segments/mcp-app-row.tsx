@@ -580,7 +580,7 @@ function LiveMcpApp(props: {
             >
               <SandboxFrame
                 key={generation}
-                html={html}
+                source={{ kind: "html", html }}
                 kind="app"
                 title={`${app.server} · ${app.tool}`}
                 appName={app.server}

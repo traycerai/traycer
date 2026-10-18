@@ -52,6 +52,13 @@ export function routerAdapterFor(
   router: KeybindingRouterSource,
 ): KeybindingRouter {
   return {
+    ...(import.meta.env.DEV
+      ? {
+          navigateArtifactProof: () => {
+            void router.navigate({ to: "/dev/artifact-proof" });
+          },
+        }
+      : {}),
     getPathname: () => router.state.location.pathname,
     // "Home" means the Home tab once it exists, and the landing route before
     // that. Both callers - the Go to Home chord and the last-Epic close - want

@@ -110,9 +110,9 @@ vi.mock("sonner", () => ({
 
 // jsdom runs no frame; a box stands in for the running page.
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
-  SandboxFrame: (props: { readonly html: string }) => (
-    <div data-testid="sandbox-frame">{props.html}</div>
-  ),
+  SandboxFrame: (props: {
+    readonly source: { readonly kind: "html"; readonly html: string };
+  }) => <div data-testid="sandbox-frame">{props.source.html}</div>,
 }));
 
 const PAGE: EpicReadFileResponse = {

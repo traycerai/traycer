@@ -8,11 +8,11 @@
 export type SandboxNetworkPolicy = "open" | "https-only";
 
 /**
- * No policy in this file names the app's or the sandbox's own origin: on mobile
- * that origin also serves Capacitor's native routes (`/_capacitor_*`, the
- * native HTTP proxy among them), and on desktop it is the sandbox scheme. The
- * one thing a page took from it, the Figtree face, arrives inside the loader as
- * a `data:` font.
+ * Artifact policy deliberately names the desktop serving scheme: it serves
+ * only sandbox documents and artifact files. Never name the mobile app origin:
+ * it also serves Capacitor native routes (`/_capacitor_*`, including its HTTP
+ * proxy). Mobile artifacts will need a separate serving scheme. Loader pages
+ * keep their existing policy and receive the Figtree face as a `data:` font.
  *
  * An `open` page reaches the web, localhost and the LAN. It names its schemes
  * rather than relying on the base policy's `*`, which also admits the
@@ -38,6 +38,21 @@ export function pageContentPolicy(networkPolicy: SandboxNetworkPolicy): string {
     "media-src https: data: blob:",
     "frame-src 'none'",
   ].join("; ");
+}
+
+/** Artifact files share the dedicated sandbox scheme; child frames stay closed. */
+export function artifactContentPolicy(scheme: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme)) {
+    throw new Error("Invalid artifact scheme");
+  }
+  return pageContentPolicy("https-only")
+    .split("; ")
+    .map((directive) =>
+      directive.startsWith("frame-src ")
+        ? directive
+        : `${directive} ${scheme}:`,
+    )
+    .join("; ");
 }
 
 /**

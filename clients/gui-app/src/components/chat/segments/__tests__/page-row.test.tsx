@@ -64,7 +64,7 @@ vi.mock("@/lib/files/save-blob-to-disk", () => ({
 // box that shows what the viewer hands it and can report a crash.
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
   SandboxFrame: (props: {
-    readonly html: string;
+    readonly source: { readonly kind: "html"; readonly html: string };
     readonly kind: string;
     readonly networkPolicy: SandboxNetworkPolicy;
     readonly height: number | null;
@@ -76,7 +76,7 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
       data-network-policy={props.networkPolicy}
       data-height={props.height === null ? "fill" : String(props.height)}
     >
-      {props.html}
+      {props.source.html}
       <button type="button" onClick={() => props.onStatus("crashed")}>
         crash the page
       </button>

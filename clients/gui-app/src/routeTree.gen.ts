@@ -17,6 +17,7 @@ import { Route as SampleWorkspaceRouteImport } from "./routes/sample-workspace";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as WhenYouQuitRouteImport } from "./routes/when-you-quit";
 import { Route as BotBotIdRouteImport } from "./routes/bot.$botId";
+import { Route as DevArtifactProofRouteImport } from "./routes/dev/artifact-proof";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
@@ -84,6 +85,11 @@ const WhenYouQuitRoute = WhenYouQuitRouteImport.update({
 const BotBotIdRoute = BotBotIdRouteImport.update({
   id: "/bot/$botId",
   path: "/bot/$botId",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const DevArtifactProofRoute = DevArtifactProofRouteImport.update({
+  id: "/dev/artifact-proof",
+  path: "/dev/artifact-proof",
   getParentRoute: () => rootRouteImport,
 } as any);
 const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
@@ -237,6 +243,7 @@ export interface FileRoutesByFullPath {
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
   "/bot/$botId": typeof BotBotIdRoute;
+  "/dev/artifact-proof": typeof DevArtifactProofRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
@@ -273,6 +280,7 @@ export interface FileRoutesByTo {
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/when-you-quit": typeof WhenYouQuitRoute;
   "/bot/$botId": typeof BotBotIdRoute;
+  "/dev/artifact-proof": typeof DevArtifactProofRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
@@ -312,6 +320,7 @@ export interface FileRoutesById {
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
   "/bot/$botId": typeof BotBotIdRoute;
+  "/dev/artifact-proof": typeof DevArtifactProofRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
@@ -352,6 +361,7 @@ export interface FileRouteTypes {
     | "/settings"
     | "/when-you-quit"
     | "/bot/$botId"
+    | "/dev/artifact-proof"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
@@ -388,6 +398,7 @@ export interface FileRouteTypes {
     | "/sample-workspace"
     | "/when-you-quit"
     | "/bot/$botId"
+    | "/dev/artifact-proof"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
@@ -426,6 +437,7 @@ export interface FileRouteTypes {
     | "/settings"
     | "/when-you-quit"
     | "/bot/$botId"
+    | "/dev/artifact-proof"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
@@ -465,6 +477,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren;
   WhenYouQuitRoute: typeof WhenYouQuitRoute;
   BotBotIdRoute: typeof BotBotIdRoute;
+  DevArtifactProofRoute: typeof DevArtifactProofRoute;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
 }
@@ -525,6 +538,13 @@ declare module "@tanstack/react-router" {
       path: "/bot/$botId";
       fullPath: "/bot/$botId";
       preLoaderRoute: typeof BotBotIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/dev/artifact-proof": {
+      id: "/dev/artifact-proof";
+      path: "/dev/artifact-proof";
+      fullPath: "/dev/artifact-proof";
+      preLoaderRoute: typeof DevArtifactProofRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/draft/$draftId": {
@@ -805,6 +825,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   WhenYouQuitRoute: WhenYouQuitRoute,
   BotBotIdRoute: BotBotIdRoute,
+  DevArtifactProofRoute: DevArtifactProofRoute,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
 };

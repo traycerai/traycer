@@ -37,7 +37,7 @@ export function RowView({ row }: { readonly row: Row }) {
   return (
     <div data-row={row.id} style={{ height: 120 }}>
       <SandboxFrame
-        html={`<main>page ${row.id}</main>`}
+        source={{ kind: "html", html: `<main>page ${row.id}</main>` }}
         kind="page"
         title={`Page ${row.id}`}
         appName={null}

@@ -141,7 +141,7 @@ export function HtmlViewer(props: HtmlViewerProps) {
   return (
     <SandboxFrame
       key={generation}
-      html={response.text}
+      source={{ kind: "html", html: response.text }}
       kind="page"
       title={title}
       appName={null}

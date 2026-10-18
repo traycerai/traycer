@@ -16,11 +16,10 @@ import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
  * (`traycer/notifications/document-ready` and `…/shortcut`).
  *
  * Trust is `event.source` alone - an opaque frame's `event.origin` is always
- * "null" - plus one rule about documents: exactly two documents ever load in
- * the frame, the loader and the resource it writes over itself. The written
- * document proves itself with the nonce delivered in
- * `sandbox-resource-ready`. A third load, a second `sandbox-proxy-ready` (the
- * loader came back), or a wrong or repeated nonce disposes the bridge. Loads
+ * "null" - plus a nonce that proves the composed document. Loader mode allows
+ * two loads (the loader and its rewrite); served mode allows only one and
+ * needs no resource handshake. An extra load, an unexpected proxy-ready, or
+ * a wrong or repeated nonce disposes the bridge. Loads
  * are COUNTED rather than ordered because the frame's messages and its
  * `load` events reach the app on different paths and can arrive in either
  * order. A page that rewrites itself trips the count too, which fails safe.
@@ -111,14 +110,31 @@ export type SandboxAppRequestHandler = (
 ) => Promise<unknown>;
 
 export interface SandboxBridgeHostOptions {
-  readonly resource: SandboxResource;
-  readonly nonce: string;
+  readonly document:
+    | {
+        readonly kind: "loader";
+        readonly resource: SandboxResource;
+        readonly nonce: string;
+      }
+    | {
+        readonly kind: "served";
+        readonly nonce: string;
+        readonly forwardedShortcuts: readonly ForwardedShortcut[];
+      };
   readonly hostContext: SandboxHostContext;
   readonly hostVersion: string;
   readonly post: (message: unknown) => void;
   readonly events: SandboxBridgeEvents;
   /** `null` for pages and wireframes: app methods answer -32601. */
   readonly appRequests: SandboxAppRequestHandler | null;
+}
+
+function documentShortcuts(
+  document: SandboxBridgeHostOptions["document"],
+): readonly ForwardedShortcut[] {
+  return document.kind === "loader"
+    ? document.resource.forwardedShortcuts
+    : document.forwardedShortcuts;
 }
 
 export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
@@ -167,6 +183,12 @@ const APP_METHODS: ReadonlySet<string> = new Set([
   "ui/update-model-context",
   "ui/request-display-mode",
   "ui/download-file",
+]);
+
+const BEFORE_DOCUMENT_PROOF: ReadonlySet<string> = new Set([
+  "traycer/notifications/document-ready",
+  "traycer/notifications/early-error",
+  "ping",
 ]);
 
 /** The page forwards this while fullscreen (`host-context-changed`). */
@@ -337,6 +359,7 @@ export class SandboxBridgeHost {
   constructor(options: SandboxBridgeHostOptions) {
     this.options = options;
     this.hostContext = options.hostContext;
+    if (options.document.kind === "served") this.phase = "delivered";
     // A loader that never answers, or a page that never finishes loading,
     // would otherwise sit at "loading" for good.
     this.loadWatchdog = window.setTimeout(() => {
@@ -387,15 +410,26 @@ export class SandboxBridgeHost {
       this.onProxyReady();
       return;
     }
-    if (this.phase === "awaiting-proxy") return;
+    if (!this.canDispatch(message.method)) return;
     this.dispatch(message);
+  }
+
+  private canDispatch(method: string | null): boolean {
+    if (this.phase === "awaiting-proxy") return false;
+    // Served documents skip the loader handshake, but their callbacks must
+    // still wait for the composed document to prove its nonce.
+    if (this.options.document.kind === "served" && this.phase !== "ready") {
+      return method !== null && BEFORE_DOCUMENT_PROOF.has(method);
+    }
+    return true;
   }
 
   /** The frame element fired `load`. */
   frameLoaded(): void {
     if (this.phase === "disposed") return;
     this.loads += 1;
-    if (this.loads > 2) this.rejectDocument();
+    const allowedLoads = this.options.document.kind === "loader" ? 2 : 1;
+    if (this.loads > allowedLoads) this.rejectDocument();
   }
 
   /** Send `host-context-changed` with the keys that changed, if any. */
@@ -474,7 +508,12 @@ export class SandboxBridgeHost {
       this.rejectDocument();
       return;
     }
-    const { resource } = this.options;
+    const document = this.options.document;
+    if (document.kind !== "loader") {
+      this.rejectDocument();
+      return;
+    }
+    const { resource } = document;
     this.phase = "delivered";
     this.post({
       jsonrpc: "2.0",
@@ -485,7 +524,7 @@ export class SandboxBridgeHost {
         networkPolicy: resource.networkPolicy,
         csp: resource.csp,
         permissions: resource.permissions,
-        nonce: this.options.nonce,
+        nonce: this.options.document.nonce,
         bootstrap: {
           theme: resource.theme,
           forwardedShortcuts: resource.forwardedShortcuts,
@@ -523,7 +562,7 @@ export class SandboxBridgeHost {
       case "traycer/notifications/shortcut": {
         const press = parseShortcutPress(params);
         if (press === null) return;
-        const forwarded = this.options.resource.forwardedShortcuts;
+        const forwarded = documentShortcuts(this.options.document);
         // Bare Escape only from the proven page, and only while fullscreen.
         const exitsFullscreen =
           this.phase === "ready" &&
@@ -662,7 +701,7 @@ export class SandboxBridgeHost {
     const valid =
       this.phase === "delivered" &&
       isRecord(params) &&
-      params.nonce === this.options.nonce;
+      params.nonce === this.options.document.nonce;
     if (!valid) {
       this.rejectDocument();
       return;
