@@ -344,8 +344,12 @@ function projectArtifact(
     title: record.title,
     folderName: record.folderName,
     layout: record.layout,
-    ...(record.relativePath === undefined ? {} : { relativePath: record.relativePath }),
-    ...(record.kind === "html" || record.kind === "canvas" ? { head: record.head } : {}),
+    ...(record.relativePath === undefined
+      ? {}
+      : { relativePath: record.relativePath }),
+    ...(record.kind === "html" || record.kind === "canvas"
+      ? { head: record.head }
+      : {}),
     ...(record.kind === "file" ? { object: record.object } : {}),
     parentId: record.parentId,
     // ALWAYS `null` on this head, and structurally so: the lane's

@@ -71,9 +71,15 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  html: ({ node, epicId }) => <ObjectArtifactTile node={node} epicId={epicId} />,
-  canvas: ({ node, epicId }) => <ObjectArtifactTile node={node} epicId={epicId} />,
-  file: ({ node, epicId }) => <ObjectArtifactTile node={node} epicId={epicId} />,
+  html: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
+  canvas: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
+  file: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
   spec: ({ node, viewTabId, tileId, isActive }) => (
     <SpecTile
       node={node}

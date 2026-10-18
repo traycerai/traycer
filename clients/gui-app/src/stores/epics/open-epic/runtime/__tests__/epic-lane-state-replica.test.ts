@@ -1155,9 +1155,12 @@ describe("epic.state.subscribe read model - html, canvas and file artifacts", ()
       }),
     );
 
-    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual(
-      ["canvas-1", "file-1", "html-1", "spec-gone"],
-    );
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual([
+      "canvas-1",
+      "file-1",
+      "html-1",
+      "spec-gone",
+    ]);
     expect(replica.slices().deletedArtifacts.byId["html-1"]).toEqual({
       id: "html-1",
       kind: "html",
@@ -1168,9 +1171,7 @@ describe("epic.state.subscribe read model - html, canvas and file artifacts", ()
     expect(replica.slices().deletedArtifacts.byId["canvas-1"].kind).toBe(
       "canvas",
     );
-    expect(replica.slices().deletedArtifacts.byId["file-1"].kind).toBe(
-      "file",
-    );
+    expect(replica.slices().deletedArtifacts.byId["file-1"].kind).toBe("file");
     expect(replica.slices().deletedArtifacts.byId["spec-gone"].title).toBe(
       "Deleted spec-gone",
     );
@@ -1198,9 +1199,12 @@ describe("epic.state.subscribe read model - html, canvas and file artifacts", ()
       }),
     );
 
-    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual(
-      ["canvas-1", "file-1", "html-1", "spec-1"],
-    );
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual([
+      "canvas-1",
+      "file-1",
+      "html-1",
+      "spec-1",
+    ]);
     // The markdown artifact's other half: its live entry is gone now too.
     expect(replica.slices().artifacts.allIds).toEqual([]);
   });

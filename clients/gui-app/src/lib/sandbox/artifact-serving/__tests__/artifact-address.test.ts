@@ -14,7 +14,9 @@ function androidOrigin(artifactId: string, mountId: string): string {
 }
 
 describe("parseArtifactAddress", () => {
-  it.each<[string, string, { artifactId: string; mountId: string; path: string }]>([
+  it.each<
+    [string, string, { artifactId: string; mountId: string; path: string }]
+  >([
     [
       "a plain path",
       `${SCHEME}://artifact-myart123--${MOUNT}/assets/logo.png`,
@@ -68,7 +70,10 @@ describe("parseArtifactAddress", () => {
   });
 
   it.each<[string, string]>([
-    ["a literal .. segment", `${SCHEME}://artifact-myart123--${MOUNT}/../secret`],
+    [
+      "a literal .. segment",
+      `${SCHEME}://artifact-myart123--${MOUNT}/../secret`,
+    ],
     [
       "a percent-encoded .. segment",
       `${SCHEME}://artifact-myart123--${MOUNT}/%2e%2e/secret`,
@@ -78,10 +83,7 @@ describe("parseArtifactAddress", () => {
       "a segment that merely starts with a dot",
       `${SCHEME}://artifact-myart123--${MOUNT}/a/.hidden`,
     ],
-    [
-      "a literal backslash",
-      `${SCHEME}://artifact-myart123--${MOUNT}/foo\\bar`,
-    ],
+    ["a literal backslash", `${SCHEME}://artifact-myart123--${MOUNT}/foo\\bar`],
     [
       "a percent-encoded backslash",
       `${SCHEME}://artifact-myart123--${MOUNT}/foo%5Cbar`,
@@ -91,21 +93,18 @@ describe("parseArtifactAddress", () => {
       `${SCHEME}://artifact-myart123--${MOUNT}//foo`,
     ],
     ["malformed percent-encoding", `${SCHEME}://artifact-myart123--${MOUNT}/%`],
-    [
-      "an uppercase artifact id",
-      `${SCHEME}://artifact-MyArt123--${MOUNT}/x`,
-    ],
-    [
-      "an uppercase mount id",
-      `${SCHEME}://artifact-myart123--ABCDEF/x`,
-    ],
+    ["an uppercase artifact id", `${SCHEME}://artifact-MyArt123--${MOUNT}/x`],
+    ["an uppercase mount id", `${SCHEME}://artifact-myart123--ABCDEF/x`],
     ["a missing artifact- prefix", `${SCHEME}://myart123--${MOUNT}/x`],
     ["no -- delimiter at all", `${SCHEME}://artifact-onlyonepiece/x`],
     [
       "an empty artifact id before the delimiter",
       `${SCHEME}://artifact---${MOUNT}/x`,
     ],
-    ["an empty mount id after the delimiter", `${SCHEME}://artifact-myart123--/x`],
+    [
+      "an empty mount id after the delimiter",
+      `${SCHEME}://artifact-myart123--/x`,
+    ],
     ["not this scheme's shape at all", "not-a-url"],
     ["a totally different scheme shape", "https://example.com/x"],
   ])("refuses %s", (_label, url) => {
@@ -193,7 +192,10 @@ describe("parseArtifactAddress", () => {
         "a lookalike suffix as a sub-path rather than the host",
         `https://artifact-myart123--${MOUNT}.invalid${ANDROID_SUFFIX}`,
       ],
-      ["a plain http scheme, never https-reserved", `http://artifact-myart123--${MOUNT}${ANDROID_SUFFIX}`],
+      [
+        "a plain http scheme, never https-reserved",
+        `http://artifact-myart123--${MOUNT}${ANDROID_SUFFIX}`,
+      ],
     ])("refuses %s", (_label, url) => {
       expect(parseArtifactAddress(url)).toBeNull();
     });
@@ -201,9 +203,18 @@ describe("parseArtifactAddress", () => {
 
   describe("scheme admission", () => {
     it.each<[string, string]>([
-      ["an uppercase custom scheme", `TRAYCER-ARTIFACT://artifact-myart123--${MOUNT}/x`],
-      ["a scheme that is neither custom scheme nor https", `ftp://artifact-myart123--${MOUNT}/x`],
-      ["a custom scheme that merely resembles a reserved one", `traycer-artifact2://artifact-myart123--${MOUNT}/x`],
+      [
+        "an uppercase custom scheme",
+        `TRAYCER-ARTIFACT://artifact-myart123--${MOUNT}/x`,
+      ],
+      [
+        "a scheme that is neither custom scheme nor https",
+        `ftp://artifact-myart123--${MOUNT}/x`,
+      ],
+      [
+        "a custom scheme that merely resembles a reserved one",
+        `traycer-artifact2://artifact-myart123--${MOUNT}/x`,
+      ],
     ])("refuses %s", (_label, url) => {
       expect(parseArtifactAddress(url)).toBeNull();
     });
@@ -213,7 +224,9 @@ describe("parseArtifactAddress", () => {
         parseArtifactAddress(`traycer-sandbox://artifact-myart123--${MOUNT}/x`),
       ).toEqual({ artifactId: "myart123", mountId: MOUNT, path: "x" });
       expect(
-        parseArtifactAddress(`traycer-artifact://artifact-myart123--${MOUNT}/x`),
+        parseArtifactAddress(
+          `traycer-artifact://artifact-myart123--${MOUNT}/x`,
+        ),
       ).toEqual({ artifactId: "myart123", mountId: MOUNT, path: "x" });
     });
   });
@@ -308,17 +321,20 @@ describe("buildArtifactAddress", () => {
   it.each<[string, string, string, string]>([
     ["an uppercase artifact id", "MyArt123", MOUNT, "x"],
     ["an uppercase mount id", "myart123", "ABCDEF", "x"],
-  ])("throws instead of lowercasing %s", (_label, artifactId, mountId, path) => {
-    expect(() =>
-      buildArtifactAddress({
-        origin: `${SCHEME}://artifact-${artifactId}--${mountId}`,
-        artifactId,
-        mountId,
-        treePath: "",
-        path,
-      }),
-    ).toThrow();
-  });
+  ])(
+    "throws instead of lowercasing %s",
+    (_label, artifactId, mountId, path) => {
+      expect(() =>
+        buildArtifactAddress({
+          origin: `${SCHEME}://artifact-${artifactId}--${mountId}`,
+          artifactId,
+          mountId,
+          treePath: "",
+          path,
+        }),
+      ).toThrow();
+    },
+  );
 
   it.each<[string, string]>([
     ["a .. segment", "../secret"],

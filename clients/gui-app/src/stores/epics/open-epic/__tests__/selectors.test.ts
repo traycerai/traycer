@@ -15,18 +15,13 @@ import {
   projectTerminalAgentsSliceForTests as projectTerminalAgents,
 } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
+import type { EpicTreeNodeType } from "@/stores/epics/open-epic/types";
 
 interface BuildTreeRow {
   readonly id: string;
   readonly parentId: string | null;
   readonly name: string;
-  readonly type:
-    | "chat"
-    | "terminal-agent"
-    | "spec"
-    | "ticket"
-    | "story"
-    | "review";
+  readonly type: EpicTreeNodeType;
 }
 
 function buildTreeRecords(

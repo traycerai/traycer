@@ -133,7 +133,8 @@ class FakeNativePlugin implements SandboxArtifactsPlugin {
       this.stagedRequestHandler = handler as (
         request: SandboxArtifactRequest,
       ) => void;
-      if (this.pendingRequestAttach !== null) return this.pendingRequestAttach.promise;
+      if (this.pendingRequestAttach !== null)
+        return this.pendingRequestAttach.promise;
       if (this.rejectNextRequestAttach !== null) {
         const error = this.rejectNextRequestAttach;
         this.rejectNextRequestAttach = null;
@@ -142,8 +143,11 @@ class FakeNativePlugin implements SandboxArtifactsPlugin {
       return Promise.resolve({ remove: this.removeRequestListener });
     }
     this.cancelAttachCount += 1;
-    this.stagedCancelHandler = handler as (cancel: SandboxArtifactCancel) => void;
-    if (this.pendingCancelAttach !== null) return this.pendingCancelAttach.promise;
+    this.stagedCancelHandler = handler as (
+      cancel: SandboxArtifactCancel,
+    ) => void;
+    if (this.pendingCancelAttach !== null)
+      return this.pendingCancelAttach.promise;
     if (this.rejectNextCancelAttach !== null) {
       const error = this.rejectNextCancelAttach;
       this.rejectNextCancelAttach = null;
@@ -358,9 +362,7 @@ describe("MobileSandboxArtifacts.register", () => {
     plugin.rejectNextRequestAttach = new Error("no plugin bridge");
     const bridge = new MobileSandboxArtifacts(plugin, "ios");
 
-    await expect(bridge.register("mount1")).rejects.toThrow(
-      "no plugin bridge",
-    );
+    await expect(bridge.register("mount1")).rejects.toThrow("no plugin bridge");
 
     // Retry succeeds and re-mounts "mount1" for real this time.
     await bridge.register("mount1");
@@ -756,7 +758,9 @@ describe("MobileSandboxArtifacts, late and cancelled responses", () => {
     const cancelled: SandboxArtifactCancel[] = [];
     bridge.onCancel((cancel) => cancelled.push(cancel));
 
-    expect(() => plugin.emitCancel({ requestId: "never-requested" })).not.toThrow();
+    expect(() =>
+      plugin.emitCancel({ requestId: "never-requested" }),
+    ).not.toThrow();
     expect(cancelled).toEqual([]);
 
     bridge.onRequest(() => undefined);

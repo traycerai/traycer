@@ -21,7 +21,10 @@ import {
   type ChatAttachmentReadClient,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
-import type { EpicReadArtifactObjectRequest, EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/files";
+import type {
+  EpicReadArtifactObjectRequest,
+  EpicReadArtifactObjectResponse,
+} from "@traycer/protocol/host/epic/artifact-objects";
 import type { ImageBytesResult } from "@/lib/attachments/image-blob-cache";
 import {
   READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,

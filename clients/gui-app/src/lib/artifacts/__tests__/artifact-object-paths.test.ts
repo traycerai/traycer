@@ -41,8 +41,18 @@ function slice(artifacts: readonly ArtifactProjection[]): ArtifactsSlice {
 describe("artifactTreePath", () => {
   it("walks the folder chain root-to-leaf for nested folder-layout artifacts", () => {
     const artifacts = slice([
-      artifact({ id: "root", kind: "spec", folderName: "docs", parentId: null }),
-      artifact({ id: "mid", kind: "spec", folderName: "guide", parentId: "root" }),
+      artifact({
+        id: "root",
+        kind: "spec",
+        folderName: "docs",
+        parentId: null,
+      }),
+      artifact({
+        id: "mid",
+        kind: "spec",
+        folderName: "guide",
+        parentId: "root",
+      }),
       artifact({
         id: "leaf",
         kind: "html",
@@ -204,7 +214,12 @@ describe("artifactSourcePathsFor", () => {
     });
     const artifacts = slice([
       artifact({ id: "root", kind: "spec", folderName: "docs" }),
-      artifact({ id: "mid", kind: "spec", folderName: "guide", parentId: "root" }),
+      artifact({
+        id: "mid",
+        kind: "spec",
+        folderName: "guide",
+        parentId: "root",
+      }),
       html,
     ]);
 
@@ -305,8 +320,18 @@ describe("createArtifactOutsideReferenceResolver", () => {
       layout: "folder",
       head: {
         files: {
-          "index.html": { sha256: SHA_A, byteLength: 10, mediaType: "text/html", status: "published" },
-          "styles.css": { sha256: SHA_B, byteLength: 20, mediaType: "text/css", status: "published" },
+          "index.html": {
+            sha256: SHA_A,
+            byteLength: 10,
+            mediaType: "text/html",
+            status: "published",
+          },
+          "styles.css": {
+            sha256: SHA_B,
+            byteLength: 20,
+            mediaType: "text/css",
+            status: "published",
+          },
         },
         capturedAt: 1,
       },
@@ -342,7 +367,12 @@ describe("createArtifactOutsideReferenceResolver", () => {
       relativePath: "weather.html",
       head: {
         files: {
-          "index.html": { sha256: SHA_A, byteLength: 42, mediaType: "text/html", status: "published" },
+          "index.html": {
+            sha256: SHA_A,
+            byteLength: 42,
+            mediaType: "text/html",
+            status: "published",
+          },
         },
         capturedAt: 1,
       },
@@ -364,7 +394,7 @@ describe("createArtifactOutsideReferenceResolver", () => {
     expect(resolve("docs/weather.html")).toBeNull();
   });
 
-  it("resolves a file-kind artifact's own bytes at its tree path, with no status field", () => {
+  it("resolves a file-kind artifact's own bytes at its tree path, keeping its status", () => {
     const file = artifact({
       id: "logo",
       kind: "file",
@@ -385,10 +415,14 @@ describe("createArtifactOutsideReferenceResolver", () => {
     ]);
     const resolve = createArtifactOutsideReferenceResolver(artifacts);
 
+    // ArtifactManifestEntry is the protocol ArtifactObjectRef, status
+    // included - the resolver hands the object through wholesale rather
+    // than stripping it.
     expect(resolve("assets/logo.png")).toEqual({
       sha256: SHA_A,
       byteLength: 1024,
       mediaType: "image/png",
+      status: "published",
     });
   });
 
@@ -397,7 +431,9 @@ describe("createArtifactOutsideReferenceResolver", () => {
       artifact({ id: "docs", kind: "spec", folderName: "docs" }),
     ]);
 
-    expect(createArtifactOutsideReferenceResolver(artifacts)("docs/nothing.html")).toBeNull();
+    expect(
+      createArtifactOutsideReferenceResolver(artifacts)("docs/nothing.html"),
+    ).toBeNull();
   });
 
   it("drops a path two different artifacts both claim", () => {
@@ -408,7 +444,12 @@ describe("createArtifactOutsideReferenceResolver", () => {
       parentId: null,
       layout: "file",
       relativePath: "shared.bin",
-      object: { sha256: SHA_A, byteLength: 1, mediaType: "application/octet-stream", status: "published" },
+      object: {
+        sha256: SHA_A,
+        byteLength: 1,
+        mediaType: "application/octet-stream",
+        status: "published",
+      },
     });
     const second = artifact({
       id: "b",
@@ -416,9 +457,16 @@ describe("createArtifactOutsideReferenceResolver", () => {
       folderName: "shared.bin",
       parentId: null,
       layout: "folder",
-      object: { sha256: SHA_B, byteLength: 2, mediaType: "application/octet-stream", status: "published" },
+      object: {
+        sha256: SHA_B,
+        byteLength: 2,
+        mediaType: "application/octet-stream",
+        status: "published",
+      },
     });
-    const resolve = createArtifactOutsideReferenceResolver(slice([first, second]));
+    const resolve = createArtifactOutsideReferenceResolver(
+      slice([first, second]),
+    );
 
     expect(resolve("shared.bin")).toBeNull();
   });
@@ -449,14 +497,21 @@ describe("createArtifactOutsideReferenceResolver", () => {
       layout: "folder",
       head: {
         files: {
-          "index.html": { sha256: SHA_A, byteLength: 1, mediaType: "text/html", status: "published" },
+          "index.html": {
+            sha256: SHA_A,
+            byteLength: 1,
+            mediaType: "text/html",
+            status: "published",
+          },
         },
         capturedAt: 1,
       },
     });
 
     expect(
-      createArtifactOutsideReferenceResolver(slice([orphan]))("page/index.html"),
+      createArtifactOutsideReferenceResolver(slice([orphan]))(
+        "page/index.html",
+      ),
     ).toBeNull();
   });
 });

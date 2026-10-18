@@ -1,4 +1,7 @@
-import { MobileSandboxArtifacts, SandboxArtifacts } from "./sandbox-artifacts-plugin";
+import {
+  MobileSandboxArtifacts,
+  SandboxArtifacts,
+} from "./sandbox-artifacts-plugin";
 import { App } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { AppLauncher } from "@capacitor/app-launcher";

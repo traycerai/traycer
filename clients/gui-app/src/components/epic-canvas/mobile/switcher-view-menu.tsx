@@ -237,8 +237,7 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
     sort,
     toggleStatus: (status: ArtifactStatusFilter) =>
       toggleArtifactStatus(epicId, status),
-    toggleKind: (kind: EpicArtifactKind) =>
-      toggleArtifactKind(epicId, kind),
+    toggleKind: (kind: EpicArtifactKind) => toggleArtifactKind(epicId, kind),
     setRead: (read: ArtifactReadFilter) => setArtifactRead(epicId, read),
     setSortField: (field: SortField) => setArtifactSortField(epicId, field),
     toggleSortDirection: () => toggleArtifactSortDirection(epicId),

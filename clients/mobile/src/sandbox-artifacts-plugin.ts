@@ -37,8 +37,12 @@ export class MobileSandboxArtifacts implements SandboxArtifactBridge {
   readonly policySource: string | null;
   private readonly mounts = new Set<string>();
   private readonly requests = new Map<string, string>();
-  private readonly requestHandlers = new Set<(request: SandboxArtifactRequest) => void>();
-  private readonly cancelHandlers = new Set<(cancel: SandboxArtifactCancel) => void>();
+  private readonly requestHandlers = new Set<
+    (request: SandboxArtifactRequest) => void
+  >();
+  private readonly cancelHandlers = new Set<
+    (cancel: SandboxArtifactCancel) => void
+  >();
   private ready: Promise<void> | null = null;
 
   constructor(
@@ -55,7 +59,8 @@ export class MobileSandboxArtifacts implements SandboxArtifactBridge {
   }
 
   async register(mountId: string): Promise<void> {
-    if (!/^[a-z0-9]+$/.test(mountId)) throw new Error("Invalid artifact mount id");
+    if (!/^[a-z0-9]+$/.test(mountId))
+      throw new Error("Invalid artifact mount id");
     this.mounts.add(mountId);
     try {
       await this.ensureListeners();
@@ -71,19 +76,34 @@ export class MobileSandboxArtifacts implements SandboxArtifactBridge {
     for (const [requestId, owner] of this.requests) {
       if (owner !== mountId) continue;
       this.requests.delete(requestId);
-      replies.push(this.plugin.respond({ requestId, kind: "unavailable", status: 404, reason: "unmounted" }));
+      replies.push(
+        this.plugin.respond({
+          requestId,
+          kind: "unavailable",
+          status: 404,
+          reason: "unmounted",
+        }),
+      );
     }
     await Promise.all(replies);
   }
 
   onRequest(handler: (request: SandboxArtifactRequest) => void): Disposable {
     this.requestHandlers.add(handler);
-    return { dispose: () => { this.requestHandlers.delete(handler); } };
+    return {
+      dispose: () => {
+        this.requestHandlers.delete(handler);
+      },
+    };
   }
 
   onCancel(handler: (cancel: SandboxArtifactCancel) => void): Disposable {
     this.cancelHandlers.add(handler);
-    return { dispose: () => { this.cancelHandlers.delete(handler); } };
+    return {
+      dispose: () => {
+        this.cancelHandlers.delete(handler);
+      },
+    };
   }
 
   async respond(reply: SandboxArtifactReply): Promise<void> {
@@ -93,7 +113,12 @@ export class MobileSandboxArtifacts implements SandboxArtifactBridge {
       return;
     }
     if (reply.bytes.byteLength > 4 * 1024 * 1024) {
-      await this.plugin.respond({ requestId: reply.requestId, kind: "unavailable", status: 503, reason: "Invalid artifact span" });
+      await this.plugin.respond({
+        requestId: reply.requestId,
+        kind: "unavailable",
+        status: 503,
+        reason: "Invalid artifact span",
+      });
       return;
     }
     // Avoid spreading an entire span into a function's argument list.
@@ -116,8 +141,18 @@ export class MobileSandboxArtifacts implements SandboxArtifactBridge {
 
   private async attachListeners(): Promise<void> {
     const requests = await this.plugin.addListener("request", (request) => {
-      if (!this.mounts.has(request.mountId) || this.requestHandlers.size === 0) {
-        void this.plugin.respond({ requestId: request.requestId, kind: "unavailable", status: 404, reason: "unmounted" }).catch(() => {});
+      if (
+        !this.mounts.has(request.mountId) ||
+        this.requestHandlers.size === 0
+      ) {
+        void this.plugin
+          .respond({
+            requestId: request.requestId,
+            kind: "unavailable",
+            status: 404,
+            reason: "unmounted",
+          })
+          .catch(() => {});
         return;
       }
       this.requests.set(request.requestId, request.mountId);

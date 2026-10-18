@@ -14,7 +14,9 @@ const SHA = "a".repeat(64);
 
 const mocks = vi.hoisted(() => ({
   artifacts: { byId: {}, allIds: [] } as ArtifactsSlice,
-  tabHostClient: null as { requestWithSignal: (...args: unknown[]) => Promise<unknown> } | null,
+  tabHostClient: null as {
+    requestWithSignal: (...args: unknown[]) => Promise<unknown>;
+  } | null,
   sandboxProps: [] as Array<{ readonly source: SandboxSource }>,
 }));
 
@@ -26,8 +28,9 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 vi.mock("@/hooks/use-epic-store", () => ({
-  useEpicStore: <T,>(selector: (state: { artifacts: ArtifactsSlice }) => T): T =>
-    selector({ artifacts: mocks.artifacts }),
+  useEpicStore: <T,>(
+    selector: (state: { artifacts: ArtifactsSlice }) => T,
+  ): T => selector({ artifacts: mocks.artifacts }),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -110,7 +113,12 @@ describe("<ObjectArtifactTile />", () => {
         layout: "folder",
         head: {
           files: {
-            "index.html": { sha256: SHA, byteLength: 10, mediaType: "text/html", status: "published" },
+            "index.html": {
+              sha256: SHA,
+              byteLength: 10,
+              mediaType: "text/html",
+              status: "published",
+            },
           },
           capturedAt: 1,
         },
@@ -141,7 +149,12 @@ describe("<ObjectArtifactTile />", () => {
         relativePath: "weather.html",
         head: {
           files: {
-            "weather.html": { sha256: SHA, byteLength: 10, mediaType: "text/html", status: "published" },
+            "weather.html": {
+              sha256: SHA,
+              byteLength: 10,
+              mediaType: "text/html",
+              status: "published",
+            },
           },
           capturedAt: 1,
         },
@@ -167,7 +180,12 @@ describe("<ObjectArtifactTile />", () => {
         folderName: "board",
         head: {
           files: {
-            "index.html": { sha256: SHA, byteLength: 10, mediaType: "text/html", status: "published" },
+            "index.html": {
+              sha256: SHA,
+              byteLength: 10,
+              mediaType: "text/html",
+              status: "published",
+            },
           },
           capturedAt: 1,
         },
@@ -212,12 +230,22 @@ describe("<ObjectArtifactTile />", () => {
       folderName: "report",
       head: {
         files: {
-          "index.html": { sha256: SHA, byteLength: 10, mediaType: "text/html", status: "published" },
+          "index.html": {
+            sha256: SHA,
+            byteLength: 10,
+            mediaType: "text/html",
+            status: "published",
+          },
         },
         capturedAt: 1,
       },
     });
-    const spec = artifact({ id: "spec-1", kind: "spec", folderName: "spec-1", title: "Before" });
+    const spec = artifact({
+      id: "spec-1",
+      kind: "spec",
+      folderName: "spec-1",
+      title: "Before",
+    });
     setArtifacts([page, spec]);
 
     const view = render(tile("page"));
@@ -235,7 +263,9 @@ describe("<ObjectArtifactTile />", () => {
     expect(second?.kind).toBe("artifact");
     expect(first?.kind).toBe("artifact");
     if (first?.kind === "artifact" && second?.kind === "artifact") {
-      expect(second.resolveOutsideReference).toBe(first.resolveOutsideReference);
+      expect(second.resolveOutsideReference).toBe(
+        first.resolveOutsideReference,
+      );
       expect(second.readSpan).toBe(first.readSpan);
       expect(second.manifest).toBe(first.manifest);
       expect(second.treePath).toBe(first.treePath);

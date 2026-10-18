@@ -31,7 +31,10 @@ import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 
-import type { ArtifactHead, ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
+import type {
+  ArtifactHead,
+  ArtifactObjectRef,
+} from "@traycer/protocol/persistence/epic/artifacts";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 

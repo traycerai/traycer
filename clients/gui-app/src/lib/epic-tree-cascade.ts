@@ -30,7 +30,9 @@ export function computeDescendantCounts(
     ticket: 0,
     story: 0,
     review: 0,
-    html: 0, canvas: 0, file: 0,
+    html: 0,
+    canvas: 0,
+    file: 0,
     chat: 0,
     "terminal-agent": 0,
   };
@@ -66,7 +68,9 @@ export function computeDescendantCountsFromTree(
     ticket: 0,
     story: 0,
     review: 0,
-    html: 0, canvas: 0, file: 0,
+    html: 0,
+    canvas: 0,
+    file: 0,
     chat: 0,
     "terminal-agent": 0,
   };

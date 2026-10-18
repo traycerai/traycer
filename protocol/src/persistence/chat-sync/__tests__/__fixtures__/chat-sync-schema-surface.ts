@@ -3019,82 +3019,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
-                                            "page": {
-                                              "default": null,
-                                              "anyOf": [
-                                                {
-                                                  "type": "object",
-                                                  "properties": {
-                                                    "path": {
-                                                      "type": "string",
-                                                      "minLength": 1
-                                                    },
-                                                    "sha256": {
-                                                      "type": "string",
-                                                      "pattern": "^[0-9a-f]{64}$"
-                                                    },
-                                                    "title": {
-                                                      "type": "string"
-                                                    },
-                                                    "height": {
-                                                      "type": "integer",
-                                                      "minimum": 80,
-                                                      "maximum": 2000
-                                                    },
-                                                    "heights": {
-                                                      "type": "array",
-                                                      "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                          "width": {
-                                                            "type": "integer",
-                                                            "exclusiveMinimum": 0,
-                                                            "maximum": 9007199254740991
-                                                          },
-                                                          "height": {
-                                                            "type": "integer",
-                                                            "minimum": 0,
-                                                            "maximum": 9007199254740991
-                                                          }
-                                                        },
-                                                        "required": [
-                                                          "width",
-                                                          "height"
-                                                        ],
-                                                        "additionalProperties": false
-                                                      }
-                                                    },
-                                                    "derivedFrom": {
-                                                      "anyOf": [
-                                                        {
-                                                          "type": "string"
-                                                        },
-                                                        {
-                                                          "type": "null"
-                                                        }
-                                                      ]
-                                                    },
-                                                    "originChatId": {
-                                                      "type": "string",
-                                                      "minLength": 1
-                                                    }
-                                                  },
-                                                  "required": [
-                                                    "path",
-                                                    "sha256",
-                                                    "title",
-                                                    "height",
-                                                    "heights",
-                                                    "derivedFrom",
-                                                    "originChatId"
-                                                  ],
-                                                  "additionalProperties": false
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            },
                                             "mcpApp": {
                                               "default": null,
                                               "anyOf": [
@@ -3309,7 +3233,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "stopped",
                                             "imageResults",
                                             "artifact",
-                                            "page",
                                             "mcpApp"
                                           ],
                                           "additionalProperties": false

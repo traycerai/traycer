@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  sandboxTheme,
-  sandboxThemeVariables,
-} from "../theme-map";
+import { sandboxTheme, sandboxThemeVariables } from "../theme-map";
 
 const read = (token: string): string => `<${token}>`;
 

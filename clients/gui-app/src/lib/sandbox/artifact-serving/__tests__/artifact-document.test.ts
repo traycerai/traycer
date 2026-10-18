@@ -61,7 +61,10 @@ async function loaderDocument(delivery: Delivery): Promise<string> {
     written.push(...chunks);
   });
   window.dispatchEvent(
-    new MessageEvent("message", { data: resourceMessage(delivery), source: window.parent }),
+    new MessageEvent("message", {
+      data: resourceMessage(delivery),
+      source: window.parent,
+    }),
   );
   return written.join("");
 }
@@ -97,7 +100,9 @@ const CASES: readonly [string, Delivery][] = [
         background: "rgb(1, 2, 3)",
         variables: { "--color-text-primary": "red" },
       },
-      shortcuts: [{ code: "KeyK", ctrl: false, meta: true, alt: false, shift: false }],
+      shortcuts: [
+        { code: "KeyK", ctrl: false, meta: true, alt: false, shift: false },
+      ],
     },
   ],
   [
@@ -151,35 +156,50 @@ const CASES: readonly [string, Delivery][] = [
 ];
 
 describe("buildArtifactDocument / sandbox loader parity", () => {
-  it.each(CASES)("matches the live loader's own document, base policy aside, for: %s", async (_label, delivery) => {
-    const fromLoader = await loaderDocument(delivery);
-    const composed = buildArtifactDocument(delivery.html, documentOptionsOf(delivery));
+  it.each(CASES)(
+    "matches the live loader's own document, base policy aside, for: %s",
+    async (_label, delivery) => {
+      const fromLoader = await loaderDocument(delivery);
+      const composed = buildArtifactDocument(
+        delivery.html,
+        documentOptionsOf(delivery),
+      );
 
-    expect(composed.startsWith(`<!doctype html>${BASE_META}`)).toBe(true);
-    // The loader never gains the base policy meta (it inherits the sandbox
-    // origin's own base policy); stripping it out of the composed document
-    // must reproduce the loader's output byte for byte.
-    expect(composed.replace(BASE_META, "")).toBe(fromLoader);
-  });
+      expect(composed.startsWith(`<!doctype html>${BASE_META}`)).toBe(true);
+      // The loader never gains the base policy meta (it inherits the sandbox
+      // origin's own base policy); stripping it out of the composed document
+      // must reproduce the loader's output byte for byte.
+      expect(composed.replace(BASE_META, "")).toBe(fromLoader);
+    },
+  );
 
-  it.each(CASES)("puts the base policy meta first, ahead of any per-page policy, for: %s", (_label, delivery) => {
-    const composed = buildArtifactDocument(delivery.html, documentOptionsOf(delivery));
-    const doc = new DOMParser().parseFromString(composed, "text/html");
-    const policies = [...doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]')];
+  it.each(CASES)(
+    "puts the base policy meta first, ahead of any per-page policy, for: %s",
+    (_label, delivery) => {
+      const composed = buildArtifactDocument(
+        delivery.html,
+        documentOptionsOf(delivery),
+      );
+      const doc = new DOMParser().parseFromString(composed, "text/html");
+      const policies = [
+        ...doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]'),
+      ];
 
-    expect(policies[0].getAttribute("content")).toBe(
-      artifactBasePolicy(POLICY_SOURCE),
-    );
-    if (delivery.csp === null) {
-      expect(policies).toHaveLength(1);
-    } else {
-      expect(policies).toHaveLength(2);
-      expect(policies[1].getAttribute("content")).toBe(delivery.csp);
-      expect(
-        policies[0].compareDocumentPosition(policies[1]) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-    }
-  });
+      expect(policies[0].getAttribute("content")).toBe(
+        artifactBasePolicy(POLICY_SOURCE),
+      );
+      if (delivery.csp === null) {
+        expect(policies).toHaveLength(1);
+      } else {
+        expect(policies).toHaveLength(2);
+        expect(policies[1].getAttribute("content")).toBe(delivery.csp);
+        expect(
+          policies[0].compareDocumentPosition(policies[1]) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+    },
+  );
 });
 
 describe("artifactBasePolicy, by policy source", () => {
@@ -281,7 +301,9 @@ interface CapturedMessage {
 function extractBootstrapScript(composedHtml: string): string {
   const match = /<script>([\s\S]*?)<\/script>/.exec(composedHtml);
   if (match === null) {
-    throw new Error("expected an inline bootstrap script in the composed document");
+    throw new Error(
+      "expected an inline bootstrap script in the composed document",
+    );
   }
   return match[1];
 }
@@ -305,7 +327,9 @@ function runBootstrapInIsolatedWindow(composedHtml: string): {
   // jsdom implements no ResizeObserver; the bootstrap only needs one that
   // does not throw when constructed and observed.
   window.ResizeObserver = class {
-    observe(): void { return; }
+    observe(): void {
+      return;
+    }
   };
   const messages: CapturedMessage[] = [];
   window.postMessage = (message: CapturedMessage) => {
@@ -334,9 +358,13 @@ describe("sandbox bootstrap load ordering", () => {
 
     // Seed a measured size the way the real page does, at DOMContentLoaded.
     window.document.dispatchEvent(new window.Event("DOMContentLoaded"));
-    const seeded = messages.find((message) => message.method === "ui/notifications/size-changed");
+    const seeded = messages.find(
+      (message) => message.method === "ui/notifications/size-changed",
+    );
     if (seeded === undefined) {
-      throw new Error("expected a size-changed notification after DOMContentLoaded");
+      throw new Error(
+        "expected a size-changed notification after DOMContentLoaded",
+      );
     }
     const seededHeight = seeded.params.height;
 

@@ -1,4 +1,10 @@
-import { ARTIFACT_FILE_OBJECT_FIELD, artifactHeadSchema, artifactObjectRefSchema, type ArtifactHead, type ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
+import {
+  ARTIFACT_FILE_OBJECT_FIELD,
+  artifactHeadSchema,
+  artifactObjectRefSchema,
+  type ArtifactHead,
+  type ArtifactObjectRef,
+} from "@traycer/protocol/persistence/epic/artifacts";
 /**
  * Pure projection + Y.Doc-mutation helpers shared between the projector
  * and the store's mutation actions. No React, no zustand, no module
@@ -185,10 +191,7 @@ export function readMaybeNullableNumber(
   return typeof value === "number" ? value : null;
 }
 
-
-export function readArtifactKind(
-  map: Y.Map<unknown>,
-): EpicArtifactKind | null {
+export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
   const value = map.get("kind");
   if (
     value === "spec" ||
@@ -252,11 +255,15 @@ function isString(value: unknown): value is string {
 
 // ─── Per-entry projectors ─────────────────────────────────────────────────
 
-function projectArtifactObjectFields(entry: Y.Map<unknown>): Partial<ArtifactProjection> | null {
+function projectArtifactObjectFields(
+  entry: Y.Map<unknown>,
+): Partial<ArtifactProjection> | null {
   const layout = entry.get("layout");
   const relativePath = entry.get("relativePath");
   const rawHead = entry.get("head");
-  const head = artifactHeadSchema.safeParse(rawHead instanceof Y.Map ? rawHead.toJSON() : rawHead);
+  const head = artifactHeadSchema.safeParse(
+    rawHead instanceof Y.Map ? rawHead.toJSON() : rawHead,
+  );
   const rawObject = entry.get(ARTIFACT_FILE_OBJECT_FIELD);
   const object = artifactObjectRefSchema.safeParse(
     rawObject instanceof Y.Map ? rawObject.toJSON() : rawObject,
@@ -265,23 +272,36 @@ function projectArtifactObjectFields(entry: Y.Map<unknown>): Partial<ArtifactPro
   if ((kind === "html" || kind === "canvas") && !head.success) return null;
   if (kind === "file" && !object.success) return null;
   return {
-    layout: layout === "file" || entry.get("kind") === "file" ? "file" : "folder",
+    layout:
+      layout === "file" || entry.get("kind") === "file" ? "file" : "folder",
     ...(typeof relativePath === "string" ? { relativePath } : {}),
     ...(head.success ? { head: head.data } : {}),
     ...(object.success ? { object: object.data } : {}),
   };
 }
 
-export function artifactHeadsEqual(a: ArtifactHead | undefined, b: ArtifactHead | undefined): boolean {
+export function artifactHeadsEqual(
+  a: ArtifactHead | undefined,
+  b: ArtifactHead | undefined,
+): boolean {
   if (a === b) return true;
-  if (a === undefined || b === undefined || a.capturedAt !== b.capturedAt) return false;
+  if (a === undefined || b === undefined || a.capturedAt !== b.capturedAt)
+    return false;
   const paths = Object.keys(a.files);
-  return paths.length === Object.keys(b.files).length && paths.every(path => {
-    if (!Object.hasOwn(b.files, path)) return false;
-    const left = a.files[path];
-    const right = b.files[path];
-    return left.sha256 === right.sha256 && left.byteLength === right.byteLength && left.mediaType === right.mediaType && left.status === right.status;
-  });
+  return (
+    paths.length === Object.keys(b.files).length &&
+    paths.every((path) => {
+      if (!Object.hasOwn(b.files, path)) return false;
+      const left = a.files[path];
+      const right = b.files[path];
+      return (
+        left.sha256 === right.sha256 &&
+        left.byteLength === right.byteLength &&
+        left.mediaType === right.mediaType &&
+        left.status === right.status
+      );
+    })
+  );
 }
 
 export function projectArtifact(
@@ -458,13 +478,18 @@ function artifactObjectsEqual(
 ): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
-  return a.sha256 === b.sha256 &&
+  return (
+    a.sha256 === b.sha256 &&
     a.byteLength === b.byteLength &&
     a.mediaType === b.mediaType &&
-    a.status === b.status;
+    a.status === b.status
+  );
 }
 
-function artifactObjectFieldsEqual(a: ArtifactProjection, b: ArtifactProjection): boolean {
+function artifactObjectFieldsEqual(
+  a: ArtifactProjection,
+  b: ArtifactProjection,
+): boolean {
   return (
     a.layout === b.layout &&
     a.relativePath === b.relativePath &&

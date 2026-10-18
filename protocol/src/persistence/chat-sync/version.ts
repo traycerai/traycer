@@ -137,15 +137,10 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // `title` / `message` / `details` exactly as before, which is the divider that
 // notice was until this key existed.
 //
-// 1.7 carries `tool_call.page` and `tool_call.mcpApp` (an agent page and an MCP
-// App, stamped on the call that produced them - a `chat.subscribe@1.23` field
-// that lands in a publication). A NEW minor rather than riding 1.6:
-// `host-v1.4.2` shipped chat-sync 1.6. Defaulted `null`, so an older record
-// parses unchanged, and a content block's `raw` re-emission (§2 of
-// `COMPATIBILITY.md`) carries both keys through an older reader's
-// re-publication. No
-// reader floor: an older reader renders the call as the plain tool row it
-// always did, which is what that row was before these keys existed.
+// 1.7 carries `tool_call.mcpApp`, stamped on the call that produced the app
+// (`chat.subscribe@1.23`). A new minor because host-v1.4.2 shipped 1.6.
+// Defaulted null for older records. A block's raw re-emission carries the key
+// through older readers, which render the plain tool row. No reader floor.
 // 1.8 reopens artifact_operation.kind to a checked string. An unknown kind
 // must not reject a whole shard; readers from this minor render no block for
 // a kind they do not know. No emission gate protects readers predating 1.8.

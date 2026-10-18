@@ -687,7 +687,9 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact && isMarkdownArtifactKind(activeArtifact.kind);
+    activeArtifact !== null &&
+    "kind" in activeArtifact &&
+    isMarkdownArtifactKind(activeArtifact.kind);
   // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(

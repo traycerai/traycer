@@ -47,7 +47,9 @@ export type TileKindId =
   | typeof TILE_KIND_SPEC
   | typeof TILE_KIND_TICKET
   | typeof TILE_KIND_STORY
-  | "html" | "canvas" | "file"
+  | "html"
+  | "canvas"
+  | "file"
   | typeof TILE_KIND_REVIEW
   | typeof TILE_KIND_TERMINAL
   | typeof TILE_KIND_BROWSER_SESSION
@@ -69,7 +71,9 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_TICKET]: true,
   [TILE_KIND_STORY]: true,
   [TILE_KIND_REVIEW]: true,
-  html: true, canvas: true, file: true,
+  html: true,
+  canvas: true,
+  file: true,
   [TILE_KIND_TERMINAL]: true,
   [TILE_KIND_BROWSER_SESSION]: true,
   [TILE_KIND_WORKSPACE_FILE]: true,

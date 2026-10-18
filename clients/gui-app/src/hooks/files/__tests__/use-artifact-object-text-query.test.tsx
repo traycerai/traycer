@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { focusManager, QueryClientProvider, type Query, type QueryClient } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClientProvider,
+  type Query,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -10,7 +15,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   EpicReadArtifactObjectRequest,
   EpicReadArtifactObjectResponse,
-} from "@traycer/protocol/host/epic/files";
+} from "@traycer/protocol/host/epic/artifact-objects";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -158,9 +163,12 @@ describe("useArtifactObjectTextQuery", () => {
     expect(textFixture.messenger.calls).toHaveLength(1);
 
     // A second observer on the same content-addressed sha reuses the cache.
-    const second = renderHook(() => useArtifactObjectTextQuery(HOST_ID, ADDRESS), {
-      wrapper: textFixture.Wrapper,
-    });
+    const second = renderHook(
+      () => useArtifactObjectTextQuery(HOST_ID, ADDRESS),
+      {
+        wrapper: textFixture.Wrapper,
+      },
+    );
     expect(second.result.current.data?.kind).toBe("text");
     expect(textFixture.messenger.calls).toHaveLength(1);
 
@@ -197,9 +205,7 @@ describe("useArtifactObjectTextQuery", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(fixture.messenger.calls).toHaveLength(1);
-    expect(appliedDelay(queryForArtifactObject(fixture.queryClient))).toBe(
-      500,
-    );
+    expect(appliedDelay(queryForArtifactObject(fixture.queryClient))).toBe(500);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);

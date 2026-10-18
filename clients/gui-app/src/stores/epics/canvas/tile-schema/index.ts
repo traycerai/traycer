@@ -128,7 +128,9 @@ const EPIC_NODE_TILE_KINDS: { readonly [K in EpicNodeTileKindId]: true } = {
   ticket: true,
   story: true,
   review: true,
-  html: true, canvas: true, file: true,
+  html: true,
+  canvas: true,
+  file: true,
   terminal: true,
   "workspace-file": true,
 };

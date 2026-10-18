@@ -166,7 +166,6 @@ export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
   return useEpicStore((s) => s.snapshotMeta);
 }
 
-
 export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
 }

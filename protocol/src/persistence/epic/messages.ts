@@ -5,7 +5,7 @@ import {
   contentBlockSchemaPreHtml,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
-  contentBlockSchemaPrePage,
+  contentBlockSchemaPreMcpApp,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
@@ -249,7 +249,7 @@ export const userMessageSchemaV18 = lazySchema(() =>
 // Wire-freeze copy of the user row as `chat.subscribe@1.15` through `@1.24`
 // ship it: the `1.7`/`1.8` field set plus `providerHistory`, without the
 // `conversationRequest` that `1.25` added. Bound by `messageSchemaPreReceipt`
-// (`1.15`-`1.17`), `messageSchemaPrePage` (`1.18`-`1.21`), the `1.15`-`1.21`
+// (`1.15`-`1.17`), `messageSchemaPreMcpApp` (`1.18`-`1.21`), the `1.15`-`1.21`
 // common frames, and - through `openUserMessageSchemaPreConversation` - the
 // `1.22`-`1.24` open-harness lines. A later key must not reach them through it.
 export const userMessageSchemaPreConversation = lazySchema(() =>
@@ -894,18 +894,18 @@ export const messageSchemaPreReceipt = lazySchema(() =>
   ]),
 );
 
-// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+// ── Wire-freeze variant (pre-MCP-App, `chat.subscribe@1.18`-`@1.21`) ──────────
 // Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
-// complete live shape with `blocks` swapped for `contentBlockSchemaPrePage`, so
-// a tool call's `page` / `mcpApp` stamps (`1.23`) cannot reach them. Same key
+// complete live shape with `blocks` swapped for `contentBlockSchemaPreMcpApp`, so
+// a tool call's `mcpApp` stamp (`1.23`) cannot reach them. Same key
 // order as the live `.extend()` result, because the order is part of the
 // captured digest.
-export const assistantMessageSchemaPrePage = lazySchema(() =>
+export const assistantMessageSchemaPreMcpApp = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
     sender: agentSenderSchema,
-    blocks: z.array(contentBlockSchemaPrePage),
+    blocks: z.array(contentBlockSchemaPreMcpApp),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
     timestamp: z.number(),
@@ -920,10 +920,10 @@ export const assistantMessageSchemaPrePage = lazySchema(() =>
 );
 
 /** The message union shipped on chat.subscribe `1.18` through `1.21`. */
-export const messageSchemaPrePage = lazySchema(() =>
+export const messageSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("role", [
     userMessageSchemaPreConversation,
-    assistantMessageSchemaPrePage,
+    assistantMessageSchemaPreMcpApp,
   ]),
 );
 

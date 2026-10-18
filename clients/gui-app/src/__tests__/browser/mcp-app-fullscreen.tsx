@@ -243,32 +243,32 @@ if (container !== null) {
           remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div>Loading app</div>}
         >
-      <ResolvedThemeContext.Provider
-        value={{ resolvedTheme: "light", themePreset: "traycer-green" }}
-      >
-        <TooltipProvider>
-          <ChatAttachmentScopeContext.Provider
-            value={{
-              epicId: "epic-1",
-              chatId: "chat-1",
-              hostId: "host-1",
-              hostVersion: null,
-              client: null,
-            }}
+          <ResolvedThemeContext.Provider
+            value={{ resolvedTheme: "light", themePreset: "traycer-green" }}
           >
-              <McpAppRpcContext.Provider value={mcpRpc}>
-                {scenario === "dialog" ? <AlreadyOpenDialog /> : null}
-                <div className="mx-auto w-full max-w-2xl p-6">
-                  <McpAppRow
-                    id="block-1"
-                    app={STAMP}
-                    fallback={<div>no app</div>}
-                  />
-                </div>
-              </McpAppRpcContext.Provider>
-          </ChatAttachmentScopeContext.Provider>
-        </TooltipProvider>
-      </ResolvedThemeContext.Provider>
+            <TooltipProvider>
+              <ChatAttachmentScopeContext.Provider
+                value={{
+                  epicId: "epic-1",
+                  chatId: "chat-1",
+                  hostId: "host-1",
+                  hostVersion: null,
+                  client: null,
+                }}
+              >
+                <McpAppRpcContext.Provider value={mcpRpc}>
+                  {scenario === "dialog" ? <AlreadyOpenDialog /> : null}
+                  <div className="mx-auto w-full max-w-2xl p-6">
+                    <McpAppRow
+                      id="block-1"
+                      app={STAMP}
+                      fallback={<div>no app</div>}
+                    />
+                  </div>
+                </McpAppRpcContext.Provider>
+              </ChatAttachmentScopeContext.Provider>
+            </TooltipProvider>
+          </ResolvedThemeContext.Provider>
         </HostRuntimeProvider>
       </RunnerHostProvider>
     </QueryClientProvider>,

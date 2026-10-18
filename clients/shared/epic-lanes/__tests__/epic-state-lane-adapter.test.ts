@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  epicStateSubscribeServerFrameSchemaV11,
-} from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   AdapterHost,
   AdapterStatus,

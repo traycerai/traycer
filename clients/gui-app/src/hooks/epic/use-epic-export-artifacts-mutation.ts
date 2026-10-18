@@ -66,8 +66,13 @@ export function useEpicExportArtifacts() {
       for (const artifact of input.artifacts) {
         // A stale menu must not try to lease an object artifact as a Markdown body.
         const records = epicHandle.store.getState().artifacts.byId;
-        if (Object.hasOwn(records, artifact.id) && !isMarkdownArtifactKind(records[artifact.id].kind)) {
-          throw new Error("Only Markdown artifacts can be exported as documents.");
+        if (
+          Object.hasOwn(records, artifact.id) &&
+          !isMarkdownArtifactKind(records[artifact.id].kind)
+        ) {
+          throw new Error(
+            "Only Markdown artifacts can be exported as documents.",
+          );
         }
         const hold = await holdArtifactBody(
           epicHandle,

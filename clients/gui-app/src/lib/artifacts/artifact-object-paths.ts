@@ -1,14 +1,24 @@
-import type { ArtifactProjection, ArtifactsSlice } from "@/stores/epics/open-epic/types";
-import type { ArtifactOutsideReferenceResolver, ArtifactManifestEntry } from "@/lib/sandbox/artifact-serving";
+import type {
+  ArtifactProjection,
+  ArtifactsSlice,
+} from "@/stores/epics/open-epic/types";
+import type {
+  ArtifactOutsideReferenceResolver,
+  ArtifactManifestEntry,
+} from "@/lib/sandbox/artifact-serving";
 import { isArtifactPath } from "@/lib/sandbox/artifact-serving/artifact-address";
 
 /** relativePath carries plain-folder prefixes; folderName remains the display leaf. */
-export function artifactTreePath(artifacts: ArtifactsSlice, artifactId: string): string | null {
+export function artifactTreePath(
+  artifacts: ArtifactsSlice,
+  artifactId: string,
+): string | null {
   const segments: string[] = [];
   const visited = new Set<string>();
   let current: string | null = artifactId;
   while (current !== null) {
-    if (visited.has(current) || !Object.hasOwn(artifacts.byId, current)) return null;
+    if (visited.has(current) || !Object.hasOwn(artifacts.byId, current))
+      return null;
     visited.add(current);
     const entry: ArtifactProjection = artifacts.byId[current];
     if (entry.layout === "file" && current !== artifactId) return null;
@@ -26,17 +36,21 @@ export function artifactSourcePathsFor(
 ): { readonly treePath: string; readonly entryPath: string } | null {
   const path = artifactTreePath(artifacts, artifact.id);
   if (path === null) return null;
-  const entryPath = artifact.layout === "file"
-    ? (artifact.relativePath ?? artifact.folderName)
-    : "index.html";
-  const treePath = artifact.layout === "file"
-    ? path.slice(0, path.length - entryPath.length).replace(/\/$/, "")
-    : path;
+  const entryPath =
+    artifact.layout === "file"
+      ? (artifact.relativePath ?? artifact.folderName)
+      : "index.html";
+  const treePath =
+    artifact.layout === "file"
+      ? path.slice(0, path.length - entryPath.length).replace(/\/$/, "")
+      : path;
   return { treePath, entryPath };
 }
 
 /** Resolve only paths advertised by the current projection, never arbitrary disk paths. */
-export function createArtifactOutsideReferenceResolver(artifacts: ArtifactsSlice): ArtifactOutsideReferenceResolver {
+export function createArtifactOutsideReferenceResolver(
+  artifacts: ArtifactsSlice,
+): ArtifactOutsideReferenceResolver {
   const entries = new Map<string, ArtifactManifestEntry>();
   const ambiguous = new Set<string>();
   const add = (path: string, entry: ArtifactManifestEntry): void => {
@@ -54,18 +68,21 @@ export function createArtifactOutsideReferenceResolver(artifacts: ArtifactsSlice
     const artifact = artifacts.byId[id];
     if (artifact.kind === "file") {
       if (artifact.object !== undefined) {
-        const { sha256, byteLength, mediaType } = artifact.object;
-        add(path, { sha256, byteLength, mediaType });
+        add(path, artifact.object);
       }
-    } else if ((artifact.kind === "html" || artifact.kind === "canvas") && artifact.head !== undefined) {
+    } else if (
+      (artifact.kind === "html" || artifact.kind === "canvas") &&
+      artifact.head !== undefined
+    ) {
       for (const [file, entry] of Object.entries(artifact.head.files)) {
         // File-layout heads are relative to the parent artifact folder.
-        const target = artifact.layout === "file"
-          ? `${path.slice(0, path.length - (artifact.relativePath ?? artifact.folderName).length)}${file}`
-          : `${path}/${file}`;
+        const target =
+          artifact.layout === "file"
+            ? `${path.slice(0, path.length - (artifact.relativePath ?? artifact.folderName).length)}${file}`
+            : `${path}/${file}`;
         add(target, entry);
       }
     }
   }
-  return path => isArtifactPath(path) ? entries.get(path) ?? null : null;
+  return (path) => (isArtifactPath(path) ? (entries.get(path) ?? null) : null);
 }

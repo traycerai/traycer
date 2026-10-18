@@ -25,7 +25,7 @@ import {
 import type {
   EpicReadArtifactObjectRequest,
   EpicReadArtifactObjectResponse,
-} from "@traycer/protocol/host/epic/files";
+} from "@traycer/protocol/host/epic/artifact-objects";
 import type {
   ChatMcpAppCallToolRequest,
   ChatMcpAppCallToolResponse,
@@ -274,8 +274,7 @@ function makeArtifactObjectRpc(handler: ArtifactObjectHandler): {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
-    findHostById: (hostId) =>
-      hostId === HOST_ID ? ARTIFACT_HOST_ENTRY : null,
+    findHostById: (hostId) => (hostId === HOST_ID ? ARTIFACT_HOST_ENTRY : null),
     messenger,
   });
   spine.setRequestContext(
@@ -335,9 +334,9 @@ function renderRow(
     <QueryClientProvider client={client}>
       <ResolvedThemeContext.Provider value={THEME}>
         <ChatAttachmentScopeContext.Provider value={scope}>
-            <McpAppRpcContext.Provider value={mcpRpc}>
-              {children}
-            </McpAppRpcContext.Provider>
+          <McpAppRpcContext.Provider value={mcpRpc}>
+            {children}
+          </McpAppRpcContext.Provider>
         </ChatAttachmentScopeContext.Provider>
       </ResolvedThemeContext.Provider>
     </QueryClientProvider>
@@ -617,7 +616,9 @@ describe("<McpAppRow /> when the app cannot run here", () => {
   });
 
   it("shows the ordinary tool row when reading the snapshot fails", async () => {
-    makeArtifactObjectRpc(() => { throw new Error("host went away"); });
+    makeArtifactObjectRpc(() => {
+      throw new Error("host went away");
+    });
     renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();

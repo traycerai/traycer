@@ -638,14 +638,7 @@ import {
   providersRefreshProfileStatusUpgradeV10ToV20,
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
-import {
-  epicCancelFetchFileV10,
-  epicDeleteFileV10,
-  epicFetchFileV10,
-  epicReadFileV10,
-  epicReadArtifactObjectV10,
-  epicRestoreFileV10,
-} from "@traycer/protocol/host/epic/files";
+import { epicReadArtifactObjectV10 } from "@traycer/protocol/host/epic/artifact-objects";
 import {
   chatMcpAppCallToolV10,
   chatMcpAppDescribeToolV10,
@@ -9164,10 +9157,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // The epic files plane (`epic/files.ts`): every byte a client renders, the
-  // explicit download of a big file, and tombstone/restore. Optional and off
-  // the released floor: a new method name is handshake-fatal against a
-  // released peer, and an old host simply hides the files surface.
   // A peer without this method has no sha-addressed artifact read. Clients
   // treat its bytes as unavailable; a path-based read is not a substitute.
   "epic.readArtifactObject": {
@@ -9178,59 +9167,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: epicReadArtifactObjectV10,
           upgradeFromPreviousVersion: null,
         },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
-  },
-  "epic.readFile": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: epicReadFileV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
-  },
-  "epic.fetchFile": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: epicFetchFileV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
-  },
-  "epic.cancelFetchFile": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: epicCancelFetchFileV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
-  },
-  "epic.deleteFile": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: epicDeleteFileV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
-  },
-  "epic.restoreFile": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: epicRestoreFileV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
@@ -13066,8 +13002,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         1: {
           contract: epicStateSubscribeV11,
         },
-        // `@1.2`: the files arm. The host sends it only to a `>=1.2` peer and
-        // projects older peers' frames down (`epic-state-stream-resolver.ts`).
+        // Empty 1.2: its files arm was removed before release; retain the
+        // minor so 1.3 keeps its number across the integration branches.
         2: {
           contract: epicStateSubscribeV12,
         },
@@ -13968,7 +13904,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (Command Code). No shape of its own: a row context's session anchor
         // takes the live union here and the 1.5.0 one on 1.9-1.20, and the
         // host refuses such a chat to a subscriber below this minor.
-        // Frozen at the pre-page message bodies since @1.23 opened above it.
+        // Frozen at the pre-MCP-App message bodies since @1.23 opened above it.
         21: {
           contract: chatSubscribeV121,
         },
@@ -13981,7 +13917,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         22: {
           contract: chatSubscribeV122,
         },
-        // @1.23 adds agent-page and MCP App stamps; older peers receive neither.
+        // @1.23 adds agent-MCP App stamps; older peers receive neither.
         23: {
           contract: chatSubscribeV123,
         },

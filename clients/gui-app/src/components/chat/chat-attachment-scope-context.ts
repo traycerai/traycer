@@ -1,15 +1,19 @@
 import { createContext, use } from "react";
 
-import type { RequiredHostMethodVersion } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+  RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   ReadChatAttachmentRequest,
   ReadChatAttachmentResponse,
 } from "@traycer/protocol/host/epic/chat-attachment";
 
-import type {
-  EpicReadArtifactObjectRequest,
-  EpicReadArtifactObjectResponse,
-} from "@traycer/protocol/host/epic/files";
+type ChatAttachmentReadMethod =
+  | "epic.readArtifactObject"
+  | "epic.readChatAttachment";
 
 /**
  * The signal-bound dispatches for chat attachments and inline artifact objects. Narrower than `HostClient` on purpose - the provider
@@ -26,16 +30,11 @@ import type {
  * for this change, because vitest does not type-check.
  */
 export interface ChatAttachmentReadClient {
-  requestWithSignal(
-    method: "epic.readArtifactObject",
-    params: EpicReadArtifactObjectRequest,
+  requestWithSignal<Method extends ChatAttachmentReadMethod>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
     signal: AbortSignal | undefined,
-  ): Promise<EpicReadArtifactObjectResponse>;
-  requestWithSignal(
-    method: "epic.readChatAttachment",
-    params: ReadChatAttachmentRequest,
-    signal: AbortSignal | undefined,
-  ): Promise<ReadChatAttachmentResponse>;
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
   requestWithSignalRequiringHostMethodVersion(
     method: "epic.readChatAttachment",
     params: ReadChatAttachmentRequest,

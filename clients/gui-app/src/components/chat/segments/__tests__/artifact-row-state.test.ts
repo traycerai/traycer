@@ -14,7 +14,13 @@ const STAMP: ToolCallArtifactStamp = {
   artifactId: "art-1",
   title: "My Artifact",
   manifest: {
-    files: { "index.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+    files: {
+      "index.html": {
+        sha256: STAMP_SHA,
+        byteLength: 100,
+        mediaType: "text/html",
+      },
+    },
     capturedAt: 1_000,
   },
   originChatId: "chat-1",
@@ -36,30 +42,45 @@ const PROJECTION_BASE: ArtifactProjection = {
 const PROJECTION_WITH_HEAD: ArtifactProjection = {
   ...PROJECTION_BASE,
   head: {
-    files: { "index.html": { sha256: HEAD_SHA, byteLength: 120, mediaType: "text/html", status: "published" } },
+    files: {
+      "index.html": {
+        sha256: HEAD_SHA,
+        byteLength: 120,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
     capturedAt: 2_000,
   },
 };
 
 describe("selectArtifactRowState", () => {
   it("is deleted when the tombstone is confirmed and the projection is absent", () => {
-    expect(selectArtifactRowState(STAMP, null, false, true)).toEqual({ kind: "deleted" });
+    expect(selectArtifactRowState(STAMP, null, false, true)).toEqual({
+      kind: "deleted",
+    });
   });
 
   it("is deleted when the tombstone is confirmed, even behind a stale retained record", () => {
     // A confirmed delete wins regardless of what the row happens to still be
     // holding from before the tombstone arrived.
-    expect(selectArtifactRowState(STAMP, PROJECTION_WITH_HEAD, false, true)).toEqual({
+    expect(
+      selectArtifactRowState(STAMP, PROJECTION_WITH_HEAD, false, true),
+    ).toEqual({
       kind: "deleted",
     });
   });
 
   it("is pending when the projection has not arrived yet and no tombstone confirms a delete", () => {
-    expect(selectArtifactRowState(STAMP, null, false, false)).toEqual({ kind: "pending" });
+    expect(selectArtifactRowState(STAMP, null, false, false)).toEqual({
+      kind: "pending",
+    });
   });
 
   it("is pending rather than deleted while the record is merely absent so far", () => {
-    expect(selectArtifactRowState(STAMP, null, true, false)).toEqual({ kind: "pending" });
+    expect(selectArtifactRowState(STAMP, null, true, false)).toEqual({
+      kind: "pending",
+    });
   });
 
   it("is stamped when the projection is live and its stamped object is not missing", () => {
@@ -68,8 +89,16 @@ describe("selectArtifactRowState", () => {
   });
 
   it("is latest, serving the live head, when the stamped object was evicted and a head exists", () => {
-    const result = selectArtifactRowState(STAMP, PROJECTION_WITH_HEAD, true, false);
-    expect(result).toEqual({ kind: "latest", manifest: PROJECTION_WITH_HEAD.head });
+    const result = selectArtifactRowState(
+      STAMP,
+      PROJECTION_WITH_HEAD,
+      true,
+      false,
+    );
+    expect(result).toEqual({
+      kind: "latest",
+      manifest: PROJECTION_WITH_HEAD.head,
+    });
   });
 
   it("falls back to the stamped manifest when the stamped object is missing but there is no head to show", () => {
@@ -82,13 +111,31 @@ describe("selectArtifactRowState", () => {
 
 describe("artifactManifestsEqual", () => {
   const FILES_A: ArtifactManifest = {
-    files: { "index.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+    files: {
+      "index.html": {
+        sha256: STAMP_SHA,
+        byteLength: 100,
+        mediaType: "text/html",
+      },
+    },
   };
   const FILES_A_SAME_CONTENT: ArtifactManifest = {
-    files: { "index.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+    files: {
+      "index.html": {
+        sha256: STAMP_SHA,
+        byteLength: 100,
+        mediaType: "text/html",
+      },
+    },
   };
   const FILES_B: ArtifactManifest = {
-    files: { "index.html": { sha256: HEAD_SHA, byteLength: 120, mediaType: "text/html" } },
+    files: {
+      "index.html": {
+        sha256: HEAD_SHA,
+        byteLength: 120,
+        mediaType: "text/html",
+      },
+    },
   };
 
   it("is true for the same reference", () => {
@@ -116,7 +163,11 @@ describe("artifactManifestsEqual", () => {
     const withExtra: ArtifactManifest = {
       files: {
         ...FILES_A.files,
-        "extra.css": { sha256: HEAD_SHA, byteLength: 10, mediaType: "text/css" },
+        "extra.css": {
+          sha256: HEAD_SHA,
+          byteLength: 10,
+          mediaType: "text/css",
+        },
       },
     };
     expect(artifactManifestsEqual(FILES_A, withExtra)).toBe(false);
@@ -124,7 +175,13 @@ describe("artifactManifestsEqual", () => {
 
   it("is false when the same number of files names different paths", () => {
     const renamed: ArtifactManifest = {
-      files: { "renamed.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+      files: {
+        "renamed.html": {
+          sha256: STAMP_SHA,
+          byteLength: 100,
+          mediaType: "text/html",
+        },
+      },
     };
     expect(artifactManifestsEqual(FILES_A, renamed)).toBe(false);
   });

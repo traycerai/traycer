@@ -47,8 +47,10 @@ import type {
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import {
+  ARTIFACT_HEAD_FIELD,
+  ARTIFACT_FILE_OBJECT_FIELD,
   buildDeletedEpicArtifact,
-  type EpicArtifact,
+  epicArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { createTypedMap } from "@traycer/protocol/utils/yjs-utils";
 import { resolveReparentNode } from "@/lib/reparent-rules";
@@ -1016,13 +1018,14 @@ export function createEpicRecordsReplica(
     // The FULL metadata record, not the four-field summary this used to write:
     // the version-history UI revives from a tombstone, so anything omitted here
     // is lost on restore rather than merely absent from the list.
+    const relativePath: unknown = entry.get("relativePath");
     const base = {
       id: artifactId,
       layout:
-        entry.get("layout") === "file"
+        kind === "file" || entry.get("layout") === "file"
           ? ("file" as const)
           : ("folder" as const),
-      relativePath: readMaybeString(entry, "relativePath"),
+      relativePath,
       folderName: readMaybeString(entry, "folderName"),
       title: readMaybeString(entry, "title"),
       artifactRoomId: readMaybeString(entry, "artifactRoomId"),
@@ -1031,15 +1034,23 @@ export function createEpicRecordsReplica(
       createdManually: readMaybeBoolean(entry, "createdManually"),
       parentId: readMaybeNullableString(entry, "parentId"),
     };
-    const artifact: EpicArtifact =
-      kind === "ticket" || kind === "story"
+    const rawHead: unknown = entry.get(ARTIFACT_HEAD_FIELD);
+    const rawObject: unknown = entry.get(ARTIFACT_FILE_OBJECT_FIELD);
+    const head: unknown = rawHead instanceof Y.Map ? rawHead.toJSON() : rawHead;
+    const object: unknown =
+      rawObject instanceof Y.Map ? rawObject.toJSON() : rawObject;
+    const artifact = epicArtifactSchema.parse({
+      ...base,
+      kind,
+      head,
+      object,
+      ...(kind === "ticket" || kind === "story"
         ? {
-            ...base,
-            kind,
             status: readTicketStatus(entry),
             assignee: readMaybeString(entry, "assignee"),
           }
-        : { ...base, kind };
+        : {}),
+    });
     const tombstone = buildDeletedEpicArtifact(
       artifact,
       new Date(environment.clock.now()).toISOString(),

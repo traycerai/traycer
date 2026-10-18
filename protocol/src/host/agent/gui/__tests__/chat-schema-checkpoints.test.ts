@@ -35,6 +35,7 @@ import {
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -175,15 +176,11 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.22 is main's released line, frozen byte for byte: it reopens exactly those
 // heard-from leaves to a string (`open-harness-wire.ts`) and moves nothing
 // else, so the 1.0-1.21 digests above did not change when it opened. It does
-// NOT carry the tool-call `page` / `mcpApp` stamps.
+// NOT carry the tool-call MCP App stamp.
 //
-// 1.23 is the live line: the open-harness 1.22 plus the tool-call `page` /
-// `mcpApp` stamps (agent pages and MCP Apps). The stamps first reached
-// 1.13-1.22 by reference, through the live tool-call block and
-// `tool_call.completed` event; the hand-frozen `toolCallBlockSchemaPrePage` /
-// `toolCallCompletedEventSchemaPrePage` leaves, swapped into every historical
-// union, are what keep them off. Every digest below 1.23 is identical with
-// and without the stamps.
+// 1.23 adds the MCP App stamp. The PreMcpApp leaves keep it off older lines.
+// Entries 1.23–1.29 were regenerated when the never-released page stamp was
+// removed. The released 1.0–1.22 digests remain unchanged.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -278,42 +275,46 @@ const SERVER_FRAME_DIGESTS = {
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
   23: [
-    "f5b56223b15cc20745f64c6fc12c12139770f769afd3ecb236db0a60b7577ff7",
-    "85f17a63cb8ad0aead1ae6d97ccbfb1b33d0b423c86415286cdaa876c3be52ff",
+    "a9681170dd0204415e81fdfa3f0a9349042b6f744e4b7472948fcafea7e4bde2",
+    "6c440c7bd1cdddc71d5ad9243c80e4244e788628de8e4e69ab195da8283e04c4",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "76fd9f55395a8589fb22b18260e5c7e89a9978b2cdd27733c13d8403a4c071ff",
-    "dfd3fd0c3e80e407fa2a94754897c7a4108fd4d671c008d08ec9a44a3d860101",
+    "df4a6c92a190a70c15ec9dd0c5213f2de6be0603a6019a497535700606c49caf",
+    "dffa1e3ba8e53a696b9683e7aa8df8361ddf11ad45f099a24fb4a2b31e5739e9",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "45696e34f99e3395c6ee65f36228a9afebe3cd42e2f6de0189e85d5cadc33a01",
-    "21d55b25706c2fc3ba1ee5dffe631e690632c8092fd8e35f9c6ee55b9e0d7f56",
+    "fb4f57ece103b2b0f1c09ce3cbb1337313475022e74aa047ab71a2363ce44393",
+    "a454bae64702f7f23ecb09f23f128a46a90297489c42d8f2ce6c69184c741c6f",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "8f1526bc99e13c0e4f311bddb9dd60d4fa834717c8ae7723c199b91d547d8b38",
-    "e19f9e26679c833d184d861b3c1b271b321e411b5888f91fd13f09384fb2b14e",
+    "217dedded3dc8f48540361498ac33cd5b74c87d834abf292627a65b45448e315",
+    "a41a8553d19255eb4dbb7334f5332134d9ed187f5f95d09c452f2c04b3005cff",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
   // task-overdue line, with operation blocks and events limited to the four
   // markdown artifact kinds.
   27: [
-    "4e9bcb56f5427b4fe47487bcd73a7a3bf5a0eb903882a3e9a09d35b7291d49f7",
-    "30c937db5a5850bec9474b167d4bd7667e4fefb6f97559d3999dcbf03fec41e6",
+    "8d04e50cb1e605fa1ef204f057463add6d4075277016a2c23d38d8beb53fdc58",
+    "88da8359f5ee5a694a313c1be9f7223fd0e7681dc8dca2c0cfc1cd79031ccd03",
   ],
   // Captured from the live schema the moment before 1.29 opened above it: the
   // html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Verified against an independent read of the pre-change
   // git baseline (HEAD), not just the frozen copy now in the tree.
   28: [
-    "e531f43cd0a0fa22ebc67251a67c31b59834aa1a3255da6d6a41bb1d3525b410",
-    "06b157c44c485ca1cbc619c67c264552984e046435a767aa368d6820922861da",
+    "59bb875d38642421bd3a489fa4275f8e6f2210b2bbb65848d1791cf0918f796b",
+    "35d505da4044a612fb67c7f6545c9a62a28f76af08a410e28309714e9d597d19",
+  ],
+  29: [
+    "1d3b534a2619caad181d1401e52f7065f6264794f5c5f99bf8f45cb612768aeb",
+    "6e8d92246352639bc8d1a3c560ce3851f473c8d033b4b283e8a5e2d0c907738a",
   ],
 } as const;
 
@@ -347,10 +348,11 @@ const contracts = [
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.28 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.29 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

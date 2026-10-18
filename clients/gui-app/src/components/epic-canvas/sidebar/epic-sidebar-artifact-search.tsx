@@ -655,9 +655,7 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
   );
 });
 
-function ArtifactSnippetList(props: {
-  readonly hit: SearchArtifactHit;
-}) {
+function ArtifactSnippetList(props: { readonly hit: SearchArtifactHit }) {
   if (props.hit.snippets.length === 0) return null;
   return (
     <div className="space-y-0.5 pl-5 pt-0.5">

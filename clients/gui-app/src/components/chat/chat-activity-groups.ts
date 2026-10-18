@@ -23,9 +23,7 @@ import {
   derivePromotedSubagentRenderId,
 } from "./chat-collapsible-key";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
-import type {
-  ToolCallMcpAppStamp,
-} from "@traycer/protocol/persistence/epic/content-blocks";
+import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 
 export type ActivitySegment =
   | ToolSegment

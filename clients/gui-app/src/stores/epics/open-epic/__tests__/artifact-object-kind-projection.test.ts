@@ -46,7 +46,7 @@ const BASE_FIELDS = {
   createdManually: true,
 };
 
-const VALID_HEAD = {
+const VALID_HEAD: ArtifactHead = {
   files: {
     "index.html": {
       sha256: SHA_A,
@@ -96,12 +96,19 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects an html artifact with a valid head and defaults layout to folder", () => {
     const doc = newDoc();
-    setArtifact(doc, "html-1", { kind: "html", ...BASE_FIELDS, head: VALID_HEAD });
+    setArtifact(doc, "html-1", {
+      kind: "html",
+      ...BASE_FIELDS,
+      head: VALID_HEAD,
+    });
 
     const slice = projectArtifactsSliceForTests(doc);
 
     expect(slice.allIds).toEqual(["html-1"]);
-    expect(slice.byId["html-1"]).toMatchObject({ kind: "html", layout: "folder" });
+    expect(slice.byId["html-1"]).toMatchObject({
+      kind: "html",
+      layout: "folder",
+    });
     expect(slice.byId["html-1"].head).toEqual(VALID_HEAD);
   });
 
@@ -120,7 +127,10 @@ describe("projectArtifact - html, canvas and file kinds", () => {
     setArtifact(doc, "html-1", {
       kind: "html",
       ...BASE_FIELDS,
-      head: { files: { "index.html": { sha256: SHA_A, mediaType: "text/html" } }, capturedAt: 5 }, // missing byteLength/status
+      head: {
+        files: { "index.html": { sha256: SHA_A, mediaType: "text/html" } },
+        capturedAt: 5,
+      }, // missing byteLength/status
     });
 
     const slice = projectArtifactsSliceForTests(doc);
@@ -221,7 +231,11 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects a loose (file-layout) html artifact's relativePath beside its head", () => {
     const doc = newDoc();
-    setArtifact(doc, "parent", { kind: "spec", ...BASE_FIELDS, folderName: "docs" });
+    setArtifact(doc, "parent", {
+      kind: "spec",
+      ...BASE_FIELDS,
+      folderName: "docs",
+    });
     setArtifact(doc, "weather", {
       kind: "html",
       ...BASE_FIELDS,
@@ -245,10 +259,23 @@ describe("projectArtifact - html, canvas and file kinds", () => {
   it("lists every valid kind without skipping html, canvas or file, and drops only the malformed ones", () => {
     const doc = newDoc();
     setArtifact(doc, "spec-1", { kind: "spec", ...BASE_FIELDS });
-    setArtifact(doc, "ticket-1", { kind: "ticket", ...BASE_FIELDS, assignee: "", status: 0 });
-    setArtifact(doc, "html-ok", { kind: "html", ...BASE_FIELDS, head: VALID_HEAD });
+    setArtifact(doc, "ticket-1", {
+      kind: "ticket",
+      ...BASE_FIELDS,
+      assignee: "",
+      status: 0,
+    });
+    setArtifact(doc, "html-ok", {
+      kind: "html",
+      ...BASE_FIELDS,
+      head: VALID_HEAD,
+    });
     setArtifact(doc, "html-bad", { kind: "html", ...BASE_FIELDS }); // no head
-    setArtifact(doc, "canvas-ok", { kind: "canvas", ...BASE_FIELDS, head: VALID_HEAD });
+    setArtifact(doc, "canvas-ok", {
+      kind: "canvas",
+      ...BASE_FIELDS,
+      head: VALID_HEAD,
+    });
     setArtifact(doc, "file-ok", {
       kind: "file",
       ...BASE_FIELDS,
@@ -317,7 +344,12 @@ describe("artifactHeadsEqual", () => {
       ...headA,
       files: {
         ...headA.files,
-        "styles.css": { sha256: SHA_B, byteLength: 1, mediaType: "text/css", status: "published" },
+        "styles.css": {
+          sha256: SHA_B,
+          byteLength: 1,
+          mediaType: "text/css",
+          status: "published",
+        },
       },
     };
     expect(artifactHeadsEqual(headA, headB)).toBe(false);

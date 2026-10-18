@@ -102,7 +102,12 @@ function sidebarNodeMention(
     return null;
   }
   // New artifact kinds have no composer mention arm yet.
-  if (record.type !== "chat" && record.type !== "terminal-agent" && !isMarkdownArtifactKind(record.type)) return null;
+  if (
+    record.type !== "chat" &&
+    record.type !== "terminal-agent" &&
+    !isMarkdownArtifactKind(record.type)
+  )
+    return null;
   return entityMentionAttachment({
     contextType: record.type,
     epicId: source.epicId,

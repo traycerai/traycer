@@ -22,9 +22,7 @@ import {
   X,
 } from "lucide-react";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
-import type {
-  EpicReadArtifactObjectResponse,
-} from "@traycer/protocol/host/epic/files";
+import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
 import { useBlockingLayerClaim } from "@/components/layout/shell/blocking-layer-claim";
@@ -196,7 +194,6 @@ function useMcpAppSnapshotQuery(props: LiveMcpAppProps) {
     epicId,
     sha256: app.snapshot.sha256,
   });
-
 }
 
 type SnapshotContent =

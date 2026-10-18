@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/files";
+import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 

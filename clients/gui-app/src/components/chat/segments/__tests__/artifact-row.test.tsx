@@ -1,12 +1,18 @@
 import { useEffect } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   EpicReadArtifactObjectRequest,
   EpicReadArtifactObjectResponse,
-} from "@traycer/protocol/host/epic/files";
+} from "@traycer/protocol/host/epic/artifact-objects";
 import type {
   ReadChatAttachmentRequest,
   ReadChatAttachmentResponse,
@@ -18,7 +24,11 @@ import {
 } from "@/components/chat/chat-attachment-scope-context";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import type { SandboxStatus } from "@/lib/sandbox/bridge-host";
-import type { ArtifactProjection, ArtifactsSlice, DeletedArtifactsSlice } from "@/stores/epics/open-epic/types";
+import type {
+  ArtifactProjection,
+  ArtifactsSlice,
+  DeletedArtifactsSlice,
+} from "@/stores/epics/open-epic/types";
 import { ArtifactRow } from "@/components/chat/segments/artifact-row";
 
 const STAMP_SHA = "a".repeat(64);
@@ -33,7 +43,13 @@ const STAMP: ToolCallArtifactStamp = {
   artifactId: ARTIFACT_ID,
   title: "My Artifact",
   manifest: {
-    files: { "index.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+    files: {
+      "index.html": {
+        sha256: STAMP_SHA,
+        byteLength: 100,
+        mediaType: "text/html",
+      },
+    },
     capturedAt: 1_000,
   },
   originChatId: "chat-1",
@@ -56,7 +72,14 @@ const PROJECTION: ArtifactProjection = {
 const PROJECTION_WITH_HEAD: ArtifactProjection = {
   ...PROJECTION,
   head: {
-    files: { "index.html": { sha256: HEAD_SHA, byteLength: HEAD_BYTES_LENGTH, mediaType: "text/html", status: "published" } },
+    files: {
+      "index.html": {
+        sha256: HEAD_SHA,
+        byteLength: HEAD_BYTES_LENGTH,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
     capturedAt: 2_000,
   },
 };
@@ -71,13 +94,17 @@ interface FakeEpicRowState {
 
 const storeMocks = vi.hoisted(() => {
   const state: { current: FakeEpicRowState } = {
-    current: { artifacts: { byId: {}, allIds: [] }, deletedArtifacts: { byId: {}, allIds: [] } },
+    current: {
+      artifacts: { byId: {}, allIds: [] },
+      deletedArtifacts: { byId: {}, allIds: [] },
+    },
   };
   return state;
 });
 
 vi.mock("@/hooks/use-epic-store", () => ({
-  useEpicStore: (selector: (state: FakeEpicRowState) => unknown) => selector(storeMocks.current),
+  useEpicStore: (selector: (state: FakeEpicRowState) => unknown) =>
+    selector(storeMocks.current),
 }));
 
 interface CapturedFrame {
@@ -87,7 +114,10 @@ interface CapturedFrame {
 }
 
 const sandboxFrameMocks = vi.hoisted(() => {
-  const captured: { renders: CapturedFrame[]; mounts: number } = { renders: [], mounts: 0 };
+  const captured: { renders: CapturedFrame[]; mounts: number } = {
+    renders: [],
+    mounts: 0,
+  };
   return captured;
 });
 
@@ -109,7 +139,10 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
   },
 }));
 
-type ArtifactSandboxSource = Extract<SandboxFrameProps["source"], { readonly kind: "artifact" }>;
+type ArtifactSandboxSource = Extract<
+  SandboxFrameProps["source"],
+  { readonly kind: "artifact" }
+>;
 
 interface ArtifactFrame {
   readonly source: ArtifactSandboxSource;
@@ -124,12 +157,20 @@ interface ArtifactFrame {
  */
 function requireArtifactFrame(frame: CapturedFrame | undefined): ArtifactFrame {
   if (frame === undefined) {
-    throw new Error("Expected the mocked sandbox frame to have rendered, but it never did.");
+    throw new Error(
+      "Expected the mocked sandbox frame to have rendered, but it never did.",
+    );
   }
   if (frame.source.kind !== "artifact") {
-    throw new Error(`Expected an artifact sandbox source, got "${frame.source.kind}".`);
+    throw new Error(
+      `Expected an artifact sandbox source, got "${frame.source.kind}".`,
+    );
   }
-  return { source: frame.source, height: frame.height, onStatus: frame.onStatus };
+  return {
+    source: frame.source,
+    height: frame.height,
+    onStatus: frame.onStatus,
+  };
 }
 
 function latestArtifactFrame(): ArtifactFrame {
@@ -147,7 +188,9 @@ type ArtifactObjectResponder = (
   signal: AbortSignal | undefined,
 ) => Promise<EpicReadArtifactObjectResponse>;
 
-function makeArtifactReadClient(respond: ArtifactObjectResponder): ChatAttachmentReadClient {
+function makeArtifactReadClient(
+  respond: ArtifactObjectResponder,
+): ChatAttachmentReadClient {
   function requestWithSignal(
     method: "epic.readArtifactObject",
     params: EpicReadArtifactObjectRequest,
@@ -163,15 +206,22 @@ function makeArtifactReadClient(respond: ArtifactObjectResponder): ChatAttachmen
     params: EpicReadArtifactObjectRequest | ReadChatAttachmentRequest,
     signal: AbortSignal | undefined,
   ): Promise<EpicReadArtifactObjectResponse | ReadChatAttachmentResponse> {
-    if (method === "epic.readArtifactObject" && isArtifactObjectRequest(params)) {
+    if (
+      method === "epic.readArtifactObject" &&
+      isArtifactObjectRequest(params)
+    ) {
       return respond(params, signal);
     }
-    return Promise.reject(new Error(`Unexpected request in this test: ${method}`));
+    return Promise.reject(
+      new Error(`Unexpected request in this test: ${method}`),
+    );
   }
   return {
     requestWithSignal,
     requestWithSignalRequiringHostMethodVersion() {
-      return Promise.reject(new Error("Unexpected attachment read in artifact row test"));
+      return Promise.reject(
+        new Error("Unexpected attachment read in artifact row test"),
+      );
     },
   };
 }
@@ -191,7 +241,9 @@ function makeEvictionClient(): ChatAttachmentReadClient {
         mediaType: "text/html",
       });
     }
-    return Promise.reject(new Error(`Unexpected sha256 in this test: ${params.sha256}`));
+    return Promise.reject(
+      new Error(`Unexpected sha256 in this test: ${params.sha256}`),
+    );
   });
 }
 
@@ -202,14 +254,22 @@ const SCOPE_BASE = {
   hostVersion: "1.30.0",
 };
 
-function scopeWithClient(client: ChatAttachmentReadClient | null): ChatAttachmentScopeValue {
+function scopeWithClient(
+  client: ChatAttachmentReadClient | null,
+): ChatAttachmentScopeValue {
   return { ...SCOPE_BASE, client };
 }
 
-function renderRow(scope: ChatAttachmentScopeValue | null, stamp: ToolCallArtifactStamp) {
+function renderRow(
+  scope: ChatAttachmentScopeValue | null,
+  stamp: ToolCallArtifactStamp,
+) {
   return render(
     <ChatAttachmentScopeContext.Provider value={scope}>
-      <ArtifactRow artifact={stamp} fallback={<div data-testid="fallback">fallback</div>} />
+      <ArtifactRow
+        artifact={stamp}
+        fallback={<div data-testid="fallback">fallback</div>}
+      />
     </ChatAttachmentScopeContext.Provider>,
   );
 }
@@ -221,7 +281,10 @@ function rerenderRow(
 ) {
   rerender(
     <ChatAttachmentScopeContext.Provider value={scope}>
-      <ArtifactRow artifact={stamp} fallback={<div data-testid="fallback">fallback</div>} />
+      <ArtifactRow
+        artifact={stamp}
+        fallback={<div data-testid="fallback">fallback</div>}
+      />
     </ChatAttachmentScopeContext.Provider>,
   );
 }
@@ -231,7 +294,10 @@ function neverRespond(): Promise<EpicReadArtifactObjectResponse> {
 }
 
 beforeEach(() => {
-  storeMocks.current = { artifacts: EMPTY_ARTIFACTS, deletedArtifacts: EMPTY_DELETED };
+  storeMocks.current = {
+    artifacts: EMPTY_ARTIFACTS,
+    deletedArtifacts: EMPTY_DELETED,
+  };
   sandboxFrameMocks.renders = [];
   sandboxFrameMocks.mounts = 0;
 });
@@ -267,7 +333,11 @@ describe("<ArtifactRow />", () => {
     expect(screen.getByText("Loading artifact")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame-mock")).toBeNull();
 
-    rerenderRow(rerender, scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+    rerenderRow(
+      rerender,
+      scopeWithClient(makeArtifactReadClient(neverRespond)),
+      STAMP,
+    );
 
     expect(screen.queryByText("Loading artifact")).toBeNull();
     expect(screen.getByTestId("sandbox-frame-mock")).toBeTruthy();
@@ -276,7 +346,18 @@ describe("<ArtifactRow />", () => {
   it("renders the deleted placeholder once the tombstone is confirmed", () => {
     storeMocks.current = {
       artifacts: EMPTY_ARTIFACTS,
-      deletedArtifacts: { byId: { [ARTIFACT_ID]: { id: ARTIFACT_ID, kind: "html", title: "My Artifact", deletedAt: "2026-01-01T00:00:00Z", status: null } }, allIds: [ARTIFACT_ID] },
+      deletedArtifacts: {
+        byId: {
+          [ARTIFACT_ID]: {
+            id: ARTIFACT_ID,
+            kind: "html",
+            title: "My Artifact",
+            deletedAt: "2026-01-01T00:00:00Z",
+            status: null,
+          },
+        },
+        allIds: [ARTIFACT_ID],
+      },
     };
     renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
 
@@ -286,7 +367,10 @@ describe("<ArtifactRow />", () => {
   });
 
   it("stays pending until the projection arrives, then mounts", () => {
-    const { rerender } = renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+    const { rerender } = renderRow(
+      scopeWithClient(makeArtifactReadClient(neverRespond)),
+      STAMP,
+    );
 
     expect(screen.getByText("Loading artifact")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame-mock")).toBeNull();
@@ -296,7 +380,11 @@ describe("<ArtifactRow />", () => {
       artifacts: { byId: { [ARTIFACT_ID]: PROJECTION }, allIds: [ARTIFACT_ID] },
       deletedArtifacts: EMPTY_DELETED,
     };
-    rerenderRow(rerender, scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+    rerenderRow(
+      rerender,
+      scopeWithClient(makeArtifactReadClient(neverRespond)),
+      STAMP,
+    );
 
     expect(screen.queryByText("Loading artifact")).toBeNull();
     expect(sandboxFrameMocks.mounts).toBe(1);
@@ -318,7 +406,10 @@ describe("<ArtifactRow />", () => {
     // The record lane drops the entry WITHOUT a tombstone - e.g. a
     // reconnect gap. The row must keep showing what it already resolved,
     // not flash to "Loading artifact" or unmount the live document.
-    storeMocks.current = { artifacts: EMPTY_ARTIFACTS, deletedArtifacts: EMPTY_DELETED };
+    storeMocks.current = {
+      artifacts: EMPTY_ARTIFACTS,
+      deletedArtifacts: EMPTY_DELETED,
+    };
     rerenderRow(rerender, scopeWithClient(client), STAMP);
 
     expect(screen.queryByText("Loading artifact")).toBeNull();
@@ -330,7 +421,18 @@ describe("<ArtifactRow />", () => {
     // Now a tombstone confirms the delete: the preserved frame is removed.
     storeMocks.current = {
       artifacts: EMPTY_ARTIFACTS,
-      deletedArtifacts: { byId: { [ARTIFACT_ID]: { id: ARTIFACT_ID, kind: "html", title: "My Artifact", deletedAt: "2026-01-01T00:00:00Z", status: null } }, allIds: [ARTIFACT_ID] },
+      deletedArtifacts: {
+        byId: {
+          [ARTIFACT_ID]: {
+            id: ARTIFACT_ID,
+            kind: "html",
+            title: "My Artifact",
+            deletedAt: "2026-01-01T00:00:00Z",
+            status: null,
+          },
+        },
+        allIds: [ARTIFACT_ID],
+      },
     };
     rerenderRow(rerender, scopeWithClient(client), STAMP);
 
@@ -354,14 +456,22 @@ describe("<ArtifactRow />", () => {
 
   it("serves the live head and shows 'Showing latest' once the stamped object is confirmed evicted (own-SHA eviction), and reads real head bytes while rejecting an unexpected sha", async () => {
     storeMocks.current = {
-      artifacts: { byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD }, allIds: [ARTIFACT_ID] },
+      artifacts: {
+        byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+        allIds: [ARTIFACT_ID],
+      },
       deletedArtifacts: EMPTY_DELETED,
     };
     renderRow(scopeWithClient(makeEvictionClient()), STAMP);
     const beforeEviction = latestArtifactFrame();
 
     await act(async () => {
-      await beforeEviction.source.readSpan(STAMP_SHA, 0, 10, new AbortController().signal);
+      await beforeEviction.source.readSpan(
+        STAMP_SHA,
+        0,
+        10,
+        new AbortController().signal,
+      );
     });
 
     expect(screen.getByText("Showing latest")).toBeTruthy();
@@ -371,7 +481,12 @@ describe("<ArtifactRow />", () => {
     // The new source actually serves the head's own bytes, not just a
     // state label - and a sha the test never authorized must reject rather
     // than silently resolve.
-    const headRead = await afterEviction.source.readSpan(HEAD_SHA, 0, HEAD_BYTES_LENGTH, new AbortController().signal);
+    const headRead = await afterEviction.source.readSpan(
+      HEAD_SHA,
+      0,
+      HEAD_BYTES_LENGTH,
+      new AbortController().signal,
+    );
     expect("bytes" in headRead).toBe(true);
     if ("bytes" in headRead) {
       expect(headRead.totalBytes).toBe(HEAD_BYTES_LENGTH);
@@ -380,13 +495,21 @@ describe("<ArtifactRow />", () => {
     }
 
     await expect(
-      afterEviction.source.readSpan(UNKNOWN_SHA, 0, 1, new AbortController().signal),
+      afterEviction.source.readSpan(
+        UNKNOWN_SHA,
+        0,
+        1,
+        new AbortController().signal,
+      ),
     ).rejects.toThrow(`Unexpected sha256 in this test: ${UNKNOWN_SHA}`);
   });
 
   it("keeps serving the live head and the same source across an equal-content stamp clone after eviction", async () => {
     storeMocks.current = {
-      artifacts: { byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD }, allIds: [ARTIFACT_ID] },
+      artifacts: {
+        byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+        allIds: [ARTIFACT_ID],
+      },
       deletedArtifacts: EMPTY_DELETED,
     };
     const client = makeEvictionClient();
@@ -394,7 +517,12 @@ describe("<ArtifactRow />", () => {
     const beforeEviction = latestArtifactFrame();
 
     await act(async () => {
-      await beforeEviction.source.readSpan(STAMP_SHA, 0, 10, new AbortController().signal);
+      await beforeEviction.source.readSpan(
+        STAMP_SHA,
+        0,
+        10,
+        new AbortController().signal,
+      );
     });
     expect(screen.getByText("Showing latest")).toBeTruthy();
     const evicted = latestArtifactFrame();
@@ -403,7 +531,13 @@ describe("<ArtifactRow />", () => {
       artifactId: STAMP.artifactId,
       title: STAMP.title,
       manifest: {
-        files: { "index.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+        files: {
+          "index.html": {
+            sha256: STAMP_SHA,
+            byteLength: 100,
+            mediaType: "text/html",
+          },
+        },
         capturedAt: 1_000,
       },
       originChatId: STAMP.originChatId,
@@ -418,15 +552,25 @@ describe("<ArtifactRow />", () => {
 
   it("treats a missing SIBLING object as unrelated and keeps the stamped state (outside missing)", async () => {
     storeMocks.current = {
-      artifacts: { byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD }, allIds: [ARTIFACT_ID] },
+      artifacts: {
+        byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+        allIds: [ARTIFACT_ID],
+      },
       deletedArtifacts: EMPTY_DELETED,
     };
-    const client = makeArtifactReadClient(() => Promise.resolve({ kind: "unavailable", reason: "missing" }));
+    const client = makeArtifactReadClient(() =>
+      Promise.resolve({ kind: "unavailable", reason: "missing" }),
+    );
     renderRow(scopeWithClient(client), STAMP);
     const mounted = latestArtifactFrame();
 
     await act(async () => {
-      await mounted.source.readSpan(OTHER_SHA, 0, 10, new AbortController().signal);
+      await mounted.source.readSpan(
+        OTHER_SHA,
+        0,
+        10,
+        new AbortController().signal,
+      );
     });
 
     expect(screen.queryByText("Showing latest")).toBeNull();
@@ -438,21 +582,39 @@ describe("<ArtifactRow />", () => {
     vi.useFakeTimers();
     try {
       storeMocks.current = {
-        artifacts: { byId: { [ARTIFACT_ID]: PROJECTION }, allIds: [ARTIFACT_ID] },
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION },
+          allIds: [ARTIFACT_ID],
+        },
         deletedArtifacts: EMPTY_DELETED,
       };
       let calls = 0;
       const client = makeArtifactReadClient(() => {
         calls += 1;
         if (calls === 1) {
-          return Promise.resolve({ kind: "downloading", receivedBytes: 0, totalBytes: 2 });
+          return Promise.resolve({
+            kind: "downloading",
+            receivedBytes: 0,
+            totalBytes: 2,
+          });
         }
-        return Promise.resolve({ kind: "bytes", bytesBase64: "aGk=", offset: 0, totalBytes: 2, mediaType: "text/html" });
+        return Promise.resolve({
+          kind: "bytes",
+          bytesBase64: "aGk=",
+          offset: 0,
+          totalBytes: 2,
+          mediaType: "text/html",
+        });
       });
       renderRow(scopeWithClient(client), STAMP);
       const mounted = latestArtifactFrame();
 
-      const resultPromise = mounted.source.readSpan(STAMP_SHA, 0, 2, new AbortController().signal);
+      const resultPromise = mounted.source.readSpan(
+        STAMP_SHA,
+        0,
+        2,
+        new AbortController().signal,
+      );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(600);
       });
@@ -478,7 +640,13 @@ describe("<ArtifactRow />", () => {
       artifactId: STAMP.artifactId,
       title: STAMP.title,
       manifest: {
-        files: { "index.html": { sha256: STAMP_SHA, byteLength: 100, mediaType: "text/html" } },
+        files: {
+          "index.html": {
+            sha256: STAMP_SHA,
+            byteLength: 100,
+            mediaType: "text/html",
+          },
+        },
         capturedAt: 1_000,
       },
       originChatId: STAMP.originChatId,

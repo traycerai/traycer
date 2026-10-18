@@ -342,10 +342,7 @@ interface LeftPanelStore {
     epicId: string,
     status: ArtifactStatusFilter,
   ) => void;
-  readonly toggleArtifactKind: (
-    epicId: string,
-    kind: EpicArtifactKind,
-  ) => void;
+  readonly toggleArtifactKind: (epicId: string, kind: EpicArtifactKind) => void;
   readonly setArtifactRead: (epicId: string, read: ArtifactReadFilter) => void;
   readonly clearArtifactFilter: (epicId: string) => void;
   readonly setChatSortField: (epicId: string, field: SortField) => void;

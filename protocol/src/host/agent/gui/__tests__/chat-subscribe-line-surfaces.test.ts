@@ -46,7 +46,7 @@
  *   lines bind frozen schemas without them, so needles do pin the boundary;
  * - `1.29` is the tool-call `artifact` stamp, minted above `1.28`: the
  *   manifest an inline `traycer_render_inline` artifact showed. PROJECTED,
- *   like `1.23`'s page/MCP App stamps, so a needle pins the boundary.
+ *   like `1.23`'s MCP App stamp, so a needle pins the boundary.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -87,7 +87,7 @@ const CLAUDE_PARITY_MINOR = 20;
 // `1.21` is the Command Code line: it adds no key, only which harnesses the
 // shapes may name. `1.22` is the open-harness-id line: it adds no key either,
 // only reopens the heard-from harness leaves to a string. `1.23` adds the
-// tool-call `page` / `mcpApp` stamps (pinned below). `1.24` adds the cron
+// tool-call `mcpApp` stamp (pinned below). `1.24` adds the cron
 // next-run time, whose `scheduledFor` key already exists on other item kinds;
 // `chat-subscribe-cron-next-run-v124.test.ts` pins that arm directly. `1.25`
 // adds the bot-conversation request on a user row and the
@@ -133,10 +133,10 @@ const CONVERSATION_NEEDLES = [
 // description that merely mentions the name; the two literals (`thinkingTokens`
 // frame kind, `cron` background kind) are matched with both quotes, which
 // `"thinkingTokensEstimate":` and `"cron..."` cannot satisfy by prefix.
-// `1.23`: the tool-call `page` / `mcpApp` stamps, server frames only (a client
-// never sends a body).
-const PAGE_STAMP_MINOR = 23;
-const PAGE_STAMP_NEEDLES = ['"page":', '"mcpApp":'];
+// `1.23`: the tool-call `mcpApp` stamp, server frames only (a client never
+// sends a body).
+const MCP_APP_STAMP_MINOR = 23;
+const MCP_APP_STAMP_NEEDLES = ['"mcpApp":'];
 const CLAUDE_PARITY_NEEDLES = [
   '"suggestedPrompt":',
   '"thinkingTokensEstimate":',
@@ -338,7 +338,7 @@ describe("chat.subscribe line surfaces", () => {
       const carriesPlacement = minor >= 9;
       const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
       const carriesClaudeParity = minor >= CLAUDE_PARITY_MINOR;
-      const carriesPageStamps = minor >= PAGE_STAMP_MINOR;
+      const carriesMcpAppStamp = minor >= MCP_APP_STAMP_MINOR;
       const carriesConversation = minor >= CONVERSATION_MINOR;
 
       it(`server frames ${carriesConversation ? "carry" : "hold back"} the bot-conversation surface`, () => {
@@ -431,18 +431,18 @@ describe("chat.subscribe line surfaces", () => {
         expect(found).toEqual(carriesClaudeParity ? CLAUDE_PARITY_NEEDLES : []);
       });
 
-      it(`server frames ${carriesPageStamps ? "carry" : "hold back"} the tool-call page and MCP App stamps`, () => {
+      it(`server frames ${carriesMcpAppStamp ? "carry" : "hold back"} the tool-call MCP App stamp`, () => {
         const text = schemaText(contract.serverFrameSchema);
-        const found = PAGE_STAMP_NEEDLES.filter((needle) =>
+        const found = MCP_APP_STAMP_NEEDLES.filter((needle) =>
           text.includes(needle),
         );
-        expect(found).toEqual(carriesPageStamps ? PAGE_STAMP_NEEDLES : []);
+        expect(found).toEqual(carriesMcpAppStamp ? MCP_APP_STAMP_NEEDLES : []);
       });
 
-      it("client frames hold back the page and MCP App stamps on every line", () => {
+      it("client frames hold back the MCP App stamp on every line", () => {
         const text = schemaText(contract.clientFrameSchema);
         expect(
-          PAGE_STAMP_NEEDLES.filter((needle) => text.includes(needle)),
+          MCP_APP_STAMP_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual([]);
       });
 

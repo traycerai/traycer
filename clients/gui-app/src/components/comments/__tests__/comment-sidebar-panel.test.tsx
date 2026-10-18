@@ -34,8 +34,9 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 vi.mock("@/stores/auth/auth-store", () => ({
-  useAuthStore: (selector: (state: { profile: { userId: string } | null }) => unknown) =>
-    selector({ profile: { userId: "user-1" } }),
+  useAuthStore: (
+    selector: (state: { profile: { userId: string } | null }) => unknown,
+  ) => selector({ profile: { userId: "user-1" } }),
 }));
 
 vi.mock("@/stores/comments/anchor-positions-store", () => ({
@@ -43,8 +44,9 @@ vi.mock("@/stores/comments/anchor-positions-store", () => ({
 }));
 
 vi.mock("@/stores/comments/comment-threads-store", () => ({
-  useCommentThreadsStore: (selector: (state: { setFlashThread: () => void }) => unknown) =>
-    selector({ setFlashThread: vi.fn() }),
+  useCommentThreadsStore: (
+    selector: (state: { setFlashThread: () => void }) => unknown,
+  ) => selector({ setFlashThread: vi.fn() }),
 }));
 
 vi.mock("@/components/comments/comment-sidebar", () => ({

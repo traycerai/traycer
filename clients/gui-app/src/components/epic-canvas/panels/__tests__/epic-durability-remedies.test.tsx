@@ -9,18 +9,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EpicDurabilityRemedies } from "@/components/epic-canvas/panels/epic-durability-remedies";
 
 const mocks = vi.hoisted(() => ({
-  records: [] as Array<{ readonly id: string; readonly name: string; readonly type: string }>,
+  records: [] as Array<{
+    readonly id: string;
+    readonly name: string;
+    readonly type: string;
+  }>,
   exportMutate: vi.fn(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
-  useEpicExportArtifacts: () => ({ mutate: mocks.exportMutate, isPending: false }),
+  useEpicExportArtifacts: () => ({
+    mutate: mocks.exportMutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => mocks.records,
   useEpicDurabilityPauseReason: () => "access-revoked" as const,
-  useEpicDurabilityView: () => ({ kind: "stated" as const, status: "paused" as const }),
+  useEpicDurabilityView: () => ({
+    kind: "stated" as const,
+    status: "paused" as const,
+  }),
   useEpicSnapshotMeta: () => ({ epicLight: { title: "My Epic" } }),
 }));
 

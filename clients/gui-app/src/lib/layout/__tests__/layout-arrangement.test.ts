@@ -1581,7 +1581,8 @@ describe("stacking and unstacking (L-168)", () => {
       expect(
         idsOf(
           normalizeRail(
-            stackRailPanels(arrangement, "chats", "pull-requests", "stack").rail,
+            stackRailPanels(arrangement, "chats", "pull-requests", "stack")
+              .rail,
           ),
         ),
       ).toEqual([
@@ -1728,7 +1729,9 @@ describe("stacking and unstacking (L-168)", () => {
 
       // Agents is the FIRST member of the shipped pair, not the last.
       expect(railPanelToStackBelow(rail, "railAgents")).toBeNull();
-      expect(railPanelToStackBelow(rail, "railArtifacts")).toBe("railTerminals");
+      expect(railPanelToStackBelow(rail, "railArtifacts")).toBe(
+        "railTerminals",
+      );
       expect(railPanelToStackBelow(rail, "railBrowsers")).toBe("railGitDiff");
     });
 

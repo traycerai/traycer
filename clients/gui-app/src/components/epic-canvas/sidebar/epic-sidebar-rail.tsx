@@ -191,7 +191,9 @@ export function EpicLeftPanelRail(props: EpicLeftPanelRailProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact && isMarkdownArtifactKind(activeArtifact.kind);
+    activeArtifact !== null &&
+    "kind" in activeArtifact &&
+    isMarkdownArtifactKind(activeArtifact.kind);
 
   return (
     <EpicLeftPanelRailContent

@@ -8,9 +8,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
-import type {
-  ToolCallArtifactStamp,
-} from "@traycer/protocol/persistence/epic/content-blocks";
+import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { ToolSegment } from "@/components/chat/segments/tool-segment";
@@ -1385,9 +1383,7 @@ describe("<ToolSegment /> row routing", () => {
     originChatId: "chat-1",
   };
 
-  function renderRouted(
-    artifact: ToolCallArtifactStamp | null,
-  ) {
+  function renderRouted(artifact: ToolCallArtifactStamp | null) {
     return render(
       <ToolSegment
         headerFindUnitId={null}

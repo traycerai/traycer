@@ -106,6 +106,7 @@ export type AnalyticsSettingsSection =
   | "app-notifications"
   | "appearance"
   | "delete-account"
+  | "dev-artifact-proof"
   | "devices"
   | "diagnostics"
   | "fallback"
@@ -124,7 +125,14 @@ export type AnalyticsSettingsSection =
   | "usage"
   | "worktrees";
 
-export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket" | "html" | "canvas" | "file";
+export type AnalyticsArtifactKind =
+  | "review"
+  | "spec"
+  | "story"
+  | "ticket"
+  | "html"
+  | "canvas"
+  | "file";
 
 /** Which usage surface ran the image export. Deliberately NOT
  * `AnalyticsSource`: that union names the UI gesture that reached a feature
@@ -1377,6 +1385,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "app-notifications": true,
     appearance: true,
     "delete-account": true,
+    "dev-artifact-proof": true,
     devices: true,
     diagnostics: true,
     fallback: true,

@@ -68,7 +68,9 @@ const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   ticket: "Untitled ticket",
   story: "Untitled story",
   review: "Untitled review",
-  html: "Untitled page", canvas: "Untitled canvas", file: "Untitled file",
+  html: "Untitled page",
+  canvas: "Untitled canvas",
+  file: "Untitled file",
 };
 
 /** User-facing literal for an empty epic title. Single-sourced from the map. */

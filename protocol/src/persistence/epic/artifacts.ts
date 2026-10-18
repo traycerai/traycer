@@ -12,8 +12,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 /**
  * POSIX path within an artifact folder: no leading ./ or /, no empty segment,
  * no .. segment, and no dot-prefixed segment. Track C resolves
- * artifact-<id>/<path> against these manifest keys. Reject backslashes as
- * isEpicFilePath in files.ts does, and all Unicode control characters (C0,
+ * artifact-<id>/<path> against these manifest keys. Reject backslashes
+ * and all Unicode control characters (C0,
  * DEL and C1). Windows hosts would read a backslash as a separator; the manifest
  * must name the same file everywhere. Reject segments named __proto__: the
  * record parser cannot carry that key. artifactHeadSchema also checks the raw

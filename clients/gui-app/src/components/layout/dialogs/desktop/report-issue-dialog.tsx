@@ -118,6 +118,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/appearance": "Settings - Appearance",
   "/settings/browser": "Settings - Browser",
   "/settings/delete-account": "Settings - Delete account",
+  "/settings/dev-artifact-proof": "Settings - Artifact proof",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
   "/settings/fallback": "Settings - Model routing",
