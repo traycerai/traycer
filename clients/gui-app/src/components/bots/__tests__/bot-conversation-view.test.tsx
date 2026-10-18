@@ -169,9 +169,7 @@ describe("<BotConversationView /> composer", () => {
     await user.click(screen.getByTestId("bot-conversation-send"));
 
     const queued = screen.getByTestId("bot-conversation-queued");
-    expect(queued.textContent).toBe(
-      "Saved. The bot reads it once it can be reached.",
-    );
+    expect(queued.textContent).toBe("Saved. The bot will read it.");
     expect(queued.textContent).not.toMatch(/host|offline/i);
   });
 

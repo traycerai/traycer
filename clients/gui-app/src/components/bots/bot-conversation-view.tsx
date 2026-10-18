@@ -148,7 +148,7 @@ function ComposerStatus(props: {
       className="text-muted-foreground"
       data-testid="bot-conversation-queued"
     >
-      Saved. The bot reads it once it can be reached.
+      Saved. The bot will read it.
     </p>
   );
 }
