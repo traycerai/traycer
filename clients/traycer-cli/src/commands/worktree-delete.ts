@@ -82,8 +82,10 @@ export function buildWorktreeDeleteCommand(
   opts: WorktreeDeleteCommandOpts,
 ): CommandFn {
   return async (ctx) => {
-    const worktreePath = opts.worktreePath.trim();
-    if (worktreePath.length === 0) {
+    // Sent as written: a folder name may end in whitespace, so only a blank
+    // value is refused here and nothing is trimmed off a real one.
+    const worktreePath = opts.worktreePath;
+    if (worktreePath.trim().length === 0) {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message: "traycer: worktree delete requires --path <worktree path>.",

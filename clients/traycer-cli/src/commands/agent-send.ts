@@ -102,13 +102,12 @@ const WINDOWS_FULLY_QUALIFIED = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
  * platform, so it is checked as absolute in either form and passed through
  * as written rather than resolved against this machine. A Windows path must
  * name its drive or share, so its meaning cannot depend on the receiver's
- * current drive.
+ * current drive. Nothing is trimmed: a folder name may end in whitespace, and
+ * a blank or space-led value is simply not absolute.
  */
 function requireWorkspacePath(rawPath: string): string {
-  const trimmed = rawPath.trim();
   if (
-    trimmed.length === 0 ||
-    !(path.posix.isAbsolute(trimmed) || WINDOWS_FULLY_QUALIFIED.test(trimmed))
+    !(path.posix.isAbsolute(rawPath) || WINDOWS_FULLY_QUALIFIED.test(rawPath))
   ) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -118,7 +117,7 @@ function requireWorkspacePath(rawPath: string): string {
       exitCode: 1,
     });
   }
-  return trimmed;
+  return rawPath;
 }
 
 /**

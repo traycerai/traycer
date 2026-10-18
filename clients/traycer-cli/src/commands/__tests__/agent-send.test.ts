@@ -2,9 +2,10 @@
  * `traycer agent send` command function.
  *
  * Pins: the `--workspace` path validation (absolute in a posix OR win32 form,
- * trimmed, never resolved against this machine), the dispatch choice (plain
- * without a workspace, `agent.sendMessage@1.1` required with one), and the
- * hint appended to the host's `WORKSPACE_BINDING_REQUIRED` refusal.
+ * sent as written - neither trimmed nor resolved against this machine), the
+ * dispatch choice (plain without a workspace, `agent.sendMessage@1.1`
+ * required with one), and the hint appended to the host's
+ * `WORKSPACE_BINDING_REQUIRED` refusal.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
@@ -135,8 +136,8 @@ describe("agent send --workspace", () => {
     );
   });
 
-  it("trims the path and does not resolve it", async () => {
-    await send("  /work/repo  ");
+  it("sends the path as written, without resolving it", async () => {
+    await send("/work/repo");
 
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.sendMessage",
@@ -144,6 +145,22 @@ describe("agent send --workspace", () => {
       expect.anything(),
     );
   });
+
+  // The folder may legitimately end in a space on the receiving host, so the
+  // value is validated and sent byte for byte, never trimmed.
+  it.each(["/srv/project ", "C:\\work "])(
+    "accepts %j and sends it with the trailing space intact",
+    async (value) => {
+      await send(value);
+
+      expect(rpcMock).toHaveBeenCalledTimes(1);
+      expect(rpcMock).toHaveBeenCalledWith(
+        "agent.sendMessage",
+        expect.objectContaining({ workspace: value }),
+        expect.anything(),
+      );
+    },
+  );
 
   it("accepts a windows absolute path as written", async () => {
     await send("C:\\work");
@@ -173,6 +190,7 @@ describe("agent send --workspace", () => {
     "./here",
     "",
     "   ",
+    " /work",
     "\\work",
     "C:work",
     "\\\\server",
