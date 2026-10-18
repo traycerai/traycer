@@ -72,8 +72,26 @@ describe("projectArtifact - html, canvas and file kinds", () => {
       layout: "folder",
     });
     expect(slice.byId["spec-1"].head).toBeUndefined();
-    expect(slice.byId["spec-1"].sha256).toBeUndefined();
+    expect(slice.byId["spec-1"].object).toBeUndefined();
     expect(slice.byId["spec-1"].relativePath).toBeUndefined();
+  });
+
+  it("projects a folder-layout markdown artifact's relativePath as a plain-folder prefix", () => {
+    const doc = newDoc();
+    setArtifact(doc, "spec-1", {
+      kind: "spec",
+      ...BASE_FIELDS,
+      relativePath: "research/site",
+    });
+
+    const slice = projectArtifactsSliceForTests(doc);
+
+    expect(slice.byId["spec-1"]).toMatchObject({
+      kind: "spec",
+      layout: "folder",
+      relativePath: "research/site",
+      folderName: "folder",
+    });
   });
 
   it("projects an html artifact with a valid head and defaults layout to folder", () => {
@@ -137,16 +155,18 @@ describe("projectArtifact - html, canvas and file kinds", () => {
     });
   });
 
-  it("projects a file artifact's object fields and defaults layout to file even if a stray 'folder' is stored", () => {
+  it("projects a file artifact's nested object and defaults layout to file even if a stray 'folder' is stored", () => {
     const doc = newDoc();
     setArtifact(doc, "file-1", {
       kind: "file",
       ...BASE_FIELDS,
       layout: "folder",
-      sha256: SHA_B,
-      byteLength: 42,
-      mediaType: "application/pdf",
-      status: "published",
+      object: {
+        sha256: SHA_B,
+        byteLength: 42,
+        mediaType: "application/pdf",
+        status: "published",
+      },
     });
 
     const slice = projectArtifactsSliceForTests(doc);
@@ -154,22 +174,43 @@ describe("projectArtifact - html, canvas and file kinds", () => {
     expect(slice.byId["file-1"]).toMatchObject({
       kind: "file",
       layout: "file",
-      sha256: SHA_B,
-      byteLength: 42,
-      mediaType: "application/pdf",
-      objectStatus: "published",
+      object: {
+        sha256: SHA_B,
+        byteLength: 42,
+        mediaType: "application/pdf",
+        status: "published",
+      },
     });
     expect(slice.byId["file-1"].head).toBeUndefined();
   });
 
-  it("drops a file artifact whose object ref fails schema validation", () => {
+  it("drops a file artifact whose nested object fails schema validation", () => {
     const doc = newDoc();
     setArtifact(doc, "file-1", {
       kind: "file",
       ...BASE_FIELDS,
+      object: {
+        sha256: SHA_B,
+        byteLength: 42,
+        // mediaType intentionally missing - artifactObjectRefSchema requires it.
+        status: "published",
+      },
+    });
+
+    const slice = projectArtifactsSliceForTests(doc);
+
+    expect(slice.allIds).toEqual([]);
+  });
+
+  it("drops a file artifact whose object leaf is missing entirely - old flat fields must not satisfy it", () => {
+    const doc = newDoc();
+    setArtifact(doc, "file-1", {
+      kind: "file",
+      ...BASE_FIELDS,
+      // The pre-nesting flat shape; must not be read as the nested object.
       sha256: SHA_B,
       byteLength: 42,
-      // mediaType intentionally missing - artifactObjectRefSchema requires it.
+      mediaType: "application/pdf",
       status: "published",
     });
 
@@ -211,12 +252,18 @@ describe("projectArtifact - html, canvas and file kinds", () => {
     setArtifact(doc, "file-ok", {
       kind: "file",
       ...BASE_FIELDS,
-      sha256: SHA_A,
-      byteLength: 1,
-      mediaType: "image/png",
-      status: "published",
+      object: {
+        sha256: SHA_A,
+        byteLength: 1,
+        mediaType: "image/png",
+        status: "published",
+      },
     });
-    setArtifact(doc, "file-bad", { kind: "file", ...BASE_FIELDS, sha256: SHA_A }); // incomplete
+    setArtifact(doc, "file-bad", {
+      kind: "file",
+      ...BASE_FIELDS,
+      object: { sha256: SHA_A }, // incomplete
+    });
 
     const slice = projectArtifactsSliceForTests(doc);
 

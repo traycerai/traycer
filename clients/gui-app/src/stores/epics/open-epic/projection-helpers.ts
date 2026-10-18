@@ -1,4 +1,4 @@
-import { artifactHeadSchema, artifactObjectRefSchema, type ArtifactHead } from "@traycer/protocol/persistence/epic/artifacts";
+import { ARTIFACT_FILE_OBJECT_FIELD, artifactHeadSchema, artifactObjectRefSchema, type ArtifactHead, type ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 /**
  * Pure projection + Y.Doc-mutation helpers shared between the projector
  * and the store's mutation actions. No React, no zustand, no module
@@ -257,7 +257,10 @@ function projectArtifactObjectFields(entry: Y.Map<unknown>): Partial<ArtifactPro
   const relativePath = entry.get("relativePath");
   const rawHead = entry.get("head");
   const head = artifactHeadSchema.safeParse(rawHead instanceof Y.Map ? rawHead.toJSON() : rawHead);
-  const object = artifactObjectRefSchema.safeParse(entry.toJSON());
+  const rawObject = entry.get(ARTIFACT_FILE_OBJECT_FIELD);
+  const object = artifactObjectRefSchema.safeParse(
+    rawObject instanceof Y.Map ? rawObject.toJSON() : rawObject,
+  );
   const kind = entry.get("kind");
   if ((kind === "html" || kind === "canvas") && !head.success) return null;
   if (kind === "file" && !object.success) return null;
@@ -265,7 +268,7 @@ function projectArtifactObjectFields(entry: Y.Map<unknown>): Partial<ArtifactPro
     layout: layout === "file" || entry.get("kind") === "file" ? "file" : "folder",
     ...(typeof relativePath === "string" ? { relativePath } : {}),
     ...(head.success ? { head: head.data } : {}),
-    ...(object.success ? { sha256: object.data.sha256, byteLength: object.data.byteLength, mediaType: object.data.mediaType, objectStatus: object.data.status } : {}),
+    ...(object.success ? { object: object.data } : {}),
   };
 }
 
@@ -449,14 +452,23 @@ export function messageRowId(message: OpenMessage, index: number): string {
 
 // ─── Equality short-circuits ──────────────────────────────────────────────
 
+function artifactObjectsEqual(
+  a: ArtifactObjectRef | undefined,
+  b: ArtifactObjectRef | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return a.sha256 === b.sha256 &&
+    a.byteLength === b.byteLength &&
+    a.mediaType === b.mediaType &&
+    a.status === b.status;
+}
+
 function artifactObjectFieldsEqual(a: ArtifactProjection, b: ArtifactProjection): boolean {
   return (
     a.layout === b.layout &&
     a.relativePath === b.relativePath &&
-    a.objectStatus === b.objectStatus &&
-    a.sha256 === b.sha256 &&
-    a.byteLength === b.byteLength &&
-    a.mediaType === b.mediaType &&
+    artifactObjectsEqual(a.object, b.object) &&
     artifactHeadsEqual(a.head, b.head)
   );
 }

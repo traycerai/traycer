@@ -36,7 +36,7 @@ export function ObjectArtifactTile(props: { readonly node: EpicArtifactRef; read
       appRequests={null} className="h-full w-full" height={null} onSize={noop} onStatus={noop}
       onRequestTeardown={noop} displayMode="inline" onBridge={null} ref={null} />;
   }
-  const byteLength = artifact.byteLength ?? (artifact.head === undefined ? null : Object.values(artifact.head.files).reduce((total, file) => total + file.byteLength, 0));
+  const byteLength = artifact.object?.byteLength ?? (artifact.head === undefined ? null : Object.values(artifact.head.files).reduce((total, file) => total + file.byteLength, 0));
   return <div className="flex min-w-0 flex-col gap-2 p-4">
     <div className="truncate">{artifact.title || EPIC_NODE_LABELS[artifact.kind]}</div>
     <div className="text-sm text-muted-foreground">{EPIC_NODE_LABELS[artifact.kind]}{byteLength === null ? "" : ` · ${byteLength.toLocaleString()} bytes`}</div>

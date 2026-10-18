@@ -120,7 +120,22 @@ describe("artifactTreePath", () => {
     expect(artifactTreePath(artifacts, "nested")).toBeNull();
   });
 
-  it("returns null when a file-layout entry has no relativePath of its own", () => {
+  it("falls back to folderName when a file-layout entry has no relativePath of its own", () => {
+    const artifacts = slice([
+      artifact({ id: "assets", kind: "spec", folderName: "assets" }),
+      artifact({
+        id: "notes",
+        kind: "file",
+        folderName: "notes.txt",
+        parentId: "assets",
+        layout: "file",
+      }),
+    ]);
+
+    expect(artifactTreePath(artifacts, "notes")).toBe("assets/notes.txt");
+  });
+
+  it("still returns null when the fallback folderName is itself empty", () => {
     const artifacts = slice([
       artifact({
         id: "broken",
@@ -140,6 +155,41 @@ describe("artifactTreePath", () => {
     ]);
 
     expect(artifactTreePath(artifacts, "empty")).toBeNull();
+  });
+
+  it("uses a folder-layout artifact's relativePath as a multi-segment prefix, keeping folderName for display only", () => {
+    const artifacts = slice([
+      artifact({
+        id: "site",
+        kind: "html",
+        folderName: "site",
+        relativePath: "research/site",
+        layout: "folder",
+      }),
+    ]);
+
+    expect(artifactTreePath(artifacts, "site")).toBe("research/site");
+  });
+
+  it("resolves a child under a folder-layout relativePath prefix (child resolution)", () => {
+    const artifacts = slice([
+      artifact({
+        id: "site",
+        kind: "html",
+        folderName: "site",
+        relativePath: "research/site",
+        layout: "folder",
+      }),
+      artifact({
+        id: "page",
+        kind: "html",
+        folderName: "page",
+        parentId: "site",
+        layout: "folder",
+      }),
+    ]);
+
+    expect(artifactTreePath(artifacts, "page")).toBe("research/site/page");
   });
 });
 
@@ -213,7 +263,26 @@ describe("artifactSourcePathsFor", () => {
     expect(artifactSourcePathsFor(orphan, slice([orphan]))).toBeNull();
   });
 
-  it("returns null for a file-layout artifact with no relativePath", () => {
+  it("falls back to folderName as the entry when a file-layout artifact has no relativePath", () => {
+    const loose = artifact({
+      id: "notes",
+      kind: "html",
+      folderName: "notes.html",
+      parentId: "parent",
+      layout: "file",
+    });
+    const artifacts = slice([
+      artifact({ id: "parent", kind: "spec", folderName: "docs" }),
+      loose,
+    ]);
+
+    expect(artifactSourcePathsFor(loose, artifacts)).toEqual({
+      treePath: "docs",
+      entryPath: "notes.html",
+    });
+  });
+
+  it("returns null when the fallback folderName is itself empty, leaving no valid path", () => {
     const broken = artifact({
       id: "broken",
       kind: "html",
@@ -303,10 +372,12 @@ describe("createArtifactOutsideReferenceResolver", () => {
       parentId: "assets",
       layout: "file",
       relativePath: "logo.png",
-      sha256: SHA_A,
-      byteLength: 1024,
-      mediaType: "image/png",
-      objectStatus: "published",
+      object: {
+        sha256: SHA_A,
+        byteLength: 1024,
+        mediaType: "image/png",
+        status: "published",
+      },
     });
     const artifacts = slice([
       artifact({ id: "assets", kind: "spec", folderName: "assets" }),
@@ -337,9 +408,7 @@ describe("createArtifactOutsideReferenceResolver", () => {
       parentId: null,
       layout: "file",
       relativePath: "shared.bin",
-      sha256: SHA_A,
-      byteLength: 1,
-      mediaType: "application/octet-stream",
+      object: { sha256: SHA_A, byteLength: 1, mediaType: "application/octet-stream", status: "published" },
     });
     const second = artifact({
       id: "b",
@@ -347,29 +416,27 @@ describe("createArtifactOutsideReferenceResolver", () => {
       folderName: "shared.bin",
       parentId: null,
       layout: "folder",
-      sha256: SHA_B,
-      byteLength: 2,
-      mediaType: "application/octet-stream",
+      object: { sha256: SHA_B, byteLength: 2, mediaType: "application/octet-stream", status: "published" },
     });
     const resolve = createArtifactOutsideReferenceResolver(slice([first, second]));
 
     expect(resolve("shared.bin")).toBeNull();
   });
 
-  it("ignores a file artifact that is missing one of its object fields", () => {
-    const incomplete = artifact({
+  it("ignores a file artifact with no object at all (upstream validation never leaves a partial one)", () => {
+    const noObject = artifact({
       id: "partial",
       kind: "file",
       folderName: "",
       parentId: null,
       layout: "file",
       relativePath: "partial.bin",
-      sha256: SHA_A,
-      // byteLength and mediaType intentionally absent.
+      // `object` intentionally absent - the projector drops a file artifact
+      // entirely rather than ever surfacing a partially-populated object.
     });
 
     expect(
-      createArtifactOutsideReferenceResolver(slice([incomplete]))("partial.bin"),
+      createArtifactOutsideReferenceResolver(slice([noObject]))("partial.bin"),
     ).toBeNull();
   });
 

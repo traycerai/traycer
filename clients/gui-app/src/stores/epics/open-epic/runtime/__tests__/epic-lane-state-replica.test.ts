@@ -1233,10 +1233,12 @@ describe("epic.state.subscribe read model - html, canvas and file artifacts", ()
       title: "Title file-1",
       folderName: "file-1-folder",
       layout: "file",
-      sha256: SHA256,
-      byteLength: 12,
-      mediaType: "application/pdf",
-      objectStatus: "published",
+      object: {
+        sha256: SHA256,
+        byteLength: 12,
+        mediaType: "application/pdf",
+        status: "published",
+      },
       parentId: null,
       artifactRoomId: null,
       createdAt: 1,
@@ -1279,7 +1281,9 @@ describe("epic.state.subscribe read model - html, canvas and file artifacts", ()
     expect(replica.slices().artifacts.byId["canvas-1"].head).toEqual(
       manifestHead,
     );
-    expect(replica.slices().artifacts.byId["file-1"].sha256).toBe(SHA256);
+    expect(replica.slices().artifacts.byId["file-1"].object?.sha256).toBe(
+      SHA256,
+    );
   });
 
   it("projects the tombstones of html, canvas and file from a snapshot beside a markdown one", () => {

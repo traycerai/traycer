@@ -40,10 +40,7 @@ export interface ArtifactProjection {
   readonly layout?: "folder" | "file";
   readonly relativePath?: string;
   readonly head?: ArtifactHead;
-  readonly objectStatus?: ArtifactObjectRef["status"];
-  readonly sha256?: string;
-  readonly byteLength?: number;
-  readonly mediaType?: string;
+  readonly object?: ArtifactObjectRef;
   readonly id: string;
   readonly kind: EpicArtifactKind;
   readonly title: string;

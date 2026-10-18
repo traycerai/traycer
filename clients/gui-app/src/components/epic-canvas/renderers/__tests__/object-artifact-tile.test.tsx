@@ -189,10 +189,12 @@ describe("<ObjectArtifactTile />", () => {
         layout: "file",
         relativePath: "logo.png",
         title: "Logo",
-        sha256: SHA,
-        byteLength: 2048,
-        mediaType: "image/png",
-        objectStatus: "published",
+        object: {
+          sha256: SHA,
+          byteLength: 2048,
+          mediaType: "image/png",
+          status: "published",
+        },
       }),
     ]);
 

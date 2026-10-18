@@ -384,7 +384,7 @@ function projectArtifact(
     layout: record.layout,
     ...(record.relativePath === undefined ? {} : { relativePath: record.relativePath }),
     ...(record.kind === "html" || record.kind === "canvas" ? { head: record.head } : {}),
-    ...(record.kind === "file" ? { sha256: record.sha256, byteLength: record.byteLength, mediaType: record.mediaType, objectStatus: record.status } : {}),
+    ...(record.kind === "file" ? { object: record.object } : {}),
     parentId: record.parentId,
     // ALWAYS `null` on this head, and structurally so: the lane's
     // artifact row OMITS `artifactRoomId` (`epicArtifactRecordSchema`
