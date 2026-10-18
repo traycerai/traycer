@@ -385,12 +385,12 @@ describe("<BotTabSurface /> paused", () => {
     },
     {
       reason: "bound-to-sandbox",
-      text: "Paused: Acme's machine for this bot can't be reached right now. Messages you send are delivered when it's back.",
+      text: "This bot's conversation can't be shown here. Messages you send still reach it.",
       retry: false,
     },
     {
       reason: "bound-host-not-observable",
-      text: "Paused while the teammate's machine it runs on is away. Messages you send are delivered when it's back.",
+      text: "This bot's conversation can't be shown here. Messages you send still reach it.",
       retry: false,
     },
     {
@@ -555,6 +555,27 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
     mocks.state.paneVisible = true;
     view.rerender(surface());
     expect(mocks.open.mock.calls.length).toBe(callsAfterMount + 1);
+  });
+
+  it("opens the bot again when the window returns to view while this tab is the one showing", () => {
+    render(surface());
+    const callsAfterMount = mocks.open.mock.calls.length;
+
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(mocks.open.mock.calls.length).toBe(callsAfterMount + 1);
+    expect(mocks.resubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a hidden tab alone when the window returns, since an open can claim the bot onto this host", () => {
+    mocks.state.paneVisible = false;
+    render(surface());
+    const callsAfterMount = mocks.open.mock.calls.length;
+
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(mocks.open.mock.calls.length).toBe(callsAfterMount);
+    expect(mocks.resubscribe).not.toHaveBeenCalled();
   });
 });
 

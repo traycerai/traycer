@@ -16,10 +16,15 @@ import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
 
-/** The reader's own hosts, and which of them this client can dial now. */
+/**
+ * The reader's own hosts, and which of them this client can dial now.
+ * `connectableResolved` is false until the directory has answered: until
+ * then an empty `connectableHostIds` means "not known yet", not "none".
+ */
 export interface HomeBotHostReach {
   readonly directoryHostIds: ReadonlySet<string>;
   readonly connectableHostIds: ReadonlySet<string>;
+  readonly connectableResolved: boolean;
 }
 
 const STATE_LABELS: Readonly<Record<HomeBotState, string>> = {
@@ -89,12 +94,15 @@ export function HomeBotRow(props: {
         // An open tab keeps its host - unless this client can no longer
         // dial it (a restored tab, a host gone since): then it opens again
         // through this window's host, which finds the one serving the bot.
+        // A directory that has not answered yet says nothing about the tab's
+        // host, so the tab keeps it.
         const existing = lookupBotTab(
           useBotTabsStore.getState().tabs,
           row.botId,
         );
         if (
           existing !== null &&
+          hostReach.connectableResolved &&
           !hostReach.connectableHostIds.has(existing.hostId)
         ) {
           rebindBotTab(row.botId, hostId);

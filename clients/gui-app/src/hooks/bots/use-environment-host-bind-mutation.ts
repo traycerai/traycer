@@ -20,6 +20,11 @@ import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
  * reader acts on next to the control, not an interruption. `hostId` is the
  * host the client addresses, captured so the read query it refreshes is the
  * same host's whatever the scope does during the round trip.
+ *
+ * A bind or unbind also moves which machines an environment lists
+ * (`environment.host.list`). That list is cloud-backed and the same through
+ * every host, so its cache is invalidated on every host scope, not only this
+ * one's: Settings' machine list and Home's row states both read it.
  */
 export function useEnvironmentHostBindMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -52,6 +57,13 @@ export function useEnvironmentHostBindMutation(
           },
           binding,
         );
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            hostQueryKeys.matchesMethodOnAnyHost(
+              query.queryKey,
+              "environment.host.list",
+            ),
+        });
       },
     },
   });

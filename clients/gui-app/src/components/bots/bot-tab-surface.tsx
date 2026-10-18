@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -194,14 +195,18 @@ function BotTabBody(props: {
     wasVisibleRef.current = paneVisible;
     if (becameVisible) refresh();
   }, [paneVisible, refresh]);
+  // Only the tab in view re-opens when the window returns: an open can claim
+  // the bot onto this host, and a hidden tab is not a person asking for it.
+  const onWindowVisible = useEffectEvent(() => {
+    if (document.visibilityState === "visible") refresh();
+  });
   useEffect(() => {
-    const onVisibilityChange = (): void => {
-      if (document.visibilityState === "visible") refresh();
-    };
+    if (!paneVisible) return undefined;
+    const onVisibilityChange = (): void => onWindowVisible();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [refresh]);
+  }, [paneVisible]);
 
   if (openState.kind === "failed") {
     return (

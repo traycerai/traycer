@@ -216,9 +216,6 @@ describe("botPausedCopy", () => {
     expect(
       botPausedCopy("host-not-in-environment", ENVIRONMENT_LABEL).text,
     ).toContain(ENVIRONMENT_LABEL);
-    expect(botPausedCopy("bound-to-sandbox", ENVIRONMENT_LABEL).text).toContain(
-      ENVIRONMENT_LABEL,
-    );
     expect(
       botPausedCopy("bound-host-not-dialable", ENVIRONMENT_LABEL).text,
     ).toContain(ENVIRONMENT_LABEL);
@@ -230,8 +227,6 @@ describe("botPausedCopy", () => {
     );
     expect(waits).toEqual([
       "host-not-in-environment",
-      "bound-to-sandbox",
-      "bound-host-not-observable",
       "bound-host-not-dialable",
     ]);
     // A moment-only pause makes no delivery promise.
@@ -241,5 +236,19 @@ describe("botPausedCopy", () => {
     expect(
       botPausedCopy("reachability-unknown", ENVIRONMENT_LABEL).text,
     ).not.toContain("delivered");
+  });
+
+  it("says only what the reader gets for the two answers that cannot show the conversation, and never that the machine is gone", () => {
+    for (const reason of [
+      "bound-to-sandbox",
+      "bound-host-not-observable",
+    ] as const) {
+      const copy = botPausedCopy(reason, ENVIRONMENT_LABEL);
+      expect(copy.text).toBe(
+        "This bot's conversation can't be shown here. Messages you send still reach it.",
+      );
+      expect(copy.retry).toBe(false);
+      expect(copy.text).not.toMatch(/back|away/i);
+    }
   });
 });

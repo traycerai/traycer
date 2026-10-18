@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => {
       },
       directory: [] as Array<{ hostId: string; label: string }>,
       connectableHostIds: [] as string[],
+      connectableResolved: true,
       hostListSupport: true,
       hostLists: new Map<string, ReadonlyArray<EnvironmentHostRecord>>(),
     },
@@ -50,6 +51,7 @@ const mocks = vi.hoisted(() => {
       environmentId: string;
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
+      connectableResolved: boolean;
       environmentHostIds: ReadonlySet<string> | null;
     }>,
     useEnvironmentHostLists:
@@ -84,7 +86,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({
     hostIds: mocks.state.connectableHostIds,
-    resolved: true,
+    resolved: mocks.state.connectableResolved,
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
@@ -116,6 +118,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
     hostReach: {
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
+      connectableResolved: boolean;
     };
     environmentHostIds: ReadonlySet<string> | null;
   }) => {
@@ -123,6 +126,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
       environmentId: props.group.environmentId,
       directoryHostIds: props.hostReach.directoryHostIds,
       connectableHostIds: props.hostReach.connectableHostIds,
+      connectableResolved: props.hostReach.connectableResolved,
       environmentHostIds: props.environmentHostIds,
     });
     return (
@@ -199,6 +203,7 @@ beforeEach(() => {
   mocks.state.bots.isError = false;
   mocks.state.directory = [{ hostId: "host-1", label: "Studio Mac" }];
   mocks.state.connectableHostIds = [];
+  mocks.state.connectableResolved = true;
   mocks.state.hostListSupport = true;
   mocks.state.hostLists = new Map();
   mocks.groupProps.length = 0;
@@ -388,6 +393,23 @@ describe("HomeBotsSection what each group is told", () => {
       const props = latestGroupProps(environmentId);
       expect([...props.directoryHostIds].sort()).toEqual(["host-1", "host-2"]);
       expect([...props.connectableHostIds]).toEqual(["host-1"]);
+    }
+  });
+
+  it("tells every group whether the directory has answered, so an empty dialable set is not read as none", () => {
+    mocks.state.connectableResolved = false;
+    resolveBothQueries();
+    mountSection();
+    for (const environmentId of ["env-personal", "env-team"]) {
+      expect(latestGroupProps(environmentId).connectableResolved).toBe(false);
+    }
+
+    cleanup();
+    mocks.groupProps.length = 0;
+    mocks.state.connectableResolved = true;
+    mountSection();
+    for (const environmentId of ["env-personal", "env-team"]) {
+      expect(latestGroupProps(environmentId).connectableResolved).toBe(true);
     }
   });
 

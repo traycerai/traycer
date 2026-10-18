@@ -37,14 +37,13 @@ export function botPausedCopy(
         text: `Paused: the machine this bot runs on is away, and this one doesn't run ${environmentLabel}'s bots. Messages you send are delivered when it's back.`,
         retry: false,
       };
+    // Neither answer says the bot is stopped - a teammate's machine is outside
+    // this reader's directory even while it runs - so the copy states only
+    // what the reader gets here.
     case "bound-to-sandbox":
-      return {
-        text: `Paused: ${environmentLabel}'s machine for this bot can't be reached right now. Messages you send are delivered when it's back.`,
-        retry: false,
-      };
     case "bound-host-not-observable":
       return {
-        text: "Paused while the teammate's machine it runs on is away. Messages you send are delivered when it's back.",
+        text: "This bot's conversation can't be shown here. Messages you send still reach it.",
         retry: false,
       };
     case "reachability-unknown":

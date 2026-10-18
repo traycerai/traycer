@@ -84,6 +84,8 @@ interface Mount {
   readonly directory: ReadonlyArray<string>;
   /** Of those, the ones this client can dial. */
   readonly connectable: ReadonlyArray<string>;
+  /** Whether the directory has answered; false makes `connectable` unknown. */
+  readonly connectableResolved: boolean;
   readonly environmentHostIds: ReadonlySet<string> | null;
 }
 
@@ -91,6 +93,7 @@ function reach(input: Mount): HomeBotHostReach {
   return {
     directoryHostIds: new Set(input.directory),
     connectableHostIds: new Set(input.connectable),
+    connectableResolved: input.connectableResolved,
   };
 }
 
@@ -98,6 +101,7 @@ const OWN_AND_DIALABLE: Mount = {
   bot: BOT,
   directory: [OWN, EFFECTIVE],
   connectable: [OWN, EFFECTIVE],
+  connectableResolved: true,
   environmentHostIds: new Set(),
 };
 
@@ -277,6 +281,23 @@ describe("<HomeBotRow /> open", () => {
     await user.click(screen.getByTestId("home-bot-row"));
 
     expect(tabHostId()).toBe(EFFECTIVE);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an open tab where it is while the directory has not answered, whatever host it is on", async () => {
+    const user = userEvent.setup();
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: BOT_ID, hostId: TEAMMATE, title: "Release Bot" });
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      connectable: [],
+      connectableResolved: false,
+    });
+
+    await user.click(screen.getByTestId("home-bot-row"));
+
+    expect(tabHostId()).toBe(TEAMMATE);
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
   });
 

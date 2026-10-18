@@ -55,8 +55,9 @@ export function HomeBotsSection(): ReactNode {
         (directory.data ?? []).map((entry) => entry.hostId),
       ),
       connectableHostIds: new Set(connectable.hostIds),
+      connectableResolved: connectable.resolved,
     }),
-    [connectable.hostIds, directory.data],
+    [connectable.hostIds, connectable.resolved, directory.data],
   );
   const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
   // A team environment's machines the reader may see beyond their own (its
