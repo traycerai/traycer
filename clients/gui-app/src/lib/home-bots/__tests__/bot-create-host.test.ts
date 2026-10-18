@@ -18,6 +18,7 @@ import {
 
 const TEAM_ENV = "env-team";
 const OTHER_ENV = "env-other";
+const PERSONAL_ENV = "env-personal";
 
 function descriptor(environmentId: string): EnvironmentDescriptor {
   return {
@@ -194,6 +195,37 @@ describe("chooseBotCreateHost qualification", () => {
         bound: {},
       }),
     ).toEqual({ kind: "none" });
+  });
+});
+
+describe("chooseBotCreateHost for a team's environment", () => {
+  it("answers none when the only connectable hosts are personal machines reporting the personal environment", () => {
+    expect(
+      choose({
+        ...ALL_QUALIFY,
+        bound: {
+          "host-local": PERSONAL_ENV,
+          "host-effective": PERSONAL_ENV,
+          "host-zeta": PERSONAL_ENV,
+          "host-alpha": PERSONAL_ENV,
+        },
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("chooses a sandbox whose binding names the team and that advertises bot.create, past personal machines", () => {
+    expect(
+      choose({
+        ...ALL_QUALIFY,
+        connectableHostIds: ["host-local", "host-effective", "host-sandbox"],
+        bound: {
+          "host-local": PERSONAL_ENV,
+          "host-effective": PERSONAL_ENV,
+          "host-sandbox": TEAM_ENV,
+        },
+        creatingHostIds: ["host-local", "host-effective", "host-sandbox"],
+      }),
+    ).toEqual({ kind: "chosen", hostId: "host-sandbox" });
   });
 });
 

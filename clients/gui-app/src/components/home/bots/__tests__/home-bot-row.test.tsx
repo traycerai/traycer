@@ -87,6 +87,11 @@ interface Mount {
   /** Whether the directory has answered; false makes `connectable` unknown. */
   readonly connectableResolved: boolean;
   readonly environmentHostIds: ReadonlySet<string> | null;
+  /** The bot's environment's owner kind. */
+  readonly environmentOwnerKind: "user" | "organization" | null;
+  /** The reader's own hosts the registry calls personal; `null` while the
+   * registry has not answered. */
+  readonly personal: ReadonlyArray<string> | null;
 }
 
 function reach(input: Mount): HomeBotHostReach {
@@ -94,6 +99,7 @@ function reach(input: Mount): HomeBotHostReach {
     directoryHostIds: new Set(input.directory),
     connectableHostIds: new Set(input.connectable),
     connectableResolved: input.connectableResolved,
+    personalHostIds: input.personal === null ? null : new Set(input.personal),
   };
 }
 
@@ -103,6 +109,8 @@ const OWN_AND_DIALABLE: Mount = {
   connectable: [OWN, EFFECTIVE],
   connectableResolved: true,
   environmentHostIds: new Set(),
+  environmentOwnerKind: "organization",
+  personal: [],
 };
 
 function mountRow(input: Mount): void {
@@ -112,6 +120,7 @@ function mountRow(input: Mount): void {
         bot={input.bot}
         hostReach={reach(input)}
         environmentHostIds={input.environmentHostIds}
+        environmentOwnerKind={input.environmentOwnerKind}
       />
     </StrictMode>,
   );
@@ -174,6 +183,29 @@ describe("<HomeBotRow /> state", () => {
     mountRow({ ...OWN_AND_DIALABLE, bot: { ...BOT, boundHostId: null } });
 
     expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
+  });
+
+  it("says Paused for a team bot bound to one of the reader's personal hosts, though it can be dialled", () => {
+    mountRow({ ...OWN_AND_DIALABLE, personal: [OWN] });
+
+    expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
+  });
+
+  it("says Idle, not Working, for a team bot while the registry has not answered which hosts are personal", () => {
+    mocks.state.working = true;
+    mountRow({ ...OWN_AND_DIALABLE, personal: null });
+
+    expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
+  });
+
+  it("says Idle for a personal environment's bot on the same dialable personal host", () => {
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      environmentOwnerKind: "user",
+      personal: [OWN],
+    });
+
+    expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
   });
 
   it("says Paused for a personal bot bound to a machine outside the reader's directory", () => {
