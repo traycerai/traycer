@@ -57,6 +57,7 @@ import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/b
 import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
+import { ResolvedImage } from "./attachment-image";
 
 interface ToolSegmentProps {
   id: string;
@@ -400,6 +401,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
     progress,
     stackedHeader,
   });
+  const imageGallery = renderToolImageGallery(toolName, props.imageResults);
 
   const header = (
     <GenericToolHeader
@@ -449,7 +451,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
         headerFindUnitId={props.headerFindUnitId}
         bodyFindUnitId={null}
         className={undefined}
-        footer={streamingFooter}
+        footer={renderToolFooter(streamingFooter, imageGallery)}
       />
     );
   }
@@ -459,8 +461,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      collapsedPreview={null}
-      body={body}
+      collapsedPreview={imageGallery}
+      body={renderToolCardBody(body, imageGallery)}
       tone={toolCardTone(hasError, isStreaming)}
       headerPosition="normal"
       bodyOverflow="hidden"
@@ -469,6 +471,73 @@ function GenericToolSegment(props: ToolSegmentProps) {
       bodyFindUnitId={null}
       className={undefined}
     />
+  );
+}
+
+function renderToolImageGallery(
+  toolName: string,
+  imageResults: ReadonlyArray<ImageGenerationResult>,
+): ReactNode {
+  if (toolName === "image_generation" || imageResults.length === 0) return null;
+  return <ToolImageGallery imageResults={imageResults} />;
+}
+
+function renderToolFooter(
+  streamingFooter: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (streamingFooter === null && imageGallery === null) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {streamingFooter}
+      {imageGallery}
+    </div>
+  );
+}
+
+function renderToolCardBody(
+  body: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (imageGallery === null) return body;
+  return (
+    <div className="flex flex-col gap-2">
+      {body}
+      {imageGallery}
+    </div>
+  );
+}
+
+function ToolImageGallery(props: {
+  readonly imageResults: ReadonlyArray<ImageGenerationResult>;
+}) {
+  const keyCounts = new Map<string, number>();
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-2">
+      {props.imageResults.map((result, index) => {
+        const caption =
+          result.alt !== null && result.alt.trim().length > 0
+            ? result.alt
+            : `Image ${index + 1}`;
+        const occurrence = keyCounts.get(result.attachmentHash) ?? 0;
+        keyCounts.set(result.attachmentHash, occurrence + 1);
+        return (
+          <figure
+            key={`${result.attachmentHash}-${occurrence}`}
+            className="min-w-0"
+          >
+            <ResolvedImage
+              alt={caption}
+              hash={result.attachmentHash}
+              mediaType={result.mediaType}
+            />
+            <figcaption className="text-ui-xs text-muted-foreground">
+              {caption}
+            </figcaption>
+          </figure>
+        );
+      })}
+    </div>
   );
 }
 

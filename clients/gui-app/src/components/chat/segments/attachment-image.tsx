@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { ImageLightbox } from "./image-lightbox";
 import { useSanitizedSvg } from "./use-sanitized-svg";
@@ -117,5 +118,44 @@ export function AttachmentImage(props: {
         </ImageLightbox>
       )}
     </span>
+  );
+}
+
+export function ResolvedImage(props: {
+  readonly alt: string;
+  readonly hash: string;
+  readonly mediaType: string;
+}): ReactNode {
+  const image = useChatAttachmentBlobSrc(props.hash, props.mediaType, null);
+  if (image.status === "loading") {
+    return (
+      <AttachmentImageLoading
+        label="Waiting for image sync"
+        fullWidth={false}
+      />
+    );
+  }
+  if (image.status === "unavailable") {
+    return (
+      <AttachmentImageFailure
+        alt={props.alt}
+        reason="This image is no longer available."
+      />
+    );
+  }
+  return (
+    <AttachmentImage
+      key={image.src}
+      src={image.src}
+      // The resolved blob's OWN type, not `props.mediaType`: the latter is the
+      // claim stored on the message, and `AttachmentImage` gates SVG
+      // sanitization on what it is handed. A host-sniffed type overrides the
+      // claim (see `ImageBlobResolution`), so bytes that are really SVG cannot
+      // slip past the gate behind a stored `image/png`.
+      mediaType={image.mediaType}
+      alt={props.alt}
+      suggestedName={null}
+      fullWidth={false}
+    />
   );
 }
