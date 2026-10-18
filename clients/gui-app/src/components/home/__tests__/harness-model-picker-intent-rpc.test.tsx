@@ -249,7 +249,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import type { Key, ReactNode } from "react";
+import type { Key, ReactElement, ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -433,14 +433,20 @@ function renderPickerWithFixture(
   fixture: PickerRpcFixture,
   selection: HarnessModelSelection,
 ): ComposerToolbarStore {
-  return renderPickerWithActivity(fixture, selection, true);
+  return renderPickerWithActivity(fixture, selection, true).store;
+}
+
+interface ActivityPickerHandle {
+  readonly store: ComposerToolbarStore;
+  /** Re-renders the SAME mounted picker under the other activity. */
+  readonly setSurfaceActive: (surfaceActive: boolean) => void;
 }
 
 function renderPickerWithActivity(
   fixture: PickerRpcFixture,
   selection: HarnessModelSelection,
   surfaceActive: boolean,
-): ComposerToolbarStore {
+): ActivityPickerHandle {
   const store = createComposerToolbarStore({
     purpose: "run",
     reasoningFallback: "model-default",
@@ -456,9 +462,9 @@ function renderPickerWithActivity(
     chatLineCarriesAutoMode: null,
     hostId: "host-a",
   });
-  render(
+  const tree = (active: boolean): ReactElement => (
     <fixture.Wrapper>
-      <SurfaceActivityProvider active={surfaceActive}>
+      <SurfaceActivityProvider active={active}>
         <TooltipProvider delayDuration={0}>
           <HarnessModelPicker
             labelDisplay="responsive"
@@ -477,9 +483,15 @@ function renderPickerWithActivity(
           />
         </TooltipProvider>
       </SurfaceActivityProvider>
-    </fixture.Wrapper>,
+    </fixture.Wrapper>
   );
-  return store;
+  const view = render(tree(surfaceActive));
+  return {
+    store,
+    setSurfaceActive: (next) => {
+      view.rerender(tree(next));
+    },
+  };
 }
 
 async function openPickerByTriggerName(
@@ -784,12 +796,25 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
 
   it("issues no commands prewarm for a profile change while the surface is inactive", async () => {
     const fixture = createPickerRpcFixture([harnessEntry("codex", true)]);
-    const store = renderPickerWithActivity(
+    const { store, setSurfaceActive } = renderPickerWithActivity(
       fixture,
       profileSelection("codex", "profile-a"),
-      false,
+      true,
     );
+    // Availability is established through the real harnesses query while the
+    // surface is active (the models row proves the selected harness resolved
+    // available); mounting alone prewarms no commands.
+    await screen.findByText("codex Model 1");
+    expect(commandProfiles(fixture, "codex")).toEqual([]);
+
+    // The SAME mounted picker goes inactive: the cached availability stays
+    // (the query data is kept), so the only thing left closing the refetch
+    // gate is activity itself.
+    act(() => {
+      setSurfaceActive(false);
+    });
     await flushPendingWork();
+    expect(screen.getByText("codex Model 1")).toBeDefined();
 
     act(() => {
       store.getState().setSelection(profileSelection("codex", "profile-b"));
