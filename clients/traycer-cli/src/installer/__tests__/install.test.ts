@@ -308,6 +308,7 @@ import {
   writeHostInstallRecord,
 } from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
+import { config } from "../../config";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { currentHostPlatformKey } from "../../registry";
 import type {
@@ -1683,6 +1684,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
 
   afterEach(() => {
     dataRootMock.movedRoot = null;
+    config.supportedHostVersion = null;
     mocks.registryClient = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
@@ -1741,6 +1743,49 @@ describe("stageHostInstallSource while the data folder is moved", () => {
 
     expect(downloads).toBe(0);
     expect(existsSync(stagingRootFor(ENV))).toBe(false);
+  });
+
+  it("with NO install record, refuses a registry source below the CLI's stamped supported host before any download or owned temp dir", async () => {
+    // Seam: `config.supportedHostVersion` (config.ts), read through
+    // `configuredSupportedHostVersion` (host/supported-host-version.ts);
+    // host/__tests__/ensure.test.ts stamps it by assigning the field.
+    config.supportedHostVersion = "2.0.0";
+    let downloads = 0;
+    mocks.registryClient = registryFor("1.0.0", () => {
+      downloads += 1;
+    });
+
+    await expect(
+      stageHostInstallSource({
+        environment: ENV,
+        source: { kind: "registry", versionRequest: "latest" },
+        onProgress: () => undefined,
+        recordVersionOverride: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+
+    expect(downloads).toBe(0);
+    expect(existsSync(stagingRootFor(ENV))).toBe(false);
+  });
+
+  it("control: an unstamped build (supported host null) with no install record stages latest as before", async () => {
+    config.supportedHostVersion = null;
+    let downloads = 0;
+    mocks.registryClient = registryFor("1.0.0", () => {
+      downloads += 1;
+    });
+
+    const staged = await stageHostInstallSource({
+      environment: ENV,
+      source: { kind: "registry", versionRequest: "latest" },
+      onProgress: () => undefined,
+      recordVersionOverride: null,
+    });
+
+    expect(downloads).toBe(1);
+    expect(staged.version).toBe("1.0.0");
   });
 
   it("control: with no install record the registry source stages as before", async () => {

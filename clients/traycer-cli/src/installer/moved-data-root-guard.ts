@@ -4,6 +4,7 @@ import {
   currentDataRootResolution,
   defaultDataRoot,
 } from "@traycer/protocol/config/data-root";
+import { configuredSupportedHostVersion } from "../host/supported-host-version";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
@@ -21,40 +22,66 @@ export function movedDataRoot(): string | null {
 }
 
 /**
- * Refuses a registry host that is not at or above the installed one while the
- * data folder is moved.
+ * Refuses, while the data folder is moved, a registry host that could be a
+ * build older than relocation. Such a build ignores `location.json`: it starts
+ * on `~/.traycer`, writes its data there and fails its health check, or sets
+ * up a second installation there when nothing was installed.
  *
- * A host build older than relocation ignores `location.json`: installed over a
- * moved folder it starts on the retained old folder, writes its data there and
- * fails its health check. An installed version this cannot order (a `local-*`
- * build) is refused too, because nothing proves the registry target is not
- * such an older build. Call it at plan time, before any transfer, staging or
- * swap, and only where a registry target would replace an EXISTING install:
- * a fresh install, a `--from` archive and the same version re-installed are
- * not its business.
+ * Two floors, both judged before any transfer, staging or swap:
+ *
+ *  - the installed version (`installedVersion`, `null` when nothing is
+ *    installed): a target must be at or above it. One this cannot order (a
+ *    `local-*` build) is refused, because nothing proves the target is not
+ *    such an older build. The same version re-installed passes;
+ *  - this CLI's stamped supported host (`configuredSupportedHostVersion`):
+ *    the release pipeline stamps the exact host this CLI ships with, so a
+ *    target below it may predate relocation - the registry's `latest` lags
+ *    behind a new CLI until the host release is finalized. An unstamped (dev)
+ *    build has no pin and so no floor.
+ *
+ * Call it only where a registry target would be installed: a `--from` archive
+ * is not its business.
  */
 export function refuseOlderHostWhileDataMoved(input: {
   readonly command: string;
   readonly environment: Environment;
-  readonly installedVersion: string;
+  readonly installedVersion: string | null;
   readonly targetVersion: string;
 }): void {
-  if (input.installedVersion === input.targetVersion) return;
-  const comparison = compareHostVersions(
-    input.installedVersion,
-    input.targetVersion,
-  );
-  if (comparison.comparable && comparison.ordering !== "greater") return;
+  const belowInstalled =
+    input.installedVersion !== null &&
+    input.installedVersion !== input.targetVersion &&
+    !atOrAbove(input.targetVersion, input.installedVersion);
+  const pin = configuredSupportedHostVersion();
+  const belowPin = pin !== null && !atOrAbove(input.targetVersion, pin);
+  if (!belowInstalled && !belowPin) return;
+  // Read only once a floor fails, so an ordinary update never consults the
+  // location record here.
   const root = movedDataRoot();
   if (root === null) return;
+  const details = {
+    environment: input.environment,
+    targetVersion: input.targetVersion,
+    installedVersion: input.installedVersion,
+  };
+  if (belowInstalled) {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: `${input.command}: Traycer's data folder was moved to ${root}, so host ${input.targetVersion} cannot replace the installed ${input.installedVersion}. Nothing was transferred.`,
+      details,
+      exitCode: 1,
+    });
+  }
   throw cliError({
     code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
-    message: `${input.command}: Traycer's data folder was moved to ${root}, so host ${input.targetVersion} cannot replace the installed ${input.installedVersion}. Nothing was transferred.`,
-    details: {
-      environment: input.environment,
-      targetVersion: input.targetVersion,
-      installedVersion: input.installedVersion,
-    },
+    message: `${input.command}: Traycer's data folder was moved to ${root}, so host ${input.targetVersion} cannot be installed there; this Traycer needs host ${pin} or newer. Nothing was transferred.`,
+    details: { ...details, supportedHostVersion: pin },
     exitCode: 1,
   });
+}
+
+/** `target` is orderable against `floor` and not below it. */
+function atOrAbove(target: string, floor: string): boolean {
+  const comparison = compareHostVersions(target, floor);
+  return comparison.comparable && comparison.ordering !== "less";
 }

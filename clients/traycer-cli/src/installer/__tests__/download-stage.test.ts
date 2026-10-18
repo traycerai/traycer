@@ -134,6 +134,7 @@ import type {
   HostVersionsManifest,
   RegistryClient,
 } from "../../registry";
+import { config } from "../../config";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { acquireCliLock } from "../../store/cli-lock";
 import {
@@ -2573,6 +2574,7 @@ describe("downloadAndStageHost", () => {
 
     afterEach(() => {
       dataRootMock.movedRoot = null;
+      config.supportedHostVersion = null;
     });
 
     it("refuses --allow-downgrade to an explicit older target and stages nothing", async () => {
@@ -2637,6 +2639,48 @@ describe("downloadAndStageHost", () => {
       });
 
       expect(plan).toMatchObject({ kind: "upgrade", targetVersion: "1.5.0" });
+    });
+
+    it("refuses an upgrade that is above the install but below the stamped supported host", async () => {
+      await writeInstall("1.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      config.supportedHostVersion = "3.0.0";
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "2.0.0",
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("2.0.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        message: expect.stringContaining("needs host 3.0.0"),
+      });
+      expect(await readHostStagedRecord(ENV)).toBeNull();
+    });
+
+    it("control: the same upgrade is planned when the supported host is the target", async () => {
+      await writeInstall("1.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      config.supportedHostVersion = "2.0.0";
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "2.0.0",
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("2.0.0"),
+      });
+
+      expect(plan).toMatchObject({ kind: "upgrade", targetVersion: "2.0.0" });
     });
 
     it("control: a default data folder still plans the explicit downgrade", async () => {

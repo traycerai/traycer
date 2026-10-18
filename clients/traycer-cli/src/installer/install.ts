@@ -340,17 +340,16 @@ export async function stageHostInstallSource(
           }),
         };
   if (plan.kind === "registry") {
-    // Every registry install over an existing one (`host install`, `host
-    // ensure`, the `host update` downgrade arm) stages here.
+    // Every registry install (`host install`, `host ensure`, the `host
+    // update` downgrade arm) stages here, a fresh one included: with nothing
+    // installed only the supported-host floor applies.
     const installed = await readHostInstallRecord(opts.environment);
-    if (installed !== null) {
-      refuseOlderHostWhileDataMoved({
-        command: "host install",
-        environment: opts.environment,
-        installedVersion: installed.version,
-        targetVersion: plan.resolved.entry.version,
-      });
-    }
+    refuseOlderHostWhileDataMoved({
+      command: "host install",
+      environment: opts.environment,
+      installedVersion: installed?.version ?? null,
+      targetVersion: plan.resolved.entry.version,
+    });
   }
   await ensureHostHomeDir(opts.environment);
   await opts.verifyMutationCapability();

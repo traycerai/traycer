@@ -15,7 +15,11 @@ import type {
   ResultErrorEvent,
   ResultOkEvent,
 } from "../../runner/output";
-import { writeStderr, writeStdout } from "../../runner/std-write";
+import {
+  installStdioErrorGuards,
+  writeStderr,
+  writeStdout,
+} from "../../runner/std-write";
 import { productionMigrationEngineDeps } from "../engine/engine-deps";
 import { DATA_ROOT_AVAILABILITY } from "./data-availability";
 import { dataCleanup } from "./data-cleanup";
@@ -374,6 +378,9 @@ const FATAL_SETTLE_CEILING_MS = 5 * 60_000;
 export async function runDataControlEntry(
   argv: readonly string[],
 ): Promise<void> {
+  // As in the ordinary entry: a reader that closed the pipe (`| head -1`) is
+  // not a failure, and must not reach `onFatal` and stop a running move.
+  installStdioErrorGuards();
   const io = processDataCommandIo(argv);
   const abort = new AbortController();
   const state: {

@@ -118,7 +118,7 @@ function advisoryLines(advisory: MigrationAdvisory): string[] {
 function whatMovesLines(sourceRoot: string, sourceBytes: number): string[] {
   return [
     `Moves: everything in ${sourceRoot} - sign-ins and credentials, chat and agent history, Traycer-managed provider accounts, managed worktrees (uncommitted changes included), downloaded hosts, models and runtimes.`,
-    "Stays: the Traycer app, Desktop window settings and caches, the updater cache, system temp files, provider folders outside Traycer (such as ~/.claude) and ~/.traycer-bootstrap, which records the location.",
+    "Stays: the Traycer app, Desktop caches, the updater cache, system temp files, provider folders outside Traycer (such as ~/.claude) and ~/.traycer-bootstrap, which records the location.",
     "Before you continue, quit Traycer Desktop and finish any other traycer commands, and close shells or editors open in managed worktrees. The move stops Traycer hosts and their agents itself, then waits for every other Traycer process to exit.",
     `The old folder is kept unchanged as a backup (${formatBytes(sourceBytes)}) until you delete it with \`traycer data cleanup\`.`,
     "Old chat history and tool output can still show the old paths.",
