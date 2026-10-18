@@ -35,6 +35,9 @@ import {
   type WorktreesConfig,
   visualizationOnlyConfigSchema,
   type VisualizationConfig,
+  SIMULATOR_CONFIG_DEFAULT,
+  simulatorOnlyConfigSchema,
+  type SimulatorConfig,
   catalogOnlyConfigSchema,
   catalogOverridesOnlyConfigSchema,
   catalogSettingsFrom,
@@ -1271,6 +1274,51 @@ export async function setAgentPages(enabled: boolean): Promise<void> {
       result: undefined,
     };
   });
+}
+
+/**
+ * The `simulator` block. Throws on a malformed block, like
+ * `readBrowserConfig`, so the Settings section shows an error rather than a
+ * false "off" that the user cannot act on.
+ */
+export async function readSimulatorConfig(): Promise<SimulatorConfig> {
+  return simulatorOnlyConfigSchema.parse(await readCliConfig()).simulator;
+}
+
+/**
+ * Best-effort synchronous read for the per-registration and per-call gates on
+ * simulator support. The block is validated ON ITS OWN, like
+ * `readBrowserConfigSync` does for the browser block, so a defect anywhere
+ * else in the document never revokes a switch the user turned on. Unlike that
+ * reader the fallback is OFF: an unreadable block cannot be read as consent
+ * to install software and hand an agent a shell-capable CLI, so a corrupt
+ * block reverts to the defaults and the error surfaces where it is actionable
+ * (`readSimulatorConfig`, the throwing sibling the Settings section reads).
+ */
+export function readSimulatorConfigSync(): SimulatorConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = simulatorOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) return result.data.simulator;
+  } catch {
+    // An unreadable config reverts to both switches off; see above.
+  }
+  return { ...SIMULATOR_CONFIG_DEFAULT };
+}
+
+/**
+ * Writes both simulator switches while preserving the rest of the config. The
+ * caller states both values: there is no implicit default on this write, so a
+ * host never guesses which switch a partial write meant to leave alone.
+ */
+export async function setSimulatorConfig(next: SimulatorConfig): Promise<void> {
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      simulator: { enabled: next.enabled, agentAccess: next.agentAccess },
+    },
+    result: undefined,
+  }));
 }
 
 /**

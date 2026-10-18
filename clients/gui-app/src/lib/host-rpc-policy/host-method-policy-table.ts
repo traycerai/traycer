@@ -2312,6 +2312,28 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.simulator.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.simulator.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The simulator verbs: reads coalesce to the latest ask, every mutation is
+  // ordered. `open` waits on a boot (up to three minutes on the host side),
+  // so it carries no join timeout of its own.
+  "simulator.list": { ...LATEST_SCHEDULING, poll: null },
+  "simulator.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "simulator.close": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "simulator.shutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "simulator.screenshot": { ...LATEST_SCHEDULING, poll: null },
+  // The settings drawer: a read coalesces to the latest ask; actions are
+  // ordered so two toggles land in the order the person made them.
+  "simulator.detail": { ...LATEST_SCHEDULING, poll: null },
+  "simulator.action": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
   "config.catalog.set": {
     mode: "fifo",

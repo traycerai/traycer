@@ -38,6 +38,7 @@ export * from "./released-floor";
 export * from "./restart";
 export * from "./runtime-capabilities";
 export * from "./session-import";
+export * from "./simulator";
 export * from "./speech";
 export * from "./status";
 export * from "./store-formats";
