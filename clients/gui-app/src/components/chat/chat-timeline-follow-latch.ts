@@ -144,6 +144,31 @@ function armBlocksAutomaticCorrection(arm: ArmedReaderDeparture): boolean {
   return true;
 }
 
+/** The end a toward-end gesture may reattach at by reaching it. None under a
+ *  touch contact: the end recorded there goes stale as streaming grows the
+ *  tail, and the finger crossing that old offset while still above the live
+ *  end would reattach and start a correction under the finger. A contact
+ *  reattaches only at the live strict end (`reconcileStrictBottom`). */
+function readerEndCandidateFor(
+  direction: ChatTimelineReaderScrollDirection,
+  geometry: ChatTimelineScrollGeometry | null,
+  arm: ArmedReaderDeparture,
+  readerGestureGeneration: number,
+): ReaderEndCandidate | null {
+  if (
+    direction !== "toward-end" ||
+    arm?.source === "touch" ||
+    geometry === null ||
+    !isChatTimelineGeometryMeasurable(geometry)
+  ) {
+    return null;
+  }
+  return {
+    readerGestureGeneration,
+    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+  };
+}
+
 function canReaderGestureMove(
   geometry: ChatTimelineScrollGeometry,
   direction: ChatTimelineReaderScrollDirection,
@@ -333,18 +358,12 @@ export function useChatTimelineFollowLatch(
             }
           : null;
       }
-      readerEndCandidateRef.current =
-        intent.direction === "toward-end" &&
-        geometry !== null &&
-        isChatTimelineGeometryMeasurable(geometry)
-          ? {
-              readerGestureGeneration: readerGestureGenerationRef.current,
-              targetScrollTop: Math.max(
-                0,
-                geometry.scrollHeight - geometry.clientHeight,
-              ),
-            }
-          : null;
+      readerEndCandidateRef.current = readerEndCandidateFor(
+        intent.direction,
+        geometry,
+        armedReaderDepartureRef.current,
+        readerGestureGenerationRef.current,
+      );
       if (
         intent.publishesReaderPosition &&
         blocksAutomaticCorrection &&

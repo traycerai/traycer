@@ -954,6 +954,39 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
+  it("does not reattach a touch contact at an end that streaming has since moved", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    // A toward-end touchmove while the end is still 1000; streaming then
+    // grows the tail to 1200 before the pan's first report.
+    fireTouch(node, "touchmove", 60);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    // The finger crosses the old end but is still 150px above the live one.
+    shim.setGeometry(node, { scrollTop: 1050 });
+    fireNativeScroll(node);
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("does not block follow for an upward wheel that cannot move from the top edge", () => {
     const node = shim.makeNode({
       scrollTop: 0,
