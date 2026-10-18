@@ -199,6 +199,225 @@ describe("parseCanvasElement", () => {
   );
 });
 
+describe("parseCanvasElement outerHtml", () => {
+  const LIMIT_BYTES = 65_536;
+  const utf8Bytes = (value: string): number =>
+    new TextEncoder().encode(value).length;
+
+  it("accepts an element that does not carry it", () => {
+    const parsed = parseCanvasElement(element({}));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.outerHtml ?? null).toBeNull();
+  });
+
+  it("accepts null", () => {
+    expect(
+      parseCanvasElement(element({ outerHtml: null }))?.outerHtml,
+    ).toBeNull();
+  });
+
+  it("returns the markup exactly as sent", () => {
+    const markup = '<p class="a">\n  héllo <b>wörld</b>\t\n</p>\n';
+    expect(parseCanvasElement(element({ outerHtml: markup }))?.outerHtml).toBe(
+      markup,
+    );
+  });
+
+  it("accepts markup of exactly 65536 bytes and rejects one byte more", () => {
+    expect(
+      parseCanvasElement(element({ outerHtml: "a".repeat(LIMIT_BYTES) })),
+    ).not.toBeNull();
+    expect(
+      parseCanvasElement(element({ outerHtml: "a".repeat(LIMIT_BYTES + 1) })),
+    ).toBeNull();
+  });
+
+  // The cap is on UTF-8 bytes, so a string far shorter than 65536 characters
+  // can still be over it, and one the length check would have refused can fit.
+  it.each([
+    ["two-byte characters", "é", 2],
+    ["three-byte characters", "€", 3],
+    ["four-byte characters", "😀", 4],
+  ])("counts bytes, not characters, for %s", (_label, character, bytes) => {
+    const fits = character.repeat(Math.floor(LIMIT_BYTES / bytes));
+    expect(utf8Bytes(fits)).toBeLessThanOrEqual(LIMIT_BYTES);
+    expect(parseCanvasElement(element({ outerHtml: fits }))).not.toBeNull();
+
+    const over = character.repeat(Math.floor(LIMIT_BYTES / bytes) + 1);
+    expect(utf8Bytes(over)).toBeGreaterThan(LIMIT_BYTES);
+    expect(parseCanvasElement(element({ outerHtml: over }))).toBeNull();
+  });
+
+  it("rejects the whole element rather than truncating the markup", () => {
+    expect(
+      parseCanvasElement(element({ outerHtml: "<p>".repeat(30_000) })),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["a number", 7],
+    ["a boolean", true],
+    ["an object", { html: "<p></p>" }],
+    ["an array", ["<p></p>"]],
+  ])("rejects %s", (_label, outerHtml) => {
+    expect(parseCanvasElement(element({ outerHtml }))).toBeNull();
+  });
+
+  it("does not let an oversized outerHtml hide behind an otherwise valid element", () => {
+    expect(parseCanvasElement(element({}))).not.toBeNull();
+    expect(
+      parseCanvasElement(element({ outerHtml: "x".repeat(LIMIT_BYTES + 1) })),
+    ).toBeNull();
+  });
+
+  it("is carried by the element inside a text selection", () => {
+    const selection = parseCanvasTextSelection({
+      element: element({ outerHtml: "<p>hi</p>" }),
+      start: 0,
+      end: 2,
+      quote: "hi",
+      rects: [BOX],
+    });
+    expect(selection?.element.outerHtml).toBe("<p>hi</p>");
+  });
+});
+
+describe("parseCanvasElement textSnapshot", () => {
+  const BUDGET_BYTES = 65_536;
+  const MAX_NODES = 1024;
+  const utf8Bytes = (value: string): number =>
+    new TextEncoder().encode(value).length;
+  const snapshot = (overrides: Record<string, unknown>) => ({
+    content: "Hello world",
+    nodes: ["Hello ", "world"],
+    textOnly: true,
+    ...overrides,
+  });
+
+  it("accepts an element that carries none", () => {
+    const parsed = parseCanvasElement(element({}));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.textSnapshot ?? null).toBeNull();
+  });
+
+  it("accepts null, which is how the page says the text was too big to send", () => {
+    expect(
+      parseCanvasElement(element({ textSnapshot: null }))?.textSnapshot,
+    ).toBeNull();
+  });
+
+  it("keeps a well-formed snapshot as sent", () => {
+    expect(
+      parseCanvasElement(element({ textSnapshot: snapshot({}) }))?.textSnapshot,
+    ).toEqual(snapshot({}));
+  });
+
+  it("accepts an element with no text at all", () => {
+    const empty = snapshot({ content: "", nodes: [], textOnly: true });
+    expect(
+      parseCanvasElement(element({ textSnapshot: empty }))?.textSnapshot,
+    ).toEqual(empty);
+  });
+
+  it("keeps mixed content flagged as not text-only", () => {
+    const mixed = snapshot({
+      content: "ac",
+      nodes: ["a", "c"],
+      textOnly: false,
+    });
+    expect(
+      parseCanvasElement(element({ textSnapshot: mixed }))?.textSnapshot
+        ?.textOnly,
+    ).toBe(false);
+  });
+
+  it("drops fields outside the contract", () => {
+    const parsed = parseCanvasElement(
+      element({ textSnapshot: snapshot({ html: "<b>x</b>" }) }),
+    );
+    expect(parsed?.textSnapshot).not.toHaveProperty("html");
+  });
+
+  it("accepts exactly 1024 direct text nodes and rejects 1025", () => {
+    const nodes = (count: number): string[] =>
+      Array.from({ length: count }, () => "x");
+    expect(
+      parseCanvasElement(
+        element({
+          textSnapshot: snapshot({
+            content: "x".repeat(MAX_NODES),
+            nodes: nodes(MAX_NODES),
+          }),
+        }),
+      ),
+    ).not.toBeNull();
+    expect(
+      parseCanvasElement(
+        element({
+          textSnapshot: snapshot({
+            content: "x".repeat(MAX_NODES + 1),
+            nodes: nodes(MAX_NODES + 1),
+          }),
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("counts the content and the nodes together against 65536 UTF-8 bytes", () => {
+    const half = BUDGET_BYTES / 2;
+    const exact = snapshot({
+      content: "a".repeat(half),
+      nodes: ["a".repeat(half)],
+    });
+    expect(utf8Bytes(exact.content) + utf8Bytes(exact.nodes[0])).toBe(
+      BUDGET_BYTES,
+    );
+    expect(parseCanvasElement(element({ textSnapshot: exact }))).not.toBeNull();
+
+    const over = snapshot({
+      content: "a".repeat(half + 1),
+      nodes: ["a".repeat(half)],
+    });
+    expect(parseCanvasElement(element({ textSnapshot: over }))).toBeNull();
+  });
+
+  it("counts bytes, not characters", () => {
+    const wide = snapshot({
+      content: "€".repeat(11_000),
+      nodes: ["€".repeat(11_000)],
+    });
+    // 22000 characters, 66000 bytes.
+    expect(parseCanvasElement(element({ textSnapshot: wide }))).toBeNull();
+  });
+
+  it("rejects the whole element rather than dropping the snapshot", () => {
+    expect(
+      parseCanvasElement(
+        element({
+          textSnapshot: snapshot({
+            content: "a".repeat(BUDGET_BYTES + 1),
+            nodes: [],
+          }),
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["a string", "Hello"],
+    ["an array", ["Hello"]],
+    ["content that is not text", snapshot({ content: 3 })],
+    ["nodes that are not a list", snapshot({ nodes: "Hello" })],
+    ["a node that is not text", snapshot({ nodes: ["Hello", 7] })],
+    ["a missing content", snapshot({ content: undefined })],
+    ["a missing nodes list", snapshot({ nodes: undefined })],
+    ["a text-only flag that is not a boolean", snapshot({ textOnly: "yes" })],
+    ["a missing text-only flag", snapshot({ textOnly: undefined })],
+  ])("rejects %s", (_label, textSnapshot) => {
+    expect(parseCanvasElement(element({ textSnapshot }))).toBeNull();
+  });
+});
+
 describe("parseCanvasTextSelection", () => {
   const selection = (overrides: Record<string, unknown>) => ({
     element: element({}),

@@ -9,18 +9,19 @@ import type {
   SourceSplice,
 } from "./types";
 
-interface CssScan {
+export interface CssScan {
+  blocks: SourceRange[];
   semicolons: number[];
   colons: number[];
   bangs: number[];
 }
 
-interface CssIdentifier {
+export interface CssIdentifier {
   value: string;
   end: number;
 }
 
-function isCssSpace(char: string): boolean {
+export function isCssSpace(char: string): boolean {
   return (
     char === " " ||
     char === "\t" ||
@@ -31,7 +32,7 @@ function isCssSpace(char: string): boolean {
 }
 
 /** CSS escapes consume up to six hex digits and one optional whitespace. */
-function escapedCodePoint(
+export function escapedCodePoint(
   value: string,
   start: number,
   end: number,
@@ -65,7 +66,7 @@ function escapedCodePoint(
   };
 }
 
-function cssIdentifier(
+export function cssIdentifier(
   value: string,
   start: number,
   end: number,
@@ -88,7 +89,7 @@ function cssIdentifier(
 }
 
 /** An unquoted url() is one token: '/*' is URL data, never a CSS comment. */
-function unquotedUrlEnd(value: string, start: number): number | null {
+export function unquotedUrlEnd(value: string, start: number): number | null {
   let cursor = start;
   while (cursor < value.length) {
     const char = value.charAt(cursor);
@@ -113,9 +114,10 @@ function unquotedUrlEnd(value: string, start: number): number | null {
 }
 
 /** Find separators only outside strings, comments, URL tokens, and blocks. */
-function scanCss(value: string): CssScan | null {
+export function scanCss(value: string): CssScan | null {
   const stack: string[] = [];
-  const result: CssScan = { semicolons: [], colons: [], bangs: [] };
+  const result: CssScan = { blocks: [], semicolons: [], colons: [], bangs: [] };
+  let blockStart = -1;
   let quote = "";
   for (let index = 0; index < value.length; index++) {
     const char = value.charAt(index);
@@ -163,10 +165,14 @@ function scanCss(value: string): CssScan | null {
       continue;
     }
     if (char === "\\") return null;
-    if (char === "(" || char === "[" || char === "{") stack.push(char);
-    else if (char === ")" || char === "]" || char === "}") {
+    if (char === "(" || char === "[" || char === "{") {
+      if (stack.length === 0 && char === "{") blockStart = index;
+      stack.push(char);
+    } else if (char === ")" || char === "]" || char === "}") {
       const open = stack.pop();
       if (open !== (char === ")" ? "(" : char === "]" ? "[" : "{")) return null;
+      if (char === "}" && stack.length === 0)
+        result.blocks.push({ start: blockStart, end: index + 1 });
     } else if (stack.length === 0) {
       if (char === ";") result.semicolons.push(index);
       else if (char === ":") result.colons.push(index);
@@ -176,7 +182,7 @@ function scanCss(value: string): CssScan | null {
   return quote || stack.length ? null : result;
 }
 
-interface Declaration {
+export interface Declaration {
   name: string;
   range: SourceRange;
   valueRange: SourceRange;
@@ -223,7 +229,7 @@ function propertyKey(property: string): string {
   return property.startsWith("--") ? property : asciiLower(property);
 }
 
-function declarations(value: string, scan: CssScan): Declaration[] {
+export function declarations(value: string, scan: CssScan): Declaration[] {
   const result: Declaration[] = [];
   let start = 0;
   for (const end of [...scan.semicolons, value.length]) {
@@ -267,6 +273,70 @@ function hasBoundary(mapped: MappedText, index: number): boolean {
   return !left || !right || left.end <= right.start;
 }
 
+/** Shared declaration surgery for inline attributes and raw style blocks. */
+export function declarationSplices(
+  css: string,
+  property: string,
+  value: string | null,
+):
+  | { ok: true; splices: SourceSplice[] }
+  | {
+      ok: false;
+      reason:
+        | "invalid-style-property"
+        | "invalid-style-value"
+        | "malformed-style";
+    } {
+  if (!/^(?:--[\w-]+|-?[a-zA-Z][\w-]*)$/.test(property))
+    return { ok: false, reason: "invalid-style-property" };
+  if (value !== null) {
+    const check = scanCss(value);
+    if (!check || check.semicolons.length || !value.trim())
+      return { ok: false, reason: "invalid-style-value" };
+  }
+  const scan = scanCss(css);
+  if (!scan) return { ok: false, reason: "malformed-style" };
+  const matches = declarations(css, scan).filter(
+    (decl) => decl.name === propertyKey(property),
+  );
+  const splices: SourceSplice[] = [];
+  if (value === null) {
+    for (const declaration of matches)
+      splices.push({ ...declaration.range, replacement: "" });
+  } else {
+    const importantMatches = matches.filter((decl) => decl.important);
+    const winner = importantMatches.length
+      ? importantMatches[importantMatches.length - 1]
+      : matches[matches.length - 1];
+    if (winner) {
+      const valueScan = scanCss(value);
+      const priority = valueScan
+        ? importantStart(value, valueScan, 0, value.length)
+        : null;
+      const replacement =
+        winner.important && priority !== null
+          ? value.slice(0, priority).trimEnd()
+          : value;
+      if (!replacement.trim())
+        return { ok: false, reason: "invalid-style-value" };
+      splices.push({ ...winner.valueRange, replacement });
+    } else {
+      const lastSemicolon = scan.semicolons[scan.semicolons.length - 1];
+      const hasContent = skipTrivia(css, 0, css.length) < css.length;
+      const terminated =
+        lastSemicolon !== undefined &&
+        skipTrivia(css, lastSemicolon + 1, css.length) === css.length;
+      const separator = !hasContent ? "" : terminated ? " " : "; ";
+      splices.push({
+        start: css.length,
+        end: css.length,
+        replacement: `${separator}${property}: ${value}`,
+      });
+    }
+  }
+  return { ok: true, splices };
+}
+
 /** Edits inline CSS only. Semantic CSS validation belongs to the browser UI. */
 export function setStyleDeclaration(
   text: string,
@@ -302,46 +372,9 @@ export function setStyleDeclaration(
     return { ok: false, reason: "unsafe-source-range" };
   const scan = scanCss(mapped.value);
   if (!scan) return { ok: false, reason: "malformed-style" };
-  const matches = declarations(mapped.value, scan).filter(
-    (decl) => decl.name === propertyKey(property),
-  );
-  const decodedSplices: SourceSplice[] = [];
-  if (value === null) {
-    for (const declaration of matches)
-      decodedSplices.push({ ...declaration.range, replacement: "" });
-  } else {
-    const importantMatches = matches.filter((decl) => decl.important);
-    const winner = importantMatches.length
-      ? importantMatches[importantMatches.length - 1]
-      : matches[matches.length - 1];
-    if (winner) {
-      const valueScan = scanCss(value);
-      const priority = valueScan
-        ? importantStart(value, valueScan, 0, value.length)
-        : null;
-      const replacement =
-        winner.important && priority !== null
-          ? value.slice(0, priority).trimEnd()
-          : value;
-      if (!replacement.trim())
-        return { ok: false, reason: "invalid-style-value" };
-      decodedSplices.push({ ...winner.valueRange, replacement });
-    } else {
-      const lastSemicolon = scan.semicolons[scan.semicolons.length - 1];
-      const hasContent =
-        skipTrivia(mapped.value, 0, mapped.value.length) < mapped.value.length;
-      const terminated =
-        lastSemicolon !== undefined &&
-        skipTrivia(mapped.value, lastSemicolon + 1, mapped.value.length) ===
-          mapped.value.length;
-      const separator = !hasContent ? "" : terminated ? " " : "; ";
-      decodedSplices.push({
-        start: mapped.value.length,
-        end: mapped.value.length,
-        replacement: `${separator}${property}: ${value}`,
-      });
-    }
-  }
+  const plan = declarationSplices(mapped.value, property, value);
+  if (!plan.ok) return plan;
+  const decodedSplices = plan.splices;
   if (!decodedSplices.length) return finishAttributeEdit(text, element, []);
   // An unquoted attribute must acquire delimiters when CSS adds whitespace.
   // Keep its authored value bytes; only new CSS needs HTML escaping.

@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import type { ArtboardEdit } from "@traycer/protocol/host/epic/artboard-edit";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Label } from "@/components/ui/label";
@@ -17,8 +17,10 @@ import { useArtboardEdit } from "./use-artboard-edit";
 
 function SelectedElementProperties({
   selection,
+  menuContent,
 }: {
   readonly selection: CanvasSelection;
+  readonly menuContent?: ReactNode;
 }) {
   const hiddenId = useId();
   const mutation = useArtboardEdit(selection.artifactId);
@@ -86,7 +88,9 @@ function SelectedElementProperties({
           onEdit={(edit) => {
             void apply([edit]);
           }}
-        />
+        >
+          {menuContent}
+        </CanvasElementMenu>
       </div>
       {!editable ? (
         <p className="text-ui-sm text-muted-foreground">
@@ -159,8 +163,10 @@ function SelectedElementProperties({
 
 export function CanvasPropertiesPanel({
   artifactId,
+  menuContent,
 }: {
   readonly artifactId: string;
+  readonly menuContent?: ReactNode;
 }) {
   const selection = useCanvasSelectionStore((state) => state.selection);
   if (selection?.artifactId !== artifactId) return null;
@@ -168,6 +174,7 @@ export function CanvasPropertiesPanel({
     <SelectedElementProperties
       key={`${selection.boardPath}:${selection.element.marker ?? selection.element.selector}`}
       selection={selection}
+      menuContent={menuContent}
     />
   );
 }

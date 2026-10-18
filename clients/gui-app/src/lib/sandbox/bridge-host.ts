@@ -96,6 +96,7 @@ const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
+  readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
   readonly onRelativeLink?: (href: string) => void;
@@ -471,6 +472,15 @@ export class SandboxBridgeHost {
     return true;
   }
 
+  private receiveCanvasTextSelection(params: Record<string, unknown>): void {
+    if (params.selection === null) {
+      this.options.events.onTextSelection?.(null);
+      return;
+    }
+    const selection = parseCanvasTextSelection(params);
+    if (selection !== null) this.options.events.onTextSelection?.(selection);
+  }
+
   private receiveCanvasNotification(method: string, params: unknown): void {
     if (
       !this.canvasDocumentProven() ||
@@ -486,13 +496,11 @@ export class SandboxBridgeHost {
       return;
     }
     if (!this.canvasEnabled()) return;
-    if (method === "traycer/canvas/text-selection") {
-      if (params.selection === null) {
-        this.options.events.onTextSelection?.(null);
-        return;
-      }
-      const selection = parseCanvasTextSelection(params);
-      if (selection !== null) this.options.events.onTextSelection?.(selection);
+    if (method === "traycer/canvas/double-click") {
+      const element = parseCanvasElement(params.element);
+      if (element !== null) this.options.events.onDoubleClick?.(element);
+    } else if (method === "traycer/canvas/text-selection") {
+      this.receiveCanvasTextSelection(params);
     } else if (method === "traycer/canvas/relative-link") {
       const href = parseCanvasRelativeLink(params);
       if (href !== null) this.options.events.onRelativeLink?.(href);

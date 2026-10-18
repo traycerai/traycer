@@ -1,8 +1,10 @@
 import type {
   CanvasPageError,
+  CanvasElement,
   CanvasTextSelection,
 } from "@/lib/sandbox/canvas-bridge";
 import {
+  useCallback,
   useEffectEvent,
   useLayoutEffect,
   useMemo,
@@ -125,6 +127,7 @@ function artifactUnavailable(
 }
 
 export interface SandboxFrameProps {
+  readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
   readonly onRelativeLink?: (href: string) => void;
@@ -315,15 +318,21 @@ export function SandboxFrame(props: SandboxFrameProps) {
     [bindings],
   );
 
-  const setRef = (node: HTMLIFrameElement | null): void => {
-    frameRef.current = node;
-    if (typeof forwardedRef === "function") {
-      forwardedRef(node);
-    } else if (forwardedRef !== null) {
-      forwardedRef.current = node;
-    }
-  };
+  const setRef = useCallback(
+    (node: HTMLIFrameElement | null): void => {
+      frameRef.current = node;
+      if (typeof forwardedRef === "function") {
+        forwardedRef(node);
+      } else if (forwardedRef !== null) {
+        forwardedRef.current = node;
+      }
+    },
+    [forwardedRef],
+  );
 
+  const onDoubleClick = useEffectEvent((element: CanvasElement) =>
+    props.onDoubleClick?.(element),
+  );
   const onTextSelection = useEffectEvent(
     (selection: CanvasTextSelection | null) =>
       props.onTextSelection?.(selection),
@@ -536,6 +545,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       hostVersion: getClientAppVersionLabel(),
       post: (message) => iframe.contentWindow?.postMessage(message, "*"),
       events: {
+        onDoubleClick,
         onTextSelection,
         onPageError,
         onRelativeLink,

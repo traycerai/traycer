@@ -5,7 +5,36 @@ import {
   type MappedText,
 } from "./mapped-text";
 import { locateElement } from "./source";
-import type { ElementLocator, HtmlChild, SourceRange } from "./types";
+import type {
+  ElementLocator,
+  HtmlChild,
+  HtmlTextNode,
+  SourceRange,
+} from "./types";
+
+/** Read a literal subrange without splitting an entity or a normalized CRLF. */
+export function textInSourceRange(
+  text: string,
+  node: HtmlTextNode,
+  range: SourceRange,
+): string | null {
+  if (range.start < node.range.start || range.end > node.range.end) return null;
+  const mapped = decodeMapped(
+    text.slice(node.range.start, node.range.end),
+    node.range.start,
+    "text",
+  );
+  if (mapped.value !== node.value) return null;
+  let result = "";
+  for (let index = 0; index < mapped.ranges.length; index++) {
+    const source = mapped.ranges[index];
+    if (!source || source.end <= range.start || source.start >= range.end)
+      continue;
+    if (source.start < range.start || source.end > range.end) return null;
+    result += mapped.value.charAt(index);
+  }
+  return result;
+}
 
 /** Best-effort source span of a decoded quote, possibly across inline elements. */
 export function findLiteralText(

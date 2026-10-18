@@ -4,6 +4,7 @@ import type {
   CanvasElement,
   CanvasMode,
   CanvasPageError,
+  CanvasTextSnapshot,
 } from "./canvas-bridge";
 
 export interface CanvasBootstrapConfig {
@@ -132,6 +133,25 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     const elements = document.querySelectorAll(selector);
     return elements.length === 1 ? elements.item(0) : null;
   };
+  const textSnapshot = (element: Element): CanvasTextSnapshot | null => {
+    const content = element.textContent;
+    if (content.length > 65_536) return null;
+    let bytes = new TextEncoder().encode(content).length;
+    const nodes: string[] = [];
+    let textOnly = true;
+    for (const child of element.childNodes) {
+      if (child.nodeType !== Node.TEXT_NODE) {
+        textOnly = false;
+        continue;
+      }
+      const value = child.textContent ?? "";
+      if (value.length > 65_536 || nodes.length >= 1024) return null;
+      bytes += new TextEncoder().encode(value).length;
+      if (bytes > 65_536) return null;
+      nodes.push(value);
+    }
+    return bytes <= 65_536 ? { content, nodes, textOnly } : null;
+  };
   const hitTest = (
     params: Record<string, unknown>,
   ): { element: CanvasElement | null } | null => {
@@ -161,7 +181,19 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       }
       case "traycer/canvas/describe-element": {
         const element = locate(params);
-        return { element: element === null ? null : capture(element) };
+        if (element === null) return { element: null };
+        const html = element.outerHTML;
+        return {
+          element: {
+            ...capture(element),
+            textSnapshot: textSnapshot(element),
+            outerHtml:
+              html.length <= 65_536 &&
+              new TextEncoder().encode(html).length <= 65_536
+                ? html
+                : null,
+          },
+        };
       }
       case "traycer/canvas/element-box": {
         const element = locate(params);
@@ -206,6 +238,28 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
+  window.addEventListener(
+    "dblclick",
+    (event) => {
+      if (
+        mode !== "edit" ||
+        textTarget === null ||
+        !textTarget.isConnected ||
+        !(event.target instanceof Node) ||
+        !textTarget.contains(event.target)
+      )
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      notify("traycer/canvas/double-click", {
+        element: {
+          ...capture(textTarget),
+          textSnapshot: textSnapshot(textTarget),
+        },
+      });
+    },
+    true,
+  );
   window.addEventListener("click", blockEdit, true);
   window.addEventListener("auxclick", blockEdit, true);
   window.addEventListener("submit", blockEdit, true);

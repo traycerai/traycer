@@ -8,11 +8,13 @@ import { CanvasFrameEventsContext } from "../canvas-surface-context";
 import { CanvasSelectionProvider } from "../canvas-selection-provider";
 import { useCanvasSelectionStore } from "../canvas-selection-store";
 
-// The overlay, panels and annotation action are other tests' subjects. The
-// stand-in keeps the one thing the provider relies on: leaving the tree reports
-// the board as retired, which is what the real overlay's effect cleanup does.
-vi.mock("../canvas-selection-overlay", () => ({
-  CanvasSelectionOverlay: (props: {
+// The editing overlay, the clipboard boundary, panels and annotation action are
+// other tests' subjects, and the real ones need a query client and the host's
+// edit transport. The overlay stand-in keeps the one thing the provider relies
+// on: leaving the tree reports the board as retired, which is what the real
+// overlay's effect cleanup does.
+vi.mock("../canvas-editing-overlay", () => ({
+  CanvasEditingOverlay: (props: {
     readonly boardPath: string;
     readonly onRetire: (path: string) => void;
   }) => {
@@ -20,6 +22,15 @@ vi.mock("../canvas-selection-overlay", () => ({
     useEffect(() => () => onRetire(boardPath), [boardPath, onRetire]);
     return null;
   },
+}));
+vi.mock("../canvas-clipboard-controls", () => ({
+  CanvasClipboardBoundary: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+vi.mock("../canvas-editing-panel", () => ({
+  CanvasEditingPanel: (props: { readonly children: ReactNode }) =>
+    props.children,
+  CanvasElementEditingPanel: () => null,
 }));
 vi.mock("../canvas-annotation-action", () => ({
   CanvasAnnotationAction: () => null,

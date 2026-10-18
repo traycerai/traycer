@@ -14,6 +14,10 @@ export interface CanvasElement {
   readonly classNames: readonly string[];
   readonly textPreview: string;
   readonly inlineStyle: string;
+  /** Complete description only; null when larger than 64 KiB. Never truncated. */
+  readonly outerHtml?: string | null;
+  /** Complete live text for retyping; null when the bounded snapshot cannot fit. */
+  readonly textSnapshot?: CanvasTextSnapshot | null;
   readonly ariaRole: string | null;
   readonly accessibleName: string | null;
   readonly box: CanvasBox;
@@ -22,6 +26,11 @@ export interface CanvasElement {
     readonly value: string;
   }[];
   readonly generated: boolean;
+}
+export interface CanvasTextSnapshot {
+  readonly content: string;
+  readonly nodes: readonly string[];
+  readonly textOnly: boolean;
 }
 export interface CanvasTextSelection {
   readonly element: CanvasElement;
@@ -142,6 +151,71 @@ function parseStyles(value: unknown): CanvasElement["computedStyles"] | null {
   }
   return styles;
 }
+function optionalOuterHtml(value: unknown): value is string | null | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" &&
+      value.length <= 65_536 &&
+      new TextEncoder().encode(value).length <= 65_536)
+  );
+}
+function optionalTextSnapshot(
+  value: unknown,
+): value is CanvasTextSnapshot | null | undefined {
+  if (value === undefined || value === null) return true;
+  if (
+    !canvasRecord(value) ||
+    !text(value.content, 65_536) ||
+    typeof value.textOnly !== "boolean" ||
+    !Array.isArray(value.nodes) ||
+    value.nodes.length > 1024
+  )
+    return false;
+  let bytes = new TextEncoder().encode(value.content).length;
+  for (const node of value.nodes) {
+    if (!text(node, 65_536)) return false;
+    bytes += new TextEncoder().encode(node).length;
+    if (bytes > 65_536) return false;
+  }
+  return bytes <= 65_536;
+}
+function snapshotFields(
+  value: CanvasTextSnapshot | null | undefined,
+): Pick<CanvasElement, "textSnapshot"> {
+  if (value === undefined) return {};
+  return {
+    textSnapshot:
+      value === null
+        ? null
+        : {
+            content: value.content,
+            nodes: [...value.nodes],
+            textOnly: value.textOnly,
+          },
+  };
+}
+function parseCanvasMarkup(
+  value: Record<string, unknown>,
+): Pick<
+  CanvasElement,
+  "inlineStyle" | "textPreview" | "outerHtml" | "textSnapshot"
+> | null {
+  const { inlineStyle, textPreview, outerHtml, textSnapshot } = value;
+  if (
+    !text(inlineStyle, 16_000) ||
+    !text(textPreview, 200) ||
+    !optionalOuterHtml(outerHtml) ||
+    !optionalTextSnapshot(textSnapshot)
+  )
+    return null;
+  return {
+    inlineStyle,
+    textPreview,
+    ...(outerHtml === undefined ? {} : { outerHtml }),
+    ...snapshotFields(textSnapshot),
+  };
+}
 export function parseCanvasElement(value: unknown): CanvasElement | null {
   if (!canvasRecord(value)) return null;
   const {
@@ -151,13 +225,12 @@ export function parseCanvasElement(value: unknown): CanvasElement | null {
     selector,
     elementId,
     classNames,
-    textPreview,
-    inlineStyle,
     ariaRole,
     accessibleName,
     computedStyles,
     generated,
   } = value;
+  const markup = parseCanvasMarkup(value);
   const box = parseCanvasBox(value.box);
   const styles = parseStyles(computedStyles);
   if (
@@ -167,8 +240,7 @@ export function parseCanvasElement(value: unknown): CanvasElement | null {
     !text(selector, 1000) ||
     !nullableText(elementId, 300) ||
     !classList(classNames) ||
-    !text(inlineStyle, 16_000) ||
-    !text(textPreview, 200) ||
+    markup === null ||
     !nullableText(ariaRole, 64) ||
     !nullableText(accessibleName, 300) ||
     box === null ||
@@ -183,12 +255,11 @@ export function parseCanvasElement(value: unknown): CanvasElement | null {
     selector,
     elementId,
     classNames,
-    textPreview,
-    inlineStyle,
     ariaRole,
     accessibleName,
     box,
     computedStyles: styles,
+    ...markup,
     generated,
   };
 }

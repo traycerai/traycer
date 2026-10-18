@@ -17,13 +17,17 @@ import type {
 import { CanvasFrameEventsContext } from "./canvas-surface-context";
 import type { CanvasFrameEvents } from "./canvas-frame";
 import { CanvasFrameRegistry } from "./canvas-frame-registry";
-import { CanvasSelectionOverlay } from "./canvas-selection-overlay";
+import { CanvasEditingOverlay } from "./canvas-editing-overlay";
+import {
+  CanvasEditingPanel,
+  CanvasElementEditingPanel,
+} from "./canvas-editing-panel";
+import { CanvasClipboardBoundary } from "./canvas-clipboard-controls";
 import { useCanvasSelectionStore } from "./canvas-selection-store";
 import {
   CanvasAnnotationAction,
   type CanvasAnnotationScope,
 } from "./canvas-annotation-action";
-import { CanvasPropertiesPanel } from "./canvas-properties-panel";
 import { CanvasBoardPanel } from "./canvas-board-panel";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
 
@@ -44,7 +48,10 @@ export function CanvasSelectionProvider(
   } | null>(null);
   const requestSequence = useRef(0);
   const pick = useCallback(
-    (path: string, point: { x: number; y: number }): void => {
+    (
+      path: string,
+      point: { x: number; y: number; additive?: boolean },
+    ): void => {
       const entry = registry.get(path);
       const bridge = entry.bridge;
       if (bridge === null || entry.sha256 === null) return;
@@ -55,7 +62,7 @@ export function CanvasSelectionProvider(
         .beginPick(selectionOwner, artifactId, path);
       registry.selectBoard(path);
       void bridge
-        .hitTest(point)
+        .hitTest({ x: point.x, y: point.y })
         .then((element) => {
           if (
             sequence !== requestSequence.current ||
@@ -64,7 +71,11 @@ export function CanvasSelectionProvider(
           )
             return;
           const store = useCanvasSelectionStore.getState();
-          store.completePick(
+          const complete =
+            point.additive === true
+              ? store.completeAdditivePick
+              : store.completePick;
+          complete(
             selectionOwner,
             generation,
             element === null
@@ -87,13 +98,32 @@ export function CanvasSelectionProvider(
   );
   const retire = useCallback(
     (path: string): void => {
+      registry.update(path, { retype: null });
       useCanvasSelectionStore.getState().retire(selectionOwner, path);
     },
-    [selectionOwner],
+    [registry, selectionOwner],
   );
   const events = useMemo<CanvasFrameEvents>(
     () => ({
       ...parent,
+      onSource: (path, source) => {
+        registry.update(path, { source });
+        parent?.onSource?.(path, source);
+      },
+      onDoubleClick: (path, element) => {
+        const entry = registry.get(path);
+        if (entry.bridge === null) return;
+        registry.update(path, {
+          retype: {
+            id: crypto.randomUUID(),
+            generation: useCanvasSelectionStore.getState().generation,
+            element,
+            sha256: entry.sha256,
+            bridge: entry.bridge,
+          },
+        });
+        parent?.onDoubleClick?.(path, element);
+      },
       onBridge: (path, bridge) => {
         registry.update(path, { bridge });
         parent?.onBridge(path, bridge);
@@ -194,7 +224,7 @@ export function CanvasSelectionProvider(
         parent?.onAddError?.(path, error);
       },
       renderOverlay: (path) => (
-        <CanvasSelectionOverlay
+        <CanvasEditingOverlay
           scope={scope}
           boardPath={path}
           registry={registry}
@@ -205,6 +235,7 @@ export function CanvasSelectionProvider(
       renderPanel: (store) => (
         <CanvasSelectionPanel
           artifactId={artifactId}
+          owner={selectionOwner}
           store={store}
           registry={registry}
         />
@@ -276,7 +307,9 @@ export function CanvasSelectionProvider(
   return (
     <CanvasFrameEventsContext value={events}>
       <div className="relative h-full w-full">
-        {props.children}
+        <CanvasClipboardBoundary artifactId={artifactId} registry={registry}>
+          {props.children}
+        </CanvasClipboardBoundary>
         {errorAttachment === null ? null : (
           <div className="absolute right-2 top-2 z-30 flex max-w-full items-start gap-1 rounded-md border bg-popover p-2 text-popover-foreground shadow-sm">
             <div className="flex min-w-0 flex-col gap-2">
@@ -328,6 +361,7 @@ export function CanvasSelectionProvider(
 }
 
 function CanvasSelectionPanel(props: {
+  readonly owner: symbol;
   readonly artifactId: string;
   readonly store: CanvasLayoutStore;
   readonly registry: CanvasFrameRegistry;
@@ -340,15 +374,26 @@ function CanvasSelectionPanel(props: {
   if (path === null) return null;
   return (
     <aside className="h-full w-full min-w-0 max-w-sm overflow-y-auto border-l bg-card">
-      {selected === null ? (
-        <CanvasBoardPanel
-          store={props.store}
-          boardPath={path}
-          contentHeight={props.registry.get(path).size?.height ?? null}
-        />
-      ) : (
-        <CanvasPropertiesPanel artifactId={props.artifactId} />
-      )}
+      <CanvasEditingPanel
+        key={path}
+        artifactId={props.artifactId}
+        boardPath={path}
+        registry={props.registry}
+        owner={props.owner}
+      >
+        {selected === null ? (
+          <CanvasBoardPanel
+            store={props.store}
+            boardPath={path}
+            contentHeight={props.registry.get(path).size?.height ?? null}
+          />
+        ) : (
+          <CanvasElementEditingPanel
+            selection={selected}
+            registry={props.registry}
+          />
+        )}
+      </CanvasEditingPanel>
     </aside>
   );
 }

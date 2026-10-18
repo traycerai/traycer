@@ -15,8 +15,20 @@ export type {
   SourceRange,
   SourceSplice,
 } from "./types";
-export { parseHtmlSource } from "./parse";
+export { parseHtmlSource, hasCompleteHtmlTokens } from "./parse";
 export { locateElement, replaceRange, stampPositions } from "./source";
 export { insertTid, setAttribute, setTextContent, setTextNode } from "./edits";
 export { setStyleDeclaration } from "./style";
-export { findLiteralText } from "./text";
+export { findLiteralText, textInSourceRange } from "./text";
+export { hasSafeStyleUrls } from "./style-urls";
+export {
+  readRootCustomProperties,
+  setRootCustomProperty,
+  type RootCustomProperty,
+  type RootStyleMiss,
+} from "./root-style";
+export {
+  wrapTextRange,
+  unwrapTextRange,
+  type TextFormatTag,
+} from "./text-range";

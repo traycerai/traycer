@@ -59,7 +59,7 @@ describe("epicEditArtboardRequestSchema", () => {
     { kind: "set-attribute", name: "alt", value: "text" },
     { kind: "set-attribute", name: "alt", value: null },
     { kind: "set-text-content", text: "" },
-    { kind: "set-text-node", index: 0, text: "hi" },
+    { kind: "set-text-node", index: 0, text: "hi", expectedText: "old" },
     { kind: "insert-tid-only" },
     { kind: "delete-element" },
     { kind: "duplicate-element" },
@@ -89,11 +89,25 @@ describe("epicEditArtboardRequestSchema", () => {
     ],
     [
       "a negative text node index",
-      { edit: { kind: "set-text-node", index: -1, text: "x" } },
+      {
+        edit: {
+          kind: "set-text-node",
+          index: -1,
+          text: "x",
+          expectedText: "y",
+        },
+      },
     ],
     [
       "a fractional text node index",
-      { edit: { kind: "set-text-node", index: 1.5, text: "x" } },
+      {
+        edit: {
+          kind: "set-text-node",
+          index: 1.5,
+          text: "x",
+          expectedText: "y",
+        },
+      },
     ],
     [
       "a negative start tag offset",

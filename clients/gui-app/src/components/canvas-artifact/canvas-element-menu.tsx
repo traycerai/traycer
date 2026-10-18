@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Copy, Ellipsis, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +12,9 @@ import type { ArtboardEdit } from "@traycer/protocol/host/epic/artboard-edit";
 export function CanvasElementMenu({
   disabled,
   onEdit,
+  children,
 }: {
+  readonly children?: ReactNode;
   readonly disabled: boolean;
   readonly onEdit: (edit: ArtboardEdit) => void;
 }) {
@@ -41,6 +44,7 @@ export function CanvasElementMenu({
           <Trash2 />
           Delete element
         </DropdownMenuItem>
+        {children}
       </DropdownMenuContent>
     </DropdownMenu>
   );

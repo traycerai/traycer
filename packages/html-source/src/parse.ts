@@ -1,4 +1,10 @@
-import { parse, parseFragment, type DefaultTreeAdapterTypes } from "parse5";
+import {
+  parse,
+  parseFragment,
+  Parser,
+  TokenizerMode,
+  type DefaultTreeAdapterTypes,
+} from "parse5";
 import type {
   HtmlAttribute,
   HtmlChild,
@@ -8,6 +14,13 @@ import type {
 } from "./types";
 
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+
+/** A fragment must finish in data state before EOF can recover broken syntax. */
+export function hasCompleteHtmlTokens(text: string): boolean {
+  const parser = Parser.getFragmentParser(null, {});
+  parser.tokenizer.write(text, false);
+  return parser.tokenizer.state === TokenizerMode.DATA;
+}
 // HTML tree construction can synthesize these without an authored start tag.
 // Other source-less elements must be tied to a formatting origin before edits.
 const IMPLIED_TAGS = new Set([

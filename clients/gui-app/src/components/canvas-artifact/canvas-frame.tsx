@@ -12,11 +12,14 @@ import type {
 import type {
   CanvasMode,
   CanvasPageError,
+  CanvasElement,
   CanvasTextSelection,
 } from "@/lib/sandbox/canvas-bridge";
 
 /** Selection and editing compose through these seams outside the opaque frame. */
 export interface CanvasFrameEvents {
+  readonly onSource?: (path: string, source: SandboxSource | null) => void;
+  readonly onDoubleClick?: (path: string, element: CanvasElement) => void;
   readonly onBridge: (path: string, bridge: SandboxBridgeHost | null) => void;
   readonly onStatus: (path: string, status: SandboxStatus) => void;
   readonly onEditPointer: (
@@ -59,6 +62,10 @@ export function CanvasBoardFrame({
   readonly onError?: (error: CanvasPageError | null) => void;
 }) {
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
+  useEffect(() => {
+    events?.onSource?.(path, source);
+    return () => events?.onSource?.(path, null);
+  }, [events, path, source]);
   const onBridge = useCallback(
     (bridge: SandboxBridgeHost | null) => {
       bridgeRef.current = bridge;
@@ -106,6 +113,7 @@ export function CanvasBoardFrame({
       onRequestTeardown={noop}
       displayMode={fullscreen ? "fullscreen" : "inline"}
       onBridge={onBridge}
+      onDoubleClick={(element) => events?.onDoubleClick?.(path, element)}
       onTextSelection={(selection) =>
         events?.onTextSelection?.(path, selection)
       }

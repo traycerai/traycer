@@ -22,6 +22,8 @@ export function sameCanvasElement(a: CanvasElement, b: CanvasElement): boolean {
 
 interface CanvasSelectionState {
   readonly selection: CanvasSelection | null;
+  /** The primary selection owns board/revision metadata for all added elements. */
+  readonly additionalElements: readonly CanvasElement[];
   readonly selectionOwner: symbol | null;
   readonly generation: number;
   readonly pendingPick: {
@@ -35,6 +37,11 @@ interface CanvasSelectionState {
     boardPath: string,
   ) => number;
   readonly completePick: (
+    owner: symbol,
+    generation: number,
+    selection: CanvasSelection | null,
+  ) => void;
+  readonly completeAdditivePick: (
     owner: symbol,
     generation: number,
     selection: CanvasSelection | null,
@@ -65,6 +72,7 @@ interface CanvasSelectionState {
 export const useCanvasSelectionStore = create<CanvasSelectionState>(
   (set, get) => ({
     selection: null,
+    additionalElements: [],
     selectionOwner: null,
     generation: 0,
     pendingPick: null,
@@ -82,7 +90,45 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
           return state;
         return {
           selection,
+          additionalElements: [],
           selectionOwner: selection === null ? null : owner,
+          pendingPick: null,
+        };
+      }),
+    completeAdditivePick: (owner, generation, selection) =>
+      set((state) => {
+        if (
+          state.generation !== generation ||
+          state.pendingPick?.owner !== owner
+        )
+          return state;
+        if (selection === null) return { pendingPick: null };
+        const current = state.selection;
+        if (
+          state.selectionOwner !== owner ||
+          current === null ||
+          current.artifactId !== selection.artifactId ||
+          current.boardPath !== selection.boardPath ||
+          current.servedSha256 !== selection.servedSha256
+        )
+          return {
+            selection,
+            additionalElements: [],
+            selectionOwner: owner,
+            pendingPick: null,
+          };
+        if (sameCanvasElement(current.element, selection.element))
+          return { pendingPick: null };
+        if (
+          state.additionalElements.some((element) =>
+            sameCanvasElement(element, selection.element),
+          ) ||
+          state.additionalElements.length >= 255
+        )
+          return { pendingPick: null };
+        return {
+          selection: { ...current, textRange: null },
+          additionalElements: [...state.additionalElements, selection.element],
           pendingPick: null,
         };
       }),
@@ -99,12 +145,14 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
           generation: retiresPick ? state.generation + 1 : state.generation,
           pendingPick: retiresPick ? null : state.pendingPick,
           selection: retiresSelection ? null : state.selection,
+          additionalElements: retiresSelection ? [] : state.additionalElements,
           selectionOwner: retiresSelection ? null : state.selectionOwner,
         };
       }),
     select: (selection) =>
       set((state) => ({
         selection,
+        additionalElements: [],
         selectionOwner:
           state.selection?.artifactId === selection.artifactId &&
           state.selection.boardPath === selection.boardPath
@@ -116,6 +164,7 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
     clear: () =>
       set((state) => ({
         selection: null,
+        additionalElements: [],
         selectionOwner: null,
         pendingPick: null,
         generation: state.generation + 1,

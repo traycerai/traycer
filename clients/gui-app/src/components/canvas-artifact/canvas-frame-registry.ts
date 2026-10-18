@@ -1,6 +1,16 @@
+import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
+import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import type { SandboxBridgeHost, SandboxSize } from "@/lib/sandbox/bridge-host";
 
 export interface CanvasSelectionFrame {
+  readonly source: SandboxSource | null;
+  readonly retype: {
+    readonly id: string;
+    readonly generation: number;
+    readonly element: CanvasElement;
+    readonly sha256: string | null;
+    readonly bridge: SandboxBridgeHost;
+  } | null;
   readonly bridge: SandboxBridgeHost | null;
   readonly frame: HTMLIFrameElement | null;
   readonly sha256: string | null;
@@ -8,6 +18,8 @@ export interface CanvasSelectionFrame {
   readonly size: SandboxSize | null;
 }
 const EMPTY_FRAME: CanvasSelectionFrame = {
+  source: null,
+  retype: null,
   bridge: null,
   frame: null,
   sha256: null,
@@ -30,7 +42,16 @@ export class CanvasFrameRegistry {
     return this.frames.get(path) ?? EMPTY_FRAME;
   }
   update(path: string, update: Partial<CanvasSelectionFrame>): void {
-    this.frames.set(path, { ...this.get(path), ...update });
+    const previous = this.get(path);
+    const next = { ...previous, ...update };
+    if (
+      next.bridge !== previous.bridge ||
+      next.frame !== previous.frame ||
+      next.source !== previous.source ||
+      next.sha256 !== previous.sha256
+    )
+      next.retype = null;
+    this.frames.set(path, next);
     this.changed();
   }
   selectBoard(path: string | null): void {

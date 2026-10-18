@@ -129,3 +129,36 @@ Quote search is best effort;
 its returned span can include markup between matched text descendants, and is
 an anchor, **not a range to blindly replace**. It does not inspect raw-text
 descendants or perform layout-dependent `innerText` matching.
+
+`wrapTextRange(text, locator, start, end, tag, href)` and
+`unwrapTextRange(text, locator, start, end, tag)` use decoded UTF-16 offsets in
+the selected element's full `textContent`. A range must fit within one text
+node and cannot divide an entity expansion or a surrogate pair. Wrapping
+supports `b`, `i`, `u`, and `a` (an HTTP(S) href is required for `a`, otherwise
+pass `null`), preserving existing text-source bytes. Unwrapping requires that
+the matching wrapper directly own that text node as its only child. It splits
+retained prefix/suffix text into wrappers, retaining identity attributes only
+on the first remaining wrapper. An `a` may retain `href`; other non-identity
+attributes refuse. Both operations reparse and refuse unsafe tree repair.
+The canvas RPC separately compares the selected decoded source quote (or the
+full direct text node for retyping) with the frame's `expectedText`: a matching
+file hash does not certify text changed by a running script.
+
+Paste validation uses `hasCompleteHtmlTokens(text)` to require the fragment's
+tokenizer to reach data state before EOF recovery, and `textInSourceRange(text,
+node, range)` to compare retained text even when adjacent text nodes merge.
+The latter returns null if a range splits an entity or normalized CRLF.
+`hasSafeStyleUrls(css)` scans declarations and decoded CSS component values,
+allowing only HTTP(S) or relative resource URLs. It preserves quoted non-URL
+text, refuses inline import rules, and refuses unresolved `var()`/`env()` in
+URL-bearing functions. This is a paste policy, not general CSS validation.
+
+`readRootCustomProperties(text)` returns `{ok: true, properties}` with
+`{name, value, important}` for each winning custom property in the first
+top-level `:root` rule of the first literal HTML `style` element.
+`setRootCustomProperty(text, name, value)` edits that same rule, returning
+`{ok: true, text, splices}`. It shares inline CSS's declaration scanning and
+winner rules, preserves raw CSS bytes outside the changed declaration, and
+rejects values that could close the style element. A null value removes all
+declarations of that name. Missing containers refuse with `missing-style` or
+`missing-root`; these helpers never create a stylesheet or a root rule.

@@ -65,6 +65,7 @@ interface Harness {
   >;
   readonly onPageError: Mock<(error: CanvasPageError) => void>;
   readonly onRelativeLink: Mock<(href: string) => void>;
+  readonly onDoubleClick: Mock<(element: CanvasElement) => void>;
   readonly onShortcut: Mock<(press: SandboxShortcutPress) => void>;
   /** The newest request posted with this method. */
   readonly requestOf: (method: string) => Sent;
@@ -81,6 +82,7 @@ function createHarness(options: {
     vi.fn<(selection: CanvasTextSelection | null) => void>();
   const onPageError = vi.fn<(error: CanvasPageError) => void>();
   const onRelativeLink = vi.fn<(href: string) => void>();
+  const onDoubleClick = vi.fn<(element: CanvasElement) => void>();
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const host = new SandboxBridgeHost({
     document: {
@@ -105,6 +107,7 @@ function createHarness(options: {
       onTextSelection,
       onPageError,
       onRelativeLink,
+      onDoubleClick,
     },
     appRequests: null,
   });
@@ -122,6 +125,7 @@ function createHarness(options: {
     onTextSelection,
     onPageError,
     onRelativeLink,
+    onDoubleClick,
     onShortcut,
     requestOf: (method) => {
       const found = sent.filter((message) => message.method === method).at(-1);
@@ -315,6 +319,113 @@ describe("canvas requests", () => {
     const silent = harness.host.describeElement({ tid: "hero" });
     await vi.advanceTimersByTimeAsync(PING_TIMEOUT_MS);
     await expect(silent).resolves.toBeNull();
+  });
+
+  it("resolves the complete markup a described element carries", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const markup = '<p class="lead">\n  Hello <em>there</em>\n</p>';
+    const answer = harness.host.describeElement({ tid: "hero" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({ outerHtml: markup }),
+        nonce: NONCE,
+      }),
+    );
+    await expect(answer).resolves.toMatchObject({ outerHtml: markup });
+  });
+
+  it("still describes an element whose markup was too large to send", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const answer = harness.host.describeElement({ marker: 7 });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({ outerHtml: null }),
+        nonce: NONCE,
+      }),
+    );
+    const described = await answer;
+    expect(described).toMatchObject({ marker: 7 });
+    expect(described?.outerHtml ?? null).toBeNull();
+  });
+
+  it("resolves null for a described element whose markup exceeds 65536 bytes", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const answer = harness.host.describeElement({ tid: "hero" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({ outerHtml: "a".repeat(65_537) }),
+        nonce: NONCE,
+      }),
+    );
+    await expect(answer).resolves.toBeNull();
+  });
+
+  it("resolves null for a described element whose markup is not a string", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const answer = harness.host.describeElement({ tid: "hero" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({ outerHtml: 7 }),
+        nonce: NONCE,
+      }),
+    );
+    await expect(answer).resolves.toBeNull();
+  });
+
+  it("resolves the text snapshot a described element carries", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const snapshot = { content: "ac", nodes: ["a", "c"], textOnly: false };
+    const answer = harness.host.describeElement({ tid: "hero" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({ textSnapshot: snapshot }),
+        nonce: NONCE,
+      }),
+    );
+    await expect(answer).resolves.toMatchObject({ textSnapshot: snapshot });
+  });
+
+  it("still describes an element whose text was too big to snapshot", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const answer = harness.host.describeElement({ tid: "hero" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({ textSnapshot: null }),
+        nonce: NONCE,
+      }),
+    );
+    const described = await answer;
+    expect(described).toMatchObject({ marker: 7 });
+    expect(described?.textSnapshot ?? null).toBeNull();
+  });
+
+  it("resolves null for a described element with an over-budget snapshot", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const answer = harness.host.describeElement({ tid: "hero" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/describe-element"), {
+        element: element({
+          textSnapshot: {
+            content: "a".repeat(65_537),
+            nodes: [],
+            textOnly: true,
+          },
+        }),
+        nonce: NONCE,
+      }),
+    );
+    await expect(answer).resolves.toBeNull();
+  });
+
+  it("does not ask for markup on a hit-test and accepts an answer without it", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const answer = harness.host.hitTest({ x: 3, y: 4 });
+    const request = harness.requestOf("traycer/canvas/hit-test");
+    expect(request.params).toEqual({ x: 3, y: 4, nonce: NONCE });
+    harness.host.receive(
+      respond(request, { element: element({}), nonce: NONCE }),
+    );
+    await expect(answer).resolves.toMatchObject({ marker: 7 });
   });
 
   it.each(["edit", "play"] as const)(
@@ -872,5 +983,140 @@ describe("canvas page errors outside a healthy ready page", () => {
     harness.host.dispose();
     harness.host.receive(pageError({}));
     expect(harness.onPageError).not.toHaveBeenCalled();
+  });
+});
+
+describe("canvas double-click", () => {
+  const DOUBLE_CLICK = "traycer/canvas/double-click";
+  const doubleClick = (overrides: Record<string, unknown>): Sent =>
+    notification(DOUBLE_CLICK, {
+      element: element({}),
+      nonce: NONCE,
+      ...overrides,
+    });
+
+  it("delivers the element the page reported", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(
+      doubleClick({ element: element({ marker: 9, textPreview: "title" }) }),
+    );
+    expect(harness.onDoubleClick).toHaveBeenCalledOnce();
+    expect(harness.onDoubleClick.mock.calls[0][0]).toMatchObject({
+      marker: 9,
+      textPreview: "title",
+      box: BOX,
+    });
+  });
+
+  it("delivers the text snapshot a double-click carries", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const snapshot = { content: "Welcome", nodes: ["Welcome"], textOnly: true };
+    harness.host.receive(
+      doubleClick({ element: element({ textSnapshot: snapshot }) }),
+    );
+    expect(harness.onDoubleClick.mock.calls[0][0]).toMatchObject({
+      textSnapshot: snapshot,
+    });
+  });
+
+  it("drops a double-click whose snapshot breaks the budget", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(
+      doubleClick({
+        element: element({
+          textSnapshot: {
+            content: "a".repeat(65_537),
+            nodes: [],
+            textOnly: true,
+          },
+        }),
+      }),
+    );
+    expect(harness.onDoubleClick).not.toHaveBeenCalled();
+  });
+
+  it("delivers each double-click separately", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(doubleClick({ element: element({ marker: 1 }) }));
+    harness.host.receive(doubleClick({ element: element({ marker: 2 }) }));
+    expect(
+      harness.onDoubleClick.mock.calls.map(([found]) => found.marker),
+    ).toEqual([1, 2]);
+  });
+
+  it.each([
+    ["a wrong nonce", { nonce: "other" }],
+    ["no nonce", { nonce: undefined }],
+  ])("drops a double-click with %s", (_label, nonce) => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(doubleClick(nonce));
+    expect(harness.onDoubleClick).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a page that is not a canvas", { canvas: false, ready: true }],
+    ["a page that has not proved its nonce", { canvas: true, ready: false }],
+  ])("drops a double-click from %s", (_label, options) => {
+    const harness = createHarness(options);
+    harness.host.receive(doubleClick({}));
+    expect(harness.onDoubleClick).not.toHaveBeenCalled();
+  });
+
+  it("drops a double-click once the host is disposed", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.dispose();
+    harness.host.receive(doubleClick({}));
+    expect(harness.onDoubleClick).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no element", { element: undefined }],
+    ["a null element", { element: null }],
+    [
+      "an element over a parser limit",
+      { element: element({ selector: "s".repeat(1001) }) },
+    ],
+    [
+      "an element claiming to be generated",
+      { element: element({ generated: true }) },
+    ],
+    ["a string element", { element: "p" }],
+    [
+      "markup over 65536 bytes",
+      { element: element({ outerHtml: "a".repeat(65_537) }) },
+    ],
+  ])("drops a double-click carrying %s", (_label, overrides) => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(doubleClick(overrides));
+    expect(harness.onDoubleClick).not.toHaveBeenCalled();
+    expect(harness.host.status).toBe("ready");
+  });
+
+  it("drops params that are not a record", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(notification(DOUBLE_CLICK, [NONCE]));
+    harness.host.receive(notification(DOUBLE_CLICK, NONCE));
+    harness.host.receive(notification(DOUBLE_CLICK, null));
+    expect(harness.onDoubleClick).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a double-click into a selection, error or link", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(doubleClick({}));
+    expect(harness.onTextSelection).not.toHaveBeenCalled();
+    expect(harness.onPageError).not.toHaveBeenCalled();
+    expect(harness.onRelativeLink).not.toHaveBeenCalled();
+  });
+
+  it("keeps delivering the other notifications after a double-click", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(doubleClick({}));
+    harness.host.receive(
+      notification("traycer/canvas/relative-link", {
+        href: "a.html",
+        nonce: NONCE,
+      }),
+    );
+    expect(harness.onRelativeLink).toHaveBeenCalledWith("a.html");
   });
 });

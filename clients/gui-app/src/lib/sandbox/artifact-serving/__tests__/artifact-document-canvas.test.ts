@@ -889,6 +889,365 @@ describe("the canvas bootstrap in a running page", () => {
     });
   });
 
+  describe("describing an element's markup", () => {
+    const HERO = `<p data-tid="hero"></p>`;
+    const byteLength = (value: string): number =>
+      new TextEncoder().encode(value).length;
+    function heroOf(page: Page): Element {
+      const hero = page.window.document.querySelector("[data-tid=hero]");
+      if (hero === null) throw new Error("no hero");
+      return hero;
+    }
+    function describeHero(page: Page) {
+      page.deliver(request(1, "describe-element", { tid: "hero" }));
+      return parseCanvasElement(page.canvasPosts().at(-1)?.result?.element);
+    }
+
+    it("carries the element's complete outer HTML", () => {
+      const page = runCanvasPage(
+        `<p data-tid="hero" class="lead">Hello <em>there</em></p>`,
+      );
+      loaded(page);
+      const described = describeHero(page);
+      expect(described?.outerHtml).toBe(heroOf(page).outerHTML);
+      // The stamp sits inside the tag, so match the element, not its exact tag.
+      expect(described?.outerHtml).toMatch(/<em [^>]*>there<\/em>/);
+    });
+
+    it("sends markup of exactly 65536 UTF-8 bytes in full", () => {
+      const page = runCanvasPage(HERO);
+      loaded(page);
+      const hero = heroOf(page);
+      // Pad the text until the live element, stamp included, lands on the cap.
+      hero.textContent = "a".repeat(65_536 - byteLength(hero.outerHTML));
+      expect(byteLength(hero.outerHTML)).toBe(65_536);
+
+      expect(describeHero(page)?.outerHtml).toBe(hero.outerHTML);
+    });
+
+    it("sends null, not a truncation, one byte over the cap", () => {
+      const page = runCanvasPage(HERO);
+      loaded(page);
+      const hero = heroOf(page);
+      hero.textContent = "a".repeat(65_537 - byteLength(hero.outerHTML));
+      expect(byteLength(hero.outerHTML)).toBe(65_537);
+
+      const described = describeHero(page);
+      expect(described).toMatchObject({ tid: "hero", tagName: "p" });
+      expect(described?.outerHtml).toBeNull();
+    });
+
+    it("counts bytes, not characters, when deciding what is too large", () => {
+      const page = runCanvasPage(HERO);
+      loaded(page);
+      // 30000 three-byte characters: well under 65536 characters, 90000 bytes.
+      heroOf(page).textContent = "€".repeat(30_000);
+      expect(describeHero(page)?.outerHtml).toBeNull();
+    });
+
+    it("leaves markup off a hit-test", () => {
+      const page = runCanvasPage(`<p data-tid="hero">hi</p>`);
+      loaded(page);
+      page.window.document.elementFromPoint = () =>
+        page.window.document.querySelector("[data-tid=hero]");
+      page.deliver(request(1, "hit-test", { x: 1, y: 1 }));
+      const element = page.canvasPosts().at(-1)?.result?.element;
+      expect(parseCanvasElement(element)?.outerHtml ?? null).toBeNull();
+      expect(element).not.toHaveProperty("outerHtml");
+    });
+  });
+
+  describe("the live text snapshot", () => {
+    const HERO = `<p data-tid="hero"></p>`;
+    const BUDGET = 65_536;
+    const byteLength = (value: string): number =>
+      new TextEncoder().encode(value).length;
+    function heroOf(page: Page): Element {
+      const hero = page.window.document.querySelector("[data-tid=hero]");
+      if (hero === null) throw new Error("no hero");
+      return hero;
+    }
+    function describeHero(page: Page) {
+      page.deliver(request(1, "describe-element", { tid: "hero" }));
+      return parseCanvasElement(page.canvasPosts().at(-1)?.result?.element);
+    }
+    function loadedPage(markup: string): Page {
+      const page = runCanvasPage(markup);
+      loaded(page);
+      return page;
+    }
+
+    it("reports the text of an element that holds only text", () => {
+      const page = loadedPage(`<p data-tid="hero">Hello world</p>`);
+      expect(describeHero(page)?.textSnapshot).toEqual({
+        content: "Hello world",
+        nodes: ["Hello world"],
+        textOnly: true,
+      });
+    });
+
+    it("reports an empty element as text-only with nothing in it", () => {
+      expect(describeHero(loadedPage(HERO))?.textSnapshot).toEqual({
+        content: "",
+        nodes: [],
+        textOnly: true,
+      });
+    });
+
+    it("reports mixed content as not text-only, with the text beside the elements", () => {
+      const page = loadedPage(`<p data-tid="hero">Hello <b>big</b> world</p>`);
+      expect(describeHero(page)?.textSnapshot).toEqual({
+        content: "Hello big world",
+        nodes: ["Hello ", " world"],
+        textOnly: false,
+      });
+    });
+
+    it("reports a lone text node beside an element as a node, not text-only", () => {
+      const page = loadedPage(`<h1 data-tid="hero">Title <i>x</i></h1>`);
+      expect(describeHero(page)?.textSnapshot).toEqual({
+        content: "Title x",
+        nodes: ["Title "],
+        textOnly: false,
+      });
+    });
+
+    it("reports the text as it is now, after the page changed it", () => {
+      const page = loadedPage(`<p data-tid="hero">Before</p>`);
+      heroOf(page).textContent = "After a script ran";
+      expect(describeHero(page)?.textSnapshot?.content).toBe(
+        "After a script ran",
+      );
+    });
+
+    it("reports entities decoded, as the page reads them", () => {
+      const page = loadedPage(`<p data-tid="hero">a &amp; b</p>`);
+      expect(describeHero(page)?.textSnapshot?.content).toBe("a & b");
+    });
+
+    it("sends it with a double-click too", () => {
+      const page = loadedPage(`<p data-tid="hero">Hello</p>`);
+      page.deliver(
+        request(7, "set-text-selection-target", { target: { tid: "hero" } }),
+      );
+      heroOf(page).dispatchEvent(
+        new page.window.MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      const posted = page.posted.find(
+        (message) => message.method === "traycer/canvas/double-click",
+      );
+      expect(parseCanvasElement(posted?.params?.element)?.textSnapshot).toEqual(
+        {
+          content: "Hello",
+          nodes: ["Hello"],
+          textOnly: true,
+        },
+      );
+    });
+
+    it("leaves it off a hit-test", () => {
+      const page = loadedPage(`<p data-tid="hero">hi</p>`);
+      page.window.document.elementFromPoint = () => heroOf(page);
+      page.deliver(request(1, "hit-test", { x: 1, y: 1 }));
+      const element = page.canvasPosts().at(-1)?.result?.element;
+      expect(element).not.toHaveProperty("textSnapshot");
+    });
+
+    it("sends content and nodes of exactly 65536 bytes together in full", () => {
+      const page = loadedPage(HERO);
+      // One text node counts twice: once as the content, once as the node.
+      heroOf(page).textContent = "a".repeat(BUDGET / 2);
+      const snapshot = describeHero(page)?.textSnapshot;
+      expect(snapshot).not.toBeNull();
+      expect(
+        byteLength(snapshot?.content ?? "") +
+          (snapshot?.nodes ?? []).reduce(
+            (sum, node) => sum + byteLength(node),
+            0,
+          ),
+      ).toBe(BUDGET);
+    });
+
+    it("sends null, not a truncation, one byte over the budget", () => {
+      const page = loadedPage(HERO);
+      heroOf(page).textContent = "a".repeat(BUDGET / 2 + 1);
+      const described = describeHero(page);
+      expect(described).toMatchObject({ tid: "hero", tagName: "p" });
+      expect(described?.textSnapshot).toBeNull();
+    });
+
+    it("counts bytes, not characters, against the budget", () => {
+      const page = loadedPage(HERO);
+      heroOf(page).textContent = "€".repeat(11_000);
+      expect(describeHero(page)?.textSnapshot).toBeNull();
+    });
+
+    it("sends null when an element has more than 1024 direct text nodes", () => {
+      const page = loadedPage(HERO);
+      const hero = heroOf(page);
+      const nodes = (count: number): Text[] =>
+        Array.from({ length: count }, () =>
+          page.window.document.createTextNode("x"),
+        );
+      hero.append(...nodes(1024));
+      expect(describeHero(page)?.textSnapshot?.nodes).toHaveLength(1024);
+
+      hero.append(...nodes(1));
+      expect(describeHero(page)?.textSnapshot).toBeNull();
+    });
+  });
+
+  describe("double-click to retype", () => {
+    const TEXT = `<p data-tid="para">one <span>two</span> three</p><p data-tid="other">other</p>`;
+    const doubleClickPosts = (page: Page) =>
+      page.posted.filter(
+        (message) => message.method === "traycer/canvas/double-click",
+      );
+
+    function target(page: Page, locator: Record<string, unknown> | null): void {
+      page.deliver(
+        request(100, "set-text-selection-target", { target: locator }),
+      );
+    }
+    function doubleClick(page: Page, selector: string): boolean {
+      const element = page.window.document.querySelector(selector);
+      if (element === null) throw new Error(`no ${selector}`);
+      return element.dispatchEvent(
+        new page.window.MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    it("reports the text target when it is double-clicked in Edit", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      doubleClick(page, "[data-tid=para]");
+
+      expect(doubleClickPosts(page)).toHaveLength(1);
+      const params = doubleClickPosts(page)[0].params;
+      expect(params?.nonce).toBe(NONCE);
+      expect(parseCanvasElement(params?.element)).toMatchObject({
+        tid: "para",
+        tagName: "p",
+      });
+    });
+
+    it("reports the target, not the nested element that was hit", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      doubleClick(page, "span");
+
+      expect(
+        parseCanvasElement(doubleClickPosts(page)[0].params?.element),
+      ).toMatchObject({ tid: "para", tagName: "p" });
+    });
+
+    it("keeps the double-click from the authored page and from the browser", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      let pageSaw = 0;
+      page.window.document
+        .querySelector("[data-tid=para]")
+        ?.addEventListener("dblclick", () => {
+          pageSaw += 1;
+        });
+
+      // false means preventDefault ran, which also stops the word selection.
+      expect(doubleClick(page, "span")).toBe(false);
+      expect(pageSaw).toBe(0);
+    });
+
+    it("says nothing for a double-click outside the text target", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      let pageSaw = 0;
+      page.window.document
+        .querySelector("[data-tid=other]")
+        ?.addEventListener("dblclick", () => {
+          pageSaw += 1;
+        });
+
+      expect(doubleClick(page, "[data-tid=other]")).toBe(true);
+      expect(doubleClickPosts(page)).toEqual([]);
+      expect(pageSaw).toBe(1);
+    });
+
+    it("says nothing when no text target was set", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      expect(doubleClick(page, "[data-tid=para]")).toBe(true);
+      expect(doubleClickPosts(page)).toEqual([]);
+    });
+
+    it("stops reporting once the text target is cleared", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      target(page, null);
+      expect(doubleClick(page, "[data-tid=para]")).toBe(true);
+      expect(doubleClickPosts(page)).toEqual([]);
+    });
+
+    it("says nothing for a target that no longer resolves to one element", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "missing" });
+      expect(doubleClick(page, "[data-tid=para]")).toBe(true);
+      expect(doubleClickPosts(page)).toEqual([]);
+    });
+
+    it("does nothing in play mode, so the page's own handler runs", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      page.deliver(request(101, "set-mode", { mode: "play" }));
+      let pageSaw = 0;
+      page.window.document
+        .querySelector("[data-tid=para]")
+        ?.addEventListener("dblclick", () => {
+          pageSaw += 1;
+        });
+
+      expect(doubleClick(page, "[data-tid=para]")).toBe(true);
+      expect(pageSaw).toBe(1);
+      expect(doubleClickPosts(page)).toEqual([]);
+    });
+
+    it("reports again when Edit mode returns", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      page.deliver(request(101, "set-mode", { mode: "play" }));
+      page.deliver(request(102, "set-mode", { mode: "edit" }));
+      doubleClick(page, "[data-tid=para]");
+      expect(doubleClickPosts(page)).toHaveLength(1);
+    });
+
+    it("says nothing before the page has loaded", () => {
+      const page = runCanvasPage(TEXT);
+      doubleClick(page, "[data-tid=para]");
+      expect(doubleClickPosts(page)).toEqual([]);
+    });
+
+    it("sends one report per double-click", () => {
+      const page = runCanvasPage(TEXT);
+      loaded(page);
+      target(page, { tid: "para" });
+      doubleClick(page, "[data-tid=para]");
+      doubleClick(page, "span");
+      expect(doubleClickPosts(page)).toHaveLength(2);
+    });
+  });
+
   describe("relative links", () => {
     function clickAnchor(page: Page, href: string): boolean {
       const anchor = page.window.document.createElement("a");
