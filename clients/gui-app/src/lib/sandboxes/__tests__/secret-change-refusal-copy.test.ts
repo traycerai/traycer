@@ -45,6 +45,12 @@ describe("secretChangeRefusalLine", () => {
     );
   });
 
+  it("a create refused for an unknown provider name says to choose the provider", () => {
+    expect(secretChangeRefusalLine("create", "provider_name_unknown")).toBe(
+      "Choose the provider; a model provider key takes its provider's variable name.",
+    );
+  });
+
   it("words version_current differently for undo and destroy", () => {
     const undo = secretChangeRefusalLine("undo", "version_current");
     const destroy = secretChangeRefusalLine("destroy", "version_current");
