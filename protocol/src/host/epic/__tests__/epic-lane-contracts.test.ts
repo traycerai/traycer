@@ -1632,10 +1632,12 @@ describe("epic.state.subscribe@1.3: html, canvas and file artifact records and t
     kind: "file" as const,
     id: "file-1",
     layout: "file" as const,
-    sha256,
-    byteLength: 12,
-    mediaType: "image/png",
-    status: "published" as const,
+    object: {
+      sha256,
+      byteLength: 12,
+      mediaType: "image/png",
+      status: "published" as const,
+    },
   };
   const markdownRecord = {
     ...artifactBase,
@@ -1776,7 +1778,8 @@ describe("epic.state.subscribe@1.3: html, canvas and file artifact records and t
   });
 
   it("@1.3 refuses a file record without its object fields", () => {
-    const { sha256: _dropped, ...fileWithoutSha } = fileRecord;
+    const { sha256: _dropped, ...objectWithoutSha } = fileRecord.object;
+    const fileWithoutSha = { ...fileRecord, object: objectWithoutSha };
     expect(
       epicStateSubscribeServerFrameSchemaV13.safeParse({
         ...newKindDelta,

@@ -1049,10 +1049,12 @@ describe("epic.state.subscribe read model - artifact kinds without a presentatio
         kind: "file",
         ...baseWire("file-1", revision),
         layout: "file",
-        sha256: SHA256,
-        byteLength: 12,
-        mediaType: "application/pdf",
-        status: "published",
+        object: {
+          sha256: SHA256,
+          byteLength: 12,
+          mediaType: "application/pdf",
+          status: "published",
+        },
       },
     ];
   }
