@@ -126,8 +126,15 @@ const artifactRoomFields = {
 const baseEpicArtifactFields = {
   ...baseEpicArtifactFieldsPreHtml,
   layout: lazySchema(() => z.enum(["folder", "file"]).default("folder")),
-  // File-layout entries: relative to the parent artifact's folder or tree root.
-  // folderName retains its existing meaning.
+  // Where the entry lives relative to the parent artifact's folder or the tree
+  // root, on either layout. A file-layout entry names its file; a folder-layout
+  // entry names its folder, which is how an html or canvas folder nested under
+  // a plain folder (`research/site/index.html`) is representable: the
+  // `parentId` chain alone cannot carry the `research/` segment. When present
+  // it replaces `folderName` in the path chain; `folderName` stays the last
+  // segment for anything that displays it. Absent means the entry sits directly
+  // under its parent (or the root) as `folderName`, which is every entry
+  // written before this field existed.
   relativePath: artifactManifestPathSchema.optional(),
 } as const;
 
