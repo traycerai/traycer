@@ -1145,6 +1145,35 @@ describe("Terminals opener sub-page", () => {
       });
     });
 
+    it("offers a sleeping team pod that cannot be dialed once, as its Open row, not also as a Create row", () => {
+      extraHostsMock.directory = [
+        {
+          hostId: POD_HOST,
+          label: "Team pod",
+          kind: "remote",
+          websocketUrl: null,
+          version: null,
+          transportDialability: "dialable",
+        },
+      ];
+      extraHostsMock.options = [
+        ...extraHostsMock.options,
+        teamPodOption("env-team"),
+      ];
+      teamPodsMock.current = new Map([["env-team", [podRow(3)]]]);
+
+      const rows = newTerminalItems();
+      const forPod = rows.filter(
+        (item) =>
+          item.id === `open:terminals:new:host:${POD_HOST}` ||
+          item.id === `open:terminals:new:pod:${POD_HOST}`,
+      );
+
+      expect(forPod.map((item) => item.id)).toEqual([
+        `open:terminals:new:pod:${POD_HOST}`,
+      ]);
+    });
+
     it("offers the team's one generic row, opening with a null ordinal, while the environment's pod list has not answered", () => {
       extraHostsMock.options = [
         ...extraHostsMock.options,

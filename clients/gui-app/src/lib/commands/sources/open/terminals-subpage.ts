@@ -30,6 +30,7 @@ import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-que
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import {
   teamPodEnvironmentIds,
+  teamPodOpenHostIds,
   teamPodOpenRows,
 } from "@/lib/commands/sources/open/team-pod-open";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
@@ -450,6 +451,17 @@ function useNewTerminalWorkspaceItems(
             },
             hostClient,
           );
+    const dialable = (hostId: string): boolean => {
+      const entry =
+        (directory.data ?? []).find((e) => e.hostId === hostId) ?? null;
+      return (
+        entry !== null &&
+        dialableHostEndpointFor(entry, hasReadySessionFor(hostId)) !== null
+      );
+    };
+    // A team pod that cannot be dialed yet has its Open row below, and that
+    // is its one row.
+    const openedAsPods = teamPodOpenHostIds(groups, dialable);
     // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
     // sleeping sandbox is offered and woken when its sub-page opens. Each
     // workspace row's launch gate still dials before it opens a tile.
@@ -458,6 +470,7 @@ function useNewTerminalWorkspaceItems(
       if (
         entry.hostId === resolvedHostId ||
         host === undefined ||
+        openedAsPods.has(host.hostId) ||
         !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
       ) {
         return [];
@@ -471,14 +484,6 @@ function useNewTerminalWorkspaceItems(
         }),
       ];
     });
-    const dialable = (hostId: string): boolean => {
-      const entry =
-        (directory.data ?? []).find((e) => e.hostId === hostId) ?? null;
-      return (
-        entry !== null &&
-        dialableHostEndpointFor(entry, hasReadySessionFor(hostId)) !== null
-      );
-    };
     const podOpens = teamPodOpenRows(groups, podsByEnvironment, dialable).map(
       (row) =>
         openerActionLeaf({

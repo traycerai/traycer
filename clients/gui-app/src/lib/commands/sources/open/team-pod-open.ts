@@ -58,6 +58,23 @@ export function teamPodEnvironmentIds(
 }
 
 /**
+ * The hosts `teamPodOpenRows` accounts for: every team pod it cannot dial
+ * yet, whether that pod gets a named row or its team's generic one. The
+ * picker's "Create terminal on" leaves them out, so a sleeping pod is
+ * offered once, as an open.
+ */
+export function teamPodOpenHostIds(
+  groups: HostPickerGroups,
+  dialable: (hostId: string) => boolean,
+): ReadonlySet<string> {
+  return new Set(
+    teamPods(groups)
+      .map((pod) => pod.host.hostId)
+      .filter((hostId) => !dialable(hostId)),
+  );
+}
+
+/**
  * The team pods the picker offers as an open (`POST /automation` with the
  * pod's environment and ordinal) because it cannot dial them yet. The
  * ordinal comes from the environment's pod list. A pod the list has not

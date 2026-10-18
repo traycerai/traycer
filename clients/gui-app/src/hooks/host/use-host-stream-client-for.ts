@@ -4,7 +4,10 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { useFrozenSandboxRebuildPark } from "@/lib/host/frozen-sandbox-rebuild-park";
+import {
+  terminalFatalCodeOf,
+  useFrozenSandboxRebuildPark,
+} from "@/lib/host/frozen-sandbox-rebuild-park";
 import { sandboxFreezeOf } from "@/lib/host/host-messenger";
 import {
   isRemoteHostDirectoryEntry,
@@ -683,7 +686,7 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
-      if (parkIfFrozen(client.getClosedReason())) {
+      if (parkIfFrozen(terminalFatalCodeOf(client))) {
         appLogger.info(
           "[stream] host stream client closed on a frozen sandbox - rebuild held until it thaws",
           { client: client.instanceId },

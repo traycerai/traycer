@@ -73,12 +73,18 @@ export class RemoteStreamClient<
     return this.session.isClosed();
   }
 
-  /**
-   * The session's terminal fatal code (e.g. `SANDBOX_FROZEN`), or `null` for
-   * a close that was not a fatal: the code is what lets a stream owner tell a
-   * refusal no rebuild can change from a close worth rebuilding after.
-   */
+  /** Always `null`: the mux session exposes no closed-reason to report. */
   getClosedReason(): string | null {
+    return null;
+  }
+
+  /**
+   * The session's terminal fatal code (e.g. `SANDBOX_FROZEN`), or `null`
+   * while it has none. Its own accessor, apart from `getClosedReason`, which
+   * stays `null`: the code is what lets a stream owner tell a refusal no
+   * rebuild can change from a close worth rebuilding after.
+   */
+  getTerminalFatalCode(): string | null {
     return this.session.terminalFatal()?.code ?? null;
   }
 

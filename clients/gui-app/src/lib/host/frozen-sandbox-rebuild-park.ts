@@ -3,6 +3,9 @@ import {
   readHostDirectoryEntry,
   subscribeHostRowChanged,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
+import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import { RemoteStreamClient } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   sandboxFreezeOf,
   TERMINAL_VERDICT_TTL_MS,
@@ -15,12 +18,12 @@ type Park = "none" | "unconfirmed" | "confirmed";
 
 export interface FrozenSandboxRebuildPark {
   /**
-   * Called by a stream owner whose client just closed, with the client's
-   * closed reason: `true` parks the rebuild (the close was a frozen
+   * Called by a stream owner whose client just closed, with
+   * {@link terminalFatalCodeOf} that client: `true` parks the rebuild (the close was a frozen
    * sandbox's refusal, which a fresh session would only repeat), `false`
    * leaves the owner to rebuild as for any other close.
    */
-  readonly parkIfFrozen: (closedReason: string | null) => boolean;
+  readonly parkIfFrozen: (terminalFatalCode: string | null) => boolean;
   /**
    * Counts the parks that ended. The owner's build effect depends on it, so
    * an end rebuilds once, as its own rebuild nonce does.
@@ -29,6 +32,19 @@ export interface FrozenSandboxRebuildPark {
 }
 
 type SandboxFreeze = "frozen" | "thawed" | "gone";
+
+/**
+ * A stream client's terminal fatal code. Only a remote session carries one: a
+ * frozen sandbox is always reached over the relay, and a local client's close
+ * is never a refusal.
+ */
+export function terminalFatalCodeOf<
+  Registry extends VersionedStreamRpcRegistry,
+>(client: IHostStreamClient<Registry>): string | null {
+  return client instanceof RemoteStreamClient
+    ? client.getTerminalFatalCode()
+    : null;
+}
 
 const noSubscription = (): (() => void) => () => undefined;
 
@@ -93,12 +109,15 @@ export function useFrozenSandboxRebuildPark(
     };
   }, [park]);
 
-  const parkIfFrozen = useCallback((closedReason: string | null): boolean => {
-    if (closedReason !== SANDBOX_FROZEN_FATAL) return false;
-    // Confirmed above once the list is seen frozen.
-    setPark("unconfirmed");
-    return true;
-  }, []);
+  const parkIfFrozen = useCallback(
+    (terminalFatalCode: string | null): boolean => {
+      if (terminalFatalCode !== SANDBOX_FROZEN_FATAL) return false;
+      // Confirmed above once the list is seen frozen.
+      setPark("unconfirmed");
+      return true;
+    },
+    [],
+  );
 
   return { parkIfFrozen, releases };
 }

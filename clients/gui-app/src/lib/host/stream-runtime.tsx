@@ -16,6 +16,7 @@ import { useHostBinding } from "@/lib/host/runtime";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
+  terminalFatalCodeOf,
   useFrozenSandboxRebuildPark,
   useRegistrySandboxFreeze,
 } from "@/lib/host/frozen-sandbox-rebuild-park";
@@ -286,7 +287,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     let backoffTimer: number | null = null;
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
-      if (parkIfFrozen(client.getClosedReason())) {
+      if (parkIfFrozen(terminalFatalCodeOf(client))) {
         appLogger.info(
           "[stream] app stream client closed on a frozen sandbox - rebuild held until it thaws",
           { client: client.instanceId },
