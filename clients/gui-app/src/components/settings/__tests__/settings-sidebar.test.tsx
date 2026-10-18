@@ -73,6 +73,12 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 // this navigation suite went on passing. The whole point of exporting
 // `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
 // of these by hand.
+// The environment label resolver is a per-host query hook (Tracy Bots);
+// mocked here for the same reason the fleet views are: this suite mounts no
+// QueryClient and the label is not what it tests.
+vi.mock("@/hooks/bots/use-host-environment-labels", () => ({
+  useHostEnvironmentLabelResolver: () => () => null,
+}));
 vi.mock("@/hooks/host/use-fleet-update-views", async () => {
   const { UNKNOWN_FLEET_UPDATE_VIEW } =
     await import("@/lib/host/fleet-update/fleet-update-view");

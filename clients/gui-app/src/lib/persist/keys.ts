@@ -415,6 +415,14 @@ export const PERSIST_STORES = [
     leaf: "feature-announcements",
     kind: "static",
   },
+  // The bot tabs open in this window, each with the host it is bound to for
+  // life (`bot-tabs-store.ts`). A bot id is a cloud entity, so no host scoping
+  // on the key; the host rides on each record instead.
+  {
+    camelName: "botTabs",
+    leaf: "bot-tabs",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).

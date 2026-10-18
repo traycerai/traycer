@@ -243,6 +243,7 @@ function resetTabsStore(): void {
 describe("TAB_KINDS surface exhaustiveness", () => {
   it("keeps registry keys, surface contract, and dispatcher aligned", () => {
     const expectedKinds: ReadonlyArray<HeaderTabKind> = [
+      "bot",
       "draft",
       "epic",
       "history",
@@ -259,6 +260,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
 
     expectTypeOf(TAB_KINDS).toHaveProperty("epic");
     expectTypeOf(TAB_KINDS).toHaveProperty("draft");
+    expectTypeOf(TAB_KINDS).toHaveProperty("bot");
     expectTypeOf(TAB_KINDS).toHaveProperty("history");
     expectTypeOf(TAB_KINDS).toHaveProperty("settings");
     expectTypeOf(TAB_KINDS).toHaveProperty("home");
@@ -269,6 +271,9 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     >();
     expectTypeOf(tabSurfaceDescriptor("draft")).toEqualTypeOf<
       TabSurfaceDescriptor<"draft">
+    >();
+    expectTypeOf(tabSurfaceDescriptor("bot")).toEqualTypeOf<
+      TabSurfaceDescriptor<"bot">
     >();
     expectTypeOf(tabSurfaceDescriptor("history")).toEqualTypeOf<
       TabSurfaceDescriptor<"history">
@@ -289,6 +294,9 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     expectTypeOf(TAB_KINDS.draft.descriptor.surface).toExtend<
       TabSurfaceDescriptor<"draft">
     >();
+    expectTypeOf(TAB_KINDS.bot.descriptor.surface).toExtend<
+      TabSurfaceDescriptor<"bot">
+    >();
     expectTypeOf(TAB_KINDS.history.descriptor.surface).toExtend<
       TabSurfaceDescriptor<"history">
     >();
@@ -305,6 +313,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     const headerKinds: ReadonlyArray<HeaderTabKind> = [
       "epic",
       "draft",
+      "bot",
       "history",
       "settings",
       "home",

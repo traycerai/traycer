@@ -55,6 +55,7 @@ const PANE_BY_KIND: ReadonlyArray<
 > = [
   { kind: "epic", top: "surface", left: "canvas", right: "canvas" },
   { kind: "draft", top: "surface", left: "surface", right: "surface" },
+  { kind: "bot", top: "surface", left: "surface", right: "surface" },
   { kind: "settings", top: "surface", left: "panel", right: "surface" },
   { kind: "home", top: "canvas", left: "canvas", right: "canvas" },
   { kind: "history", top: "canvas", left: "canvas", right: "canvas" },
@@ -162,10 +163,22 @@ const SAMPLE_WORKSPACE_TAB: HeaderTab = {
   canOpenInNewWindow: false,
 };
 
+const BOT_TAB: HeaderTab = {
+  kind: "bot",
+  id: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  hostId: "host-a",
+  route: "/bot/bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  name: "Release bot",
+  icon: null,
+  canDuplicate: false,
+  canOpenInNewWindow: false,
+};
+
 /** One header tab of every kind, keyed by it: the strip's projection of each. */
 const HEADER_TAB_BY_KIND: Readonly<Record<HeaderTabKind, HeaderTab>> = {
   epic: EPIC_TAB,
   draft: DRAFT_TAB,
+  bot: BOT_TAB,
   settings: SETTINGS_TAB,
   home: HOME_TAB,
   history: HISTORY_TAB,

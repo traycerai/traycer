@@ -2,6 +2,8 @@
  * `environment.list` - every team environment the signed-in user belongs to.
  * `environment.host.read` / `environment.host.bind` - the one environment
  * this host is bound to, and rebinding it.
+ * `environment.host.list` - every host bound to a team environment, as any
+ * member of the team sees it.
  *
  * An environment is the cloud container a team shares: skills, the shared
  * notes block, the agent selection guide and the bot list, all held in one
@@ -76,12 +78,19 @@ export const environmentListV10 = defineRpcContract({
  * runs in that one. `explicit` is false when the owner never bound the host:
  * it is then in their personal environment, which is the only default and
  * never a team.
+ *
+ * A host bound to a team environment is the team's: every member sees it
+ * (`environment.host.list`), and only the account that bound it can unbind
+ * it. `enrolledByUserId` is that account, null when the binding is not
+ * explicit; `canUnbind` is whether the caller is it.
  */
 export const environmentHostBindingSchema = lazySchema(() =>
   z.object({
     hostId: z.string().min(1),
     environment: environmentDescriptorSchema,
     explicit: z.boolean(),
+    enrolledByUserId: z.string().min(1).nullable(),
+    canUnbind: z.boolean(),
   }),
 );
 export type EnvironmentHostBinding = z.infer<
@@ -121,4 +130,61 @@ export const environmentHostBindV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentHostBindRequestSchema,
   responseSchema: environmentHostBindingSchema,
+});
+
+export const environmentHostListRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+  }),
+);
+export type EnvironmentHostListRequest = z.infer<
+  typeof environmentHostListRequestSchema
+>;
+
+/**
+ * One host bound to an environment. `hostLabel` and `hostPlatform` are what
+ * the host reported about itself when it was bound, null when it reported
+ * nothing; `enrolledByUserId` is the account that bound it, the only one that
+ * can unbind it. `kind` is the host's registry kind: a `sandbox` is the
+ * environment's machine, listed to every member and open to the environment's
+ * bots; a `personal` machine is its enrolling member's, listed to that member
+ * alone. `boundAt` is epoch milliseconds.
+ */
+export const environmentHostRecordSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string().min(1),
+    hostLabel: z.string().nullable(),
+    hostPlatform: z.string().nullable(),
+    enrolledByUserId: z.string().min(1),
+    kind: z.enum(["personal", "sandbox"]),
+    boundAt: z.number().int(),
+  }),
+);
+export type EnvironmentHostRecord = z.infer<typeof environmentHostRecordSchema>;
+
+/**
+ * The hosts of the environment the caller may see: every sandbox bound to it,
+ * whoever bound it, plus the caller's own bound hosts of any kind. A member of
+ * an object root so the response can grow additively. Empty for a personal
+ * environment, whose hosts are its owner's unbound ones.
+ */
+export const environmentHostListResponseSchema = lazySchema(() =>
+  z.object({
+    hosts: z.array(environmentHostRecordSchema),
+  }),
+);
+export type EnvironmentHostListResponse = z.infer<
+  typeof environmentHostListResponseSchema
+>;
+
+/**
+ * Lists every host bound to a team environment to any member of it. Refused
+ * for an environment the caller does not belong to, and for one that does
+ * not exist.
+ */
+export const environmentHostListV10 = defineRpcContract({
+  method: "environment.host.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentHostListRequestSchema,
+  responseSchema: environmentHostListResponseSchema,
 });

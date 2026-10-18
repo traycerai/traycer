@@ -3,6 +3,7 @@ import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
+import { STDERR_FATAL_KINDS } from "../crash-diagnostics";
 import type {
   HostCrashEvent,
   HostCrashIdentity,
@@ -135,6 +136,7 @@ function sampleTelemetry(
     uptimeMs: 1500,
     stopRequested: false,
     stderrEmpty: false,
+    stderrFatal: "other",
     reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
     ...overrides,
   };
@@ -204,6 +206,7 @@ describe("buildHostCrashEvent", () => {
         "cli_version",
         "crash_kind",
         "host_environment",
+        "host_fatal",
         "host_output",
         "host_phase",
         "host_running_version",
@@ -264,6 +267,7 @@ describe("buildHostCrashEvent", () => {
       crash_kind: "1",
       stop_requested: "no",
       host_output: "wrote",
+      host_fatal: "other",
       host_phase: "published",
       uptime_bucket: "lt-10s",
     });
@@ -330,6 +334,18 @@ describe("buildHostCrashEvent", () => {
       expect(event.tags.stop_requested).toBe("yes");
       expect(event.tags.host_output).toBe("silent");
     });
+
+    it.each(STDERR_FATAL_KINDS)(
+      "carries the stderr fatal kind %s as the host_fatal tag, and nothing else of the capture",
+      (kind) => {
+        const event = buildHostCrashEvent(
+          sampleTelemetry({ stderrFatal: kind }),
+          null,
+        );
+        expect(event.tags.host_fatal).toBe(kind);
+        expect(JSON.stringify(event)).not.toContain("heap out of memory");
+      },
+    );
 
     it("derives host_phase from whether the child published its own pid.json", () => {
       const published = buildHostCrashEvent(sampleTelemetry({}), {

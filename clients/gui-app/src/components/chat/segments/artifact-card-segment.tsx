@@ -26,6 +26,7 @@ import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import { EpicSessionGate } from "@/providers/epic-session-gate";
 interface ArtifactCardSegmentProps {
   readonly operation: ArtifactOperationAction;
   readonly artifactKind: EpicArtifactKind;
@@ -470,11 +471,32 @@ function canOpenArtifactCard(input: {
  * no body, so a deleted card is not openable).
  */
 export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
+  // The card's projection, drag source and open action are the Epic's. A
+  // transcript outside an Epic session (a bot's, Tracy Bots) gets the inert
+  // form: the operation and the title the row recorded, nothing to act on.
   return (
-    <ArtifactCardSegmentContent
-      key={artifactCardDiffStateKey(props)}
-      {...props}
-    />
+    <EpicSessionGate fallback={<ArtifactCardInert {...props} />}>
+      <ArtifactCardSegmentContent
+        key={artifactCardDiffStateKey(props)}
+        {...props}
+      />
+    </EpicSessionGate>
+  );
+}
+
+function ArtifactCardInert(props: ArtifactCardSegmentProps) {
+  const title = resolveArtifactTitle(null, props.title);
+  return (
+    <div
+      data-chat-find-unit={props.findUnitId ?? undefined}
+      data-testid="artifact-card-inert"
+      className="flex w-full items-center gap-2 rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm"
+    >
+      <ArtifactOperationBadge operation={props.operation} />
+      <span className="min-w-0 flex-1 truncate">
+        {title ?? EPIC_NODE_LABELS[props.artifactKind]}
+      </span>
+    </div>
   );
 }
 

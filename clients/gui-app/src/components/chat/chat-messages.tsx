@@ -6,9 +6,10 @@ import {
   ChatTimeline,
   type ChatTimelineInitialScrollAnchor,
 } from "@/components/chat/chat-timeline";
-import type {
-  ChatTimelineFollowLatch,
-  ChatTimelineReaderGestureIntent,
+import {
+  type ChatTimelineFollowLatch,
+  type ChatTimelineReaderGestureIntent,
+  isChatTimelineAtStrictBottom,
 } from "@/components/chat/chat-timeline-follow-latch";
 import {
   acceptExhaustedPersistedRestoreFallback,
@@ -307,6 +308,8 @@ export type ChatMessageScrollRequest =
   | {
       readonly kind: "end";
       readonly requestId: number;
+      /** History edits should follow the replacement without animating through deleted rows. */
+      readonly animated?: boolean;
     };
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
@@ -357,6 +360,69 @@ function resolvePersistedChatTabScrollMode(
   scrollMode: ChatTimelineScrollMode,
 ): ChatTabScrollMode {
   return scrollMode === "following-end" ? "following-end" : "free-scrolling";
+}
+
+/** The scroll node's raw geometry read in the commit that concealed it. */
+interface ConcealedScrollGeometry {
+  readonly scrollTop: number;
+  readonly clientHeight: number;
+  readonly scrollHeight: number;
+}
+
+/**
+ * The scroll node's geometry in the hide commit, or `null` when that commit
+ * had already collapsed it. "Collapsed" is read two ways, because the browser
+ * applies a `display:none` ancestor before any effect runs: a zero box, or a
+ * `scrollTop` that no longer matches the last one a `scroll` event reported
+ * while visible (a collapse resets it silently). A bottom-follower whose
+ * node still reads at the strict edge is intact whatever the last event said,
+ * since following moves `scrollTop` through LegendList's own writes. With no
+ * reported position at all the answer is unknown, and unknown replays.
+ */
+function readIntactConcealedGeometry(
+  node: HTMLElement | undefined,
+  lastVisibleScrollTop: number | null,
+): ConcealedScrollGeometry | null {
+  if (node === undefined || node.clientHeight <= 0) return null;
+  const geometry: ConcealedScrollGeometry = {
+    scrollTop: node.scrollTop,
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+  };
+  if (isChatTimelineAtStrictBottom(geometry)) return geometry;
+  if (lastVisibleScrollTop === null) return null;
+  return geometry.scrollTop === lastVisibleScrollTop ? geometry : null;
+}
+
+/**
+ * Whether a list shown again after concealment is exactly where the reader
+ * left it, so the visibility handoff can skip its replay (see
+ * `concealedScrollGeometryRef` in `ChatMessagesInner`).
+ *
+ * The box survived the whole concealment when it was intact at hide
+ * (`readIntactConcealedGeometry`) AND is measurable now: a collapse in
+ * between resets `scrollTop`, so the equality for a free reader also fails
+ * for a box that collapsed and came back. A bottom-follower is judged by the
+ * live edge rather than by `scrollTop`, because content that arrived while
+ * hidden legitimately moved it - and when it did, the follower still needs
+ * its `scrollToEnd`.
+ */
+function listUndisturbedSinceConcealment(
+  concealed: ConcealedScrollGeometry | null,
+  node: HTMLElement | undefined,
+  replayMode: ChatTabScrollMode,
+): boolean {
+  if (concealed === null || node === undefined || node.clientHeight <= 0) {
+    return false;
+  }
+  if (replayMode === "following-end") {
+    return isChatTimelineAtStrictBottom({
+      scrollTop: node.scrollTop,
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+    });
+  }
+  return node.scrollTop === concealed.scrollTop;
 }
 
 /** The scroll offset that lands `index`'s row at `viewOffset` px from the
@@ -2312,6 +2378,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     SaveChatTabStateInput,
     "identity"
   > | null>(null);
+  // The raw `scrollTop` the last `scroll` event reported while this surface
+  // was visible and measurable. A collapse (`display:none`, a zeroed hosted
+  // rect) resets `scrollTop` WITHOUT a scroll event, so a hide-time read that
+  // disagrees with this is the collapse itself, already applied in the hide
+  // commit - the hazard above, read from the other side. Consumed by the
+  // visibility handoff through `readIntactConcealedGeometry`.
+  const lastVisibleScrollTopRef = useRef<number | null>(null);
   // Mirrors `timelineScrollModeRef.current` into render - the pill formula
   // and `data-scroll-mode` derive from this single value. The ref above
   // stays the authoritative value every imperative callback reads/writes
@@ -3032,6 +3105,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // (e.g. a still-settling restore) should leave its in-view dots stale.
     minimapInViewRefreshRef.current();
     if (!visible) return;
+    const scrollNode = chatTimelineRef.current?.getScrollableNode();
+    if (scrollNode !== undefined && scrollNode.clientHeight > 0) {
+      lastVisibleScrollTopRef.current = scrollNode.scrollTop;
+    }
     scheduleActiveViewportUpdate(
       timelineScrollModeRef.current === "following-end",
     );
@@ -3610,12 +3687,32 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // neighbor/natural-clamp fallback a destructive mutation while hidden
   // already gets on an ordinary remount.
   const wasSurfaceVisibleRef = useRef(visible);
+  // The scroll node's raw geometry at the moment it was concealed, or `null`
+  // when the hide had already collapsed it (a `display:none` top-level tab;
+  // `readIntactConcealedGeometry` says how that is read). A retained in-pane chat
+  // is concealed with `visibility:hidden` (`use-mounted-pane-tabs.ts`) and its
+  // hosted record keeps its rect (`stable-tile-surface-host.tsx`), so the list
+  // never stops measuring and `scrollTop` survives. Replaying the saved anchor
+  // over that intact list is not a no-op: LegendList's `scrollToOffset` /
+  // `scrollToEnd` re-resolve unmeasured rows from an average-size snapshot
+  // while a scroll is in flight, so the viewport visibly jumps through an
+  // estimated layout and converges back over several frames (rows from the
+  // mis-landed window painted over the rows the reader was looking at). The
+  // show branch below compares the live node against this record and leaves
+  // an undisturbed list alone; a collapsed or moved one still takes the replay.
+  const concealedScrollGeometryRef = useRef<ConcealedScrollGeometry | null>(
+    null,
+  );
   useLayoutEffect(() => {
     const wasVisible = wasSurfaceVisibleRef.current;
     wasSurfaceVisibleRef.current = visible;
     if (visible === wasVisible) return;
 
     if (!visible) {
+      concealedScrollGeometryRef.current = readIntactConcealedGeometry(
+        chatTimelineRef.current?.getScrollableNode(),
+        lastVisibleScrollTopRef.current,
+      );
       // Fixup (hidden-close-and-rapid-capture, P1 #2): publish the
       // continuously-mirrored snapshot (kept fresh, synchronously, by
       // `captureLastVisibleScrollSnapshot` above - no app-level rAF
@@ -3661,6 +3758,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       identity,
       listRowsRef.current.map((row) => row.key),
     );
+    // An undisturbed list needs no replay (see `concealedScrollGeometryRef`).
+    // Unless a saved restore is still converging: the cleanup above just
+    // cancelled its settle loop, and that loop was the only thing that would
+    // release the persistence gate - returning here would leave the gate
+    // armed with no scroll capture allowed until the next publishing reader
+    // gesture. Let the replay below re-issue it and own the release instead.
+    const concealed = concealedScrollGeometryRef.current;
+    concealedScrollGeometryRef.current = null;
+    if (
+      !restorePersistencePendingRef.current &&
+      listUndisturbedSinceConcealment(
+        concealed,
+        chatTimelineRef.current?.getScrollableNode(),
+        replay.mode,
+      )
+    ) {
+      return;
+    }
     if (replay.mode === "following-end") {
       void chatTimelineRef.current?.scrollToEnd({ animated: false });
       return;
@@ -4005,7 +4120,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // view covering it would hide where the jump lands.
     closeSubagentDrillIn();
     if (request.kind === "end") {
-      scrollToEnd(true);
+      scrollToEnd(request.animated ?? true);
       scrollRequestRef.current = null;
       return;
     }

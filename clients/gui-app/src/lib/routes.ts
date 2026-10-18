@@ -24,6 +24,35 @@ export function draftPathname(draftId: string): string {
   return `/draft/${draftId}`;
 }
 
+export function botRoute(botId: string): NavigateOptions {
+  return {
+    to: "/bot/$botId",
+    params: { botId },
+  };
+}
+
+export function botPathname(botId: string): string {
+  return `/bot/${encodeURIComponent(botId)}`;
+}
+
+const BOT_ROUTE_RE = /^\/bot\/([^/]+)\/?$/;
+
+/**
+ * Extract the bot id from a pathname if it matches `/bot/:botId`. Returns
+ * `null` for any other route. The one parser every bot-route reader shares -
+ * the navigation controller, desktop persistence and the kind module - so a
+ * route-shape change cannot land in one of them and miss the rest.
+ */
+export function readBotIdFromPath(pathname: string): string | null {
+  const match = BOT_ROUTE_RE.exec(pathname);
+  if (match === null) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 const DEFAULT_EPIC_SEARCH = {
   focusedAt: undefined,
   focusArtifactId: undefined,

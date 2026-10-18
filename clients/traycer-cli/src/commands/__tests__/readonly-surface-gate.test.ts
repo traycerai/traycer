@@ -239,6 +239,7 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
     "11111111-1111-4111-8111-111111111111",
   ],
   "worktree delete": ["--path", "/tmp/some-worktree"],
+  "bot send": ["Tracy", "hi"],
   "profile add": ["claude"],
   "profile login": ["claude", "ambient"],
   "profile rename": ["claude", "profile-1", "Work"],
@@ -262,6 +263,8 @@ const UNGATED_READS: ReadonlyArray<{
   { path: ["agent", "inbox"], args: [] },
   { path: ["agent", "role", "list"], args: [] },
   { path: ["worktree", "list"], args: [] },
+  { path: ["bot", "list"], args: [] },
+  { path: ["bot", "checkins"], args: ["Tracy"] },
 ];
 
 describe("readonly-surface gate: table coverage is complete", () => {

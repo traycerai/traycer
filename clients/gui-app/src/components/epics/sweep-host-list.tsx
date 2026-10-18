@@ -217,6 +217,7 @@ function SweepHostOption(props: {
           surfaceState={surfaceState}
           updateView={null}
           nameRef={null}
+          environmentLabel={null}
         />
         {row.isDefault ? (
           <span className="sr-only">Currently showing this host</span>

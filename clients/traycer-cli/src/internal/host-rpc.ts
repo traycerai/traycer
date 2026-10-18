@@ -51,7 +51,11 @@ import {
 } from "../host/compat-recovery";
 import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
-const FRAME_TIMEOUT_MS = 15_000;
+/**
+ * How long a call waits for its response frame. Exported so a one-shot stream
+ * read (`readBotSnapshot`) waits for its first answer exactly as long.
+ */
+export const FRAME_TIMEOUT_MS = 15_000;
 
 /**
  * One-shot unary RPC to the host's `/rpc` WebSocket endpoint.

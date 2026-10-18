@@ -54,6 +54,9 @@ import {
 } from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
 import { buildAgentSendCommand } from "./commands/agent-send";
+import { buildBotCheckinsCommand } from "./commands/bot-checkins";
+import { buildBotListCommand } from "./commands/bot-list";
+import { buildBotSendCommand } from "./commands/bot-send";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
 import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
@@ -872,6 +875,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
+  registerBotCommands(program);
   registerMonitorCommand(program);
 }
 
@@ -3644,6 +3648,67 @@ function registerAgentCommands(
 // It is not read-only, and the description now says so: printing a message
 // durably acknowledges it, and the process maintains this machine's stored
 // credentials for as long as it runs.
+function registerBotCommands(program: Command): void {
+  const bot = program
+    .command("bot")
+    .description("List your bots, message them, and see what they follow");
+  const botArgument = "Bot id, or its title";
+
+  withRunner(
+    bot
+      .command("list")
+      .description(
+        "List your bots in every environment you belong to, with the host each runs on and its open requests",
+      ),
+    () => buildBotListCommand(),
+  );
+
+  // Sending is hidden and refused on the readonly surface (see
+  // `READONLY_REFUSED_COMMANDS`); the two reads stay offered.
+  withRunner(
+    bot
+      .command("send", {
+        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+      })
+      .description(
+        "Message a bot and print the request it opens. The bot answers in a turn of its own, which counts toward your usage like any other agent turn.",
+      )
+      .argument("<bot>", botArgument)
+      .argument("<text>", "The message")
+      .option(
+        "--conversation <id>",
+        "Conversation to write to (defaults to the bot's first conversation, the one the app shows)",
+      )
+      .option(
+        "--wait <duration>",
+        "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.",
+      ),
+    (opts, args) =>
+      buildBotSendCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        text: expectRequiredPositional(args[1], "text"),
+        conversationId:
+          typeof opts.conversation === "string" ? opts.conversation : null,
+        wait: typeof opts.wait === "string" ? opts.wait : null,
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("checkins")
+      .description(
+        "List the tasks a bot follows, how often it checks in on each, and when it last did",
+      )
+      .argument("<bot>", botArgument)
+      .option("--task <id>", "Show only this task"),
+    (opts, args) =>
+      buildBotCheckinsCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        taskId: typeof opts.task === "string" ? opts.task : null,
+      }),
+  );
+}
+
 function registerMonitorCommand(program: Command): void {
   addRunnerFlags(
     program
