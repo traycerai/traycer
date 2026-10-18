@@ -101,7 +101,13 @@ function frameFor(
   status: HostReachability["status"],
   restartWait: (attemptsNow: number) => void,
 ): ChatTilePreContentFrame {
-  return { wait, restartWait, reachability: reachability(status) };
+  return {
+    wait,
+    restartWait,
+    reachability: reachability(status),
+    cloneAllowed: true,
+    hasReadySession: false,
+  };
 }
 
 function session(
